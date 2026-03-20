@@ -1,0 +1,10 @@
+# Linux runtime noise
+*.log
+*.pid
+
+# Local env overrides
+tools/ubuntu/va-connect.env
+
+# macOS / Windows editor noise
+.DS_Store
+Thumbs.db

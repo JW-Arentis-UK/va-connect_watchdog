@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+INSTALL_DIR="${INSTALL_DIR:-/opt/va-connect-watchdog}"
+SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
+SERVICE_NAME="va-connect-watchdog.service"
+TIMER_NAME="va-connect-watchdog.timer"
+SITE_SERVICE_NAME="va-connect-site-watchdog.service"
+ENV_TARGET="$INSTALL_DIR/va-connect.env"
+ENV_EXAMPLE_SOURCE="$SCRIPT_DIR/va-connect.env.example"
+SITE_CONFIG_TARGET="$INSTALL_DIR/site-watchdog.json"
+SITE_CONFIG_EXAMPLE_SOURCE="$SCRIPT_DIR/site-watchdog.json.example"
+
+require_root() {
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    echo "Run this installer with sudo or as root."
+    exit 1
+  fi
+}
+
+install_files() {
+  mkdir -p "$INSTALL_DIR"
+
+  install -m 755 "$SCRIPT_DIR/va_connect_watchdog.sh" "$INSTALL_DIR/va_connect_watchdog.sh"
+  install -m 755 "$SCRIPT_DIR/va_connect_site_watchdog.py" "$INSTALL_DIR/va_connect_site_watchdog.py"
+
+  if [[ ! -f "$ENV_TARGET" ]]; then
+    install -m 644 "$ENV_EXAMPLE_SOURCE" "$ENV_TARGET"
+    echo "Created $ENV_TARGET from example."
+  else
+    echo "Keeping existing $ENV_TARGET"
+  fi
+
+  if [[ ! -f "$SITE_CONFIG_TARGET" ]]; then
+    install -m 644 "$SITE_CONFIG_EXAMPLE_SOURCE" "$SITE_CONFIG_TARGET"
+    echo "Created $SITE_CONFIG_TARGET from example."
+  else
+    echo "Keeping existing $SITE_CONFIG_TARGET"
+  fi
+
+  install -m 644 "$SCRIPT_DIR/$SERVICE_NAME" "$SYSTEMD_DIR/$SERVICE_NAME"
+  install -m 644 "$SCRIPT_DIR/$TIMER_NAME" "$SYSTEMD_DIR/$TIMER_NAME"
+  install -m 644 "$SCRIPT_DIR/$SITE_SERVICE_NAME" "$SYSTEMD_DIR/$SITE_SERVICE_NAME"
+}
+
+enable_timer() {
+  systemctl daemon-reload
+  systemctl enable --now "$TIMER_NAME"
+}
+
+print_next_steps() {
+  cat <<EOF
+Install complete.
+
+Next steps:
+1. Edit $ENV_TARGET with the real VA-Connect process match and start command.
+2. Edit $SITE_CONFIG_TARGET with the real site IPs, RTSP target, and commands.
+3. Run: systemctl start $SERVICE_NAME
+4. Run: systemctl enable --now $SITE_SERVICE_NAME
+5. Check: systemctl status $TIMER_NAME
+6. Check logs: journalctl -u $SERVICE_NAME -n 50 --no-pager
+7. Check site watchdog logs: journalctl -u $SITE_SERVICE_NAME -n 50 --no-pager
+EOF
+}
+
+main() {
+  require_root
+  install_files
+  enable_timer
+  print_next_steps
+}
+
+main "$@"

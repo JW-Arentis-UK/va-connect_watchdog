@@ -1,0 +1,11 @@
+[Unit]
+Description=VA-Connect watchdog check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=ENV_FILE=/opt/va-connect-watchdog/va-connect.env
+ExecStart=/opt/va-connect-watchdog/va_connect_watchdog.sh

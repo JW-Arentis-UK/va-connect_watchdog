@@ -1,0 +1,16 @@
+[Unit]
+Description=VA-Connect site watchdog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=SITE_WATCHDOG_CONFIG=/opt/va-connect-watchdog/site-watchdog.json
+ExecStart=/usr/bin/python3 /opt/va-connect-watchdog/va_connect_site_watchdog.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
