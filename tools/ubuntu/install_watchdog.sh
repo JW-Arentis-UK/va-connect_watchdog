@@ -26,6 +26,36 @@ require_root() {
   fi
 }
 
+resolve_source_repo_dir() {
+  if [[ -d "$PROJECT_ROOT/.git" ]]; then
+    printf '%s\n' "$PROJECT_ROOT"
+    return
+  fi
+
+  if [[ -f "$REPO_DIR_TARGET" ]]; then
+    local saved_repo_dir
+    saved_repo_dir="$(head -n 1 "$REPO_DIR_TARGET")"
+    if [[ -d "$saved_repo_dir/.git" ]]; then
+      printf '%s\n' "$saved_repo_dir"
+      return
+    fi
+  fi
+
+  printf '%s\n' "$PROJECT_ROOT"
+}
+
+run_git_as_repo_owner() {
+  local repo_dir="$1"
+  shift
+  local repo_owner
+  repo_owner="$(stat -c '%U' "$repo_dir")"
+  if [[ "$(id -un)" == "$repo_owner" ]]; then
+    git -C "$repo_dir" "$@"
+  else
+    sudo -u "$repo_owner" git -C "$repo_dir" "$@"
+  fi
+}
+
 install_files() {
   mkdir -p "$INSTALL_DIR"
   mkdir -p "$BIN_DIR"
@@ -78,12 +108,14 @@ write_build_info() {
   local git_branch="unknown"
   local git_status="unknown"
   local deployed_at
+  local source_repo_dir
   deployed_at="$(date -Is)"
+  source_repo_dir="$(resolve_source_repo_dir)"
 
-  if command -v git >/dev/null 2>&1 && [[ -d "$PROJECT_ROOT/.git" ]]; then
-    git_commit="$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-    git_branch="$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
-    if git -C "$PROJECT_ROOT" diff --quiet --ignore-submodules HEAD -- 2>/dev/null; then
+  if command -v git >/dev/null 2>&1 && [[ -d "$source_repo_dir/.git" ]]; then
+    git_commit="$(run_git_as_repo_owner "$source_repo_dir" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    git_branch="$(run_git_as_repo_owner "$source_repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+    if run_git_as_repo_owner "$source_repo_dir" diff --quiet --ignore-submodules HEAD -- 2>/dev/null; then
       git_status="clean"
     else
       git_status="dirty"
@@ -96,11 +128,11 @@ write_build_info() {
   "git_branch": "$git_branch",
   "git_commit": "$git_commit",
   "git_status": "$git_status",
-  "source_repo_dir": "$PROJECT_ROOT"
+  "source_repo_dir": "$source_repo_dir"
 }
 EOF
 
-  printf '%s\n' "$PROJECT_ROOT" > "$REPO_DIR_TARGET"
+  printf '%s\n' "$source_repo_dir" > "$REPO_DIR_TARGET"
 }
 
 enable_timer() {
