@@ -6,19 +6,23 @@
     "1.1.1.1",
     "8.8.8.8"
   ],
+  "systemd_services": [
+    "esg.service",
+    "sysops.service",
+    "bridge.service"
+  ],
   "tcp_targets": [
     {
       "host": "192.168.1.1",
       "port": 80
-    },
-    {
-      "host": "192.168.1.132",
-      "port": 554
     }
   ],
-  "app_match": "VA-Connect",
-  "app_start_command": "/opt/va-connect/start-va-connect.sh",
+  "app_match": "vsapp",
+  "app_start_command": "systemctl restart esg.service",
+  "monitoring_enabled": true,
+  "app_restart_enabled": true,
   "restart_network_before_reboot": true,
+  "reboot_enabled": true,
   "network_restart_command": "systemctl restart NetworkManager || systemctl restart systemd-networkd",
   "network_restart_cooldown_seconds": 600,
   "base_reboot_timeout_seconds": 300,
@@ -27,8 +31,13 @@
   "post_action_settle_seconds": 20,
   "reboot_command": "shutdown -r now",
   "json_log": "/var/log/va-connect-site-watchdog/events.jsonl",
+  "metrics_file": "/var/log/va-connect-site-watchdog/metrics.jsonl",
   "state_file": "/var/lib/va-connect-site-watchdog/state.json",
+  "manual_dir": "/var/lib/va-connect-site-watchdog",
   "snapshot_dir": "/var/log/va-connect-site-watchdog/snapshots",
   "snapshot_cooldown_seconds": 900,
-  "journal_lines": 120
+  "journal_lines": 120,
+  "web_bind": "0.0.0.0",
+  "web_port": 8787,
+  "web_token": ""
 }

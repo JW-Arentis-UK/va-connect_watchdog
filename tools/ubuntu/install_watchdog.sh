@@ -10,6 +10,7 @@ SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
 SERVICE_NAME="va-connect-watchdog.service"
 TIMER_NAME="va-connect-watchdog.timer"
 SITE_SERVICE_NAME="va-connect-site-watchdog.service"
+WEB_SERVICE_NAME="va-connect-watchdog-web.service"
 ENV_TARGET="$INSTALL_DIR/va-connect.env"
 ENV_EXAMPLE_SOURCE="$SCRIPT_DIR/va-connect.env.example"
 SITE_CONFIG_TARGET="$INSTALL_DIR/site-watchdog.json"
@@ -27,6 +28,7 @@ install_files() {
 
   install -m 755 "$SCRIPT_DIR/va_connect_watchdog.sh" "$INSTALL_DIR/va_connect_watchdog.sh"
   install -m 755 "$SCRIPT_DIR/va_connect_site_watchdog.py" "$INSTALL_DIR/va_connect_site_watchdog.py"
+  install -m 755 "$SCRIPT_DIR/va_connect_watchdog_web.py" "$INSTALL_DIR/va_connect_watchdog_web.py"
 
   if [[ ! -f "$ENV_TARGET" ]]; then
     install -m 644 "$ENV_EXAMPLE_SOURCE" "$ENV_TARGET"
@@ -45,11 +47,15 @@ install_files() {
   install -m 644 "$SCRIPT_DIR/$SERVICE_NAME" "$SYSTEMD_DIR/$SERVICE_NAME"
   install -m 644 "$SCRIPT_DIR/$TIMER_NAME" "$SYSTEMD_DIR/$TIMER_NAME"
   install -m 644 "$SCRIPT_DIR/$SITE_SERVICE_NAME" "$SYSTEMD_DIR/$SITE_SERVICE_NAME"
+  install -m 644 "$SCRIPT_DIR/$WEB_SERVICE_NAME" "$SYSTEMD_DIR/$WEB_SERVICE_NAME"
 }
 
 enable_timer() {
   systemctl daemon-reload
-  systemctl enable --now "$TIMER_NAME"
+  systemctl disable --now "$TIMER_NAME" || true
+  systemctl stop "$SERVICE_NAME" || true
+  systemctl enable --now "$SITE_SERVICE_NAME"
+  systemctl enable --now "$WEB_SERVICE_NAME"
 }
 
 print_next_steps() {
@@ -59,11 +65,11 @@ Install complete.
 Next steps:
 1. Edit $ENV_TARGET with the real VA-Connect process match and start command.
 2. Edit $SITE_CONFIG_TARGET with the real site IPs, RTSP target, and commands.
-3. Run: systemctl start $SERVICE_NAME
-4. Run: systemctl enable --now $SITE_SERVICE_NAME
-5. Check: systemctl status $TIMER_NAME
-6. Check logs: journalctl -u $SERVICE_NAME -n 50 --no-pager
-7. Check site watchdog logs: journalctl -u $SITE_SERVICE_NAME -n 50 --no-pager
+3. Check: systemctl status $SITE_SERVICE_NAME
+4. Check: systemctl status $WEB_SERVICE_NAME
+5. Check site watchdog logs: journalctl -u $SITE_SERVICE_NAME -n 50 --no-pager
+6. Open the web UI on http://<encoder-ip>:8787/
+7. Note: the legacy $TIMER_NAME is disabled by this installer.
 EOF
 }
 

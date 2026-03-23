@@ -9,10 +9,12 @@ This setup gives an Ubuntu PC two watchdog layers for VA-Connect:
 
 - `tools/ubuntu/va_connect_watchdog.sh`
 - `tools/ubuntu/va_connect_site_watchdog.py`
+- `tools/ubuntu/va_connect_watchdog_web.py`
 - `tools/ubuntu/install_watchdog.sh`
 - `tools/ubuntu/va-connect-watchdog.service`
 - `tools/ubuntu/va-connect-watchdog.timer`
 - `tools/ubuntu/va-connect-site-watchdog.service`
+- `tools/ubuntu/va-connect-watchdog-web.service`
 - `tools/ubuntu/va-connect.env.example`
 - `tools/ubuntu/site-watchdog.json.example`
 
@@ -31,9 +33,86 @@ The installer:
 - creates `/opt/va-connect-watchdog/site-watchdog.json` if it does not already exist
 - installs the `systemd` service and timer
 - installs the continuous site watchdog service
-- reloads `systemd` and enables the timer
+- installs the web UI service
+- reloads `systemd`, disables the legacy minute timer, and enables the site watchdog and web UI
 
-After that, edit both config files with your real command and site IPs.
+After that, edit both config files if needed for your site.
+
+## Quick site info capture
+
+If copy and paste is awkward over the remote connection, run this from the project folder:
+
+```bash
+chmod +x ./tools/ubuntu/collect_va_connect_site_info.sh
+./tools/ubuntu/collect_va_connect_site_info.sh
+```
+
+It writes a timestamped text file to the Desktop, for example:
+
+```text
+~/Desktop/va_connect_site_info_<hostname>_<timestamp>.txt
+```
+
+That file includes the user, hostname, process list, desktop launchers, IP config, routes, and related `systemd` and journal details.
+
+## Restart watchdog services
+
+If you update files or need to bounce the watchdog stack, run:
+
+```bash
+chmod +x ./tools/ubuntu/restart_watchdog_services.sh
+sudo ./tools/ubuntu/restart_watchdog_services.sh
+```
+
+That reloads `systemd` and restarts:
+
+- `va-connect-site-watchdog.service`
+- `va-connect-watchdog-web.service`
+
+It also disables the legacy `va-connect-watchdog.timer` so the older process-only watchdog does not cause noise or false failures.
+
+## Update after changes
+
+When you change any watchdog file, use one script to redeploy everything:
+
+```bash
+chmod +x ./tools/ubuntu/update_watchdog.sh
+sudo ./tools/ubuntu/update_watchdog.sh
+```
+
+That will:
+
+- reinstall the latest watchdog files into `/opt/va-connect-watchdog`
+- reload and restart the live watchdog services
+- disable the legacy minute timer if needed
+- print quick verification checks
+
+## GitHub install and update
+
+For a clean GitHub-based install on the gateway PC:
+
+```bash
+sudo apt update && sudo apt install -y git
+cd ~/Desktop
+curl -L -o bootstrap_watchdog_from_github.sh <your-raw-script-url>
+chmod +x bootstrap_watchdog_from_github.sh
+./bootstrap_watchdog_from_github.sh <your-github-repo-url> main
+```
+
+If the repository is already cloned on the gateway PC, update and redeploy with:
+
+```bash
+cd ~/Desktop/va-connect-watchdog/tools/ubuntu
+chmod +x git_update_watchdog.sh
+./git_update_watchdog.sh
+```
+
+That script will:
+
+- run `git pull --ff-only`
+- redeploy the latest files into `/opt/va-connect-watchdog`
+- restart the live watchdog services
+- keep the legacy minute timer disabled
 
 ## 1. Copy the files to the Ubuntu machine
 
@@ -90,6 +169,8 @@ Most important values:
   Public IPs to prove WAN access is working.
 - `tcp_targets`
   Local devices you care about, such as the RUT and an RTSP endpoint.
+- `systemd_services`
+  Services that must stay active, for example Videosoft gateway services.
 - `app_match`
   Process text used to prove VA-Connect is still alive.
 - `app_start_command`
@@ -100,10 +181,19 @@ Most important values:
   First reboot delay after a fault begins.
 - `max_reboot_timeout_seconds`
   Ceiling for the expanding reboot delay.
+- `web_bind` and `web_port`
+  Where the watchdog web UI listens on the VA-Connect encoder.
+- `web_token`
+  Optional simple token if you want to protect the page.
 
 Example targets:
 
 ```json
+"systemd_services": [
+  "esg.service",
+  "sysops.service",
+  "bridge.service"
+],
 "tcp_targets": [
   { "host": "192.168.1.1", "port": 80 },
   { "host": "192.168.1.132", "port": 554 }
@@ -114,10 +204,37 @@ What the site watchdog writes:
 
 - `/var/log/va-connect-site-watchdog/events.jsonl`
   Structured event log for remote review.
+- `/var/log/va-connect-site-watchdog/metrics.jsonl`
+  Rolling PC metrics used for the 24-hour graph in the web UI.
 - `/var/log/va-connect-site-watchdog/snapshots/`
   Evidence bundles captured when a fault starts, changes, or just before reboot.
 - `/var/lib/va-connect-site-watchdog/state.json`
   Current state, counters, and backoff progress.
+
+After an unexpected reboot, it also captures a previous-boot review snapshot using `journalctl -b -1` so the next boot can surface clues from the last one.
+
+The web UI defaults to:
+
+```text
+http://<encoder-ip>:8787/
+```
+
+If you set `web_token`, open it as:
+
+```text
+http://<encoder-ip>:8787/?token=your-token
+```
+
+From that page you can:
+
+- view current WAN, LAN, and app health
+- view monitored `systemd` service health
+- view a 24-hour graph of CPU, memory, root disk, and recording disk usage
+- review recent watchdog events
+- enable or disable monitoring
+- enable or disable app restart, network restart, and reboot actions
+- edit key watchdog config values such as hosts, ports, timers, and web access settings
+- trigger a manual check, snapshot, or network restart
 
 Each snapshot contains items such as:
 
@@ -125,7 +242,13 @@ Each snapshot contains items such as:
 - `ip route`
 - resolver status
 - memory and disk usage
+- load average and `vmstat`
+- failed `systemd` services
+- kernel journal
 - top processes
+- service status for key Videosoft services
+- storage mount information
+- recording storage status under `/mnt/storage`
 - recent system journal
 - recent `NetworkManager` journal
 - recent `teamviewerd` journal
@@ -138,9 +261,11 @@ Copy the service and timer:
 sudo cp va-connect-watchdog.service /etc/systemd/system/
 sudo cp va-connect-watchdog.timer /etc/systemd/system/
 sudo cp va-connect-site-watchdog.service /etc/systemd/system/
+sudo cp va-connect-watchdog-web.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now va-connect-watchdog.timer
 sudo systemctl enable --now va-connect-site-watchdog.service
+sudo systemctl enable --now va-connect-watchdog-web.service
 ```
 
 ## 5. Check status
@@ -149,10 +274,12 @@ sudo systemctl enable --now va-connect-site-watchdog.service
 systemctl status va-connect-watchdog.timer
 systemctl status va-connect-watchdog.service
 systemctl status va-connect-site-watchdog.service
+systemctl status va-connect-watchdog-web.service
 journalctl -u va-connect-watchdog.service -n 50 --no-pager
 tail -n 50 /var/log/va-connect-watchdog.log
 journalctl -u va-connect-site-watchdog.service -n 50 --no-pager
 tail -n 50 /var/log/va-connect-site-watchdog/events.jsonl
+journalctl -u va-connect-watchdog-web.service -n 50 --no-pager
 ```
 
 ## 6. Run an immediate check
@@ -160,6 +287,7 @@ tail -n 50 /var/log/va-connect-site-watchdog/events.jsonl
 ```bash
 sudo systemctl start va-connect-watchdog.service
 sudo systemctl restart va-connect-site-watchdog.service
+sudo systemctl restart va-connect-watchdog-web.service
 ```
 
 ## How it behaves
@@ -177,6 +305,7 @@ The site watchdog behaves differently because it is meant for remote fault findi
 - If the fault persists long enough, it reboots the PC.
 - After each reboot attempt, the next reboot threshold expands using backoff.
 - Once the system is healthy again, the reboot threshold resets to the base delay.
+- The web UI updates the JSON config on disk, so enable or disable choices persist across restarts.
 
 ## Notes
 

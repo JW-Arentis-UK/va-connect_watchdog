@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 
 DEFAULT_CONFIG_PATH = "/opt/va-connect-watchdog/site-watchdog.json"
+DEFAULT_MANUAL_DIR = "/var/lib/va-connect-site-watchdog"
 
 
 def utc_now() -> datetime:
@@ -42,6 +43,19 @@ def append_jsonl(path: Path, payload) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def tail_jsonl(path: Path, limit: int):
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8").splitlines()[-limit:]
+    items = []
+    for line in lines:
+        try:
+            items.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return items
 
 
 def run_command(command: List[str], timeout: int = 10) -> Tuple[int, str]:
@@ -91,6 +105,12 @@ def process_running(match_text: str) -> bool:
     return code == 0
 
 
+def service_status(service_name: str) -> Dict[str, object]:
+    code, output = run_command(["systemctl", "is-active", service_name], timeout=10)
+    detail = output.strip() or ("active" if code == 0 else "unknown")
+    return {"service": service_name, "ok": code == 0 and detail == "active", "detail": detail}
+
+
 def run_action(command: str) -> Tuple[int, str]:
     return run_shell(command, timeout=120)
 
@@ -108,6 +128,39 @@ def backoff_seconds(base: int, multiplier: float, maximum: int, failures: int) -
     return int(delay)
 
 
+def read_cpu_times() -> Tuple[int, int]:
+    line = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0]
+    parts = [int(value) for value in line.split()[1:]]
+    idle = parts[3] + (parts[4] if len(parts) > 4 else 0)
+    total = sum(parts)
+    return total, idle
+
+
+def read_mem_percent() -> float:
+    values = {}
+    for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+        key, value = line.split(":", 1)
+        values[key] = int(value.strip().split()[0])
+    total = values.get("MemTotal", 0)
+    available = values.get("MemAvailable", values.get("MemFree", 0))
+    if total <= 0:
+        return 0.0
+    return round(((total - available) / total) * 100.0, 2)
+
+
+def read_disk_percent(path_text: str) -> Optional[float]:
+    path = Path(path_text)
+    if not path.exists():
+        return None
+    stats = os.statvfs(path)
+    total = stats.f_blocks * stats.f_frsize
+    available = stats.f_bavail * stats.f_frsize
+    if total <= 0:
+        return None
+    used = total - available
+    return round((used / total) * 100.0, 2)
+
+
 def capture_snapshot(snapshot_dir: Path, reason: str, app_match: str, max_journal_lines: int) -> Path:
     timestamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
     target_dir = snapshot_dir / f"{timestamp}_{reason}"
@@ -116,18 +169,29 @@ def capture_snapshot(snapshot_dir: Path, reason: str, app_match: str, max_journa
     commands = {
         "date.txt": "date -Is",
         "uptime.txt": "uptime",
+        "loadavg.txt": "cat /proc/loadavg",
         "ip_addr.txt": "ip addr",
         "ip_route.txt": "ip route",
         "resolvectl.txt": "resolvectl status || systemd-resolve --status",
         "free.txt": "free -m",
         "df.txt": "df -h",
+        "findmnt.txt": "findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS,USED,AVAIL",
+        "failed_services.txt": "systemctl --failed --no-pager",
+        "service_status.txt": "systemctl status esg.service bridge.service sysops.service teamviewerd.service NetworkManager.service --no-pager || true",
         "top.txt": "top -b -n 1 | head -n 40",
+        "vmstat.txt": "vmstat 1 5",
         "dmesg_tail.txt": "dmesg | tail -n 80",
+        "journal_kernel.txt": f"journalctl -k -n {max_journal_lines} --no-pager",
         "processes.txt": "ps -eo pid,ppid,stat,%cpu,%mem,etime,args --sort=-%cpu | head -n 40",
         "app_processes.txt": f"pgrep -af -- {shlex.quote(app_match)} || true",
         "journal_system.txt": f"journalctl -n {max_journal_lines} --no-pager",
         "journal_network.txt": f"journalctl -u NetworkManager -n {max_journal_lines} --no-pager || journalctl -u systemd-networkd -n {max_journal_lines} --no-pager || true",
         "journal_teamviewer.txt": f"journalctl -u teamviewerd -n {max_journal_lines} --no-pager || true",
+        "journal_esg.txt": f"journalctl -u esg.service -n {max_journal_lines} --no-pager || true",
+        "journal_bridge.txt": f"journalctl -u bridge.service -n {max_journal_lines} --no-pager || true",
+        "journal_sysops.txt": f"journalctl -u sysops.service -n {max_journal_lines} --no-pager || true",
+        "recording_mount.txt": "df -h /mnt/storage /mnt/storage/recordings 2>/dev/null || true",
+        "recording_tree.txt": "ls -lah /mnt/storage 2>/dev/null && ls -lah /mnt/storage/recordings 2>/dev/null | tail -n 50 || true",
     }
 
     for filename, command in commands.items():
@@ -137,13 +201,46 @@ def capture_snapshot(snapshot_dir: Path, reason: str, app_match: str, max_journa
     return target_dir
 
 
+def read_boot_id() -> str:
+    path = Path("/proc/sys/kernel/random/boot_id")
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
+def capture_previous_boot_snapshot(snapshot_dir: Path, max_journal_lines: int) -> Optional[Path]:
+    timestamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
+    target_dir = snapshot_dir / f"{timestamp}_previous-boot-review"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    commands = {
+        "journal_previous_boot.txt": f"journalctl -b -1 -n {max_journal_lines} --no-pager || true",
+        "journal_kernel_previous_boot.txt": f"journalctl -k -b -1 -n {max_journal_lines} --no-pager || true",
+        "last_reboots.txt": "last -x -n 20 || true",
+        "uptime_since.txt": "uptime -s || true",
+        "boot_list.txt": "journalctl --list-boots || true",
+    }
+
+    wrote_any = False
+    for filename, command in commands.items():
+        _, output = run_shell(command, timeout=25)
+        (target_dir / filename).write_text(output + "\n", encoding="utf-8")
+        if output.strip():
+            wrote_any = True
+
+    return target_dir if wrote_any else None
+
+
 class SiteWatchdog:
     def __init__(self, config: Dict[str, object]):
         self.config = config
         self.stop_requested = False
         self.state_path = Path(str(config["state_file"]))
         self.log_path = Path(str(config["json_log"]))
+        self.metrics_path = Path(str(config.get("metrics_file", "/var/log/va-connect-site-watchdog/metrics.jsonl")))
         self.snapshot_dir = Path(str(config["snapshot_dir"]))
+        self.manual_dir = Path(str(config.get("manual_dir", DEFAULT_MANUAL_DIR)))
+        self.prev_cpu_total, self.prev_cpu_idle = read_cpu_times()
         self.state = read_json(
             self.state_path,
             {
@@ -154,6 +251,14 @@ class SiteWatchdog:
                 "last_network_restart_at": None,
                 "last_fault_signature": None,
                 "last_snapshot_at": None,
+                "last_checks": None,
+                "last_metrics": None,
+                "last_check_at": None,
+                "last_healthy_at": None,
+                "monitoring_state": "starting",
+                "hostname": socket.gethostname(),
+                "boot_id": read_boot_id(),
+                "last_startup_at": None,
             },
         )
 
@@ -164,6 +269,70 @@ class SiteWatchdog:
         payload = {"ts": iso_now(), "event": event_type}
         payload.update(fields)
         append_jsonl(self.log_path, payload)
+
+    def collect_metrics(self) -> Dict[str, object]:
+        total, idle = read_cpu_times()
+        delta_total = max(1, total - self.prev_cpu_total)
+        delta_idle = max(0, idle - self.prev_cpu_idle)
+        cpu_percent = round(((delta_total - delta_idle) / delta_total) * 100.0, 2)
+        self.prev_cpu_total = total
+        self.prev_cpu_idle = idle
+
+        load_1, load_5, load_15 = os.getloadavg()
+        metrics = {
+            "ts": iso_now(),
+            "cpu_percent": cpu_percent,
+            "mem_percent": read_mem_percent(),
+            "root_disk_percent": read_disk_percent("/"),
+            "recording_disk_percent": read_disk_percent("/mnt/storage"),
+            "load_1": round(load_1, 2),
+            "load_5": round(load_5, 2),
+            "load_15": round(load_15, 2),
+        }
+        append_jsonl(self.metrics_path, metrics)
+        self.state["last_metrics"] = metrics
+
+        # Keep the metrics file bounded without extra dependencies.
+        recent = tail_jsonl(self.metrics_path, 6000)
+        if len(recent) >= 5800:
+            self.metrics_path.write_text(
+                "\n".join(json.dumps(item, sort_keys=True) for item in recent[-5000:]) + "\n",
+                encoding="utf-8",
+            )
+        return metrics
+
+    def inspect_boot_transition(self) -> None:
+        current_boot_id = read_boot_id()
+        previous_boot_id = str(self.state.get("boot_id") or "")
+        last_check_at = str(self.state.get("last_check_at") or "")
+        self.state["last_startup_at"] = iso_now()
+
+        if previous_boot_id and current_boot_id and previous_boot_id != current_boot_id:
+            event = {
+                "previous_boot_id": previous_boot_id,
+                "current_boot_id": current_boot_id,
+                "last_check_at": last_check_at,
+            }
+            self.log_event("unexpected_reboot_detected", **event)
+            snapshot_path = capture_previous_boot_snapshot(
+                self.snapshot_dir,
+                max_journal_lines=int(self.config["journal_lines"]),
+            )
+            if snapshot_path is not None:
+                self.log_event("snapshot", reason="previous-boot-review", path=str(snapshot_path))
+
+        self.state["boot_id"] = current_boot_id
+        write_json(self.state_path, self.state)
+
+    def pop_manual_marker(self, name: str) -> bool:
+        path = self.manual_dir / name
+        if path.exists():
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            return True
+        return False
 
     def maybe_snapshot(self, reason: str, signature: str) -> Optional[str]:
         cooldown = int(self.config["snapshot_cooldown_seconds"])
@@ -183,6 +352,9 @@ class SiteWatchdog:
         return str(snapshot_path)
 
     def start_app(self) -> bool:
+        if not bool(self.config.get("app_restart_enabled", True)):
+            self.log_event("action_skipped", action="start_app", reason="app restart disabled")
+            return False
         command = str(self.config.get("app_start_command", "")).strip()
         if not command:
             self.log_event("action_skipped", action="start_app", reason="app_start_command empty")
@@ -202,6 +374,9 @@ class SiteWatchdog:
         return code == 0
 
     def reboot_host(self) -> bool:
+        if not bool(self.config.get("reboot_enabled", True)):
+            self.log_event("action_skipped", action="reboot", reason="reboot disabled")
+            return False
         command = str(self.config.get("reboot_command", "shutdown -r now")).strip()
         code, output = run_action(command)
         self.state["last_reboot_attempt_at"] = time.time()
@@ -214,26 +389,68 @@ class SiteWatchdog:
             tcp_check(item["host"], int(item["port"]), int(self.config["tcp_timeout_seconds"]))
             for item in self.config["tcp_targets"]
         ]
+        services = [
+            service_status(service_name)
+            for service_name in self.config.get("systemd_services", [])
+        ]
         app_ok = process_running(str(self.config["app_match"]))
         summary = summarize_checks(pings, ports)
+        services_ok = all(item["ok"] for item in services) if services else True
         result = {
             "pings": pings,
             "ports": ports,
+            "services": services,
             "app_ok": app_ok,
+            "services_ok": services_ok,
             **summary,
         }
-        result["healthy"] = bool(result["internet_ok"] and result["lan_ok"] and result["app_ok"])
+        result["healthy"] = bool(result["internet_ok"] and result["lan_ok"] and result["app_ok"] and result["services_ok"])
         return result
 
     def run_once(self) -> None:
+        if self.pop_manual_marker("manual-snapshot"):
+            self.maybe_snapshot("manual", "manual")
+
+        if self.pop_manual_marker("manual-restart-network"):
+            self.restart_network()
+
+        run_only_checks = self.pop_manual_marker("manual-run-checks")
+        if not bool(self.config.get("monitoring_enabled", True)):
+            if run_only_checks:
+                checks = self.perform_checks()
+                self.state["last_checks"] = checks
+                self.state["last_check_at"] = iso_now()
+            self.collect_metrics()
+            self.state["monitoring_state"] = "disabled"
+            self.state["fault_active"] = False
+            self.state["fault_started_at"] = None
+            self.state["last_fault_signature"] = None
+            write_json(self.state_path, self.state)
+            if run_only_checks:
+                self.log_event("manual_check", checks=self.state.get("last_checks"))
+            else:
+                self.log_event("heartbeat", status="disabled")
+            return
+
         checks = self.perform_checks()
+        self.collect_metrics()
+        self.state["monitoring_state"] = "active"
+        self.state["last_checks"] = checks
+        self.state["last_check_at"] = iso_now()
+        if run_only_checks:
+            write_json(self.state_path, self.state)
+            self.log_event("manual_check", checks=checks)
+            return
+
         signature = json.dumps(
             {
                 "internet_ok": checks["internet_ok"],
                 "lan_ok": checks["lan_ok"],
                 "app_ok": checks["app_ok"],
+                "services_ok": checks["services_ok"],
                 "bad_pings": [item["host"] for item in checks["pings"] if not item["ok"]],
                 "bad_ports": [f'{item["host"]}:{item["port"]}' for item in checks["ports"] if not item["ok"]],
+                "bad_services": [item["service"] for item in checks["services"] if not item["ok"]],
             },
             sort_keys=True,
         )
@@ -249,6 +466,7 @@ class SiteWatchdog:
             self.state["fault_started_at"] = None
             self.state["failure_count"] = 0
             self.state["last_fault_signature"] = None
+            self.state["last_healthy_at"] = iso_now()
             write_json(self.state_path, self.state)
             self.log_event("heartbeat", status="healthy", checks=checks)
             return
@@ -288,6 +506,7 @@ class SiteWatchdog:
                 self.state["fault_started_at"] = None
                 self.state["failure_count"] = 0
                 self.state["last_fault_signature"] = None
+                self.state["last_healthy_at"] = iso_now()
                 write_json(self.state_path, self.state)
                 return
 
@@ -303,6 +522,7 @@ class SiteWatchdog:
                     self.state["fault_started_at"] = None
                     self.state["failure_count"] = 0
                     self.state["last_fault_signature"] = None
+                    self.state["last_healthy_at"] = iso_now()
                     write_json(self.state_path, self.state)
                     return
 
@@ -319,10 +539,12 @@ class SiteWatchdog:
         signal.signal(signal.SIGTERM, self.request_stop)
         signal.signal(signal.SIGINT, self.request_stop)
         self.log_event("startup", config=self.config)
+        self.inspect_boot_transition()
 
         while not self.stop_requested:
             started_at = time.time()
             try:
+                self.config = load_config()
                 self.run_once()
             except Exception as exc:
                 self.log_event("error", detail=f"{type(exc).__name__}: {exc}")
@@ -343,9 +565,13 @@ def load_config() -> Dict[str, object]:
         "tcp_timeout_seconds": 3,
         "internet_hosts": ["1.1.1.1", "8.8.8.8"],
         "tcp_targets": [],
+        "systemd_services": [],
         "app_match": "va-connect",
         "app_start_command": "",
+        "monitoring_enabled": True,
+        "app_restart_enabled": True,
         "restart_network_before_reboot": True,
+        "reboot_enabled": True,
         "network_restart_command": "systemctl restart NetworkManager || systemctl restart systemd-networkd",
         "network_restart_cooldown_seconds": 600,
         "base_reboot_timeout_seconds": 300,
@@ -354,7 +580,9 @@ def load_config() -> Dict[str, object]:
         "post_action_settle_seconds": 20,
         "reboot_command": "shutdown -r now",
         "json_log": "/var/log/va-connect-site-watchdog/events.jsonl",
+        "metrics_file": "/var/log/va-connect-site-watchdog/metrics.jsonl",
         "state_file": "/var/lib/va-connect-site-watchdog/state.json",
+        "manual_dir": "/var/lib/va-connect-site-watchdog",
         "snapshot_dir": "/var/log/va-connect-site-watchdog/snapshots",
         "snapshot_cooldown_seconds": 900,
         "journal_lines": 120,
