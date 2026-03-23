@@ -140,10 +140,33 @@ def recent_metrics(hours: int = 24) -> List[Dict[str, Any]]:
 
 
 def status_payload() -> Dict[str, Any]:
+    state = read_json(STATE_PATH, {})
+    checks = state.get("last_checks") or {}
+    diagnosis = "Healthy"
+    diagnosis_detail = "All monitored checks are passing."
+
+    if state.get("unexpected_reboot_count", 0):
+        diagnosis = "Unexpected reboot seen"
+        diagnosis_detail = str(state.get("last_reboot_reason") or "A reboot was detected after startup.")
+    if state.get("fault_active"):
+        diagnosis = "Active fault"
+        if not checks.get("app_ok", True):
+            diagnosis_detail = "App process is missing."
+        elif not checks.get("services_ok", True):
+            bad = [item.get("service") for item in checks.get("services", []) if not item.get("ok")]
+            diagnosis_detail = "Service issue: " + ", ".join(bad) if bad else "A monitored service is not active."
+        elif not checks.get("lan_ok", True):
+            bad = [f"{item.get('host')}:{item.get('port')}" for item in checks.get("ports", []) if not item.get("ok")]
+            diagnosis_detail = "LAN target issue: " + ", ".join(bad) if bad else "A monitored TCP target failed."
+        elif not checks.get("internet_ok", True):
+            bad = [item.get("host") for item in checks.get("pings", []) if not item.get("ok")]
+            diagnosis_detail = "WAN issue: " + ", ".join(bad) if bad else "A monitored internet host failed."
+
     return {
         "hostname": socket.gethostname(),
         "config": load_config(),
-        "state": read_json(STATE_PATH, {}),
+        "state": state,
+        "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "recent_events": recent_events(),
         "paths": {
             "config": str(CONFIG_PATH),
@@ -181,6 +204,7 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
     .wrap {{ max-width: 1520px; margin: 0 auto; padding: 24px; }}
     .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }}
+    .overview-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 16px; }}
     .panel {{
       background: rgba(255,255,255,0.82);
       border: 1px solid #ccd9cf;
@@ -230,6 +254,34 @@ def render_page(status: Dict[str, Any]) -> str:
       padding: 10px 12px;
       background: rgba(255,255,255,0.66);
     }}
+    .stat-card {{
+      border: 1px solid #dbe4dc;
+      border-radius: 16px;
+      padding: 14px;
+      background: rgba(255,255,255,0.78);
+    }}
+    .hero {{
+      display: grid;
+      grid-template-columns: minmax(240px, 1.1fr) minmax(180px, 0.9fr);
+      gap: 16px;
+      margin-top: 16px;
+    }}
+    .hero-main {{
+      border: 1px solid #ccd9cf;
+      border-radius: 18px;
+      padding: 18px;
+      background: linear-gradient(135deg, rgba(40,95,131,0.1), rgba(76,109,85,0.08));
+    }}
+    .hero-title {{ font-size: 1.8rem; font-weight: 800; margin: 4px 0 10px; }}
+    .hero-detail {{ font-size: 1rem; color: #415448; }}
+    .status-strip {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }}
+    .stat-label {{ color: #607064; font-size: 0.85rem; }}
+    .stat-value {{ font-size: 1.6rem; font-weight: 700; margin-top: 6px; }}
     .formgrid {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -272,6 +324,51 @@ def render_page(status: Dict[str, Any]) -> str:
   <div class="wrap">
     <h1>VA-Connect Encoder Watchdog</h1>
     <div class="sub">Control page for <strong>{html.escape(status["hostname"])}</strong></div>
+    <div class="hero">
+      <section class="hero-main">
+        <div class="stat-label">Current diagnosis</div>
+        <div class="hero-title">{html.escape(status["diagnosis"]["title"])}</div>
+        <div class="hero-detail">{html.escape(status["diagnosis"]["detail"])}</div>
+        <div class="status-strip">
+          <span class="badge {'danger' if status['state'].get('fault_active') else ''}">{'Fault active' if status['state'].get('fault_active') else 'Healthy now'}</span>
+          <span class="badge {'warn' if status['state'].get('unexpected_reboot_count', 0) else ''}">Unexpected reboots: {int(status["state"].get("unexpected_reboot_count", 0))}</span>
+          <span class="badge">Detected reboots: {int(status["state"].get("reboot_detections_count", 0))}</span>
+          <span class="badge">Watchdog commands: {int(status["state"].get("reboot_commands_sent_count", 0))}</span>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="stat-label">What to look at next</div>
+        <p><strong>Recent events</strong> for fault transitions and reboot detections.</p>
+        <p><strong>PC stats</strong> for memory, CPU, and recording-disk changes before a reboot.</p>
+        <p><strong>Snapshots</strong> for previous-boot review after an overnight freeze.</p>
+      </section>
+    </div>
+    <div class="overview-grid">
+      <section class="stat-card">
+        <div class="stat-label">Current state</div>
+        <div class="stat-value">{'Healthy' if not status['state'].get('fault_active') else 'Fault'}</div>
+      </section>
+      <section class="stat-card">
+        <div class="stat-label">Watchdog reboot commands</div>
+        <div class="stat-value">{int(status["state"].get("reboot_commands_sent_count", 0))}</div>
+      </section>
+      <section class="stat-card">
+        <div class="stat-label">Detected reboots</div>
+        <div class="stat-value">{int(status["state"].get("reboot_detections_count", 0))}</div>
+      </section>
+      <section class="stat-card">
+        <div class="stat-label">Unexpected reboots</div>
+        <div class="stat-value">{int(status["state"].get("unexpected_reboot_count", 0))}</div>
+      </section>
+      <section class="stat-card">
+        <div class="stat-label">Last reboot reason</div>
+        <div class="stat-value" style="font-size:1rem;">{html.escape(str(status["state"].get("last_reboot_reason", "none")))}</div>
+      </section>
+      <section class="stat-card">
+        <div class="stat-label">Last startup</div>
+        <div class="stat-value" style="font-size:1rem;">{html.escape(str(status["state"].get("last_startup_at", "unknown")))}</div>
+      </section>
+    </div>
     <div class="grid">
       <section class="panel">
         <div class="badge {'danger' if status['state'].get('fault_active') else ''}">{'Fault Active' if status['state'].get('fault_active') else 'Healthy / Idle'}</div>
@@ -434,6 +531,28 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('events').innerHTML = (status.recent_events || []).map((event) => (
         `<div class="item"><strong>${{event.event}}</strong><br><code>${{JSON.stringify(event)}}</code></div>`
       )).join('');
+
+      document.querySelector('.overview-grid').innerHTML = `
+        <section class="stat-card"><div class="stat-label">Current state</div><div class="stat-value">${{status.state.fault_active ? 'Fault' : 'Healthy'}}</div></section>
+        <section class="stat-card"><div class="stat-label">Watchdog reboot commands</div><div class="stat-value">${{status.state.reboot_commands_sent_count || 0}}</div></section>
+        <section class="stat-card"><div class="stat-label">Detected reboots</div><div class="stat-value">${{status.state.reboot_detections_count || 0}}</div></section>
+        <section class="stat-card"><div class="stat-label">Unexpected reboots</div><div class="stat-value">${{status.state.unexpected_reboot_count || 0}}</div></section>
+        <section class="stat-card"><div class="stat-label">Last reboot reason</div><div class="stat-value" style="font-size:1rem;">${{status.state.last_reboot_reason || 'none'}}</div></section>
+        <section class="stat-card"><div class="stat-label">Last startup</div><div class="stat-value" style="font-size:1rem;">${{status.state.last_startup_at || 'unknown'}}</div></section>
+      `;
+
+      const heroMain = document.querySelector('.hero-main');
+      heroMain.innerHTML = `
+        <div class="stat-label">Current diagnosis</div>
+        <div class="hero-title">${{status.diagnosis.title}}</div>
+        <div class="hero-detail">${{status.diagnosis.detail}}</div>
+        <div class="status-strip">
+          <span class="badge ${{status.state.fault_active ? 'danger' : ''}}">${{status.state.fault_active ? 'Fault active' : 'Healthy now'}}</span>
+          <span class="badge ${{status.state.unexpected_reboot_count ? 'warn' : ''}}">Unexpected reboots: ${{status.state.unexpected_reboot_count || 0}}</span>
+          <span class="badge">Detected reboots: ${{status.state.reboot_detections_count || 0}}</span>
+          <span class="badge">Watchdog commands: ${{status.state.reboot_commands_sent_count || 0}}</span>
+        </div>
+      `;
     }}
 
     function drawMetrics(points) {{

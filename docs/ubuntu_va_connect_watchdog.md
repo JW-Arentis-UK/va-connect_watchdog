@@ -243,6 +243,7 @@ From that page you can:
 - view current WAN, LAN, and app health
 - view monitored `systemd` service health
 - view a 24-hour graph of CPU, memory, root disk, and recording disk usage
+- view reboot counters and the last detected reboot reason
 - review recent watchdog events
 - enable or disable monitoring
 - enable or disable app restart, network restart, and reboot actions
@@ -319,6 +320,15 @@ The site watchdog behaves differently because it is meant for remote fault findi
 - After each reboot attempt, the next reboot threshold expands using backoff.
 - Once the system is healthy again, the reboot threshold resets to the base delay.
 - The web UI updates the JSON config on disk, so enable or disable choices persist across restarts.
+
+Reboot counters are separated so the page is easier to read:
+
+- `Watchdog reboot commands`
+  How many times the watchdog itself issued a reboot command.
+- `Detected reboots`
+  How many boot transitions the watchdog has seen on startup.
+- `Unexpected reboots`
+  Reboots that happened without a recent watchdog reboot command, such as manual Ubuntu reboot or relay/power-cycle reboot.
 
 ## Notes
 

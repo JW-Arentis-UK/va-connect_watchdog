@@ -259,6 +259,10 @@ class SiteWatchdog:
                 "hostname": socket.gethostname(),
                 "boot_id": read_boot_id(),
                 "last_startup_at": None,
+                "reboot_commands_sent_count": 0,
+                "reboot_detections_count": 0,
+                "unexpected_reboot_count": 0,
+                "last_reboot_reason": None,
             },
         )
 
@@ -308,12 +312,21 @@ class SiteWatchdog:
         self.state["last_startup_at"] = iso_now()
 
         if previous_boot_id and current_boot_id and previous_boot_id != current_boot_id:
+            self.state["reboot_detections_count"] = int(self.state.get("reboot_detections_count", 0)) + 1
+            last_reboot_attempt_at = float(self.state.get("last_reboot_attempt_at") or 0)
+            reboot_was_requested = last_reboot_attempt_at > 0 and (time.time() - last_reboot_attempt_at) < 1800
             event = {
                 "previous_boot_id": previous_boot_id,
                 "current_boot_id": current_boot_id,
                 "last_check_at": last_check_at,
             }
-            self.log_event("unexpected_reboot_detected", **event)
+            if reboot_was_requested:
+                self.state["last_reboot_reason"] = "watchdog reboot observed"
+                self.log_event("watchdog_reboot_observed", **event)
+            else:
+                self.state["unexpected_reboot_count"] = int(self.state.get("unexpected_reboot_count", 0)) + 1
+                self.state["last_reboot_reason"] = "unexpected reboot detected after boot"
+                self.log_event("unexpected_reboot_detected", **event)
             snapshot_path = capture_previous_boot_snapshot(
                 self.snapshot_dir,
                 max_journal_lines=int(self.config["journal_lines"]),
@@ -380,6 +393,8 @@ class SiteWatchdog:
         command = str(self.config.get("reboot_command", "shutdown -r now")).strip()
         code, output = run_action(command)
         self.state["last_reboot_attempt_at"] = time.time()
+        self.state["reboot_commands_sent_count"] = int(self.state.get("reboot_commands_sent_count", 0)) + 1
+        self.state["last_reboot_reason"] = "watchdog issued reboot command"
         self.log_event("action", action="reboot", return_code=code, detail=output[-600:])
         return code == 0
 
