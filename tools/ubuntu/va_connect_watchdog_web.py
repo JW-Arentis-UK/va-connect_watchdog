@@ -229,6 +229,13 @@ def extract_notable_lines(path: Path, limit: int = 8) -> List[str]:
     return notable
 
 
+def extract_all_notable_lines(path: Path, limit: int = 40) -> List[str]:
+    if not path.exists():
+        return []
+    all_lines = extract_notable_lines(path, limit=limit)
+    return all_lines[:limit]
+
+
 def summarize_crash_findings(system_lines: List[str], kernel_lines: List[str]) -> List[str]:
     findings: List[str] = []
     combined = [*kernel_lines, *system_lines]
@@ -357,6 +364,8 @@ def crash_review_payload() -> Dict[str, Any]:
 
     system_lines = extract_notable_lines(snapshot / "journal_previous_boot.txt")
     kernel_lines = extract_notable_lines(snapshot / "journal_kernel_previous_boot.txt")
+    system_lines_all = extract_all_notable_lines(snapshot / "journal_previous_boot.txt", limit=40)
+    kernel_lines_all = extract_all_notable_lines(snapshot / "journal_kernel_previous_boot.txt", limit=40)
     detail = "Review the highlighted lines below first."
     if not system_lines and not kernel_lines:
         detail = "No obvious error lines were extracted automatically. Open the snapshot files for the full previous-boot logs."
@@ -368,7 +377,9 @@ def crash_review_payload() -> Dict[str, Any]:
         "snapshot_path": str(snapshot),
         "findings": summarize_crash_findings(system_lines, kernel_lines),
         "system_lines": system_lines,
+        "system_lines_all": system_lines_all,
         "kernel_lines": kernel_lines,
+        "kernel_lines_all": kernel_lines_all,
     }
 
 
@@ -684,6 +695,15 @@ def render_page(status: Dict[str, Any]) -> str:
       gap: 6px;
       font-size: 0.85rem;
     }}
+    .review-scroll {{
+      margin-top: 10px;
+      max-height: 180px;
+      overflow: auto;
+      border: 1px solid #dbe4dc;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.72);
+      padding: 8px 10px;
+    }}
     .timeline {{
       display: grid;
       gap: 8px;
@@ -862,12 +882,22 @@ def render_page(status: Dict[str, Any]) -> str:
             <ul class="review-list" id="crashReviewSystem">
               {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("system_lines", []))}
             </ul>
+            <div class="review-scroll">
+              <ul class="review-list" id="crashReviewSystemAll">
+                {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("system_lines_all", []))}
+              </ul>
+            </div>
           </section>
           <section class="item">
             <strong>Previous boot kernel log highlights</strong>
             <ul class="review-list" id="crashReviewKernel">
               {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("kernel_lines", []))}
             </ul>
+            <div class="review-scroll">
+              <ul class="review-list" id="crashReviewKernelAll">
+                {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("kernel_lines_all", []))}
+              </ul>
+            </div>
           </section>
         </div>
       </section>
@@ -1012,9 +1042,15 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('crashReviewSystem').innerHTML = (crashReview.system_lines || []).length
         ? (crashReview.system_lines || []).map((line) => `<li>${{line}}</li>`).join('')
         : '<li>No notable system-log lines extracted yet.</li>';
+      document.getElementById('crashReviewSystemAll').innerHTML = (crashReview.system_lines_all || []).length
+        ? (crashReview.system_lines_all || []).map((line) => `<li>${{line}}</li>`).join('')
+        : '<li>No extra system-log lines extracted yet.</li>';
       document.getElementById('crashReviewKernel').innerHTML = (crashReview.kernel_lines || []).length
         ? (crashReview.kernel_lines || []).map((line) => `<li>${{line}}</li>`).join('')
         : '<li>No notable kernel-log lines extracted yet.</li>';
+      document.getElementById('crashReviewKernelAll').innerHTML = (crashReview.kernel_lines_all || []).length
+        ? (crashReview.kernel_lines_all || []).map((line) => `<li>${{line}}</li>`).join('')
+        : '<li>No extra kernel-log lines extracted yet.</li>';
       const updateState = status.update_status || {{}};
       const updateBadge = document.getElementById('updateState');
       updateBadge.className = `badge ${{updateState.state === 'running' ? 'warn' : (updateState.state === 'failed' ? 'danger' : '')}}`;
