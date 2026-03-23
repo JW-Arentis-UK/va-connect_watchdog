@@ -686,19 +686,32 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
     .timeline {{
       display: grid;
-      gap: 10px;
+      gap: 8px;
+      max-height: 340px;
+      overflow: auto;
     }}
     .timeline-card {{
       border: 1px solid #dbe4dc;
       border-left: 4px solid #5c7b66;
       border-radius: 12px;
-      padding: 10px 12px;
+      padding: 9px 10px;
       background: rgba(255,255,255,0.74);
     }}
     .timeline-card.warn {{ border-left-color: #b47b1f; }}
     .timeline-card.danger {{ border-left-color: #a23d3d; }}
-    .timeline-time {{ color: #607064; font-size: 0.75rem; margin-bottom: 4px; }}
-    .timeline-title {{ font-weight: 700; margin-bottom: 4px; }}
+    .timeline-time {{ color: #607064; font-size: 0.73rem; margin-bottom: 3px; }}
+    .timeline-title {{ font-weight: 700; margin-bottom: 3px; }}
+    .analysis-grid {{
+      display: grid;
+      grid-template-columns: minmax(320px, 0.85fr) minmax(420px, 1.4fr);
+      gap: 14px;
+      align-items: start;
+    }}
+    .timeline-empty {{
+      color: #607064;
+      font-size: 0.84rem;
+      padding: 12px 4px;
+    }}
   </style>
 </head>
 <body>
@@ -795,14 +808,14 @@ def render_page(status: Dict[str, Any]) -> str:
       </section>
     </div>
 
-    <div class="grid" style="margin-top:16px;">
+    <div class="analysis-grid" style="margin-top:16px;">
       <section class="panel">
         <h2>Incident timeline</h2>
         <div class="timeline" id="timeline">
           {"".join(f'<div class="timeline-card {html.escape(item.get("severity", ""))}"><div class="timeline-time">{html.escape(item.get("ts", ""))}</div><div class="timeline-title">{html.escape(item.get("title", ""))}</div><div>{html.escape(item.get("detail", ""))}</div></div>' for item in status.get("timeline", []))}
         </div>
       </section>
-      <section class="panel" style="grid-column: 1 / -1;">
+      <section class="panel">
         <h2>PC Stats - Last 24 Hours</h2>
         <canvas id="metricsChart" width="1000" height="280"></canvas>
         <p class="hint">CPU, memory, root disk, and recording disk usage are plotted as percentages.</p>
@@ -963,7 +976,7 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('nextSteps').innerHTML = (status.next_steps || []).map((step) => `<li>${{step}}</li>`).join('');
       document.getElementById('timeline').innerHTML = (status.timeline || []).map((item) => (
         `<div class="timeline-card ${{item.severity || ''}}"><div class="timeline-time">${{item.ts || ''}}</div><div class="timeline-title">${{item.title || ''}}</div><div>${{item.detail || ''}}</div></div>`
-      )).join('') || '<div class="item">No incident timeline entries yet.</div>';
+      )).join('') || '<div class="timeline-empty">No incident timeline entries yet.</div>';
       const crashReview = status.crash_review || {{}};
       document.getElementById('crashReviewTitle').textContent = crashReview.title || 'Crash review unavailable';
       document.getElementById('crashReviewDetail').textContent = crashReview.detail || '';
