@@ -21,6 +21,7 @@ METRICS_PATH = Path("/var/log/va-connect-site-watchdog/metrics.jsonl")
 BUILD_INFO_PATH = Path("/opt/va-connect-watchdog/build-info.json")
 UPDATE_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-update-status.json")
 UPDATE_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-update.log")
+SNAPSHOT_DIR = Path("/var/log/va-connect-site-watchdog/snapshots")
 
 
 def read_json(path: Path, default):
@@ -147,6 +148,90 @@ def recent_metrics(hours: int = 24) -> List[Dict[str, Any]]:
     return points[-3000:]
 
 
+def latest_previous_boot_snapshot() -> Path | None:
+    if not SNAPSHOT_DIR.exists():
+        return None
+    candidates = sorted(
+        (path for path in SNAPSHOT_DIR.iterdir() if path.is_dir() and path.name.endswith("_previous-boot-review")),
+        key=lambda item: item.name,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def extract_notable_lines(path: Path, limit: int = 8) -> List[str]:
+    if not path.exists():
+        return []
+    keywords = (
+        "error",
+        "failed",
+        "failure",
+        "timed out",
+        "timeout",
+        "segfault",
+        "panic",
+        "watchdog",
+        "hung",
+        "i/o",
+        "reset",
+        "oom",
+        "out of memory",
+        "nvrm",
+        "gpu",
+        "ext4",
+        "xfs",
+        "nvme",
+        "sda",
+        "network",
+        "teamviewer",
+        "bridge",
+        "esg",
+        "sysops",
+    )
+    notable: List[str] = []
+    seen = set()
+    for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        if any(keyword in lowered for keyword in keywords):
+            if line not in seen:
+                seen.add(line)
+                notable.append(line[:240])
+        if len(notable) >= limit:
+            break
+    return notable
+
+
+def crash_review_payload() -> Dict[str, Any]:
+    snapshot = latest_previous_boot_snapshot()
+    if snapshot is None:
+        return {
+            "available": False,
+            "title": "No previous-boot review yet",
+            "detail": "A previous-boot review snapshot will appear here after the next detected reboot.",
+            "snapshot_path": "",
+            "system_lines": [],
+            "kernel_lines": [],
+        }
+
+    system_lines = extract_notable_lines(snapshot / "journal_previous_boot.txt")
+    kernel_lines = extract_notable_lines(snapshot / "journal_kernel_previous_boot.txt")
+    detail = "Review the highlighted lines below first."
+    if not system_lines and not kernel_lines:
+        detail = "No obvious error lines were extracted automatically. Open the snapshot files for the full previous-boot logs."
+
+    return {
+        "available": True,
+        "title": "Latest previous-boot review",
+        "detail": detail,
+        "snapshot_path": str(snapshot),
+        "system_lines": system_lines,
+        "kernel_lines": kernel_lines,
+    }
+
+
 def status_payload() -> Dict[str, Any]:
     state = read_json(STATE_PATH, {})
     checks = state.get("last_checks") or {}
@@ -190,6 +275,7 @@ def status_payload() -> Dict[str, Any]:
         "update_status": read_json(UPDATE_STATUS_PATH, {"state": "idle"}),
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "next_steps": next_steps,
+        "crash_review": crash_review_payload(),
         "recent_events": recent_events(),
         "paths": {
             "config": str(CONFIG_PATH),
@@ -415,6 +501,13 @@ def render_page(status: Dict[str, Any]) -> str:
       align-items: center;
       margin-top: 10px;
     }}
+    .review-list {{
+      margin: 8px 0 0;
+      padding-left: 18px;
+      display: grid;
+      gap: 6px;
+      font-size: 0.85rem;
+    }}
   </style>
 </head>
 <body>
@@ -516,6 +609,29 @@ def render_page(status: Dict[str, Any]) -> str:
         <h2>PC Stats - Last 24 Hours</h2>
         <canvas id="metricsChart" width="1000" height="280"></canvas>
         <p class="hint">CPU, memory, root disk, and recording disk usage are plotted as percentages.</p>
+      </section>
+    </div>
+
+    <div class="grid" style="margin-top:16px;">
+      <section class="panel" style="grid-column: 1 / -1;">
+        <h2>Crash review</h2>
+        <p><strong id="crashReviewTitle">{html.escape(status["crash_review"]["title"])}</strong></p>
+        <p id="crashReviewDetail">{html.escape(status["crash_review"]["detail"])}</p>
+        <p><code id="crashReviewPath">{html.escape(status["crash_review"]["snapshot_path"])}</code></p>
+        <div class="grid">
+          <section class="item">
+            <strong>Previous boot system log highlights</strong>
+            <ul class="review-list" id="crashReviewSystem">
+              {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("system_lines", []))}
+            </ul>
+          </section>
+          <section class="item">
+            <strong>Previous boot kernel log highlights</strong>
+            <ul class="review-list" id="crashReviewKernel">
+              {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("kernel_lines", []))}
+            </ul>
+          </section>
+        </div>
       </section>
     </div>
 
@@ -644,6 +760,16 @@ def render_page(status: Dict[str, Any]) -> str:
         `<div class="item"><strong>${{event.event}}</strong><br><code>${{JSON.stringify(event)}}</code></div>`
       )).join('');
       document.getElementById('nextSteps').innerHTML = (status.next_steps || []).map((step) => `<li>${{step}}</li>`).join('');
+      const crashReview = status.crash_review || {{}};
+      document.getElementById('crashReviewTitle').textContent = crashReview.title || 'Crash review unavailable';
+      document.getElementById('crashReviewDetail').textContent = crashReview.detail || '';
+      document.getElementById('crashReviewPath').textContent = crashReview.snapshot_path || '';
+      document.getElementById('crashReviewSystem').innerHTML = (crashReview.system_lines || []).length
+        ? (crashReview.system_lines || []).map((line) => `<li>${{line}}</li>`).join('')
+        : '<li>No notable system-log lines extracted yet.</li>';
+      document.getElementById('crashReviewKernel').innerHTML = (crashReview.kernel_lines || []).length
+        ? (crashReview.kernel_lines || []).map((line) => `<li>${{line}}</li>`).join('')
+        : '<li>No notable kernel-log lines extracted yet.</li>';
       const updateState = status.update_status || {{}};
       const updateBadge = document.getElementById('updateState');
       updateBadge.className = `badge ${{updateState.state === 'running' ? 'warn' : (updateState.state === 'failed' ? 'danger' : '')}}`;
