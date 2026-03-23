@@ -208,12 +208,15 @@ def launch_update() -> Dict[str, Any]:
     if current.get("state") == "running":
         return {"ok": False, "message": "Update already running."}
 
+    build_info = read_json(BUILD_INFO_PATH, {})
     payload = {
         "state": "running",
         "started_at": now_iso(),
         "finished_at": "",
         "message": "Git update requested from web UI.",
         "log_path": str(UPDATE_LOG_PATH),
+        "from_build": str(build_info.get("git_commit", "unknown")),
+        "to_build": "",
     }
     write_json(UPDATE_STATUS_PATH, payload)
     UPDATE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -230,9 +233,12 @@ def launch_update() -> Dict[str, Any]:
         "    log.write((f'\\n===== Web update started {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
         "    result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)\n"
         "payload = json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
+        "build_info_path = Path('/opt/va-connect-watchdog/build-info.json')\n"
+        "build_info = json.loads(build_info_path.read_text(encoding='utf-8')) if build_info_path.exists() else {}\n"
         "payload['state'] = 'ok' if result.returncode == 0 else 'failed'\n"
         "payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
         "payload['return_code'] = result.returncode\n"
+        "payload['to_build'] = str(build_info.get('git_commit', 'unknown'))\n"
         "payload['message'] = 'Update completed successfully.' if result.returncode == 0 else 'Update failed. Check web-update.log.'\n"
         "status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
         "PY"
@@ -497,6 +503,7 @@ def render_page(status: Dict[str, Any]) -> str:
           <span class="badge {'warn' if status['update_status'].get('state') == 'running' else ('danger' if status['update_status'].get('state') == 'failed' else '')}" id="updateState">{html.escape(str(status["update_status"].get("state", "idle")).title())}</span>
           <span id="updateMessage">{html.escape(str(status["update_status"].get("message", "No web update run yet.")))}</span>
         </div>
+        <p class="hint" id="updateMeta">{html.escape(str(status["update_status"].get("from_build", "unknown")))} to {html.escape(str(status["update_status"].get("to_build", "unknown")))} | {html.escape(str(status["update_status"].get("finished_at", "not finished yet")))}</p>
       </section>
       <section class="panel">
         <h2>Latest checks</h2>
@@ -641,6 +648,7 @@ def render_page(status: Dict[str, Any]) -> str:
       updateBadge.className = `badge ${{updateState.state === 'running' ? 'warn' : (updateState.state === 'failed' ? 'danger' : '')}}`;
       updateBadge.textContent = (updateState.state || 'idle').toUpperCase();
       document.getElementById('updateMessage').textContent = updateState.message || 'No web update run yet.';
+      document.getElementById('updateMeta').textContent = `${{updateState.from_build || 'unknown'}} to ${{updateState.to_build || 'unknown'}} | ${{updateState.finished_at || 'not finished yet'}}`;
 
       document.querySelector('.overview-grid').innerHTML = `
         <section class="stat-card"><div class="stat-label">Current state</div><div class="stat-value">${{status.state.fault_active ? 'Fault' : 'Healthy'}}</div></section>
