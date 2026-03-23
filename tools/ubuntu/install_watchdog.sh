@@ -123,7 +123,7 @@ Next steps:
    sudo bash $INSTALL_DIR/update_watchdog.sh
    watchdog-update
    watchdog-restart
-9. `update_watchdog.sh` now pulls from Git first when this folder is a clean git checkout.
+9. update_watchdog.sh now pulls from Git first when this folder is a clean git checkout.
 EOF
 }
 
