@@ -17,6 +17,7 @@ CONFIG_PATH = Path(os.environ.get("SITE_WATCHDOG_CONFIG", "/opt/va-connect-watch
 STATE_PATH = Path("/var/lib/va-connect-site-watchdog/state.json")
 EVENTS_PATH = Path("/var/log/va-connect-site-watchdog/events.jsonl")
 METRICS_PATH = Path("/var/log/va-connect-site-watchdog/metrics.jsonl")
+BUILD_INFO_PATH = Path("/opt/va-connect-watchdog/build-info.json")
 
 
 def read_json(path: Path, default):
@@ -166,6 +167,7 @@ def status_payload() -> Dict[str, Any]:
         "hostname": socket.gethostname(),
         "config": load_config(),
         "state": state,
+        "build_info": read_json(BUILD_INFO_PATH, {}),
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "recent_events": recent_events(),
         "paths": {
@@ -173,6 +175,7 @@ def status_payload() -> Dict[str, Any]:
             "state": str(STATE_PATH),
             "events": str(EVENTS_PATH),
             "metrics": str(METRICS_PATH),
+            "build_info": str(BUILD_INFO_PATH),
         },
     }
 
@@ -368,6 +371,10 @@ def render_page(status: Dict[str, Any]) -> str:
         <div class="stat-label">Last startup</div>
         <div class="stat-value" style="font-size:1rem;">{html.escape(str(status["state"].get("last_startup_at", "unknown")))}</div>
       </section>
+      <section class="stat-card">
+        <div class="stat-label">Build</div>
+        <div class="stat-value" style="font-size:1rem;">{html.escape(str(status["build_info"].get("git_commit", "unknown")))}</div>
+      </section>
     </div>
     <div class="grid">
       <section class="panel">
@@ -381,6 +388,7 @@ def render_page(status: Dict[str, Any]) -> str:
         <div class="badge">{html.escape(str(cfg["web_bind"]))}:{cfg["web_port"]}</div>
         <p>Base reboot timer: <strong>{cfg["base_reboot_timeout_seconds"]}s</strong></p>
         <p>Max reboot timer: <strong>{cfg["max_reboot_timeout_seconds"]}s</strong></p>
+        <p>Deployed: <strong>{html.escape(str(status["build_info"].get("deployed_at", "unknown")))}</strong></p>
         <p>Config path: <code>{html.escape(status["paths"]["config"])}</code></p>
       </section>
     </div>
@@ -488,6 +496,7 @@ def render_page(status: Dict[str, Any]) -> str:
         <p><code>{html.escape(status["paths"]["state"])}</code></p>
         <p><code>{html.escape(status["paths"]["events"])}</code></p>
         <p><code>{html.escape(status["paths"].get("metrics", ""))}</code></p>
+        <p><code>{html.escape(status["paths"].get("build_info", ""))}</code></p>
       </section>
     </div>
   </div>
@@ -539,6 +548,7 @@ def render_page(status: Dict[str, Any]) -> str:
         <section class="stat-card"><div class="stat-label">Unexpected reboots</div><div class="stat-value">${{status.state.unexpected_reboot_count || 0}}</div></section>
         <section class="stat-card"><div class="stat-label">Last reboot reason</div><div class="stat-value" style="font-size:1rem;">${{status.state.last_reboot_reason || 'none'}}</div></section>
         <section class="stat-card"><div class="stat-label">Last startup</div><div class="stat-value" style="font-size:1rem;">${{status.state.last_startup_at || 'unknown'}}</div></section>
+        <section class="stat-card"><div class="stat-label">Build</div><div class="stat-value" style="font-size:1rem;">${{(status.build_info && status.build_info.git_commit) || 'unknown'}}</div></section>
       `;
 
       const heroMain = document.querySelector('.hero-main');

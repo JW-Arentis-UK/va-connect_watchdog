@@ -8,6 +8,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 INSTALL_DIR="${INSTALL_DIR:-/opt/va-connect-watchdog}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
 BIN_DIR="${BIN_DIR:-/usr/local/bin}"
+BUILD_INFO_TARGET="$INSTALL_DIR/build-info.json"
 SERVICE_NAME="va-connect-watchdog.service"
 TIMER_NAME="va-connect-watchdog.timer"
 SITE_SERVICE_NAME="va-connect-site-watchdog.service"
@@ -67,6 +68,35 @@ EOF
   install -m 644 "$SCRIPT_DIR/$TIMER_NAME" "$SYSTEMD_DIR/$TIMER_NAME"
   install -m 644 "$SCRIPT_DIR/$SITE_SERVICE_NAME" "$SYSTEMD_DIR/$SITE_SERVICE_NAME"
   install -m 644 "$SCRIPT_DIR/$WEB_SERVICE_NAME" "$SYSTEMD_DIR/$WEB_SERVICE_NAME"
+
+  write_build_info
+}
+
+write_build_info() {
+  local git_commit="unknown"
+  local git_branch="unknown"
+  local git_status="unknown"
+  local deployed_at
+  deployed_at="$(date -Is)"
+
+  if command -v git >/dev/null 2>&1 && [[ -d "$PROJECT_ROOT/.git" ]]; then
+    git_commit="$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    git_branch="$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+    if git -C "$PROJECT_ROOT" diff --quiet --ignore-submodules HEAD -- 2>/dev/null; then
+      git_status="clean"
+    else
+      git_status="dirty"
+    fi
+  fi
+
+  cat > "$BUILD_INFO_TARGET" <<EOF
+{
+  "deployed_at": "$deployed_at",
+  "git_branch": "$git_branch",
+  "git_commit": "$git_commit",
+  "git_status": "$git_status"
+}
+EOF
 }
 
 enable_timer() {
