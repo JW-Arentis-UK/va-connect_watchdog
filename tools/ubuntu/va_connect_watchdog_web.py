@@ -956,10 +956,10 @@ def render_page(status: Dict[str, Any]) -> str:
         ...(checks.ports || []).map((item) => `<div class="item"><strong>TCP: ${{item.host}}:${{item.port}}</strong><br><span class="${{badge(!!item.ok)}}">${{item.ok ? 'Reachable' : 'Failed'}}</span><br><code>${{item.detail || ''}}</code></div>`)
       ].join('');
 
-      document.getElementById('events').innerHTML = (status.recent_events || []).map((event) => {
-        const summary = event.summary || { title: (event.event || 'event'), detail: '', severity: 'info', ts: event.ts || '' };
+      document.getElementById('events').innerHTML = (status.recent_events || []).map((event) => {{
+        const summary = event.summary || {{ title: (event.event || 'event'), detail: '', severity: 'info', ts: event.ts || '' }};
         return `<div class="item"><strong>${{summary.title}}</strong><br><span class="hint">${{summary.ts || ''}}</span><br>${{summary.detail || ''}}<br><code>${{JSON.stringify(event)}}</code></div>`;
-      }).join('');
+      }}).join('');
       document.getElementById('nextSteps').innerHTML = (status.next_steps || []).map((step) => `<li>${{step}}</li>`).join('');
       document.getElementById('timeline').innerHTML = (status.timeline || []).map((item) => (
         `<div class="timeline-card ${{item.severity || ''}}"><div class="timeline-time">${{item.ts || ''}}</div><div class="timeline-title">${{item.title || ''}}</div><div>${{item.detail || ''}}</div></div>`
