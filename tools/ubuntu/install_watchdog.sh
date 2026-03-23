@@ -7,6 +7,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 INSTALL_DIR="${INSTALL_DIR:-/opt/va-connect-watchdog}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
+BIN_DIR="${BIN_DIR:-/usr/local/bin}"
 SERVICE_NAME="va-connect-watchdog.service"
 TIMER_NAME="va-connect-watchdog.timer"
 SITE_SERVICE_NAME="va-connect-site-watchdog.service"
@@ -25,10 +26,28 @@ require_root() {
 
 install_files() {
   mkdir -p "$INSTALL_DIR"
+  mkdir -p "$BIN_DIR"
 
   install -m 755 "$SCRIPT_DIR/va_connect_watchdog.sh" "$INSTALL_DIR/va_connect_watchdog.sh"
   install -m 755 "$SCRIPT_DIR/va_connect_site_watchdog.py" "$INSTALL_DIR/va_connect_site_watchdog.py"
   install -m 755 "$SCRIPT_DIR/va_connect_watchdog_web.py" "$INSTALL_DIR/va_connect_watchdog_web.py"
+  install -m 755 "$SCRIPT_DIR/update_watchdog.sh" "$INSTALL_DIR/update_watchdog.sh"
+  install -m 755 "$SCRIPT_DIR/git_update_watchdog.sh" "$INSTALL_DIR/git_update_watchdog.sh"
+  install -m 755 "$SCRIPT_DIR/restart_watchdog_services.sh" "$INSTALL_DIR/restart_watchdog_services.sh"
+
+  cat > "$BIN_DIR/watchdog-update" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+bash "$INSTALL_DIR/git_update_watchdog.sh" "\$@"
+EOF
+  chmod 755 "$BIN_DIR/watchdog-update"
+
+  cat > "$BIN_DIR/watchdog-restart" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+sudo bash "$INSTALL_DIR/restart_watchdog_services.sh" "\$@"
+EOF
+  chmod 755 "$BIN_DIR/watchdog-restart"
 
   if [[ ! -f "$ENV_TARGET" ]]; then
     install -m 644 "$ENV_EXAMPLE_SOURCE" "$ENV_TARGET"
@@ -70,6 +89,9 @@ Next steps:
 5. Check site watchdog logs: journalctl -u $SITE_SERVICE_NAME -n 50 --no-pager
 6. Open the web UI on http://<encoder-ip>:8787/
 7. Note: the legacy $TIMER_NAME is disabled by this installer.
+8. Easy commands:
+   watchdog-update
+   watchdog-restart
 EOF
 }
 

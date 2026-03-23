@@ -55,4 +55,5 @@ For harder remote-site faults, it also includes a continuous site watchdog that:
 - Snapshots now include extra PC-health and recording-storage evidence for post-fault review.
 - On the next boot, the watchdog now captures a previous-boot review if the machine appears to have restarted unexpectedly.
 - The Ubuntu tooling now supports GitHub-based bootstrap and update scripts for repeatable deployment on the gateway PC.
+- The installer also creates easy operator commands: `watchdog-update` and `watchdog-restart`.
 - If VA-Connect already has its own `systemd` service, native `systemd` restart rules may be a better fit than an external watchdog.

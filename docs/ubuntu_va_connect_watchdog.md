@@ -114,6 +114,19 @@ That script will:
 - restart the live watchdog services
 - keep the legacy minute timer disabled
 
+The installer also creates simple commands in `/usr/local/bin`:
+
+```bash
+watchdog-update
+watchdog-restart
+```
+
+So on the gateway PC, once installed, updating is as simple as:
+
+```bash
+watchdog-update
+```
+
 ## 1. Copy the files to the Ubuntu machine
 
 Place the watchdog folder somewhere durable, for example:
