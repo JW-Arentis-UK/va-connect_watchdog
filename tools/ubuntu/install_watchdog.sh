@@ -120,8 +120,10 @@ Next steps:
 6. Open the web UI on http://<encoder-ip>:8787/
 7. Note: the legacy $TIMER_NAME is disabled by this installer.
 8. Easy commands:
+   sudo bash $INSTALL_DIR/update_watchdog.sh
    watchdog-update
    watchdog-restart
+9. `update_watchdog.sh` now pulls from Git first when this folder is a clean git checkout.
 EOF
 }
 

@@ -33,7 +33,7 @@ main() {
     run_as_repo_user git pull --ff-only
   fi
 
-  sudo bash "$REPO_DIR/tools/ubuntu/update_watchdog.sh"
+  sudo WATCHDOG_SKIP_GIT_PULL=1 bash "$REPO_DIR/tools/ubuntu/update_watchdog.sh"
 }
 
 main "$@"
