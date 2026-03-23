@@ -4,6 +4,7 @@ import html
 import json
 import os
 import socket
+import subprocess
 import time
 from datetime import datetime
 from http import HTTPStatus
@@ -18,6 +19,8 @@ STATE_PATH = Path("/var/lib/va-connect-site-watchdog/state.json")
 EVENTS_PATH = Path("/var/log/va-connect-site-watchdog/events.jsonl")
 METRICS_PATH = Path("/var/log/va-connect-site-watchdog/metrics.jsonl")
 BUILD_INFO_PATH = Path("/opt/va-connect-watchdog/build-info.json")
+UPDATE_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-update-status.json")
+UPDATE_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-update.log")
 
 
 def read_json(path: Path, default):
@@ -32,6 +35,10 @@ def read_json(path: Path, default):
 def write_json(path: Path, payload) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def now_iso() -> str:
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "+00:00"
 
 
 def load_config() -> Dict[str, Any]:
@@ -180,6 +187,7 @@ def status_payload() -> Dict[str, Any]:
         "config": load_config(),
         "state": state,
         "build_info": read_json(BUILD_INFO_PATH, {}),
+        "update_status": read_json(UPDATE_STATUS_PATH, {"state": "idle"}),
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "next_steps": next_steps,
         "recent_events": recent_events(),
@@ -189,8 +197,53 @@ def status_payload() -> Dict[str, Any]:
             "events": str(EVENTS_PATH),
             "metrics": str(METRICS_PATH),
             "build_info": str(BUILD_INFO_PATH),
+            "update_status": str(UPDATE_STATUS_PATH),
+            "update_log": str(UPDATE_LOG_PATH),
         },
     }
+
+
+def launch_update() -> Dict[str, Any]:
+    current = read_json(UPDATE_STATUS_PATH, {})
+    if current.get("state") == "running":
+        return {"ok": False, "message": "Update already running."}
+
+    payload = {
+        "state": "running",
+        "started_at": now_iso(),
+        "finished_at": "",
+        "message": "Git update requested from web UI.",
+        "log_path": str(UPDATE_LOG_PATH),
+    }
+    write_json(UPDATE_STATUS_PATH, payload)
+    UPDATE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    command = (
+        "python3 - <<'PY'\n"
+        "import json, subprocess\n"
+        "from datetime import datetime\n"
+        "from pathlib import Path\n"
+        "status_path = Path('/var/lib/va-connect-site-watchdog/web-update-status.json')\n"
+        "log_path = Path('/var/log/va-connect-site-watchdog/web-update.log')\n"
+        "cmd = ['bash', '/usr/local/bin/watchdog-update']\n"
+        "with log_path.open('ab') as log:\n"
+        "    log.write((f'\\n===== Web update started {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
+        "    result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)\n"
+        "payload = json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
+        "payload['state'] = 'ok' if result.returncode == 0 else 'failed'\n"
+        "payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "payload['return_code'] = result.returncode\n"
+        "payload['message'] = 'Update completed successfully.' if result.returncode == 0 else 'Update failed. Check web-update.log.'\n"
+        "status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "PY"
+    )
+    subprocess.Popen(
+        ["nohup", "bash", "-lc", command],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return {"ok": True, "message": "Update started.", "status": payload}
 
 
 def authorized(path: str, headers) -> bool:
@@ -349,6 +402,13 @@ def render_page(status: Dict[str, Any]) -> str:
     .events .item code {{
       white-space: pre-wrap;
     }}
+    .update-row {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-top: 10px;
+    }}
   </style>
 </head>
 <body>
@@ -432,6 +492,11 @@ def render_page(status: Dict[str, Any]) -> str:
         <button class="secondary" onclick="runAction('run_checks')">Run checks now</button>
         <button class="secondary" onclick="runAction('snapshot')">Capture snapshot</button>
         <button class="warnbtn" onclick="runAction('restart_network')">Restart network</button>
+        <button class="secondary" onclick="runAction('update_watchdog')">Update from GitHub</button>
+        <div class="update-row">
+          <span class="badge {'warn' if status['update_status'].get('state') == 'running' else ('danger' if status['update_status'].get('state') == 'failed' else '')}" id="updateState">{html.escape(str(status["update_status"].get("state", "idle")).title())}</span>
+          <span id="updateMessage">{html.escape(str(status["update_status"].get("message", "No web update run yet.")))}</span>
+        </div>
       </section>
       <section class="panel">
         <h2>Latest checks</h2>
@@ -525,6 +590,8 @@ def render_page(status: Dict[str, Any]) -> str:
         <p><code>{html.escape(status["paths"]["events"])}</code></p>
         <p><code>{html.escape(status["paths"].get("metrics", ""))}</code></p>
         <p><code>{html.escape(status["paths"].get("build_info", ""))}</code></p>
+        <p><code>{html.escape(status["paths"].get("update_status", ""))}</code></p>
+        <p><code>{html.escape(status["paths"].get("update_log", ""))}</code></p>
       </section>
     </div>
   </div>
@@ -569,6 +636,11 @@ def render_page(status: Dict[str, Any]) -> str:
         `<div class="item"><strong>${{event.event}}</strong><br><code>${{JSON.stringify(event)}}</code></div>`
       )).join('');
       document.getElementById('nextSteps').innerHTML = (status.next_steps || []).map((step) => `<li>${{step}}</li>`).join('');
+      const updateState = status.update_status || {{}};
+      const updateBadge = document.getElementById('updateState');
+      updateBadge.className = `badge ${{updateState.state === 'running' ? 'warn' : (updateState.state === 'failed' ? 'danger' : '')}}`;
+      updateBadge.textContent = (updateState.state || 'idle').toUpperCase();
+      document.getElementById('updateMessage').textContent = updateState.message || 'No web update run yet.';
 
       document.querySelector('.overview-grid').innerHTML = `
         <section class="stat-card"><div class="stat-label">Current state</div><div class="stat-value">${{status.state.fault_active ? 'Fault' : 'Healthy'}}</div></section>
@@ -749,11 +821,16 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
 
     async function runAction(action) {{
-      await fetch('/api/action' + authQuery, {{
+      const response = await fetch('/api/action' + authQuery, {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
         body: JSON.stringify({{ action }})
       }});
+      if (!response.ok) {{
+        const payload = await response.json().catch(() => ({{ message: 'Action failed.' }}));
+        alert(payload.message || 'Action failed.');
+        return;
+      }}
       await fetchStatus();
     }}
 
@@ -823,6 +900,10 @@ class Handler(BaseHTTPRequestHandler):
                 "snapshot": Path("/var/lib/va-connect-site-watchdog/manual-snapshot"),
                 "restart_network": Path("/var/lib/va-connect-site-watchdog/manual-restart-network"),
             }
+            if action == "update_watchdog":
+                result = launch_update()
+                self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT)
+                return
             marker = action_map.get(action)
             if not marker:
                 self._send_json({"ok": False, "message": f"Unknown action: {action}"}, HTTPStatus.BAD_REQUEST)
