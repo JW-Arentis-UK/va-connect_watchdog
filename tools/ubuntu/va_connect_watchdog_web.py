@@ -163,12 +163,25 @@ def status_payload() -> Dict[str, Any]:
             bad = [item.get("host") for item in checks.get("pings", []) if not item.get("ok")]
             diagnosis_detail = "WAN issue: " + ", ".join(bad) if bad else "A monitored internet host failed."
 
+    next_steps: List[str] = []
+    if state.get("fault_active"):
+        next_steps.append("Check Latest checks first to see whether the app, a service, WAN, or the RUT target is currently failing.")
+    elif state.get("unexpected_reboot_count", 0):
+        next_steps.append("Review Recent events for the exact time the unexpected reboot was detected.")
+        next_steps.append("Open the latest previous-boot snapshot to inspect journal and kernel messages from before the restart.")
+    else:
+        next_steps.append("Watch Recent events for the next change in state or reboot detection.")
+
+    next_steps.append("Use PC stats to look for CPU, memory, or disk changes building before a reboot or hang.")
+    next_steps.append("If it freezes overnight again, compare the last event time with the next boot's previous-boot snapshot.")
+
     return {
         "hostname": socket.gethostname(),
         "config": load_config(),
         "state": state,
         "build_info": read_json(BUILD_INFO_PATH, {}),
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
+        "next_steps": next_steps,
         "recent_events": recent_events(),
         "paths": {
             "config": str(CONFIG_PATH),
@@ -202,26 +215,30 @@ def render_page(status: Dict[str, Any]) -> str:
     body {{
       margin: 0;
       font-family: "Segoe UI", Tahoma, sans-serif;
+      font-size: 14px;
+      line-height: 1.35;
       background: linear-gradient(180deg, #eff5ef 0%, #e5efe7 100%);
       color: #17301f;
     }}
-    .wrap {{ max-width: 1520px; margin: 0 auto; padding: 24px; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }}
-    .overview-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 16px; }}
+    .wrap {{ max-width: 1600px; margin: 0 auto; padding: 18px; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }}
+    .overview-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 14px; }}
     .panel {{
       background: rgba(255,255,255,0.82);
       border: 1px solid #ccd9cf;
       border-radius: 18px;
-      padding: 18px;
+      padding: 14px;
       box-shadow: 0 10px 28px rgba(24, 48, 31, 0.08);
     }}
-    h1 {{ margin: 0 0 8px; }}
-    .sub {{ color: #607064; margin-bottom: 18px; }}
+    h1 {{ margin: 0 0 6px; font-size: 1.2rem; }}
+    h2 {{ margin: 0 0 10px; font-size: 0.95rem; }}
+    p {{ margin: 0 0 10px; }}
+    .sub {{ color: #607064; margin-bottom: 14px; font-size: 0.9rem; }}
     .badge {{
       display: inline-block;
-      padding: 6px 10px;
+      padding: 5px 9px;
       border-radius: 999px;
-      font-size: 0.85rem;
+      font-size: 0.78rem;
       font-weight: 700;
       background: #e0f0e4;
       color: #246241;
@@ -232,14 +249,14 @@ def render_page(status: Dict[str, Any]) -> str:
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 10px 0;
+      padding: 8px 0;
       border-bottom: 1px solid #dbe4dc;
     }}
     label:last-child {{ border-bottom: 0; }}
     button {{
       border: 0;
       border-radius: 12px;
-      padding: 12px 14px;
+      padding: 9px 12px;
       background: #285f83;
       color: white;
       font-weight: 700;
@@ -250,46 +267,47 @@ def render_page(status: Dict[str, Any]) -> str:
     button.secondary {{ background: #4c6d55; }}
     button.warnbtn {{ background: #956615; }}
     .targets, .events {{ display: grid; gap: 10px; }}
-    .targets {{ grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }}
+    .targets {{ grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }}
     .item {{
       border: 1px solid #dbe4dc;
       border-radius: 14px;
-      padding: 10px 12px;
+      padding: 8px 10px;
       background: rgba(255,255,255,0.66);
+      font-size: 0.83rem;
     }}
     .stat-card {{
       border: 1px solid #dbe4dc;
       border-radius: 16px;
-      padding: 14px;
+      padding: 12px;
       background: rgba(255,255,255,0.78);
     }}
     .hero {{
       display: grid;
       grid-template-columns: minmax(240px, 1.1fr) minmax(180px, 0.9fr);
-      gap: 16px;
-      margin-top: 16px;
+      gap: 14px;
+      margin-top: 14px;
     }}
     .hero-main {{
       border: 1px solid #ccd9cf;
       border-radius: 18px;
-      padding: 18px;
+      padding: 14px;
       background: linear-gradient(135deg, rgba(40,95,131,0.1), rgba(76,109,85,0.08));
     }}
-    .hero-title {{ font-size: 1.8rem; font-weight: 800; margin: 4px 0 10px; }}
-    .hero-detail {{ font-size: 1rem; color: #415448; }}
+    .hero-title {{ font-size: 1.18rem; font-weight: 800; margin: 3px 0 8px; }}
+    .hero-detail {{ font-size: 0.9rem; color: #415448; }}
     .status-strip {{
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      margin-top: 12px;
+      margin-top: 10px;
     }}
-    .stat-label {{ color: #607064; font-size: 0.85rem; }}
-    .stat-value {{ font-size: 1.6rem; font-weight: 700; margin-top: 6px; }}
+    .stat-label {{ color: #607064; font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.03em; }}
+    .stat-value {{ font-size: 1.25rem; font-weight: 700; margin-top: 4px; }}
     .formgrid {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 12px;
-      margin-top: 12px;
+      gap: 10px;
+      margin-top: 10px;
     }}
     .field {{
       display: grid;
@@ -306,20 +324,30 @@ def render_page(status: Dict[str, Any]) -> str:
       box-sizing: border-box;
       border: 1px solid #c7d6ca;
       border-radius: 10px;
-      padding: 10px 12px;
+      padding: 8px 10px;
       font: inherit;
       background: #fff;
       color: #17301f;
     }}
-    textarea {{ min-height: 96px; resize: vertical; }}
-    .hint {{ color: #607064; font-size: 0.9rem; }}
-    code {{ font-family: Consolas, monospace; font-size: 0.9rem; word-break: break-word; }}
+    textarea {{ min-height: 84px; resize: vertical; }}
+    .hint {{ color: #607064; font-size: 0.8rem; }}
+    code {{ font-family: Consolas, monospace; font-size: 0.78rem; word-break: break-word; }}
     canvas {{
       width: 100%;
-      height: 280px;
+      height: 240px;
       border: 1px solid #dbe4dc;
       border-radius: 14px;
       background: rgba(255,255,255,0.72);
+    }}
+    .next-steps {{
+      margin: 8px 0 0;
+      padding-left: 18px;
+      display: grid;
+      gap: 8px;
+      font-size: 0.88rem;
+    }}
+    .events .item code {{
+      white-space: pre-wrap;
     }}
   </style>
 </head>
@@ -341,9 +369,9 @@ def render_page(status: Dict[str, Any]) -> str:
       </section>
       <section class="panel">
         <div class="stat-label">What to look at next</div>
-        <p><strong>Recent events</strong> for fault transitions and reboot detections.</p>
-        <p><strong>PC stats</strong> for memory, CPU, and recording-disk changes before a reboot.</p>
-        <p><strong>Snapshots</strong> for previous-boot review after an overnight freeze.</p>
+        <ol class="next-steps" id="nextSteps">
+          {"".join(f"<li>{html.escape(step)}</li>" for step in status.get("next_steps", []))}
+        </ol>
       </section>
     </div>
     <div class="overview-grid">
@@ -540,6 +568,7 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('events').innerHTML = (status.recent_events || []).map((event) => (
         `<div class="item"><strong>${{event.event}}</strong><br><code>${{JSON.stringify(event)}}</code></div>`
       )).join('');
+      document.getElementById('nextSteps').innerHTML = (status.next_steps || []).map((step) => `<li>${{step}}</li>`).join('');
 
       document.querySelector('.overview-grid').innerHTML = `
         <section class="stat-card"><div class="stat-label">Current state</div><div class="stat-value">${{status.state.fault_active ? 'Fault' : 'Healthy'}}</div></section>
