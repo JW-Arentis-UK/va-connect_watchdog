@@ -10,7 +10,7 @@ from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 
@@ -40,6 +40,13 @@ def write_json(path: Path, payload) -> None:
 
 def now_iso() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat() + "+00:00"
+
+
+def parse_iso(value: str) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 
 def load_config() -> Dict[str, Any]:
@@ -116,7 +123,7 @@ def sanitize_patch(data: Dict[str, Any]) -> Dict[str, Any]:
     return patch
 
 
-def recent_events(limit: int = 20) -> List[Dict[str, Any]]:
+def recent_events(limit: int = 30) -> List[Dict[str, Any]]:
     if not EVENTS_PATH.exists():
         return []
     events = []
@@ -148,7 +155,7 @@ def recent_metrics(hours: int = 24) -> List[Dict[str, Any]]:
     return points[-3000:]
 
 
-def latest_previous_boot_snapshot() -> Path | None:
+def latest_previous_boot_snapshot() -> Optional[Path]:
     if not SNAPSHOT_DIR.exists():
         return None
     candidates = sorted(
@@ -162,7 +169,7 @@ def latest_previous_boot_snapshot() -> Path | None:
 def extract_notable_lines(path: Path, limit: int = 8) -> List[str]:
     if not path.exists():
         return []
-    keywords = (
+    high_keywords = (
         "error",
         "failed",
         "failure",
@@ -172,21 +179,37 @@ def extract_notable_lines(path: Path, limit: int = 8) -> List[str]:
         "panic",
         "watchdog",
         "hung",
-        "i/o",
+        "i/o error",
         "reset",
         "oom",
         "out of memory",
+        "memory error",
         "nvrm",
         "gpu",
-        "ext4",
-        "xfs",
-        "nvme",
-        "sda",
-        "network",
+        "call trace",
+        "blocked for more than",
+        "stack trace",
+    )
+    medium_keywords = (
         "teamviewer",
         "bridge",
         "esg",
         "sysops",
+        "network",
+        "link is down",
+        "dhcp",
+        "carrier",
+        "nvme",
+        "sda",
+        "ext4-fs warning",
+        "xfs",
+    )
+    ignore_terms = (
+        "mounted filesystem",
+        "unmounting filesystem",
+        "apparmor=",
+        "audit:",
+        "quota mode: none",
     )
     notable: List[str] = []
     seen = set()
@@ -195,13 +218,129 @@ def extract_notable_lines(path: Path, limit: int = 8) -> List[str]:
         if not line:
             continue
         lowered = line.lower()
-        if any(keyword in lowered for keyword in keywords):
+        if any(term in lowered for term in ignore_terms):
+            continue
+        if any(keyword in lowered for keyword in high_keywords) or any(keyword in lowered for keyword in medium_keywords):
             if line not in seen:
                 seen.add(line)
                 notable.append(line[:240])
         if len(notable) >= limit:
             break
     return notable
+
+
+def summarize_crash_findings(system_lines: List[str], kernel_lines: List[str]) -> List[str]:
+    findings: List[str] = []
+    combined = [*kernel_lines, *system_lines]
+    lowered = " \n".join(line.lower() for line in combined)
+
+    if "memory error" in lowered or "edac" in lowered:
+        findings.append("Memory-related kernel messages were seen before the reboot. This is worth treating as a possible hardware or platform-stability clue.")
+    if "oom" in lowered or "out of memory" in lowered:
+        findings.append("The previous boot shows signs of memory exhaustion, which could explain a hang or forced restart.")
+    if "i/o error" in lowered or "nvme" in lowered or "sda" in lowered:
+        findings.append("Storage-related messages appeared in the previous boot logs. Check whether the OS disk or recording disk showed instability.")
+    if "network" in lowered or "link is down" in lowered or "dhcp" in lowered:
+        findings.append("Network-related messages appeared before reboot. Compare these with any loss of remote access or RUT reachability.")
+    if "bridge" in lowered or "esg" in lowered or "sysops" in lowered:
+        findings.append("Videosoft service names appeared in the previous-boot logs. Compare their timing with the fault window.")
+
+    if not findings and (system_lines or kernel_lines):
+        findings.append("A previous-boot snapshot exists, but nothing strongly suspicious ranked above normal noise. Review the highlighted lines and full snapshot files if the fault repeats.")
+    if not findings:
+        findings.append("No previous-boot findings yet. The next detected reboot should populate this section.")
+    return findings[:4]
+
+
+def summarize_event(event: Dict[str, Any]) -> Dict[str, str]:
+    event_type = str(event.get("event", "event"))
+    ts = str(event.get("ts", ""))
+    severity = "info"
+    title = event_type.replace("_", " ").title()
+    detail = ""
+
+    if event_type == "unexpected_reboot_detected":
+        severity = "warn"
+        title = "Unexpected reboot detected"
+        detail = f"Boot changed after last check at {event.get('last_check_at', 'unknown')}."
+    elif event_type == "watchdog_reboot_observed":
+        title = "Watchdog reboot observed"
+        detail = "A reboot followed a watchdog-issued reboot command."
+    elif event_type == "fault_started":
+        severity = "danger"
+        checks = event.get("checks", {})
+        detail = summarize_fault_checks(checks)
+        title = "Fault started"
+    elif event_type == "recovered":
+        title = "Recovered"
+        duration = event.get("duration_seconds")
+        detail = f"System returned healthy after {duration}s." if duration is not None else "System returned healthy."
+    elif event_type == "snapshot":
+        title = "Snapshot captured"
+        detail = f"{event.get('reason', 'snapshot')} at {event.get('path', '')}"
+    elif event_type == "action":
+        action = str(event.get("action", "action"))
+        rc = event.get("return_code", "")
+        title = f"Action: {action}"
+        detail = f"Return code {rc}. {str(event.get('detail', ''))[:120]}"
+        severity = "warn" if str(rc) not in {"0", ""} else "info"
+    elif event_type == "post_action_check":
+        title = f"Post-action check: {event.get('action', 'action')}"
+        detail = summarize_fault_checks(event.get("checks", {}))
+    elif event_type == "heartbeat":
+        if event.get("status") == "fault":
+            severity = "warn"
+            title = "Fault heartbeat"
+            detail = f"Fault age {event.get('fault_age_seconds', '?')}s, reboot after {event.get('reboot_after_seconds', '?')}s."
+        else:
+            title = "Healthy heartbeat"
+            detail = "All monitored checks healthy."
+    elif event_type == "manual_check":
+        title = "Manual check"
+        detail = summarize_fault_checks(event.get("checks", {}))
+    elif event_type == "startup":
+        title = "Watchdog startup"
+        detail = "Site watchdog process started."
+    elif event_type == "error":
+        severity = "danger"
+        title = "Watchdog error"
+        detail = str(event.get("detail", ""))
+
+    return {"ts": ts, "title": title, "detail": detail, "severity": severity}
+
+
+def summarize_fault_checks(checks: Any) -> str:
+    if not isinstance(checks, dict) or not checks:
+        return "No check details recorded."
+    if checks.get("healthy") is True:
+        return "All monitored checks healthy."
+    if checks.get("app_ok") is False:
+        return "App process missing."
+    bad_services = [item.get("service") for item in checks.get("services", []) if not item.get("ok")]
+    if bad_services:
+        return "Service issue: " + ", ".join(str(item) for item in bad_services)
+    bad_ports = [f"{item.get('host')}:{item.get('port')}" for item in checks.get("ports", []) if not item.get("ok")]
+    if bad_ports:
+        return "LAN target issue: " + ", ".join(bad_ports)
+    bad_pings = [item.get("host") for item in checks.get("pings", []) if not item.get("ok")]
+    if bad_pings:
+        return "WAN issue: " + ", ".join(str(item) for item in bad_pings)
+    return "A fault was recorded, but no simple summary matched."
+
+
+def build_incident_timeline(events: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    interesting = []
+    for event in events:
+        event_type = str(event.get("event", ""))
+        if event_type in {"heartbeat"} and event.get("status") != "fault":
+            continue
+        if event_type == "heartbeat" and event.get("status") == "fault":
+            if interesting and interesting[-1].get("title") == "Fault heartbeat":
+                continue
+        interesting.append(summarize_event(event))
+        if len(interesting) >= 12:
+            break
+    return interesting
 
 
 def crash_review_payload() -> Dict[str, Any]:
@@ -227,9 +366,37 @@ def crash_review_payload() -> Dict[str, Any]:
         "title": "Latest previous-boot review",
         "detail": detail,
         "snapshot_path": str(snapshot),
+        "findings": summarize_crash_findings(system_lines, kernel_lines),
         "system_lines": system_lines,
         "kernel_lines": kernel_lines,
     }
+
+
+def normalize_update_status(update_status: Dict[str, Any], build_info: Dict[str, Any]) -> Dict[str, Any]:
+    status = dict(update_status or {})
+    if status.get("state") != "running":
+        return status
+
+    started_at = parse_iso(str(status.get("started_at", "")))
+    deployed_at = parse_iso(str(build_info.get("deployed_at", "")))
+    now = datetime.utcnow().astimezone()
+
+    if started_at and deployed_at and deployed_at >= started_at:
+        status["state"] = "ok"
+        status["finished_at"] = status.get("finished_at") or build_info.get("deployed_at", "")
+        status["to_build"] = status.get("to_build") or build_info.get("git_commit", "unknown")
+        status["message"] = "Update appears to have completed after the web service restarted."
+        write_json(UPDATE_STATUS_PATH, status)
+        return status
+
+    if started_at and (now - started_at).total_seconds() > 300:
+        status["state"] = "failed"
+        status["finished_at"] = status.get("finished_at") or now_iso()
+        status["message"] = "Web update stayed in running state too long. Check web-update.log."
+        write_json(UPDATE_STATUS_PATH, status)
+        return status
+
+    return status
 
 
 def status_payload() -> Dict[str, Any]:
@@ -267,16 +434,25 @@ def status_payload() -> Dict[str, Any]:
     next_steps.append("Use PC stats to look for CPU, memory, or disk changes building before a reboot or hang.")
     next_steps.append("If it freezes overnight again, compare the last event time with the next boot's previous-boot snapshot.")
 
+    events = recent_events()
+    summarized_events = []
+    for event in events:
+        enriched = dict(event)
+        enriched["summary"] = summarize_event(event)
+        summarized_events.append(enriched)
+    build_info = read_json(BUILD_INFO_PATH, {})
+    update_status = normalize_update_status(read_json(UPDATE_STATUS_PATH, {"state": "idle"}), build_info)
     return {
         "hostname": socket.gethostname(),
         "config": load_config(),
         "state": state,
-        "build_info": read_json(BUILD_INFO_PATH, {}),
-        "update_status": read_json(UPDATE_STATUS_PATH, {"state": "idle"}),
+        "build_info": build_info,
+        "update_status": update_status,
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "next_steps": next_steps,
         "crash_review": crash_review_payload(),
-        "recent_events": recent_events(),
+        "recent_events": summarized_events,
+        "timeline": build_incident_timeline(events),
         "paths": {
             "config": str(CONFIG_PATH),
             "state": str(STATE_PATH),
@@ -508,6 +684,21 @@ def render_page(status: Dict[str, Any]) -> str:
       gap: 6px;
       font-size: 0.85rem;
     }}
+    .timeline {{
+      display: grid;
+      gap: 10px;
+    }}
+    .timeline-card {{
+      border: 1px solid #dbe4dc;
+      border-left: 4px solid #5c7b66;
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.74);
+    }}
+    .timeline-card.warn {{ border-left-color: #b47b1f; }}
+    .timeline-card.danger {{ border-left-color: #a23d3d; }}
+    .timeline-time {{ color: #607064; font-size: 0.75rem; margin-bottom: 4px; }}
+    .timeline-title {{ font-weight: 700; margin-bottom: 4px; }}
   </style>
 </head>
 <body>
@@ -605,6 +796,12 @@ def render_page(status: Dict[str, Any]) -> str:
     </div>
 
     <div class="grid" style="margin-top:16px;">
+      <section class="panel">
+        <h2>Incident timeline</h2>
+        <div class="timeline" id="timeline">
+          {"".join(f'<div class="timeline-card {html.escape(item.get("severity", ""))}"><div class="timeline-time">{html.escape(item.get("ts", ""))}</div><div class="timeline-title">{html.escape(item.get("title", ""))}</div><div>{html.escape(item.get("detail", ""))}</div></div>' for item in status.get("timeline", []))}
+        </div>
+      </section>
       <section class="panel" style="grid-column: 1 / -1;">
         <h2>PC Stats - Last 24 Hours</h2>
         <canvas id="metricsChart" width="1000" height="280"></canvas>
@@ -618,6 +815,9 @@ def render_page(status: Dict[str, Any]) -> str:
         <p><strong id="crashReviewTitle">{html.escape(status["crash_review"]["title"])}</strong></p>
         <p id="crashReviewDetail">{html.escape(status["crash_review"]["detail"])}</p>
         <p><code id="crashReviewPath">{html.escape(status["crash_review"]["snapshot_path"])}</code></p>
+        <ul class="review-list" id="crashReviewFindings">
+          {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("findings", []))}
+        </ul>
         <div class="grid">
           <section class="item">
             <strong>Previous boot system log highlights</strong>
@@ -756,14 +956,21 @@ def render_page(status: Dict[str, Any]) -> str:
         ...(checks.ports || []).map((item) => `<div class="item"><strong>TCP: ${{item.host}}:${{item.port}}</strong><br><span class="${{badge(!!item.ok)}}">${{item.ok ? 'Reachable' : 'Failed'}}</span><br><code>${{item.detail || ''}}</code></div>`)
       ].join('');
 
-      document.getElementById('events').innerHTML = (status.recent_events || []).map((event) => (
-        `<div class="item"><strong>${{event.event}}</strong><br><code>${{JSON.stringify(event)}}</code></div>`
-      )).join('');
+      document.getElementById('events').innerHTML = (status.recent_events || []).map((event) => {
+        const summary = event.summary || { title: (event.event || 'event'), detail: '', severity: 'info', ts: event.ts || '' };
+        return `<div class="item"><strong>${{summary.title}}</strong><br><span class="hint">${{summary.ts || ''}}</span><br>${{summary.detail || ''}}<br><code>${{JSON.stringify(event)}}</code></div>`;
+      }).join('');
       document.getElementById('nextSteps').innerHTML = (status.next_steps || []).map((step) => `<li>${{step}}</li>`).join('');
+      document.getElementById('timeline').innerHTML = (status.timeline || []).map((item) => (
+        `<div class="timeline-card ${{item.severity || ''}}"><div class="timeline-time">${{item.ts || ''}}</div><div class="timeline-title">${{item.title || ''}}</div><div>${{item.detail || ''}}</div></div>`
+      )).join('') || '<div class="item">No incident timeline entries yet.</div>';
       const crashReview = status.crash_review || {{}};
       document.getElementById('crashReviewTitle').textContent = crashReview.title || 'Crash review unavailable';
       document.getElementById('crashReviewDetail').textContent = crashReview.detail || '';
       document.getElementById('crashReviewPath').textContent = crashReview.snapshot_path || '';
+      document.getElementById('crashReviewFindings').innerHTML = (crashReview.findings || []).length
+        ? (crashReview.findings || []).map((line) => `<li>${{line}}</li>`).join('')
+        : '<li>No crash-review findings yet.</li>';
       document.getElementById('crashReviewSystem').innerHTML = (crashReview.system_lines || []).length
         ? (crashReview.system_lines || []).map((line) => `<li>${{line}}</li>`).join('')
         : '<li>No notable system-log lines extracted yet.</li>';
