@@ -707,6 +707,31 @@ def render_page(status: Dict[str, Any]) -> str:
       gap: 14px;
       align-items: start;
     }}
+    .status-grid {{
+      display: grid;
+      grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
+      gap: 14px;
+      margin-top: 16px;
+    }}
+    .ops-grid {{
+      display: grid;
+      grid-template-columns: minmax(360px, 1fr) minmax(480px, 1fr);
+      gap: 14px;
+      margin-top: 16px;
+      align-items: start;
+    }}
+    .timeline-panel {{
+      min-height: 360px;
+    }}
+    .checks-panel {{
+      min-height: 360px;
+    }}
+    .controls-panel {{
+      min-height: 260px;
+    }}
+    .summary-panel {{
+      min-height: 170px;
+    }}
     .timeline-empty {{
       color: #607064;
       font-size: 0.84rem;
@@ -767,15 +792,15 @@ def render_page(status: Dict[str, Any]) -> str:
         <div class="stat-value" style="font-size:1rem;">{html.escape(str(status["build_info"].get("git_commit", "unknown")))}</div>
       </section>
     </div>
-    <div class="grid">
-      <section class="panel">
+    <div class="status-grid">
+      <section class="panel summary-panel">
         <div class="badge {'danger' if status['state'].get('fault_active') else ''}">{'Fault Active' if status['state'].get('fault_active') else 'Healthy / Idle'}</div>
         <p>Monitoring state: <strong>{html.escape(str(status["state"].get("monitoring_state", "unknown")))}</strong></p>
         <p>Last check: <strong>{html.escape(str(status["state"].get("last_check_at", "never")))}</strong></p>
         <p>Last healthy: <strong>{html.escape(str(status["state"].get("last_healthy_at", "unknown")))}</strong></p>
         <p>Failure count: <strong>{html.escape(str(status["state"].get("failure_count", 0)))}</strong></p>
       </section>
-      <section class="panel">
+      <section class="panel summary-panel">
         <div class="badge">{html.escape(str(cfg["web_bind"]))}:{cfg["web_port"]}</div>
         <p>Base reboot timer: <strong>{cfg["base_reboot_timeout_seconds"]}s</strong></p>
         <p>Max reboot timer: <strong>{cfg["max_reboot_timeout_seconds"]}s</strong></p>
@@ -784,8 +809,22 @@ def render_page(status: Dict[str, Any]) -> str:
       </section>
     </div>
 
-    <div class="grid" style="margin-top:16px;">
+    <div class="analysis-grid" style="margin-top:16px;">
+      <section class="panel timeline-panel">
+        <h2>Incident timeline</h2>
+        <div class="timeline" id="timeline">
+          {"".join(f'<div class="timeline-card {html.escape(item.get("severity", ""))}"><div class="timeline-time">{html.escape(item.get("ts", ""))}</div><div class="timeline-title">{html.escape(item.get("title", ""))}</div><div>{html.escape(item.get("detail", ""))}</div></div>' for item in status.get("timeline", []))}
+        </div>
+      </section>
       <section class="panel">
+        <h2>PC Stats - Last 24 Hours</h2>
+        <canvas id="metricsChart" width="1000" height="280"></canvas>
+        <p class="hint">CPU, memory, root disk, and recording disk usage are plotted as percentages.</p>
+      </section>
+    </div>
+
+    <div class="ops-grid">
+      <section class="panel controls-panel">
         <h2>Controls</h2>
         <label>Monitoring enabled <input type="checkbox" id="monitoring_enabled" {'checked' if cfg['monitoring_enabled'] else ''}></label>
         <label>App auto-restart <input type="checkbox" id="app_restart_enabled" {'checked' if cfg['app_restart_enabled'] else ''}></label>
@@ -802,23 +841,9 @@ def render_page(status: Dict[str, Any]) -> str:
         </div>
         <p class="hint" id="updateMeta">{html.escape(str(status["update_status"].get("from_build", "unknown")))} to {html.escape(str(status["update_status"].get("to_build", "unknown")))} | {html.escape(str(status["update_status"].get("finished_at", "not finished yet")))}</p>
       </section>
-      <section class="panel">
+      <section class="panel checks-panel">
         <h2>Latest checks</h2>
         <div class="targets" id="targets"></div>
-      </section>
-    </div>
-
-    <div class="analysis-grid" style="margin-top:16px;">
-      <section class="panel">
-        <h2>Incident timeline</h2>
-        <div class="timeline" id="timeline">
-          {"".join(f'<div class="timeline-card {html.escape(item.get("severity", ""))}"><div class="timeline-time">{html.escape(item.get("ts", ""))}</div><div class="timeline-title">{html.escape(item.get("title", ""))}</div><div>{html.escape(item.get("detail", ""))}</div></div>' for item in status.get("timeline", []))}
-        </div>
-      </section>
-      <section class="panel">
-        <h2>PC Stats - Last 24 Hours</h2>
-        <canvas id="metricsChart" width="1000" height="280"></canvas>
-        <p class="hint">CPU, memory, root disk, and recording disk usage are plotted as percentages.</p>
       </section>
     </div>
 
