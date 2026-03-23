@@ -599,6 +599,7 @@ def render_page(status: Dict[str, Any]) -> str:
         <p><code>{html.escape(status["paths"].get("build_info", ""))}</code></p>
         <p><code>{html.escape(status["paths"].get("update_status", ""))}</code></p>
         <p><code>{html.escape(status["paths"].get("update_log", ""))}</code></p>
+        <p><code>{html.escape(str(status["build_info"].get("source_repo_dir", "unknown")))}</code></p>
       </section>
     </div>
   </div>

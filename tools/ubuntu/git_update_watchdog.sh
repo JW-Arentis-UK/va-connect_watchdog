@@ -2,9 +2,15 @@
 
 set -euo pipefail
 
+INSTALL_DIR="${INSTALL_DIR:-/opt/va-connect-watchdog}"
+REPO_DIR_FILE="$INSTALL_DIR/repo-dir.txt"
 DEFAULT_REPO_DIR="$HOME/Desktop/va-connect-watchdog"
 REPO_DIR="${1:-${REPO_DIR:-$DEFAULT_REPO_DIR}}"
 BRANCH="${BRANCH:-}"
+
+if [[ -f "$REPO_DIR_FILE" && -z "${1:-}" && -z "${REPO_DIR:-}" ]]; then
+  REPO_DIR="$(head -n 1 "$REPO_DIR_FILE")"
+fi
 
 run_as_repo_user() {
   local repo_owner

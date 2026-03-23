@@ -9,6 +9,7 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/va-connect-watchdog}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
 BIN_DIR="${BIN_DIR:-/usr/local/bin}"
 BUILD_INFO_TARGET="$INSTALL_DIR/build-info.json"
+REPO_DIR_TARGET="$INSTALL_DIR/repo-dir.txt"
 SERVICE_NAME="va-connect-watchdog.service"
 TIMER_NAME="va-connect-watchdog.timer"
 SITE_SERVICE_NAME="va-connect-site-watchdog.service"
@@ -94,9 +95,12 @@ write_build_info() {
   "deployed_at": "$deployed_at",
   "git_branch": "$git_branch",
   "git_commit": "$git_commit",
-  "git_status": "$git_status"
+  "git_status": "$git_status",
+  "source_repo_dir": "$PROJECT_ROOT"
 }
 EOF
+
+  printf '%s\n' "$PROJECT_ROOT" > "$REPO_DIR_TARGET"
 }
 
 enable_timer() {
