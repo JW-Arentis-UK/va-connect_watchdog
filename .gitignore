@@ -8,3 +8,7 @@ tools/ubuntu/va-connect.env
 # macOS / Windows editor noise
 .DS_Store
 Thumbs.db
+tools/ubuntu/Untitled Document*
+tools/ubuntu/va_connect_site_info_*.txt
+tools/ubuntu/*.log
+tools/ubuntu/*journal*.txt
