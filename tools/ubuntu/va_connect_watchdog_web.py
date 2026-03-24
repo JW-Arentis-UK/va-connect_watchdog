@@ -25,6 +25,8 @@ UPDATE_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-update-status.j
 UPDATE_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-update.log")
 EXPORT_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-export-status.json")
 EXPORT_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-export.log")
+MEMTEST_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-memtest-status.json")
+MEMTEST_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-memtest.log")
 SNAPSHOT_DIR = Path("/var/log/va-connect-site-watchdog/snapshots")
 
 
@@ -72,6 +74,34 @@ def load_config() -> Dict[str, Any]:
     merged = {**defaults, **config}
     merged["web_port"] = int(merged["web_port"])
     return merged
+
+
+def command_exists(name: str) -> bool:
+    return subprocess.run(["bash", "-lc", f"command -v {shlex.quote(name)}"], capture_output=True, text=True).returncode == 0
+
+
+def mem_available_mb() -> int:
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemAvailable:"):
+                kb = int(line.split(":", 1)[1].strip().split()[0])
+                return max(0, kb // 1024)
+    except Exception:
+        return 0
+    return 0
+
+
+def memtest_recommendation() -> Dict[str, Any]:
+    available_mb = mem_available_mb()
+    recommended_mb = max(256, int(available_mb * 0.5)) if available_mb else 1024
+    recommended_mb = min(recommended_mb, 4096)
+    return {
+        "installed": command_exists("memtester"),
+        "available_mb": available_mb,
+        "recommended_mb": recommended_mb,
+        "recommended_label": f"{recommended_mb}M",
+        "recommended_loops": 2,
+    }
 
 
 def sanitize_patch(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -292,6 +322,72 @@ def hardware_review_payload(state: Dict[str, Any]) -> Dict[str, Any]:
         "pstore_entries": pstore_entries,
         "findings": findings[:4],
     }
+
+
+def suspect_scores_payload(state: Dict[str, Any], crash_review: Dict[str, Any], hardware_review: Dict[str, Any]) -> List[Dict[str, Any]]:
+    checks = state.get("last_checks") or {}
+    suspects = {
+        "Memory / platform": {"score": 0, "reasons": []},
+        "Storage / recording disk": {"score": 0, "reasons": []},
+        "Network / RUT path": {"score": 0, "reasons": []},
+        "Videosoft app / service": {"score": 0, "reasons": []},
+    }
+
+    warning_text = " \n".join(str(line).lower() for line in hardware_review.get("warnings", []))
+    crash_text = " \n".join(str(line).lower() for line in [*(crash_review.get("system_lines_all", []) or []), *(crash_review.get("kernel_lines_all", []) or [])])
+
+    if any(term in warning_text for term in ("edac", "memory error", "machine check")):
+        suspects["Memory / platform"]["score"] += 4
+        suspects["Memory / platform"]["reasons"].append("EDAC or memory-controller warnings were detected.")
+    if any(term in crash_text for term in ("edac", "memory error", "machine check")):
+        suspects["Memory / platform"]["score"] += 2
+        suspects["Memory / platform"]["reasons"].append("Previous-boot review also contains memory-related lines.")
+
+    last_metrics = state.get("last_metrics") or {}
+    recording_disk = last_metrics.get("recording_disk_percent")
+    if isinstance(recording_disk, (int, float)) and recording_disk >= 99.0:
+        suspects["Storage / recording disk"]["score"] += 3
+        suspects["Storage / recording disk"]["reasons"].append(f"Recording disk is effectively full at {recording_disk:.2f}%.")
+    if any(term in warning_text for term in ("i/o error", "ext4", "ata", "nvme", "resetting link", "buffer i/o error")):
+        suspects["Storage / recording disk"]["score"] += 4
+        suspects["Storage / recording disk"]["reasons"].append("Kernel warnings include storage or filesystem terms.")
+    failing_smart = [item for item in hardware_review.get("smart", []) if item.get("available") and item.get("ok") is False]
+    if failing_smart:
+        suspects["Storage / recording disk"]["score"] += 4
+        suspects["Storage / recording disk"]["reasons"].append("SMART returned a non-zero result for at least one disk.")
+
+    if checks.get("internet_ok") is False:
+        suspects["Network / RUT path"]["score"] += 4
+        suspects["Network / RUT path"]["reasons"].append("Current checks show WAN reachability issues.")
+    if checks.get("lan_ok") is False:
+        suspects["Network / RUT path"]["score"] += 3
+        suspects["Network / RUT path"]["reasons"].append("Current checks show LAN/TCP target failures.")
+    if any(term in warning_text for term in ("link is down", "dhcp", "carrier")):
+        suspects["Network / RUT path"]["score"] += 2
+        suspects["Network / RUT path"]["reasons"].append("Kernel warnings include network-link terms.")
+
+    if checks.get("app_ok") is False or checks.get("services_ok") is False:
+        suspects["Videosoft app / service"]["score"] += 4
+        suspects["Videosoft app / service"]["reasons"].append("Current checks show the app or a monitored service failing.")
+    if any(term in crash_text for term in ("esg", "bridge", "sysops", "segfault", "oom", "killed")):
+        suspects["Videosoft app / service"]["score"] += 2
+        suspects["Videosoft app / service"]["reasons"].append("Previous-boot review includes app or service-related clues.")
+
+    if state.get("unexpected_reboot_count", 0):
+        suspects["Memory / platform"]["score"] += 1
+        suspects["Storage / recording disk"]["score"] += 1
+
+    ranked = []
+    for label, data in suspects.items():
+        ranked.append(
+            {
+                "label": label,
+                "score": int(data["score"]),
+                "reasons": data["reasons"][:3] or ["No specific evidence pushing this cause higher yet."],
+            }
+        )
+    ranked.sort(key=lambda item: item["score"], reverse=True)
+    return ranked
 
 
 def summarize_event(event: Dict[str, Any]) -> Dict[str, str]:
@@ -530,6 +626,88 @@ def safe_export_file(kind: str) -> Optional[Path]:
     return path
 
 
+def safe_memtest_file(kind: str) -> Optional[Path]:
+    memtest_status = read_json(MEMTEST_STATUS_PATH, {})
+    candidate = ""
+    if kind == "log":
+        candidate = str(memtest_status.get("log_path", "")).strip()
+    if not candidate:
+        return None
+    path = Path(candidate)
+    if not path.exists() or not path.is_file():
+        return None
+    return path
+
+
+def normalize_memtest_status(memtest_status: Dict[str, Any]) -> Dict[str, Any]:
+    status = dict(memtest_status or {})
+    if status.get("state") != "running":
+        return status
+
+    started_at = parse_iso(str(status.get("started_at", "")))
+    now = datetime.utcnow().astimezone()
+    if started_at and (now - started_at).total_seconds() > 6 * 3600:
+        status["state"] = "failed"
+        status["finished_at"] = status.get("finished_at") or now_iso()
+        status["message"] = "Memtester ran too long or got stuck. Check web-memtest.log."
+        write_json(MEMTEST_STATUS_PATH, status)
+    return status
+
+
+def launch_memtest(size_mb: int, loops: int) -> Dict[str, Any]:
+    current = read_json(MEMTEST_STATUS_PATH, {})
+    if current.get("state") == "running":
+        return {"ok": False, "message": "Memory test already running."}
+
+    recommendation = memtest_recommendation()
+    available_mb = int(recommendation.get("available_mb", 0))
+    if not recommendation.get("installed"):
+        return {"ok": False, "message": "memtester is not installed on the gateway."}
+    if size_mb <= 0 or loops <= 0:
+        return {"ok": False, "message": "Provide a positive memory-test size and loop count."}
+    if available_mb and size_mb >= available_mb:
+        return {"ok": False, "message": f"Requested size is too high for current free RAM ({available_mb} MB available)."}
+
+    payload = {
+        "state": "running",
+        "started_at": now_iso(),
+        "finished_at": "",
+        "message": "Memory test requested from web UI.",
+        "size_mb": int(size_mb),
+        "loops": int(loops),
+        "log_path": str(MEMTEST_LOG_PATH),
+    }
+    write_json(MEMTEST_STATUS_PATH, payload)
+    MEMTEST_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    command = (
+        "python3 - <<'PY'\n"
+        "import json, subprocess\n"
+        "from datetime import datetime\n"
+        "from pathlib import Path\n"
+        "status_path = Path('/var/lib/va-connect-site-watchdog/web-memtest-status.json')\n"
+        "log_path = Path('/var/log/va-connect-site-watchdog/web-memtest.log')\n"
+        f"cmd = ['memtester', '{int(size_mb)}M', '{int(loops)}']\n"
+        "with log_path.open('ab') as log:\n"
+        "    log.write((f'\\n===== Web memtest started {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
+        "    result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)\n"
+        "payload = json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
+        "payload['state'] = 'ok' if result.returncode == 0 else 'failed'\n"
+        "payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "payload['return_code'] = result.returncode\n"
+        "payload['message'] = 'Memory test completed successfully.' if result.returncode == 0 else 'Memory test failed. Check web-memtest.log.'\n"
+        "status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "PY"
+    )
+    subprocess.Popen(
+        ["nohup", "bash", "-lc", command],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return {"ok": True, "message": "Memory test started.", "status": payload}
+
+
 def status_payload() -> Dict[str, Any]:
     state = read_json(STATE_PATH, {})
     checks = state.get("last_checks") or {}
@@ -563,6 +741,8 @@ def status_payload() -> Dict[str, Any]:
         next_steps.append("Watch Recent events for the next change in state or reboot detection.")
 
     hardware_payload = hardware_review_payload(state)
+    crash_payload = crash_review_payload()
+    suspects_payload = suspect_scores_payload(state, crash_payload, hardware_payload)
     if hardware_payload.get("warnings"):
         next_steps.append("Review Hardware warnings for EDAC, storage, or persistent-crash clues that may explain a hard freeze.")
     next_steps.append("Use PC stats to look for CPU, memory, or disk changes building before a reboot or hang.")
@@ -576,6 +756,8 @@ def status_payload() -> Dict[str, Any]:
         summarized_events.append(enriched)
     build_info = read_json(BUILD_INFO_PATH, {})
     update_status = normalize_update_status(read_json(UPDATE_STATUS_PATH, {"state": "idle"}), build_info)
+    memtest_info = memtest_recommendation()
+    memtest_status = normalize_memtest_status(read_json(MEMTEST_STATUS_PATH, {"state": "idle"}))
     return {
         "hostname": socket.gethostname(),
         "config": load_config(),
@@ -583,10 +765,13 @@ def status_payload() -> Dict[str, Any]:
         "build_info": build_info,
         "update_status": update_status,
         "export_status": read_json(EXPORT_STATUS_PATH, {"state": "idle"}),
+        "memtest_status": memtest_status,
+        "memtest_info": memtest_info,
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "next_steps": next_steps,
         "hardware_review": hardware_payload,
-        "crash_review": crash_review_payload(),
+        "crash_review": crash_payload,
+        "suspect_scores": suspects_payload,
         "recent_events": summarized_events,
         "timeline": build_incident_timeline(events),
         "paths": {
@@ -599,6 +784,8 @@ def status_payload() -> Dict[str, Any]:
             "update_log": str(UPDATE_LOG_PATH),
             "export_status": str(EXPORT_STATUS_PATH),
             "export_log": str(EXPORT_LOG_PATH),
+            "memtest_status": str(MEMTEST_STATUS_PATH),
+            "memtest_log": str(MEMTEST_LOG_PATH),
         },
     }
 
@@ -895,6 +1082,23 @@ def render_page(status: Dict[str, Any]) -> str:
       display: grid;
       gap: 8px;
     }}
+    .suspect-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }}
+    .suspect-card {{
+      border: 1px solid #dbe4dc;
+      border-radius: 14px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.72);
+    }}
+    .suspect-score {{
+      font-size: 1.15rem;
+      font-weight: 800;
+      margin: 4px 0 8px;
+    }}
     .mini-form {{
       display: grid;
       grid-template-columns: repeat(2, minmax(160px, 1fr));
@@ -917,6 +1121,12 @@ def render_page(status: Dict[str, Any]) -> str:
       color: #17301f;
       font-size: 0.82rem;
       font-weight: 600;
+    }}
+    .inline-fields {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(120px, 1fr));
+      gap: 8px;
+      margin-top: 10px;
     }}
   </style>
 </head>
@@ -1051,6 +1261,13 @@ def render_page(status: Dict[str, Any]) -> str:
 
     <div class="grid" style="margin-top:16px;">
       <section class="panel" style="grid-column: 1 / -1;">
+        <h2>Likely causes</h2>
+        <p class="hint">Higher scores mean the current evidence points more strongly in that direction. This is only a guide, not proof.</p>
+        <div class="suspect-grid" id="suspectScores">
+          {"".join(f"<div class='suspect-card'><div class='stat-label'>{html.escape(item['label'])}</div><div class='suspect-score'>{int(item['score'])}</div><ul class='review-list'>{''.join(f'<li>{html.escape(reason)}</li>' for reason in item.get('reasons', []))}</ul></div>" for item in status.get("suspect_scores", []))}
+        </div>
+      </section>
+      <section class="panel" style="grid-column: 1 / -1;">
         <h2>Hardware warnings</h2>
         <p><strong>Last checked:</strong> <span id="hardwareCheckedAt">{html.escape(str(status["hardware_review"].get("checked_at", "unknown")))}</span></p>
         <ul class="review-list" id="hardwareFindings">
@@ -1072,6 +1289,31 @@ def render_page(status: Dict[str, Any]) -> str:
             <ul class="review-list" id="hardwarePstore">
               {"".join(f"<li>{html.escape(line)}</li>" for line in status["hardware_review"].get("pstore_entries", []))}
             </ul>
+            <p style="margin-top:10px;"><strong>Online memory test</strong></p>
+            <p class="hint" id="memtestHint">
+              memtester {'is installed' if status["memtest_info"].get("installed") else 'is not installed'}.
+              Free RAM: {int(status["memtest_info"].get("available_mb", 0))} MB.
+              Suggested test: {html.escape(str(status["memtest_info"].get("recommended_label", "1024M")))} x {int(status["memtest_info"].get("recommended_loops", 2))}.
+            </p>
+            <div class="inline-fields">
+              <div class="field">
+                <label for="memtest_size_mb">Mem test MB</label>
+                <input id="memtest_size_mb" type="number" min="128" value="{int(status['memtest_info'].get('recommended_mb', 1024))}">
+              </div>
+              <div class="field">
+                <label for="memtest_loops">Loops</label>
+                <input id="memtest_loops" type="number" min="1" value="{int(status['memtest_info'].get('recommended_loops', 2))}">
+              </div>
+            </div>
+            <button class="secondary" onclick="runMemtest()">Run online mem test</button>
+            <div class="update-row">
+              <span class="badge {'warn' if status['memtest_status'].get('state') == 'running' else ('danger' if status['memtest_status'].get('state') == 'failed' else '')}" id="memtestState">{html.escape(str(status["memtest_status"].get("state", "idle")).title())}</span>
+              <span id="memtestMessage">{html.escape(str(status["memtest_status"].get("message", "No web memory test run yet.")))}</span>
+            </div>
+            <p class="hint" id="memtestMeta">{html.escape(str(status["memtest_status"].get("finished_at", "not finished yet")))}</p>
+            <div class="link-row">
+              <a class="link-btn" id="memtestLogLink" href="/download/memtest-log">Download memtest log</a>
+            </div>
           </section>
         </div>
       </section>
@@ -1255,6 +1497,9 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('crashReviewDetail').textContent = crashReview.detail || '';
       document.getElementById('crashReviewPath').textContent = crashReview.snapshot_path || '';
       const hardwareReview = status.hardware_review || {{}};
+      document.getElementById('suspectScores').innerHTML = (status.suspect_scores || []).map((item) => (
+        `<div class="suspect-card"><div class="stat-label">${{item.label || 'Cause'}}</div><div class="suspect-score">${{item.score || 0}}</div><ul class="review-list">${{(item.reasons || []).map((reason) => `<li>${{reason}}</li>`).join('')}}</ul></div>`
+      )).join('');
       document.getElementById('hardwareCheckedAt').textContent = hardwareReview.checked_at || 'unknown';
       document.getElementById('hardwareFindings').innerHTML = (hardwareReview.findings || []).length
         ? (hardwareReview.findings || []).map((line) => `<li>${{line}}</li>`).join('')
@@ -1268,6 +1513,17 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('hardwarePstore').innerHTML = (hardwareReview.pstore_entries || []).length
         ? (hardwareReview.pstore_entries || []).map((line) => `<li>${{line}}</li>`).join('')
         : '<li>No pstore entries present.</li>';
+      const memtestInfo = status.memtest_info || {{}};
+      document.getElementById('memtestHint').textContent = `memtester ${{memtestInfo.installed ? 'is installed' : 'is not installed'}}. Free RAM: ${{memtestInfo.available_mb || 0}} MB. Suggested test: ${{memtestInfo.recommended_label || '1024M'}} x ${{memtestInfo.recommended_loops || 2}}.`;
+      document.getElementById('memtest_size_mb').value = memtestInfo.recommended_mb || 1024;
+      document.getElementById('memtest_loops').value = memtestInfo.recommended_loops || 2;
+      const memtestStatus = status.memtest_status || {{}};
+      const memtestBadge = document.getElementById('memtestState');
+      memtestBadge.className = `badge ${{memtestStatus.state === 'running' ? 'warn' : (memtestStatus.state === 'failed' ? 'danger' : '')}}`;
+      memtestBadge.textContent = (memtestStatus.state || 'idle').toUpperCase();
+      document.getElementById('memtestMessage').textContent = memtestStatus.message || 'No web memory test run yet.';
+      document.getElementById('memtestMeta').textContent = memtestStatus.finished_at || 'not finished yet';
+      document.getElementById('memtestLogLink').style.display = memtestStatus.log_path ? 'inline-block' : 'none';
       document.getElementById('crashReviewFindings').innerHTML = (crashReview.findings || []).length
         ? (crashReview.findings || []).map((line) => `<li>${{line}}</li>`).join('')
         : '<li>No crash-review findings yet.</li>';
@@ -1510,6 +1766,23 @@ def render_page(status: Dict[str, Any]) -> str:
       await fetchStatus();
     }}
 
+    async function runMemtest() {{
+      const response = await fetch('/api/memtest' + authQuery, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{
+          size_mb: Number(document.getElementById('memtest_size_mb').value || 1024),
+          loops: Number(document.getElementById('memtest_loops').value || 2)
+        }})
+      }});
+      if (!response.ok) {{
+        const payload = await response.json().catch(() => ({{ message: 'Memory test failed to start.' }}));
+        alert(payload.message || 'Memory test failed to start.');
+        return;
+      }}
+      await fetchStatus();
+    }}
+
     render(initialStatus);
     fetchMetrics();
     setInterval(fetchStatus, 15000);
@@ -1554,6 +1827,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/download/export-log":
             self._send_file(safe_export_file("log"), download_name="watchdog-incident-export.log")
             return
+        if parsed.path == "/download/memtest-log":
+            self._send_file(safe_memtest_file("log"), download_name="watchdog-memtest.log")
+            return
         if parsed.path in {"/", "/index.html"}:
             body = render_page(status_payload()).encode("utf-8")
             self.send_response(HTTPStatus.OK)
@@ -1593,6 +1869,12 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/export":
             data = self._read_json()
             result = launch_export(str(data.get("since", "")).strip(), str(data.get("until", "")).strip())
+            self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+
+        if parsed.path == "/api/memtest":
+            data = self._read_json()
+            result = launch_memtest(int(data.get("size_mb", 0) or 0), int(data.get("loops", 0) or 0))
             self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
             return
 
