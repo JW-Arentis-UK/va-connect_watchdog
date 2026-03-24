@@ -346,8 +346,7 @@ def suspect_scores_payload(state: Dict[str, Any], crash_review: Dict[str, Any], 
     last_metrics = state.get("last_metrics") or {}
     recording_disk = last_metrics.get("recording_disk_percent")
     if isinstance(recording_disk, (int, float)) and recording_disk >= 99.0:
-        suspects["Storage / recording disk"]["score"] += 3
-        suspects["Storage / recording disk"]["reasons"].append(f"Recording disk is effectively full at {recording_disk:.2f}%.")
+        suspects["Storage / recording disk"]["reasons"].append(f"Recording disk is full at {recording_disk:.2f}%, but that alone may not explain a gateway lockup.")
     if any(term in warning_text for term in ("i/o error", "ext4", "ata", "nvme", "resetting link", "buffer i/o error")):
         suspects["Storage / recording disk"]["score"] += 4
         suspects["Storage / recording disk"]["reasons"].append("Kernel warnings include storage or filesystem terms.")
@@ -375,7 +374,6 @@ def suspect_scores_payload(state: Dict[str, Any], crash_review: Dict[str, Any], 
 
     if state.get("unexpected_reboot_count", 0):
         suspects["Memory / platform"]["score"] += 1
-        suspects["Storage / recording disk"]["score"] += 1
 
     ranked = []
     for label, data in suspects.items():
@@ -985,6 +983,12 @@ def render_page(status: Dict[str, Any]) -> str:
       border-radius: 14px;
       background: rgba(255,255,255,0.72);
     }}
+    .chart-hover {{
+      min-height: 18px;
+      color: #415448;
+      font-size: 0.82rem;
+      margin: 0 0 8px;
+    }}
     .next-steps {{
       margin: 8px 0 0;
       padding-left: 18px;
@@ -1054,8 +1058,19 @@ def render_page(status: Dict[str, Any]) -> str:
       margin-top: 16px;
       align-items: start;
     }}
+    .bottom-grid {{
+      display: grid;
+      grid-template-columns: minmax(420px, 1.2fr) minmax(320px, 0.8fr);
+      gap: 14px;
+      margin-top: 16px;
+      align-items: start;
+    }}
+    .sidebar-stack {{
+      display: grid;
+      gap: 14px;
+    }}
     .timeline-panel {{
-      min-height: 360px;
+      min-height: 300px;
     }}
     .checks-panel {{
       min-height: 360px;
@@ -1127,6 +1142,12 @@ def render_page(status: Dict[str, Any]) -> str:
       grid-template-columns: repeat(2, minmax(120px, 1fr));
       gap: 8px;
       margin-top: 10px;
+    }}
+    details summary {{
+      cursor: pointer;
+      color: #607064;
+      font-size: 0.8rem;
+      margin-top: 6px;
     }}
   </style>
 </head>
@@ -1209,6 +1230,7 @@ def render_page(status: Dict[str, Any]) -> str:
       </section>
       <section class="panel">
         <h2>PC Stats - Last 24 Hours</h2>
+        <div class="chart-hover" id="metricsHover">Move across the graph to inspect time and values.</div>
         <canvas id="metricsChart" width="1000" height="280"></canvas>
         <p class="hint">CPU, memory, root disk, and recording disk usage are plotted as percentages.</p>
       </section>
@@ -1352,8 +1374,8 @@ def render_page(status: Dict[str, Any]) -> str:
       </section>
     </div>
 
-    <div class="grid" style="margin-top:16px; align-items:start;">
-      <section class="panel" style="grid-column: span 2;">
+    <div class="bottom-grid">
+      <section class="panel">
         <h2>Config</h2>
         <div class="formgrid">
           <div class="field">
@@ -1420,22 +1442,26 @@ def render_page(status: Dict[str, Any]) -> str:
         <button onclick="saveConfig()">Save full config</button>
         <p class="hint">Use one internet host per line. Use one TCP target per line in the form <code>192.168.1.132:554</code>.</p>
       </section>
-      <section class="panel" style="max-height: 760px; overflow: auto;">
-        <h2>Recent events</h2>
-        <div class="events" id="events"></div>
-      </section>
-      <section class="panel">
-        <h2>Watchdog files</h2>
-        <p><code>{html.escape(status["paths"]["state"])}</code></p>
-        <p><code>{html.escape(status["paths"]["events"])}</code></p>
-        <p><code>{html.escape(status["paths"].get("metrics", ""))}</code></p>
-        <p><code>{html.escape(status["paths"].get("build_info", ""))}</code></p>
-        <p><code>{html.escape(status["paths"].get("update_status", ""))}</code></p>
-        <p><code>{html.escape(status["paths"].get("update_log", ""))}</code></p>
-        <p><code>{html.escape(status["paths"].get("export_status", ""))}</code></p>
-        <p><code>{html.escape(status["paths"].get("export_log", ""))}</code></p>
-        <p><code>{html.escape(str(status["build_info"].get("source_repo_dir", "unknown")))}</code></p>
-      </section>
+      <div class="sidebar-stack">
+        <section class="panel" style="max-height: 560px; overflow: auto;">
+          <h2>Recent events</h2>
+          <div class="events" id="events"></div>
+        </section>
+        <section class="panel">
+          <h2>Watchdog files</h2>
+          <p><code>{html.escape(status["paths"]["state"])}</code></p>
+          <p><code>{html.escape(status["paths"]["events"])}</code></p>
+          <p><code>{html.escape(status["paths"].get("metrics", ""))}</code></p>
+          <p><code>{html.escape(status["paths"].get("build_info", ""))}</code></p>
+          <p><code>{html.escape(status["paths"].get("update_status", ""))}</code></p>
+          <p><code>{html.escape(status["paths"].get("update_log", ""))}</code></p>
+          <p><code>{html.escape(status["paths"].get("export_status", ""))}</code></p>
+          <p><code>{html.escape(status["paths"].get("export_log", ""))}</code></p>
+          <p><code>{html.escape(status["paths"].get("memtest_status", ""))}</code></p>
+          <p><code>{html.escape(status["paths"].get("memtest_log", ""))}</code></p>
+          <p><code>{html.escape(str(status["build_info"].get("source_repo_dir", "unknown")))}</code></p>
+        </section>
+      </div>
     </div>
   </div>
   <script>
@@ -1486,7 +1512,8 @@ def render_page(status: Dict[str, Any]) -> str:
 
       document.getElementById('events').innerHTML = (status.recent_events || []).map((event) => {{
         const summary = event.summary || {{ title: (event.event || 'event'), detail: '', severity: 'info', ts: event.ts || '' }};
-        return `<div class="item"><strong>${{summary.title}}</strong><br><span class="hint">${{summary.ts || ''}}</span><br>${{summary.detail || ''}}<br><code>${{JSON.stringify(event)}}</code></div>`;
+        const raw = JSON.stringify(event, null, 2);
+        return `<div class="item"><strong>${{summary.title}}</strong><br><span class="hint">${{summary.ts || ''}}</span><br>${{summary.detail || ''}}<details><summary>Raw event</summary><code>${{raw}}</code></details></div>`;
       }}).join('');
       document.getElementById('nextSteps').innerHTML = (status.next_steps || []).map((step) => `<li>${{step}}</li>`).join('');
       document.getElementById('timeline').innerHTML = (status.timeline || []).map((item) => (
@@ -1579,7 +1606,7 @@ def render_page(status: Dict[str, Any]) -> str:
       `;
     }}
 
-    function drawMetrics(points) {{
+    function drawMetrics(points, hoverIndex = null) {{
       const canvas = document.getElementById('metricsChart');
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1652,6 +1679,16 @@ def render_page(status: Dict[str, Any]) -> str:
         ctx.fillStyle = '#17301f';
         ctx.fillText(line.label, pad + idx * 140 + 18, 20);
       }});
+
+      if (hoverIndex !== null && points[hoverIndex]) {{
+        const x = xFor(hoverIndex);
+        ctx.strokeStyle = '#607064';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, pad);
+        ctx.lineTo(x, pad + chartHeight);
+        ctx.stroke();
+      }}
     }}
 
     async function fetchStatus() {{
@@ -1783,8 +1820,41 @@ def render_page(status: Dict[str, Any]) -> str:
       await fetchStatus();
     }}
 
+    function attachChartHover() {{
+      const canvas = document.getElementById('metricsChart');
+      const hover = document.getElementById('metricsHover');
+      if (!canvas || !hover) {{
+        return;
+      }}
+
+      canvas.addEventListener('mousemove', (event) => {{
+        if (!latestMetrics.length) {{
+          return;
+        }}
+        const rect = canvas.getBoundingClientRect();
+        const ratioX = canvas.width / rect.width;
+        const x = (event.clientX - rect.left) * ratioX;
+        const pad = 40;
+        const chartWidth = canvas.width - pad * 2;
+        const clamped = Math.max(pad, Math.min(pad + chartWidth, x));
+        const idx = Math.round(((clamped - pad) / chartWidth) * Math.max(1, latestMetrics.length - 1));
+        const point = latestMetrics[idx];
+        if (!point) {{
+          return;
+        }}
+        hover.textContent = `${{point.ts || ''}} | CPU ${{Number(point.cpu_percent || 0).toFixed(1)}}% | Memory ${{Number(point.mem_percent || 0).toFixed(1)}}% | Root ${{Number(point.root_disk_percent || 0).toFixed(1)}}% | Recording ${{Number(point.recording_disk_percent || 0).toFixed(1)}}%`;
+        drawMetrics(latestMetrics, idx);
+      }});
+
+      canvas.addEventListener('mouseleave', () => {{
+        hover.textContent = 'Move across the graph to inspect time and values.';
+        drawMetrics(latestMetrics);
+      }});
+    }}
+
     render(initialStatus);
     fetchMetrics();
+    attachChartHover();
     setInterval(fetchStatus, 15000);
     setInterval(fetchMetrics, 60000);
   </script>
