@@ -161,6 +161,70 @@ def read_disk_percent(path_text: str) -> Optional[float]:
     return round((used / total) * 100.0, 2)
 
 
+def command_available(name: str) -> bool:
+    code, _ = run_command(["bash", "-lc", f"command -v {shlex.quote(name)}"], timeout=5)
+    return code == 0
+
+
+def hardware_warning_lines(limit: int = 20) -> List[str]:
+    patterns = (
+        "edac|mce|machine check|hardware error|i/o error|ext4-fs warning|buffer i/o error|"
+        "ata[0-9].*failed|failed command|resetting link|link is down|nvme.*error|watchdog"
+    )
+    code, output = run_shell(
+        f"journalctl -k -n 400 --no-pager | grep -Ei {shlex.quote(patterns)} | tail -n {int(limit)} || true",
+        timeout=20,
+    )
+    if code not in (0, 1, 999):
+        return [f"journal scan failed: {output[:240]}"]
+    return [line.strip()[:240] for line in output.splitlines() if line.strip()][:limit]
+
+
+def smart_summary(device: str) -> Dict[str, object]:
+    if not command_available("smartctl"):
+        return {"device": device, "available": False, "summary": "smartctl not installed"}
+    code, output = run_command(["smartctl", "-H", "-A", device], timeout=25)
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    interesting = [
+        line for line in lines
+        if any(
+            term in line.lower()
+            for term in ("overall-health", "result", "reallocated", "pending", "uncorrect", "crc", "media_wearout")
+        )
+    ][:8]
+    summary = "; ".join(interesting) if interesting else (lines[0] if lines else "no SMART output")
+    return {"device": device, "available": True, "ok": code == 0, "summary": summary[:400]}
+
+
+def collect_hardware_health() -> Dict[str, object]:
+    pstore_entries: List[str] = []
+    pstore_path = Path("/sys/fs/pstore")
+    if pstore_path.exists():
+        try:
+            pstore_entries = sorted(item.name for item in pstore_path.iterdir())
+        except Exception:
+            pstore_entries = []
+
+    warnings = hardware_warning_lines(limit=20)
+    smart = [smart_summary("/dev/sda"), smart_summary("/dev/sdb")]
+    warning_signature = json.dumps(
+        {
+            "warnings": warnings,
+            "smart": [{k: item.get(k) for k in ("device", "available", "ok", "summary")} for item in smart],
+            "pstore": pstore_entries,
+        },
+        sort_keys=True,
+    )
+    return {
+        "checked_at": iso_now(),
+        "warnings": warnings,
+        "smart": smart,
+        "pstore_entries": pstore_entries,
+        "warning_count": len(warnings),
+        "warning_signature": warning_signature,
+    }
+
+
 def capture_snapshot(snapshot_dir: Path, reason: str, app_match: str, max_journal_lines: int) -> Path:
     timestamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
     target_dir = snapshot_dir / f"{timestamp}_{reason}"
@@ -190,6 +254,10 @@ def capture_snapshot(snapshot_dir: Path, reason: str, app_match: str, max_journa
         "journal_esg.txt": f"journalctl -u esg.service -n {max_journal_lines} --no-pager || true",
         "journal_bridge.txt": f"journalctl -u bridge.service -n {max_journal_lines} --no-pager || true",
         "journal_sysops.txt": f"journalctl -u sysops.service -n {max_journal_lines} --no-pager || true",
+        "journal_kernel_hardware_warnings.txt": "journalctl -k -n 400 --no-pager | grep -Ei 'edac|mce|machine check|hardware error|i/o error|ext4-fs warning|buffer i/o error|ata[0-9].*failed|failed command|resetting link|link is down|nvme.*error|watchdog' || true",
+        "pstore_listing.txt": "ls -la /sys/fs/pstore 2>/dev/null || true",
+        "smart_sda.txt": "smartctl -a /dev/sda 2>/dev/null || echo 'smartctl not installed or /dev/sda unavailable'",
+        "smart_sdb.txt": "smartctl -a /dev/sdb 2>/dev/null || echo 'smartctl not installed or /dev/sdb unavailable'",
         "recording_mount.txt": "df -h /mnt/storage /mnt/storage/recordings 2>/dev/null || true",
         "recording_tree.txt": "ls -lah /mnt/storage 2>/dev/null && ls -lah /mnt/storage/recordings 2>/dev/null | tail -n 50 || true",
     }
@@ -216,9 +284,13 @@ def capture_previous_boot_snapshot(snapshot_dir: Path, max_journal_lines: int) -
     commands = {
         "journal_previous_boot.txt": f"journalctl -b -1 -n {max_journal_lines} --no-pager || true",
         "journal_kernel_previous_boot.txt": f"journalctl -k -b -1 -n {max_journal_lines} --no-pager || true",
+        "journal_kernel_previous_boot_hardware_warnings.txt": "journalctl -k -b -1 --no-pager | grep -Ei 'edac|mce|machine check|hardware error|i/o error|ext4-fs warning|buffer i/o error|ata[0-9].*failed|failed command|resetting link|link is down|nvme.*error|watchdog' || true",
         "last_reboots.txt": "last -x -n 20 || true",
         "uptime_since.txt": "uptime -s || true",
         "boot_list.txt": "journalctl --list-boots || true",
+        "pstore_listing.txt": "ls -la /sys/fs/pstore 2>/dev/null || true",
+        "smart_sda.txt": "smartctl -a /dev/sda 2>/dev/null || echo 'smartctl not installed or /dev/sda unavailable'",
+        "smart_sdb.txt": "smartctl -a /dev/sdb 2>/dev/null || echo 'smartctl not installed or /dev/sdb unavailable'",
     }
 
     wrote_any = False
@@ -263,6 +335,9 @@ class SiteWatchdog:
                 "reboot_detections_count": 0,
                 "unexpected_reboot_count": 0,
                 "last_reboot_reason": None,
+                "hardware_health": None,
+                "last_hardware_check_at": None,
+                "last_hardware_signature": None,
             },
         )
 
@@ -335,7 +410,27 @@ class SiteWatchdog:
                 self.log_event("snapshot", reason="previous-boot-review", path=str(snapshot_path))
 
         self.state["boot_id"] = current_boot_id
+        self.refresh_hardware_health(force=True)
         write_json(self.state_path, self.state)
+
+    def refresh_hardware_health(self, force: bool = False) -> None:
+        now_epoch = time.time()
+        last_check_at = float(self.state.get("last_hardware_check_at") or 0)
+        if not force and (now_epoch - last_check_at) < 3600:
+            return
+        hardware = collect_hardware_health()
+        self.state["hardware_health"] = hardware
+        self.state["last_hardware_check_at"] = now_epoch
+        new_signature = str(hardware.get("warning_signature") or "")
+        if new_signature and new_signature != str(self.state.get("last_hardware_signature") or ""):
+            self.log_event(
+                "hardware_warning_update",
+                warning_count=int(hardware.get("warning_count", 0)),
+                warnings=hardware.get("warnings", []),
+                smart=hardware.get("smart", []),
+                pstore_entries=hardware.get("pstore_entries", []),
+            )
+        self.state["last_hardware_signature"] = new_signature
 
     def pop_manual_marker(self, name: str) -> bool:
         path = self.manual_dir / name
@@ -449,6 +544,7 @@ class SiteWatchdog:
 
         checks = self.perform_checks()
         self.collect_metrics()
+        self.refresh_hardware_health()
         self.state["monitoring_state"] = "active"
         self.state["last_checks"] = checks
         self.state["last_check_at"] = iso_now()

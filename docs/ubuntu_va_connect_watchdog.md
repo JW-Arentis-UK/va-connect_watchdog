@@ -81,6 +81,28 @@ This writes a folder and `.tar.gz` archive to the Desktop containing:
 - snapshots captured in the same time window
 - the latest `previous-boot-review` snapshot even if it falls just outside the selected window
 
+## Hardware clues surfaced automatically
+
+The site watchdog now also keeps a lightweight hardware summary in state for the webpage and snapshots:
+
+- kernel warning matches for `EDAC`, machine-check, storage, and link-reset style messages
+- `pstore` presence under `/sys/fs/pstore`
+- SMART summaries for `/dev/sda` and `/dev/sdb` when `smartctl` is installed
+
+For full disk-health visibility on the gateway, install:
+
+```bash
+sudo apt update
+sudo apt install -y smartmontools edac-utils
+```
+
+After that, the web page will show a `Hardware warnings` section and snapshots will include:
+
+- `smart_sda.txt`
+- `smart_sdb.txt`
+- `pstore_listing.txt`
+- kernel hardware-warning extracts
+
 ## Restart watchdog services
 
 If you update files or need to bounce the watchdog stack, run:

@@ -263,6 +263,37 @@ def summarize_crash_findings(system_lines: List[str], kernel_lines: List[str]) -
     return findings[:4]
 
 
+def hardware_review_payload(state: Dict[str, Any]) -> Dict[str, Any]:
+    hardware = state.get("hardware_health") or {}
+    warnings = [str(line) for line in hardware.get("warnings", []) if str(line).strip()]
+    smart = hardware.get("smart", []) if isinstance(hardware.get("smart", []), list) else []
+    pstore_entries = [str(item) for item in hardware.get("pstore_entries", []) if str(item).strip()]
+    findings: List[str] = []
+    combined = " \n".join(warnings).lower()
+
+    if "edac" in combined or "memory error" in combined or "machine check" in combined:
+        findings.append("Memory-controller or EDAC warnings are present. Treat RAM or platform stability as a live suspect.")
+    if any(not bool(item.get("available", True)) for item in smart):
+        findings.append("SMART data is not available yet for one or more disks. Install smartmontools to rule storage in or out properly.")
+    failing_smart = [str(item.get("device")) for item in smart if item.get("available") and item.get("ok") is False]
+    if failing_smart:
+        findings.append("SMART returned a non-zero result for " + ", ".join(failing_smart) + ". Check disk health next.")
+    if pstore_entries:
+        findings.append("Persistent crash-store files exist in /sys/fs/pstore. These may contain kernel panic or reset clues.")
+    if not findings and warnings:
+        findings.append("Hardware-related warnings exist, but nothing clearly ranks above the rest yet. Compare them across repeated incidents.")
+    if not findings:
+        findings.append("No current hardware-warning summary is available yet.")
+
+    return {
+        "checked_at": str(hardware.get("checked_at", "")),
+        "warnings": warnings,
+        "smart": smart,
+        "pstore_entries": pstore_entries,
+        "findings": findings[:4],
+    }
+
+
 def summarize_event(event: Dict[str, Any]) -> Dict[str, str]:
     event_type = str(event.get("event", "event"))
     ts = str(event.get("ts", ""))
@@ -309,6 +340,11 @@ def summarize_event(event: Dict[str, Any]) -> Dict[str, str]:
     elif event_type == "manual_check":
         title = "Manual check"
         detail = summarize_fault_checks(event.get("checks", {}))
+    elif event_type == "hardware_warning_update":
+        severity = "warn"
+        title = "Hardware warning update"
+        warning_count = int(event.get("warning_count", 0))
+        detail = f"{warning_count} hardware warning line(s) currently surfaced."
     elif event_type == "startup":
         title = "Watchdog startup"
         detail = "Site watchdog process started."
@@ -526,6 +562,9 @@ def status_payload() -> Dict[str, Any]:
     else:
         next_steps.append("Watch Recent events for the next change in state or reboot detection.")
 
+    hardware_payload = hardware_review_payload(state)
+    if hardware_payload.get("warnings"):
+        next_steps.append("Review Hardware warnings for EDAC, storage, or persistent-crash clues that may explain a hard freeze.")
     next_steps.append("Use PC stats to look for CPU, memory, or disk changes building before a reboot or hang.")
     next_steps.append("If it freezes overnight again, compare the last event time with the next boot's previous-boot snapshot.")
 
@@ -546,6 +585,7 @@ def status_payload() -> Dict[str, Any]:
         "export_status": read_json(EXPORT_STATUS_PATH, {"state": "idle"}),
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "next_steps": next_steps,
+        "hardware_review": hardware_payload,
         "crash_review": crash_review_payload(),
         "recent_events": summarized_events,
         "timeline": build_incident_timeline(events),
@@ -844,6 +884,17 @@ def render_page(status: Dict[str, Any]) -> str:
       font-size: 0.84rem;
       padding: 12px 4px;
     }}
+    .hardware-grid {{
+      display: grid;
+      grid-template-columns: minmax(280px, 0.95fr) minmax(380px, 1.05fr);
+      gap: 14px;
+      margin-top: 16px;
+      align-items: start;
+    }}
+    .smart-table {{
+      display: grid;
+      gap: 8px;
+    }}
     .mini-form {{
       display: grid;
       grid-template-columns: repeat(2, minmax(160px, 1fr));
@@ -999,6 +1050,31 @@ def render_page(status: Dict[str, Any]) -> str:
     </div>
 
     <div class="grid" style="margin-top:16px;">
+      <section class="panel" style="grid-column: 1 / -1;">
+        <h2>Hardware warnings</h2>
+        <p><strong>Last checked:</strong> <span id="hardwareCheckedAt">{html.escape(str(status["hardware_review"].get("checked_at", "unknown")))}</span></p>
+        <ul class="review-list" id="hardwareFindings">
+          {"".join(f"<li>{html.escape(line)}</li>" for line in status["hardware_review"].get("findings", []))}
+        </ul>
+        <div class="hardware-grid">
+          <section class="item">
+            <strong>Detected warning lines</strong>
+            <ul class="review-list" id="hardwareWarnings">
+              {"".join(f"<li>{html.escape(line)}</li>" for line in status["hardware_review"].get("warnings", []))}
+            </ul>
+          </section>
+          <section class="item">
+            <strong>Disk and crash-store overview</strong>
+            <div class="smart-table" id="hardwareSmart">
+              {"".join(f"<div><strong>{html.escape(str(item.get('device', 'disk')))}</strong><br><code>{html.escape(str(item.get('summary', '')))}</code></div>" for item in status["hardware_review"].get("smart", []))}
+            </div>
+            <p style="margin-top:10px;"><strong>pstore entries</strong></p>
+            <ul class="review-list" id="hardwarePstore">
+              {"".join(f"<li>{html.escape(line)}</li>" for line in status["hardware_review"].get("pstore_entries", []))}
+            </ul>
+          </section>
+        </div>
+      </section>
       <section class="panel" style="grid-column: 1 / -1;">
         <h2>Crash review</h2>
         <p><strong id="crashReviewTitle">{html.escape(status["crash_review"]["title"])}</strong></p>
@@ -1178,6 +1254,20 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('crashReviewTitle').textContent = crashReview.title || 'Crash review unavailable';
       document.getElementById('crashReviewDetail').textContent = crashReview.detail || '';
       document.getElementById('crashReviewPath').textContent = crashReview.snapshot_path || '';
+      const hardwareReview = status.hardware_review || {{}};
+      document.getElementById('hardwareCheckedAt').textContent = hardwareReview.checked_at || 'unknown';
+      document.getElementById('hardwareFindings').innerHTML = (hardwareReview.findings || []).length
+        ? (hardwareReview.findings || []).map((line) => `<li>${{line}}</li>`).join('')
+        : '<li>No hardware findings yet.</li>';
+      document.getElementById('hardwareWarnings').innerHTML = (hardwareReview.warnings || []).length
+        ? (hardwareReview.warnings || []).map((line) => `<li>${{line}}</li>`).join('')
+        : '<li>No hardware-warning lines surfaced yet.</li>';
+      document.getElementById('hardwareSmart').innerHTML = (hardwareReview.smart || []).length
+        ? (hardwareReview.smart || []).map((item) => `<div><strong>${{item.device || 'disk'}}</strong><br><code>${{item.summary || ''}}</code></div>`).join('')
+        : '<div><code>No SMART summary yet.</code></div>';
+      document.getElementById('hardwarePstore').innerHTML = (hardwareReview.pstore_entries || []).length
+        ? (hardwareReview.pstore_entries || []).map((line) => `<li>${{line}}</li>`).join('')
+        : '<li>No pstore entries present.</li>';
       document.getElementById('crashReviewFindings').innerHTML = (crashReview.findings || []).length
         ? (crashReview.findings || []).map((line) => `<li>${{line}}</li>`).join('')
         : '<li>No crash-review findings yet.</li>';
