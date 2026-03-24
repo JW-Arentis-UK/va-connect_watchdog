@@ -63,6 +63,7 @@ install_files() {
   install -m 755 "$SCRIPT_DIR/va_connect_watchdog.sh" "$INSTALL_DIR/va_connect_watchdog.sh"
   install -m 755 "$SCRIPT_DIR/va_connect_site_watchdog.py" "$INSTALL_DIR/va_connect_site_watchdog.py"
   install -m 755 "$SCRIPT_DIR/va_connect_watchdog_web.py" "$INSTALL_DIR/va_connect_watchdog_web.py"
+  install -m 755 "$SCRIPT_DIR/export_watchdog_incident.sh" "$INSTALL_DIR/export_watchdog_incident.sh"
   install -m 755 "$SCRIPT_DIR/update_watchdog.sh" "$INSTALL_DIR/update_watchdog.sh"
   install -m 755 "$SCRIPT_DIR/git_update_watchdog.sh" "$INSTALL_DIR/git_update_watchdog.sh"
   install -m 755 "$SCRIPT_DIR/restart_watchdog_services.sh" "$INSTALL_DIR/restart_watchdog_services.sh"

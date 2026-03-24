@@ -3,6 +3,7 @@
 import html
 import json
 import os
+import shlex
 import socket
 import subprocess
 import time
@@ -21,6 +22,8 @@ METRICS_PATH = Path("/var/log/va-connect-site-watchdog/metrics.jsonl")
 BUILD_INFO_PATH = Path("/opt/va-connect-watchdog/build-info.json")
 UPDATE_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-update-status.json")
 UPDATE_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-update.log")
+EXPORT_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-export-status.json")
+EXPORT_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-export.log")
 SNAPSHOT_DIR = Path("/var/log/va-connect-site-watchdog/snapshots")
 
 
@@ -410,6 +413,67 @@ def normalize_update_status(update_status: Dict[str, Any], build_info: Dict[str,
     return status
 
 
+def launch_export(since_time: str, until_time: str) -> Dict[str, Any]:
+    current = read_json(EXPORT_STATUS_PATH, {})
+    if current.get("state") == "running":
+        return {"ok": False, "message": "Export already running."}
+    if not since_time.strip() or not until_time.strip():
+        return {"ok": False, "message": "Provide both since and until times."}
+
+    payload = {
+        "state": "running",
+        "started_at": now_iso(),
+        "finished_at": "",
+        "message": "Incident export requested from web UI.",
+        "since": since_time,
+        "until": until_time,
+        "folder": "",
+        "archive": "",
+        "log_path": str(EXPORT_LOG_PATH),
+    }
+    write_json(EXPORT_STATUS_PATH, payload)
+    EXPORT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    since_q = shlex.quote(since_time)
+    until_q = shlex.quote(until_time)
+    command = (
+        "python3 - <<'PY'\n"
+        "import json, subprocess\n"
+        "from datetime import datetime\n"
+        "from pathlib import Path\n"
+        "status_path = Path('/var/lib/va-connect-site-watchdog/web-export-status.json')\n"
+        "log_path = Path('/var/log/va-connect-site-watchdog/web-export.log')\n"
+        "cmd = ['bash', '/opt/va-connect-watchdog/export_watchdog_incident.sh', '--since', " + repr(since_time) + ", '--until', " + repr(until_time) + "]\n"
+        "with log_path.open('ab') as log:\n"
+        "    log.write((f'\\n===== Web export started {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
+        "    result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+        "payload = json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
+        "payload['state'] = 'ok' if result.returncode == 0 else 'failed'\n"
+        "payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "payload['return_code'] = result.returncode\n"
+        "try:\n"
+        "    lines = log_path.read_text(encoding='utf-8', errors='ignore').splitlines()\n"
+        "except Exception:\n"
+        "    lines = []\n"
+        "    \n"
+        "for line in reversed(lines):\n"
+        "    if line.startswith('  Folder: '):\n"
+        "        payload['folder'] = line.split(': ', 1)[1]\n"
+        "    if line.startswith('  Archive: '):\n"
+        "        payload['archive'] = line.split(': ', 1)[1]\n"
+        "payload['message'] = 'Incident export created.' if result.returncode == 0 else 'Incident export failed. Check web-export.log.'\n"
+        "status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "PY"
+    )
+    subprocess.Popen(
+        ["nohup", "bash", "-lc", command],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return {"ok": True, "message": "Export started.", "status": payload}
+
+
 def status_payload() -> Dict[str, Any]:
     state = read_json(STATE_PATH, {})
     checks = state.get("last_checks") or {}
@@ -459,6 +523,7 @@ def status_payload() -> Dict[str, Any]:
         "state": state,
         "build_info": build_info,
         "update_status": update_status,
+        "export_status": read_json(EXPORT_STATUS_PATH, {"state": "idle"}),
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "next_steps": next_steps,
         "crash_review": crash_review_payload(),
@@ -472,6 +537,8 @@ def status_payload() -> Dict[str, Any]:
             "build_info": str(BUILD_INFO_PATH),
             "update_status": str(UPDATE_STATUS_PATH),
             "update_log": str(UPDATE_LOG_PATH),
+            "export_status": str(EXPORT_STATUS_PATH),
+            "export_log": str(EXPORT_LOG_PATH),
         },
     }
 
@@ -757,6 +824,12 @@ def render_page(status: Dict[str, Any]) -> str:
       font-size: 0.84rem;
       padding: 12px 4px;
     }}
+    .mini-form {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(160px, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }}
   </style>
 </head>
 <body>
@@ -860,6 +933,22 @@ def render_page(status: Dict[str, Any]) -> str:
           <span id="updateMessage">{html.escape(str(status["update_status"].get("message", "No web update run yet.")))}</span>
         </div>
         <p class="hint" id="updateMeta">{html.escape(str(status["update_status"].get("from_build", "unknown")))} to {html.escape(str(status["update_status"].get("to_build", "unknown")))} | {html.escape(str(status["update_status"].get("finished_at", "not finished yet")))}</p>
+        <div class="mini-form">
+          <div class="field">
+            <label for="export_since">Export since</label>
+            <input id="export_since" type="datetime-local">
+          </div>
+          <div class="field">
+            <label for="export_until">Export until</label>
+            <input id="export_until" type="datetime-local">
+          </div>
+        </div>
+        <button class="secondary" onclick="exportIncident()">Export incident pack</button>
+        <div class="update-row">
+          <span class="badge {'warn' if status['export_status'].get('state') == 'running' else ('danger' if status['export_status'].get('state') == 'failed' else '')}" id="exportState">{html.escape(str(status["export_status"].get("state", "idle")).title())}</span>
+          <span id="exportMessage">{html.escape(str(status["export_status"].get("message", "No incident export run yet.")))}</span>
+        </div>
+        <p class="hint" id="exportMeta">{html.escape(str(status["export_status"].get("folder", "")))} {html.escape(str(status["export_status"].get("archive", "")))}</p>
       </section>
       <section class="panel checks-panel">
         <h2>Latest checks</h2>
@@ -983,6 +1072,8 @@ def render_page(status: Dict[str, Any]) -> str:
         <p><code>{html.escape(status["paths"].get("build_info", ""))}</code></p>
         <p><code>{html.escape(status["paths"].get("update_status", ""))}</code></p>
         <p><code>{html.escape(status["paths"].get("update_log", ""))}</code></p>
+        <p><code>{html.escape(status["paths"].get("export_status", ""))}</code></p>
+        <p><code>{html.escape(status["paths"].get("export_log", ""))}</code></p>
         <p><code>{html.escape(str(status["build_info"].get("source_repo_dir", "unknown")))}</code></p>
       </section>
     </div>
@@ -1013,6 +1104,15 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('web_port').value = status.config.web_port || 8787;
       document.getElementById('web_token').value = status.config.web_token || '';
       document.getElementById('network_restart_command').value = status.config.network_restart_command || '';
+      if (!document.getElementById('export_since').value) {{
+        const startup = status.state.last_startup_at || '';
+        if (startup) {{
+          const startupDate = new Date(startup);
+          const sinceDate = new Date(startupDate.getTime() - (30 * 60000));
+          document.getElementById('export_since').value = sinceDate.toISOString().slice(0, 16);
+          document.getElementById('export_until').value = startupDate.toISOString().slice(0, 16);
+        }}
+      }}
       document.getElementById('internet_hosts').value = (status.config.internet_hosts || []).join('\\n');
       document.getElementById('systemd_services').value = (status.config.systemd_services || []).join('\\n');
       document.getElementById('tcp_targets').value = (status.config.tcp_targets || []).map((item) => `${{item.host}}:${{item.port}}`).join('\\n');
@@ -1057,6 +1157,12 @@ def render_page(status: Dict[str, Any]) -> str:
       updateBadge.textContent = (updateState.state || 'idle').toUpperCase();
       document.getElementById('updateMessage').textContent = updateState.message || 'No web update run yet.';
       document.getElementById('updateMeta').textContent = `${{updateState.from_build || 'unknown'}} to ${{updateState.to_build || 'unknown'}} | ${{updateState.finished_at || 'not finished yet'}}`;
+      const exportState = status.export_status || {{}};
+      const exportBadge = document.getElementById('exportState');
+      exportBadge.className = `badge ${{exportState.state === 'running' ? 'warn' : (exportState.state === 'failed' ? 'danger' : '')}}`;
+      exportBadge.textContent = (exportState.state || 'idle').toUpperCase();
+      document.getElementById('exportMessage').textContent = exportState.message || 'No incident export run yet.';
+      document.getElementById('exportMeta').textContent = `${{exportState.folder || ''}} ${{exportState.archive || ''}}`.trim();
 
       document.querySelector('.overview-grid').innerHTML = `
         <section class="stat-card"><div class="stat-label">Current state</div><div class="stat-value">${{status.state.fault_active ? 'Fault' : 'Healthy'}}</div></section>
@@ -1250,6 +1356,25 @@ def render_page(status: Dict[str, Any]) -> str:
       await fetchStatus();
     }}
 
+    async function exportIncident() {{
+      const since = document.getElementById('export_since').value;
+      const until = document.getElementById('export_until').value;
+      const response = await fetch('/api/export' + authQuery, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{
+          since: since ? since.replace('T', ' ') : '',
+          until: until ? until.replace('T', ' ') : ''
+        }})
+      }});
+      if (!response.ok) {{
+        const payload = await response.json().catch(() => ({{ message: 'Export failed.' }}));
+        alert(payload.message || 'Export failed.');
+        return;
+      }}
+      await fetchStatus();
+    }}
+
     render(initialStatus);
     fetchMetrics();
     setInterval(fetchStatus, 15000);
@@ -1306,6 +1431,12 @@ class Handler(BaseHTTPRequestHandler):
             config.update(sanitize_patch(data))
             write_json(CONFIG_PATH, config)
             self._send_json({"ok": True, "config": config})
+            return
+
+        if parsed.path == "/api/export":
+            data = self._read_json()
+            result = launch_export(str(data.get("since", "")).strip(), str(data.get("until", "")).strip())
+            self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
             return
 
         if parsed.path == "/api/action":
