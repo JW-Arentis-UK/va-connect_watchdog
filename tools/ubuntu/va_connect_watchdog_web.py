@@ -10,6 +10,7 @@ import time
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from mimetypes import guess_type
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
@@ -474,6 +475,25 @@ def launch_export(since_time: str, until_time: str) -> Dict[str, Any]:
     return {"ok": True, "message": "Export started.", "status": payload}
 
 
+def safe_export_file(kind: str) -> Optional[Path]:
+    export_status = read_json(EXPORT_STATUS_PATH, {})
+    candidate = ""
+    if kind == "archive":
+        candidate = str(export_status.get("archive", "")).strip()
+    elif kind == "log":
+        candidate = str(export_status.get("log_path", "")).strip()
+    elif kind == "folder_readme":
+        folder = str(export_status.get("folder", "")).strip()
+        if folder:
+            candidate = str(Path(folder) / "README.txt")
+    if not candidate:
+        return None
+    path = Path(candidate)
+    if not path.exists() or not path.is_file():
+        return None
+    return path
+
+
 def status_payload() -> Dict[str, Any]:
     state = read_json(STATE_PATH, {})
     checks = state.get("last_checks") or {}
@@ -830,6 +850,23 @@ def render_page(status: Dict[str, Any]) -> str:
       gap: 8px;
       margin-top: 10px;
     }}
+    .link-row {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }}
+    .link-btn {{
+      display: inline-block;
+      text-decoration: none;
+      border-radius: 10px;
+      padding: 7px 10px;
+      background: #eef5ef;
+      border: 1px solid #cbd8ce;
+      color: #17301f;
+      font-size: 0.82rem;
+      font-weight: 600;
+    }}
   </style>
 </head>
 <body>
@@ -949,6 +986,11 @@ def render_page(status: Dict[str, Any]) -> str:
           <span id="exportMessage">{html.escape(str(status["export_status"].get("message", "No incident export run yet.")))}</span>
         </div>
         <p class="hint" id="exportMeta">{html.escape(str(status["export_status"].get("folder", "")))} {html.escape(str(status["export_status"].get("archive", "")))}</p>
+        <div class="link-row">
+          <a class="link-btn" id="exportArchiveLink" href="/download/export-archive">Download export archive</a>
+          <a class="link-btn" id="exportReadmeLink" href="/download/export-readme">Download export README</a>
+          <a class="link-btn" id="exportLogLink" href="/download/export-log">Download export log</a>
+        </div>
       </section>
       <section class="panel checks-panel">
         <h2>Latest checks</h2>
@@ -1163,6 +1205,9 @@ def render_page(status: Dict[str, Any]) -> str:
       exportBadge.textContent = (exportState.state || 'idle').toUpperCase();
       document.getElementById('exportMessage').textContent = exportState.message || 'No incident export run yet.';
       document.getElementById('exportMeta').textContent = `${{exportState.folder || ''}} ${{exportState.archive || ''}}`.trim();
+      document.getElementById('exportArchiveLink').style.display = exportState.archive ? 'inline-block' : 'none';
+      document.getElementById('exportReadmeLink').style.display = exportState.folder ? 'inline-block' : 'none';
+      document.getElementById('exportLogLink').style.display = exportState.log_path ? 'inline-block' : 'none';
 
       document.querySelector('.overview-grid').innerHTML = `
         <section class="stat-card"><div class="stat-label">Current state</div><div class="stat-value">${{status.state.fault_active ? 'Fault' : 'Healthy'}}</div></section>
@@ -1410,6 +1455,15 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/metrics":
             self._send_json({"points": recent_metrics()})
             return
+        if parsed.path == "/download/export-archive":
+            self._send_file(safe_export_file("archive"), download_name="watchdog-incident-export.tar.gz")
+            return
+        if parsed.path == "/download/export-readme":
+            self._send_file(safe_export_file("folder_readme"), download_name="watchdog-incident-export-readme.txt")
+            return
+        if parsed.path == "/download/export-log":
+            self._send_file(safe_export_file("log"), download_name="watchdog-incident-export.log")
+            return
         if parsed.path in {"/", "/index.html"}:
             body = render_page(status_payload()).encode("utf-8")
             self.send_response(HTTPStatus.OK)
@@ -1419,6 +1473,19 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _send_file(self, path: Optional[Path], download_name: str) -> None:
+        if path is None:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        body = path.read_bytes()
+        content_type = guess_type(path.name)[0] or "application/octet-stream"
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self) -> None:
         if not authorized(self.path, self.headers):
