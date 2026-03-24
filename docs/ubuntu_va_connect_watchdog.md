@@ -79,6 +79,7 @@ This writes a folder and `.tar.gz` archive to the Desktop containing:
 - service journals for `esg`, `bridge`, `sysops`, `teamviewerd`, and networking
 - boot history
 - snapshots captured in the same time window
+- the latest `previous-boot-review` snapshot even if it falls just outside the selected window
 
 ## Restart watchdog services
 

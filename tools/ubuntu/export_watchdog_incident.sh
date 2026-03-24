@@ -175,13 +175,28 @@ journalctl --list-boots > "$EXPORT_DIR/boot_list.txt" 2>&1 || true
 
 find "$SNAPSHOT_DIR" -maxdepth 1 -mindepth 1 -type d | sort > "$EXPORT_DIR/snapshot_dirs.txt" 2>&1 || true
 
+copied_previous_boot_review="false"
 while IFS= read -r snapshot_path; do
   [[ -z "$snapshot_path" ]] && continue
   snapshot_name="$(basename "$snapshot_path")"
   cp -r "$snapshot_path" "$EXPORT_DIR/$snapshot_name" 2>/dev/null || true
+  if [[ "$snapshot_name" == *_previous-boot-review ]]; then
+    copied_previous_boot_review="true"
+  fi
 done < <(
   find "$SNAPSHOT_DIR" -maxdepth 1 -mindepth 1 -type d -newermt "$SINCE_TIME" ! -newermt "$UNTIL_TIME" 2>/dev/null | sort
 )
+
+if [[ "$copied_previous_boot_review" != "true" ]]; then
+  latest_previous_boot_review="$(
+    find "$SNAPSHOT_DIR" -maxdepth 1 -mindepth 1 -type d -name '*_previous-boot-review' 2>/dev/null | sort | tail -n 1
+  )"
+  if [[ -n "$latest_previous_boot_review" && -d "$latest_previous_boot_review" ]]; then
+    snapshot_name="$(basename "$latest_previous_boot_review")"
+    cp -r "$latest_previous_boot_review" "$EXPORT_DIR/$snapshot_name" 2>/dev/null || true
+    printf 'Included latest previous-boot review outside requested window: %s\n' "$latest_previous_boot_review" >> "$EXPORT_DIR/README.txt"
+  fi
+fi
 
 tar -czf "$EXPORT_DIR.tar.gz" -C "$OUTPUT_ROOT" "$(basename "$EXPORT_DIR")"
 
