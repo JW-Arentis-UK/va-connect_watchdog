@@ -55,6 +55,31 @@ It writes a timestamped text file to the Desktop, for example:
 
 That file includes the user, hostname, process list, desktop launchers, IP config, routes, and related `systemd` and journal details.
 
+## Export an incident window
+
+If you want a pack of everything around a fault, use:
+
+```bash
+chmod +x ./tools/ubuntu/export_watchdog_incident.sh
+./tools/ubuntu/export_watchdog_incident.sh --incident "2026-03-23 22:26" --reboot "2026-03-24 08:12"
+```
+
+Or use an explicit time range:
+
+```bash
+./tools/ubuntu/export_watchdog_incident.sh --since "2026-03-23 21:56" --until "2026-03-24 08:42"
+```
+
+This writes a folder and `.tar.gz` archive to the Desktop containing:
+
+- filtered `events.jsonl`
+- filtered `metrics.jsonl`
+- current state and build info
+- system and kernel journal for the selected window
+- service journals for `esg`, `bridge`, `sysops`, `teamviewerd`, and networking
+- boot history
+- snapshots captured in the same time window
+
 ## Restart watchdog services
 
 If you update files or need to bounce the watchdog stack, run:
