@@ -878,6 +878,32 @@ def render_page(status: Dict[str, Any]) -> str:
     h2 {{ margin: 0 0 10px; font-size: 0.95rem; }}
     p {{ margin: 0 0 10px; }}
     .sub {{ color: #607064; margin-bottom: 14px; font-size: 0.9rem; }}
+    .tabs {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }}
+    .tab-btn {{
+      border: 1px solid #cbd8ce;
+      border-radius: 999px;
+      padding: 8px 14px;
+      background: rgba(255,255,255,0.72);
+      color: #17301f;
+      font-weight: 700;
+      cursor: pointer;
+    }}
+    .tab-btn.active {{
+      background: #285f83;
+      color: #fff;
+      border-color: #285f83;
+    }}
+    .tab-panel {{
+      display: none;
+    }}
+    .tab-panel.active {{
+      display: block;
+    }}
     .badge {{
       display: inline-block;
       padding: 5px 9px;
@@ -1155,6 +1181,12 @@ def render_page(status: Dict[str, Any]) -> str:
   <div class="wrap">
     <h1>VA-Connect Encoder Watchdog</h1>
     <div class="sub">Control page for <strong>{html.escape(status["hostname"])}</strong></div>
+    <div class="tabs">
+      <button type="button" class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
+      <button type="button" class="tab-btn" data-tab="investigation" onclick="switchTab('investigation')">Investigation</button>
+      <button type="button" class="tab-btn" data-tab="config" onclick="switchTab('config')">Config</button>
+    </div>
+    <section class="tab-panel active" data-tab-panel="overview">
     <div class="hero">
       <section class="hero-main">
         <div class="stat-label">Current diagnosis</div>
@@ -1280,7 +1312,9 @@ def render_page(status: Dict[str, Any]) -> str:
         <div class="targets" id="targets"></div>
       </section>
     </div>
+    </section>
 
+    <section class="tab-panel" data-tab-panel="investigation">
     <div class="grid" style="margin-top:16px;">
       <section class="panel" style="grid-column: 1 / -1;">
         <h2>Likely causes</h2>
@@ -1373,7 +1407,9 @@ def render_page(status: Dict[str, Any]) -> str:
         </div>
       </section>
     </div>
+    </section>
 
+    <section class="tab-panel" data-tab-panel="config">
     <div class="bottom-grid">
       <section class="panel">
         <h2>Config</h2>
@@ -1463,11 +1499,21 @@ def render_page(status: Dict[str, Any]) -> str:
         </section>
       </div>
     </div>
+    </section>
   </div>
   <script>
     const initialStatus = {json.dumps(status)};
     const authQuery = window.location.search || '';
     let latestMetrics = [];
+
+    function switchTab(name) {{
+      document.querySelectorAll('.tab-btn').forEach((btn) => {{
+        btn.classList.toggle('active', btn.dataset.tab === name);
+      }});
+      document.querySelectorAll('.tab-panel').forEach((panel) => {{
+        panel.classList.toggle('active', panel.dataset.tabPanel === name);
+      }});
+    }}
 
     function badge(ok) {{
       return ok ? 'badge' : 'badge danger';
