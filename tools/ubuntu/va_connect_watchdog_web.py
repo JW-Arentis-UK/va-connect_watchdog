@@ -104,6 +104,20 @@ def memtest_recommendation() -> Dict[str, Any]:
     }
 
 
+def effective_reboot_counts(state: Dict[str, Any]) -> Dict[str, int]:
+    raw_watchdog = int(state.get("reboot_commands_sent_count", 0) or 0)
+    raw_detected = int(state.get("reboot_detections_count", 0) or 0)
+    raw_unexpected = int(state.get("unexpected_reboot_count", 0) or 0)
+    ack_watchdog = int(state.get("ack_reboot_commands_sent_count", 0) or 0)
+    ack_detected = int(state.get("ack_reboot_detections_count", 0) or 0)
+    ack_unexpected = int(state.get("ack_unexpected_reboot_count", 0) or 0)
+    return {
+        "watchdog": max(0, raw_watchdog - ack_watchdog),
+        "detected": max(0, raw_detected - ack_detected),
+        "unexpected": max(0, raw_unexpected - ack_unexpected),
+    }
+
+
 def sanitize_patch(data: Dict[str, Any]) -> Dict[str, Any]:
     patch: Dict[str, Any] = {}
 
@@ -439,6 +453,9 @@ def summarize_event(event: Dict[str, Any]) -> Dict[str, str]:
         title = "Hardware warning update"
         warning_count = int(event.get("warning_count", 0))
         detail = f"{warning_count} hardware warning line(s) currently surfaced."
+    elif event_type == "reboot_counts_acknowledged":
+        title = "Reboot counts acknowledged"
+        detail = "Known manual or remote-triggered reboot counts were cleared from the active view."
     elif event_type == "startup":
         title = "Watchdog startup"
         detail = "Site watchdog process started."
@@ -709,10 +726,11 @@ def launch_memtest(size_mb: int, loops: int) -> Dict[str, Any]:
 def status_payload() -> Dict[str, Any]:
     state = read_json(STATE_PATH, {})
     checks = state.get("last_checks") or {}
+    reboot_counts = effective_reboot_counts(state)
     diagnosis = "Healthy"
     diagnosis_detail = "All monitored checks are passing."
 
-    if state.get("unexpected_reboot_count", 0):
+    if reboot_counts["unexpected"]:
         diagnosis = "Unexpected reboot seen"
         diagnosis_detail = str(state.get("last_reboot_reason") or "A reboot was detected after startup.")
     if state.get("fault_active"):
@@ -732,7 +750,7 @@ def status_payload() -> Dict[str, Any]:
     next_steps: List[str] = []
     if state.get("fault_active"):
         next_steps.append("Check Latest checks first to see whether the app, a service, WAN, or the RUT target is currently failing.")
-    elif state.get("unexpected_reboot_count", 0):
+    elif reboot_counts["unexpected"]:
         next_steps.append("Review Recent events for the exact time the unexpected reboot was detected.")
         next_steps.append("Open the latest previous-boot snapshot to inspect journal and kernel messages from before the restart.")
     else:
@@ -765,6 +783,7 @@ def status_payload() -> Dict[str, Any]:
         "export_status": read_json(EXPORT_STATUS_PATH, {"state": "idle"}),
         "memtest_status": memtest_status,
         "memtest_info": memtest_info,
+        "reboot_counts": reboot_counts,
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "next_steps": next_steps,
         "hardware_review": hardware_payload,
@@ -1194,9 +1213,9 @@ def render_page(status: Dict[str, Any]) -> str:
         <div class="hero-detail">{html.escape(status["diagnosis"]["detail"])}</div>
         <div class="status-strip">
           <span class="badge {'danger' if status['state'].get('fault_active') else ''}">{'Fault active' if status['state'].get('fault_active') else 'Healthy now'}</span>
-          <span class="badge {'warn' if status['state'].get('unexpected_reboot_count', 0) else ''}">Unexpected reboots: {int(status["state"].get("unexpected_reboot_count", 0))}</span>
-          <span class="badge">Detected reboots: {int(status["state"].get("reboot_detections_count", 0))}</span>
-          <span class="badge">Watchdog commands: {int(status["state"].get("reboot_commands_sent_count", 0))}</span>
+          <span class="badge {'warn' if status['reboot_counts'].get('unexpected', 0) else ''}">Unexpected reboots: {int(status["reboot_counts"].get("unexpected", 0))}</span>
+          <span class="badge">Detected reboots: {int(status["reboot_counts"].get("detected", 0))}</span>
+          <span class="badge">Watchdog commands: {int(status["reboot_counts"].get("watchdog", 0))}</span>
         </div>
       </section>
       <section class="panel">
@@ -1213,15 +1232,15 @@ def render_page(status: Dict[str, Any]) -> str:
       </section>
       <section class="stat-card">
         <div class="stat-label">Watchdog reboot commands</div>
-        <div class="stat-value">{int(status["state"].get("reboot_commands_sent_count", 0))}</div>
+        <div class="stat-value">{int(status["reboot_counts"].get("watchdog", 0))}</div>
       </section>
       <section class="stat-card">
         <div class="stat-label">Detected reboots</div>
-        <div class="stat-value">{int(status["state"].get("reboot_detections_count", 0))}</div>
+        <div class="stat-value">{int(status["reboot_counts"].get("detected", 0))}</div>
       </section>
       <section class="stat-card">
         <div class="stat-label">Unexpected reboots</div>
-        <div class="stat-value">{int(status["state"].get("unexpected_reboot_count", 0))}</div>
+        <div class="stat-value">{int(status["reboot_counts"].get("unexpected", 0))}</div>
       </section>
       <section class="stat-card">
         <div class="stat-label">Last reboot reason</div>
@@ -1276,6 +1295,7 @@ def render_page(status: Dict[str, Any]) -> str:
         <label>Network restart before reboot <input type="checkbox" id="restart_network_before_reboot" {'checked' if cfg['restart_network_before_reboot'] else ''}></label>
         <label>Reboot allowed <input type="checkbox" id="reboot_enabled" {'checked' if cfg['reboot_enabled'] else ''}></label>
         <button onclick="saveSettings()">Save settings</button>
+        <button class="secondary" onclick="runAction('ack_reboots')">Acknowledge reboot counts</button>
         <button class="secondary" onclick="runAction('run_checks')">Run checks now</button>
         <button class="secondary" onclick="runAction('snapshot')">Capture snapshot</button>
         <button class="warnbtn" onclick="runAction('restart_network')">Restart network</button>
@@ -1630,9 +1650,9 @@ def render_page(status: Dict[str, Any]) -> str:
 
       document.querySelector('.overview-grid').innerHTML = `
         <section class="stat-card"><div class="stat-label">Current state</div><div class="stat-value">${{status.state.fault_active ? 'Fault' : 'Healthy'}}</div></section>
-        <section class="stat-card"><div class="stat-label">Watchdog reboot commands</div><div class="stat-value">${{status.state.reboot_commands_sent_count || 0}}</div></section>
-        <section class="stat-card"><div class="stat-label">Detected reboots</div><div class="stat-value">${{status.state.reboot_detections_count || 0}}</div></section>
-        <section class="stat-card"><div class="stat-label">Unexpected reboots</div><div class="stat-value">${{status.state.unexpected_reboot_count || 0}}</div></section>
+        <section class="stat-card"><div class="stat-label">Watchdog reboot commands</div><div class="stat-value">${{(status.reboot_counts && status.reboot_counts.watchdog) || 0}}</div></section>
+        <section class="stat-card"><div class="stat-label">Detected reboots</div><div class="stat-value">${{(status.reboot_counts && status.reboot_counts.detected) || 0}}</div></section>
+        <section class="stat-card"><div class="stat-label">Unexpected reboots</div><div class="stat-value">${{(status.reboot_counts && status.reboot_counts.unexpected) || 0}}</div></section>
         <section class="stat-card"><div class="stat-label">Last reboot reason</div><div class="stat-value" style="font-size:1rem;">${{status.state.last_reboot_reason || 'none'}}</div></section>
         <section class="stat-card"><div class="stat-label">Last startup</div><div class="stat-value" style="font-size:1rem;">${{status.state.last_startup_at || 'unknown'}}</div></section>
         <section class="stat-card"><div class="stat-label">Build</div><div class="stat-value" style="font-size:1rem;">${{(status.build_info && status.build_info.git_commit) || 'unknown'}}</div></section>
@@ -1645,9 +1665,9 @@ def render_page(status: Dict[str, Any]) -> str:
         <div class="hero-detail">${{status.diagnosis.detail}}</div>
         <div class="status-strip">
           <span class="badge ${{status.state.fault_active ? 'danger' : ''}}">${{status.state.fault_active ? 'Fault active' : 'Healthy now'}}</span>
-          <span class="badge ${{status.state.unexpected_reboot_count ? 'warn' : ''}}">Unexpected reboots: ${{status.state.unexpected_reboot_count || 0}}</span>
-          <span class="badge">Detected reboots: ${{status.state.reboot_detections_count || 0}}</span>
-          <span class="badge">Watchdog commands: ${{status.state.reboot_commands_sent_count || 0}}</span>
+          <span class="badge ${{status.reboot_counts && status.reboot_counts.unexpected ? 'warn' : ''}}">Unexpected reboots: ${{(status.reboot_counts && status.reboot_counts.unexpected) || 0}}</span>
+          <span class="badge">Detected reboots: ${{(status.reboot_counts && status.reboot_counts.detected) || 0}}</span>
+          <span class="badge">Watchdog commands: ${{(status.reboot_counts && status.reboot_counts.watchdog) || 0}}</span>
         </div>
       `;
     }}
@@ -2005,6 +2025,18 @@ class Handler(BaseHTTPRequestHandler):
             if action == "update_watchdog":
                 result = launch_update()
                 self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT)
+                return
+            if action == "ack_reboots":
+                state = read_json(STATE_PATH, {})
+                state["ack_reboot_commands_sent_count"] = int(state.get("reboot_commands_sent_count", 0) or 0)
+                state["ack_reboot_detections_count"] = int(state.get("reboot_detections_count", 0) or 0)
+                state["ack_unexpected_reboot_count"] = int(state.get("unexpected_reboot_count", 0) or 0)
+                write_json(STATE_PATH, state)
+                append_path = EVENTS_PATH
+                append_path.parent.mkdir(parents=True, exist_ok=True)
+                with append_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps({"ts": now_iso(), "event": "reboot_counts_acknowledged"}, sort_keys=True) + "\n")
+                self._send_json({"ok": True, "action": action, "message": "Reboot counts acknowledged."})
                 return
             marker = action_map.get(action)
             if not marker:
