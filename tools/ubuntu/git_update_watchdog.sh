@@ -27,6 +27,10 @@ run_as_repo_user() {
   fi
 }
 
+prepare_repo_for_pull() {
+  run_as_repo_user git -C "$REPO_DIR" config core.filemode false
+}
+
 main() {
   if [[ ! -d "$REPO_DIR/.git" ]]; then
     echo "Git repository not found at $REPO_DIR"
@@ -35,6 +39,7 @@ main() {
   fi
 
   cd "$REPO_DIR"
+  prepare_repo_for_pull
 
   if [[ -n "$BRANCH" ]]; then
     run_as_repo_user git fetch origin "$BRANCH"

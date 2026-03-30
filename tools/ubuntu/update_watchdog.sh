@@ -23,6 +23,12 @@ run_as_repo_user() {
   fi
 }
 
+prepare_repo_for_pull() {
+  if [[ -d "$PROJECT_ROOT/.git" ]]; then
+    run_as_repo_user git -C "$PROJECT_ROOT" config core.filemode false
+  fi
+}
+
 maybe_pull_latest() {
   local before_commit
   local after_commit
@@ -38,6 +44,7 @@ maybe_pull_latest() {
   fi
 
   before_commit="$(run_as_repo_user git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  prepare_repo_for_pull
 
   echo "Checking GitHub for watchdog updates..."
   if ! run_as_repo_user git -C "$PROJECT_ROOT" pull --ff-only; then

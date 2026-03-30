@@ -56,6 +56,14 @@ run_git_as_repo_owner() {
   fi
 }
 
+configure_repo_for_gateway_updates() {
+  local source_repo_dir
+  source_repo_dir="$(resolve_source_repo_dir)"
+  if [[ -d "$source_repo_dir/.git" ]]; then
+    run_git_as_repo_owner "$source_repo_dir" config core.filemode false || true
+  fi
+}
+
 install_files() {
   mkdir -p "$INSTALL_DIR"
   mkdir -p "$BIN_DIR"
@@ -166,6 +174,7 @@ EOF
 
 main() {
   require_root
+  configure_repo_for_gateway_updates
   install_files
   enable_timer
   print_next_steps
