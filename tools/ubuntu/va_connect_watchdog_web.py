@@ -965,48 +965,52 @@ def render_page(status: Dict[str, Any]) -> str:
       font-family: "Segoe UI", Tahoma, sans-serif;
       font-size: 14px;
       line-height: 1.35;
-      background: linear-gradient(180deg, #eff5ef 0%, #e5efe7 100%);
-      color: #17301f;
+      background:
+        radial-gradient(circle at top left, rgba(54, 89, 122, 0.28), transparent 28%),
+        radial-gradient(circle at top right, rgba(120, 87, 31, 0.22), transparent 24%),
+        linear-gradient(180deg, #0d151c 0%, #111c24 55%, #0b1319 100%);
+      color: #e7eef5;
     }}
-    .wrap {{ max-width: 1600px; margin: 0 auto; padding: 18px; }}
+    .wrap {{ max-width: 1540px; margin: 0 auto; padding: 12px; }}
     .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }}
-    .overview-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 14px; }}
+    .overview-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-top: 10px; }}
     .current-stats-grid {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      gap: 10px;
-      margin-top: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+      gap: 8px;
+      margin-top: 8px;
     }}
     .panel {{
-      background: rgba(255,255,255,0.82);
-      border: 1px solid #ccd9cf;
-      border-radius: 18px;
-      padding: 14px;
-      box-shadow: 0 10px 28px rgba(24, 48, 31, 0.08);
+      background: rgba(18, 29, 39, 0.9);
+      border: 1px solid rgba(122, 150, 176, 0.18);
+      border-radius: 16px;
+      padding: 12px;
+      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+      backdrop-filter: blur(10px);
     }}
     h1 {{ margin: 0 0 6px; font-size: 1.2rem; }}
     h2 {{ margin: 0 0 10px; font-size: 0.95rem; }}
     p {{ margin: 0 0 10px; }}
-    .sub {{ color: #607064; margin-bottom: 14px; font-size: 0.9rem; }}
+    .sub {{ color: #8ea5b9; margin-bottom: 12px; font-size: 0.88rem; }}
     .tabs {{
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      margin-bottom: 14px;
+      margin-bottom: 10px;
     }}
     .tab-btn {{
-      border: 1px solid #cbd8ce;
+      border: 1px solid rgba(133, 159, 180, 0.24);
       border-radius: 999px;
-      padding: 8px 14px;
-      background: rgba(255,255,255,0.72);
-      color: #17301f;
+      padding: 7px 13px;
+      background: rgba(19, 32, 43, 0.9);
+      color: #d9e5ef;
       font-weight: 700;
       cursor: pointer;
     }}
     .tab-btn.active {{
-      background: #285f83;
+      background: #3a6c98;
       color: #fff;
-      border-color: #285f83;
+      border-color: #4b7ca8;
     }}
     .tab-panel {{
       display: none;
@@ -1016,73 +1020,85 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
     .badge {{
       display: inline-block;
-      padding: 5px 9px;
+      padding: 4px 8px;
       border-radius: 999px;
       font-size: 0.78rem;
       font-weight: 700;
-      background: #e0f0e4;
-      color: #246241;
+      background: rgba(53, 122, 88, 0.2);
+      color: #9be0b1;
+      border: 1px solid rgba(97, 168, 123, 0.2);
     }}
-    .danger {{ background: #f6e1e1; color: #a23d3d; }}
-    .warn {{ background: #f4ead7; color: #9a6708; }}
+    .danger {{ background: rgba(153, 57, 57, 0.22); color: #ffb3b3; border-color: rgba(182, 78, 78, 0.26); }}
+    .warn {{ background: rgba(157, 108, 26, 0.22); color: #ffd28a; border-color: rgba(171, 123, 42, 0.28); }}
     label {{
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 8px 0;
-      border-bottom: 1px solid #dbe4dc;
+      padding: 7px 0;
+      border-bottom: 1px solid rgba(130, 153, 173, 0.14);
     }}
     label:last-child {{ border-bottom: 0; }}
     button {{
       border: 0;
       border-radius: 12px;
-      padding: 9px 12px;
-      background: #285f83;
+      padding: 8px 11px;
+      background: #366a97;
       color: white;
       font-weight: 700;
       cursor: pointer;
       margin-right: 8px;
       margin-top: 8px;
     }}
-    button.secondary {{ background: #4c6d55; }}
-    button.warnbtn {{ background: #956615; }}
-    .targets, .events {{ display: grid; gap: 10px; }}
+    button.secondary {{ background: #486458; }}
+    button.warnbtn {{ background: #8a6521; }}
+    .targets, .events {{ display: grid; gap: 8px; }}
     .targets {{ grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }}
     .item {{
-      border: 1px solid #dbe4dc;
-      border-radius: 14px;
+      border: 1px solid rgba(130, 153, 173, 0.15);
+      border-radius: 12px;
       padding: 8px 10px;
-      background: rgba(255,255,255,0.66);
+      background: rgba(22, 35, 46, 0.86);
       font-size: 0.83rem;
     }}
     .stat-card {{
-      border: 1px solid #dbe4dc;
-      border-radius: 16px;
-      padding: 12px;
-      background: rgba(255,255,255,0.78);
+      border: 1px solid rgba(130, 153, 173, 0.15);
+      border-radius: 14px;
+      padding: 10px;
+      background: rgba(20, 33, 44, 0.88);
     }}
     .hero {{
       display: grid;
       grid-template-columns: minmax(240px, 1.1fr) minmax(180px, 0.9fr);
-      gap: 14px;
-      margin-top: 14px;
+      gap: 10px;
+      margin-top: 10px;
     }}
     .hero-main {{
-      border: 1px solid #ccd9cf;
+      border: 1px solid rgba(122, 150, 176, 0.18);
       border-radius: 18px;
       padding: 14px;
-      background: linear-gradient(135deg, rgba(40,95,131,0.1), rgba(76,109,85,0.08));
+      background: linear-gradient(135deg, rgba(53, 93, 128, 0.34), rgba(47, 78, 62, 0.22));
     }}
     .hero-title {{ font-size: 1.18rem; font-weight: 800; margin: 3px 0 8px; }}
-    .hero-detail {{ font-size: 0.9rem; color: #415448; }}
+    .hero-detail {{ font-size: 0.9rem; color: #b8c9d8; }}
     .status-strip {{
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
       margin-top: 10px;
     }}
-    .stat-label {{ color: #607064; font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.03em; }}
-    .stat-value {{ font-size: 1.25rem; font-weight: 700; margin-top: 4px; }}
+    .stat-label {{ color: #8da4b8; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; }}
+    .stat-value {{ font-size: 1.18rem; font-weight: 700; margin-top: 3px; }}
+    .current-stats-grid .stat-card {{
+      padding: 8px 9px;
+      border-radius: 12px;
+    }}
+    .current-stats-grid .stat-label {{
+      font-size: 0.64rem;
+    }}
+    .current-stats-grid .stat-value {{
+      font-size: 0.9rem;
+      line-height: 1.15;
+    }}
     .formgrid {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -1102,36 +1118,36 @@ def render_page(status: Dict[str, Any]) -> str:
     input[type="text"], input[type="number"], textarea {{
       width: 100%;
       box-sizing: border-box;
-      border: 1px solid #c7d6ca;
+      border: 1px solid rgba(129, 154, 175, 0.18);
       border-radius: 10px;
       padding: 8px 10px;
       font: inherit;
-      background: #fff;
-      color: #17301f;
+      background: rgba(9, 18, 25, 0.88);
+      color: #e7eef5;
     }}
     textarea {{ min-height: 84px; resize: vertical; }}
-    .hint {{ color: #607064; font-size: 0.8rem; }}
+    .hint {{ color: #8ea5b9; font-size: 0.78rem; }}
     code {{ font-family: Consolas, monospace; font-size: 0.78rem; word-break: break-word; }}
     canvas {{
       width: 100%;
-      height: 240px;
-      border: 1px solid #dbe4dc;
+      height: 220px;
+      border: 1px solid rgba(129, 154, 175, 0.18);
       border-radius: 14px;
-      background: rgba(255,255,255,0.72);
+      background: rgba(10, 18, 25, 0.92);
     }}
     .chart-hover {{
       min-height: 18px;
-      color: #415448;
-      font-size: 0.82rem;
-      margin: 0 0 8px;
+      color: #b2c3d1;
+      font-size: 0.8rem;
+      margin: 0 0 6px;
     }}
     .chart-event-legend {{
       display: flex;
       flex-wrap: wrap;
       gap: 14px;
       margin: 10px 0 8px;
-      color: #607064;
-      font-size: 0.8rem;
+      color: #90a6b8;
+      font-size: 0.76rem;
     }}
     .chart-event-item {{
       display: inline-flex;
@@ -1152,7 +1168,7 @@ def render_page(status: Dict[str, Any]) -> str:
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
       flex-wrap: wrap;
     }}
     .range-toggle {{
@@ -1161,17 +1177,17 @@ def render_page(status: Dict[str, Any]) -> str:
       flex-wrap: wrap;
     }}
     .range-btn {{
-      border: 1px solid #cfdcd1;
-      background: #fff;
-      color: #27412f;
+      border: 1px solid rgba(129, 154, 175, 0.18);
+      background: rgba(17, 28, 37, 0.95);
+      color: #dce7ef;
       border-radius: 999px;
-      padding: 6px 12px;
-      font-size: 0.8rem;
+      padding: 5px 11px;
+      font-size: 0.76rem;
       cursor: pointer;
     }}
     .range-btn.active {{
-      background: #325f86;
-      border-color: #325f86;
+      background: #3c6f9c;
+      border-color: #4d7fad;
       color: #fff;
     }}
     .next-steps {{
@@ -1189,7 +1205,7 @@ def render_page(status: Dict[str, Any]) -> str:
       flex-wrap: wrap;
       gap: 8px;
       align-items: center;
-      margin-top: 10px;
+      margin-top: 8px;
     }}
     .review-list {{
       margin: 8px 0 0;
@@ -1202,52 +1218,52 @@ def render_page(status: Dict[str, Any]) -> str:
       margin-top: 10px;
       max-height: 180px;
       overflow: auto;
-      border: 1px solid #dbe4dc;
+      border: 1px solid rgba(129, 154, 175, 0.18);
       border-radius: 10px;
-      background: rgba(255,255,255,0.72);
+      background: rgba(18, 29, 39, 0.9);
       padding: 8px 10px;
     }}
     .timeline {{
       display: grid;
       gap: 8px;
-      max-height: 340px;
+      max-height: 300px;
       overflow: auto;
     }}
     .timeline-card {{
-      border: 1px solid #dbe4dc;
+      border: 1px solid rgba(129, 154, 175, 0.14);
       border-left: 4px solid #5c7b66;
       border-radius: 12px;
-      padding: 9px 10px;
-      background: rgba(255,255,255,0.74);
+      padding: 8px 9px;
+      background: rgba(20, 33, 44, 0.88);
     }}
     .timeline-card.warn {{ border-left-color: #b47b1f; }}
     .timeline-card.danger {{ border-left-color: #a23d3d; }}
-    .timeline-time {{ color: #607064; font-size: 0.73rem; margin-bottom: 3px; }}
+    .timeline-time {{ color: #8ea5b9; font-size: 0.71rem; margin-bottom: 2px; }}
     .timeline-title {{ font-weight: 700; margin-bottom: 3px; }}
     .analysis-grid {{
       display: grid;
       grid-template-columns: minmax(320px, 0.85fr) minmax(420px, 1.4fr);
-      gap: 14px;
+      gap: 10px;
       align-items: start;
     }}
     .status-grid {{
       display: grid;
       grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
-      gap: 14px;
-      margin-top: 16px;
+      gap: 10px;
+      margin-top: 10px;
     }}
     .ops-grid {{
       display: grid;
       grid-template-columns: minmax(360px, 1fr) minmax(480px, 1fr);
-      gap: 14px;
-      margin-top: 16px;
+      gap: 10px;
+      margin-top: 10px;
       align-items: start;
     }}
     .bottom-grid {{
       display: grid;
       grid-template-columns: minmax(420px, 1.2fr) minmax(320px, 0.8fr);
-      gap: 14px;
-      margin-top: 16px;
+      gap: 10px;
+      margin-top: 10px;
       align-items: start;
     }}
     .sidebar-stack {{
@@ -1255,27 +1271,27 @@ def render_page(status: Dict[str, Any]) -> str:
       gap: 14px;
     }}
     .timeline-panel {{
-      min-height: 300px;
+      min-height: 250px;
     }}
     .checks-panel {{
-      min-height: 360px;
+      min-height: 320px;
     }}
     .controls-panel {{
-      min-height: 260px;
+      min-height: 240px;
     }}
     .summary-panel {{
-      min-height: 170px;
+      min-height: 150px;
     }}
     .timeline-empty {{
-      color: #607064;
+      color: #8ea5b9;
       font-size: 0.84rem;
       padding: 12px 4px;
     }}
     .hardware-grid {{
       display: grid;
       grid-template-columns: minmax(280px, 0.95fr) minmax(380px, 1.05fr);
-      gap: 14px;
-      margin-top: 16px;
+      gap: 10px;
+      margin-top: 10px;
       align-items: start;
     }}
     .smart-table {{
@@ -1285,14 +1301,14 @@ def render_page(status: Dict[str, Any]) -> str:
     .suspect-grid {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 10px;
-      margin-top: 10px;
+      gap: 8px;
+      margin-top: 8px;
     }}
     .suspect-card {{
-      border: 1px solid #dbe4dc;
+      border: 1px solid rgba(129, 154, 175, 0.15);
       border-radius: 14px;
       padding: 10px 12px;
-      background: rgba(255,255,255,0.72);
+      background: rgba(20, 33, 44, 0.88);
     }}
     .suspect-score {{
       font-size: 1.15rem;
@@ -1316,9 +1332,9 @@ def render_page(status: Dict[str, Any]) -> str:
       text-decoration: none;
       border-radius: 10px;
       padding: 7px 10px;
-      background: #eef5ef;
-      border: 1px solid #cbd8ce;
-      color: #17301f;
+      background: rgba(17, 28, 37, 0.95);
+      border: 1px solid rgba(129, 154, 175, 0.18);
+      color: #dce7ef;
       font-size: 0.82rem;
       font-weight: 600;
     }}
@@ -1330,9 +1346,19 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
     details summary {{
       cursor: pointer;
-      color: #607064;
+      color: #8ea5b9;
       font-size: 0.8rem;
       margin-top: 6px;
+    }}
+    @media (max-width: 1100px) {{
+      .hero,
+      .analysis-grid,
+      .status-grid,
+      .ops-grid,
+      .bottom-grid,
+      .hardware-grid {{
+        grid-template-columns: 1fr;
+      }}
     }}
   </style>
 </head>
@@ -1948,14 +1974,14 @@ def render_page(status: Dict[str, Any]) -> str:
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = '#0f1820';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       const pad = 40;
       const chartWidth = canvas.width - pad * 2;
       const chartHeight = canvas.height - pad * 2;
 
-      ctx.strokeStyle = '#d0ddd3';
+      ctx.strokeStyle = '#29404f';
       ctx.lineWidth = 1;
       for (let i = 0; i <= 4; i += 1) {{
         const y = pad + (chartHeight / 4) * i;
@@ -1965,7 +1991,7 @@ def render_page(status: Dict[str, Any]) -> str:
         ctx.stroke();
       }}
 
-      ctx.fillStyle = '#607064';
+      ctx.fillStyle = '#8ea5b9';
       ctx.font = '12px Segoe UI';
       for (let i = 0; i <= 4; i += 1) {{
         const value = 100 - (25 * i);
@@ -1974,17 +2000,17 @@ def render_page(status: Dict[str, Any]) -> str:
       }}
 
       if (!points.length) {{
-        ctx.fillStyle = '#607064';
+        ctx.fillStyle = '#8ea5b9';
         ctx.font = '16px Segoe UI';
         ctx.fillText('No metrics collected yet.', pad, canvas.height / 2);
         return;
       }}
 
       const series = [
-        {{ key: 'cpu_percent', color: '#285f83', label: 'CPU' }},
-        {{ key: 'mem_percent', color: '#ad3d3d', label: 'Memory' }},
-        {{ key: 'root_disk_percent', color: '#4c6d55', label: 'Root disk' }},
-        {{ key: 'recording_disk_percent', color: '#956615', label: 'Recording disk' }}
+        {{ key: 'cpu_percent', color: '#67a8db', label: 'CPU' }},
+        {{ key: 'mem_percent', color: '#e07b7b', label: 'Memory' }},
+        {{ key: 'root_disk_percent', color: '#7ab08a', label: 'Root disk' }},
+        {{ key: 'recording_disk_percent', color: '#d4a34a', label: 'Recording disk' }}
       ];
 
       const maxIndex = Math.max(1, points.length - 1);
@@ -2016,7 +2042,7 @@ def render_page(status: Dict[str, Any]) -> str:
         ctx.stroke();
         ctx.fillStyle = line.color;
         ctx.fillRect(pad + idx * 140, 10, 12, 12);
-        ctx.fillStyle = '#17301f';
+        ctx.fillStyle = '#d8e6f1';
         ctx.fillText(line.label, pad + idx * 140 + 18, 20);
       }});
 
@@ -2029,7 +2055,7 @@ def render_page(status: Dict[str, Any]) -> str:
         if (x < pad || x > pad + chartWidth) {{
           return;
         }}
-        const markerColor = event.kind === 'command' ? '#b06d10' : (event.kind === 'detected' ? '#b34747' : '#607064');
+        const markerColor = event.kind === 'command' ? '#d4a34a' : (event.kind === 'detected' ? '#e07b7b' : '#8ea5b9');
         ctx.strokeStyle = markerColor;
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -2044,7 +2070,7 @@ def render_page(status: Dict[str, Any]) -> str:
 
       if (hoverIndex !== null && points[hoverIndex]) {{
         const x = xFor(hoverIndex);
-        ctx.strokeStyle = '#607064';
+        ctx.strokeStyle = '#8ea5b9';
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(x, pad);
