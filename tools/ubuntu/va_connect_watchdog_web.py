@@ -971,6 +971,12 @@ def render_page(status: Dict[str, Any]) -> str:
     .wrap {{ max-width: 1600px; margin: 0 auto; padding: 18px; }}
     .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }}
     .overview-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 14px; }}
+    .current-stats-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }}
     .panel {{
       background: rgba(255,255,255,0.82);
       border: 1px solid #ccd9cf;
@@ -1412,6 +1418,22 @@ def render_page(status: Dict[str, Any]) -> str:
     </div>
 
     <div class="analysis-grid" style="margin-top:16px;">
+      <section class="panel" style="grid-column: 1 / -1;">
+        <div class="chart-toolbar">
+          <h2>Current PC Stats</h2>
+          <span class="hint" id="currentStatsAt">Latest sample unknown</span>
+        </div>
+        <div class="current-stats-grid" id="currentStatsGrid">
+          <section class="stat-card"><div class="stat-label">CPU</div><div class="stat-value">{html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("cpu_percent", "unknown")))}%</div></section>
+          <section class="stat-card"><div class="stat-label">Memory</div><div class="stat-value">{html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("mem_percent", "unknown")))}%</div></section>
+          <section class="stat-card"><div class="stat-label">MemAvailable</div><div class="stat-value" style="font-size:1rem;">{html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("mem_available_mb", "unknown")))} MB</div></section>
+          <section class="stat-card"><div class="stat-label">Cached</div><div class="stat-value" style="font-size:1rem;">{html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("mem_cached_mb", "unknown")))} MB</div></section>
+          <section class="stat-card"><div class="stat-label">Root disk</div><div class="stat-value">{html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("root_disk_percent", "unknown")))}%</div></section>
+          <section class="stat-card"><div class="stat-label">Recording disk</div><div class="stat-value">{html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("recording_disk_percent", "unknown")))}%</div></section>
+          <section class="stat-card"><div class="stat-label">Temperature</div><div class="stat-value" style="font-size:1rem;">{html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("temperature_c", "unknown")))} C</div></section>
+          <section class="stat-card"><div class="stat-label">Load</div><div class="stat-value" style="font-size:1rem;">{html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("load_1", "unknown")))}</div></section>
+        </div>
+      </section>
       <section class="panel timeline-panel">
         <h2>Incident timeline</h2>
         <div class="timeline" id="timeline">
@@ -1713,6 +1735,37 @@ def render_page(status: Dict[str, Any]) -> str:
       return ok ? 'badge' : 'badge danger';
     }}
 
+    function formatLocalTimestamp(ts) {{
+      if (!ts) {{
+        return 'unknown';
+      }}
+      const date = new Date(ts);
+      if (Number.isNaN(date.getTime())) {{
+        return ts;
+      }}
+      return date.toLocaleString([], {{
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      }});
+    }}
+
+    function formatLocalDateTimeInput(ts) {{
+      if (!ts) {{
+        return '';
+      }}
+      const date = new Date(ts);
+      if (Number.isNaN(date.getTime())) {{
+        return '';
+      }}
+      const pad = (value) => String(value).padStart(2, '0');
+      return `${{date.getFullYear()}}-${{pad(date.getMonth() + 1)}}-${{pad(date.getDate())}}T${{pad(date.getHours())}}:${{pad(date.getMinutes())}}`;
+    }}
+
     function render(status) {{
       document.getElementById('monitoring_enabled').checked = !!status.config.monitoring_enabled;
       document.getElementById('app_restart_enabled').checked = !!status.config.app_restart_enabled;
@@ -1735,8 +1788,8 @@ def render_page(status: Dict[str, Any]) -> str:
         if (startup) {{
           const startupDate = new Date(startup);
           const sinceDate = new Date(startupDate.getTime() - (30 * 60000));
-          document.getElementById('export_since').value = sinceDate.toISOString().slice(0, 16);
-          document.getElementById('export_until').value = startupDate.toISOString().slice(0, 16);
+          document.getElementById('export_since').value = formatLocalDateTimeInput(sinceDate.toISOString());
+          document.getElementById('export_until').value = formatLocalDateTimeInput(startupDate.toISOString());
         }}
       }}
       document.getElementById('internet_hosts').value = (status.config.internet_hosts || []).join('\\n');
@@ -1753,11 +1806,11 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('events').innerHTML = (status.recent_events || []).map((event) => {{
         const summary = event.summary || {{ title: (event.event || 'event'), detail: '', severity: 'info', ts: event.ts || '' }};
         const raw = JSON.stringify(event, null, 2);
-        return `<div class="item"><strong>${{summary.title}}</strong><br><span class="hint">${{summary.ts || ''}}</span><br>${{summary.detail || ''}}<details><summary>Raw event</summary><code>${{raw}}</code></details></div>`;
+        return `<div class="item"><strong>${{summary.title}}</strong><br><span class="hint">${{formatLocalTimestamp(summary.ts || '')}}</span><br>${{summary.detail || ''}}<details><summary>Raw event</summary><code>${{raw}}</code></details></div>`;
       }}).join('');
       document.getElementById('nextSteps').innerHTML = (status.next_steps || []).map((step) => `<li>${{step}}</li>`).join('');
       document.getElementById('timeline').innerHTML = (status.timeline || []).map((item) => (
-        `<div class="timeline-card ${{item.severity || ''}}"><div class="timeline-time">${{item.ts || ''}}</div><div class="timeline-title">${{item.title || ''}}</div><div>${{item.detail || ''}}</div></div>`
+        `<div class="timeline-card ${{item.severity || ''}}"><div class="timeline-time">${{formatLocalTimestamp(item.ts || '')}}</div><div class="timeline-title">${{item.title || ''}}</div><div>${{item.detail || ''}}</div></div>`
       )).join('') || '<div class="timeline-empty">No incident timeline entries yet.</div>';
       const crashReview = status.crash_review || {{}};
       document.getElementById('crashReviewTitle').textContent = crashReview.title || 'Crash review unavailable';
@@ -1767,7 +1820,7 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('suspectScores').innerHTML = (status.suspect_scores || []).map((item) => (
         `<div class="suspect-card"><div class="stat-label">${{item.label || 'Cause'}}</div><div class="suspect-score">${{item.score || 0}}</div><ul class="review-list">${{(item.reasons || []).map((reason) => `<li>${{reason}}</li>`).join('')}}</ul></div>`
       )).join('');
-      document.getElementById('hardwareCheckedAt').textContent = hardwareReview.checked_at || 'unknown';
+      document.getElementById('hardwareCheckedAt').textContent = formatLocalTimestamp(hardwareReview.checked_at || '');
       document.getElementById('hardwareFindings').innerHTML = (hardwareReview.findings || []).length
         ? (hardwareReview.findings || []).map((line) => `<li>${{line}}</li>`).join('')
         : '<li>No hardware findings yet.</li>';
@@ -1790,6 +1843,23 @@ def render_page(status: Dict[str, Any]) -> str:
         <li><strong>BIOS date:</strong> ${{hardwareIdentity.bios_date || 'unknown'}}</li>
       `;
       const currentMetrics = status.state.last_metrics || {{}};
+      const formatMetricNumber = (value, digits = 1) => {{
+        if (value === null || value === undefined || Number.isNaN(Number(value))) {{
+          return 'unknown';
+        }}
+        return Number(value).toFixed(digits);
+      }};
+      document.getElementById('currentStatsAt').textContent = currentMetrics.ts ? `Latest sample ${formatLocalTimestamp(currentMetrics.ts)}` : 'Latest sample unknown';
+      document.getElementById('currentStatsGrid').innerHTML = `
+        <section class="stat-card"><div class="stat-label">CPU</div><div class="stat-value">${{formatMetricNumber(currentMetrics.cpu_percent)}}%</div></section>
+        <section class="stat-card"><div class="stat-label">Memory</div><div class="stat-value">${{formatMetricNumber(currentMetrics.mem_percent)}}%</div></section>
+        <section class="stat-card"><div class="stat-label">MemAvailable</div><div class="stat-value" style="font-size:1rem;">${{currentMetrics.mem_available_mb ?? 'unknown'}} MB</div></section>
+        <section class="stat-card"><div class="stat-label">Cached</div><div class="stat-value" style="font-size:1rem;">${{currentMetrics.mem_cached_mb ?? 'unknown'}} MB</div></section>
+        <section class="stat-card"><div class="stat-label">Root disk</div><div class="stat-value">${{formatMetricNumber(currentMetrics.root_disk_percent)}}%</div></section>
+        <section class="stat-card"><div class="stat-label">Recording disk</div><div class="stat-value">${{formatMetricNumber(currentMetrics.recording_disk_percent)}}%</div></section>
+        <section class="stat-card"><div class="stat-label">Temperature</div><div class="stat-value" style="font-size:1rem;">${{currentMetrics.temperature_c ?? 'unknown'}} C</div></section>
+        <section class="stat-card"><div class="stat-label">Load</div><div class="stat-value" style="font-size:1rem;">${{formatMetricNumber(currentMetrics.load_1, 2)}}</div></section>
+      `;
       document.getElementById('memoryThermalSummary').innerHTML = `
         <li><strong>Memory used:</strong> ${{Number(currentMetrics.mem_percent || 0).toFixed(1)}}%</li>
         <li><strong>MemAvailable:</strong> ${{currentMetrics.mem_available_mb ?? 'unknown'}} MB</li>
@@ -1805,7 +1875,7 @@ def render_page(status: Dict[str, Any]) -> str:
       memtestBadge.className = `badge ${{memtestStatus.state === 'running' ? 'warn' : (memtestStatus.state === 'failed' ? 'danger' : '')}}`;
       memtestBadge.textContent = (memtestStatus.state || 'idle').toUpperCase();
       document.getElementById('memtestMessage').textContent = memtestStatus.message || 'No web memory test run yet.';
-      document.getElementById('memtestMeta').textContent = memtestStatus.finished_at || 'not finished yet';
+      document.getElementById('memtestMeta').textContent = memtestStatus.finished_at ? formatLocalTimestamp(memtestStatus.finished_at) : 'not finished yet';
       document.getElementById('memtestLogLink').style.display = memtestStatus.log_path ? 'inline-block' : 'none';
       document.getElementById('crashReviewFindings').innerHTML = (crashReview.findings || []).length
         ? (crashReview.findings || []).map((line) => `<li>${{line}}</li>`).join('')
@@ -1827,13 +1897,23 @@ def render_page(status: Dict[str, Any]) -> str:
       updateBadge.className = `badge ${{updateState.state === 'running' ? 'warn' : (updateState.state === 'failed' ? 'danger' : '')}}`;
       updateBadge.textContent = (updateState.state || 'idle').toUpperCase();
       document.getElementById('updateMessage').textContent = updateState.message || 'No web update run yet.';
-      document.getElementById('updateMeta').textContent = `${{updateState.from_build || 'unknown'}} to ${{updateState.to_build || 'unknown'}} | ${{updateState.finished_at || 'not finished yet'}}`;
+      document.getElementById('updateMeta').textContent = `${{updateState.from_build || 'unknown'}} to ${{updateState.to_build || 'unknown'}} | ${{updateState.finished_at ? formatLocalTimestamp(updateState.finished_at) : 'not finished yet'}}`;
       const exportState = status.export_status || {{}};
       const exportBadge = document.getElementById('exportState');
       exportBadge.className = `badge ${{exportState.state === 'running' ? 'warn' : (exportState.state === 'failed' ? 'danger' : '')}}`;
       exportBadge.textContent = (exportState.state || 'idle').toUpperCase();
       document.getElementById('exportMessage').textContent = exportState.message || 'No incident export run yet.';
-      document.getElementById('exportMeta').textContent = `${{exportState.folder || ''}} ${{exportState.archive || ''}}`.trim();
+      const exportMetaParts = [];
+      if (exportState.folder) {{
+        exportMetaParts.push(exportState.folder);
+      }}
+      if (exportState.archive) {{
+        exportMetaParts.push(exportState.archive);
+      }}
+      if (exportState.finished_at) {{
+        exportMetaParts.push(formatLocalTimestamp(exportState.finished_at));
+      }}
+      document.getElementById('exportMeta').textContent = exportMetaParts.join(' | ') || 'not finished yet';
       document.getElementById('exportArchiveLink').style.display = exportState.archive ? 'inline-block' : 'none';
       document.getElementById('exportReadmeLink').style.display = exportState.folder ? 'inline-block' : 'none';
       document.getElementById('exportLogLink').style.display = exportState.log_path ? 'inline-block' : 'none';
@@ -1844,7 +1924,7 @@ def render_page(status: Dict[str, Any]) -> str:
         <section class="stat-card"><div class="stat-label">Detected reboots</div><div class="stat-value">${{(status.reboot_counts && status.reboot_counts.detected) || 0}}</div></section>
         <section class="stat-card"><div class="stat-label">Unexpected reboots</div><div class="stat-value">${{(status.reboot_counts && status.reboot_counts.unexpected) || 0}}</div></section>
         <section class="stat-card"><div class="stat-label">Last reboot reason</div><div class="stat-value" style="font-size:1rem;">${{status.state.last_reboot_reason || 'none'}}</div></section>
-        <section class="stat-card"><div class="stat-label">Last startup</div><div class="stat-value" style="font-size:1rem;">${{status.state.last_startup_at || 'unknown'}}</div></section>
+        <section class="stat-card"><div class="stat-label">Last startup</div><div class="stat-value" style="font-size:1rem;">${{formatLocalTimestamp(status.state.last_startup_at || '')}}</div></section>
         <section class="stat-card"><div class="stat-label">Hardware ID</div><div class="stat-value" style="font-size:1rem;">${{(status.hardware_identity && status.hardware_identity.serial) || 'unknown'}}</div></section>
         <section class="stat-card"><div class="stat-label">Build</div><div class="stat-value" style="font-size:1rem;">${{(status.build_info && status.build_info.git_commit) || 'unknown'}}</div></section>
       `;
@@ -2145,7 +2225,7 @@ def render_page(status: Dict[str, Any]) -> str:
         const eventText = nearbyEvents.length ? ` | Events: ${{nearbyEvents.join(', ')}}` : '';
         const memAvailText = point.mem_available_mb !== undefined && point.mem_available_mb !== null ? ` | MemAvailable ${{point.mem_available_mb}} MB` : '';
         const tempText = point.temperature_c !== undefined && point.temperature_c !== null ? ` | Temp ${{Number(point.temperature_c).toFixed(1)}} C` : '';
-        hover.textContent = `${{point.ts || ''}} | CPU ${{Number(point.cpu_percent || 0).toFixed(1)}}% | Memory ${{Number(point.mem_percent || 0).toFixed(1)}}%${{memAvailText}} | Root ${{Number(point.root_disk_percent || 0).toFixed(1)}}% | Recording ${{Number(point.recording_disk_percent || 0).toFixed(1)}}%${{tempText}}${{eventText}}`;
+        hover.textContent = `${{formatLocalTimestamp(point.ts || '')}} | CPU ${{Number(point.cpu_percent || 0).toFixed(1)}}% | Memory ${{Number(point.mem_percent || 0).toFixed(1)}}%${{memAvailText}} | Root ${{Number(point.root_disk_percent || 0).toFixed(1)}}% | Recording ${{Number(point.recording_disk_percent || 0).toFixed(1)}}%${{tempText}}${{eventText}}`;
         drawMetrics(latestMetrics, idx);
       }});
 
