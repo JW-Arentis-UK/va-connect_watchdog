@@ -1160,6 +1160,7 @@ def render_page(status: Dict[str, Any]) -> str:
       border-radius: 999px;
       display: inline-block;
     }}
+    .chart-event-dot.temp {{ background: #ff9f6e; }}
     .chart-event-dot.command {{ background: #b06d10; }}
     .chart-event-dot.detected {{ background: #b34747; }}
     .chart-event-dot.note {{ background: #607064; }}
@@ -1493,11 +1494,12 @@ def render_page(status: Dict[str, Any]) -> str:
         <div class="chart-hover" id="metricsHover">Move across the graph to inspect time and values.</div>
         <canvas id="metricsChart" width="1000" height="280"></canvas>
         <div class="chart-event-legend">
+          <span class="chart-event-item"><span class="chart-event-dot temp"></span>Temperature</span>
           <span class="chart-event-item"><span class="chart-event-dot command"></span>Watchdog reboot command</span>
           <span class="chart-event-item"><span class="chart-event-dot detected"></span>Detected or unexpected reboot</span>
           <span class="chart-event-item"><span class="chart-event-dot note"></span>Reboot counts acknowledged</span>
         </div>
-        <p class="hint">CPU, memory, root disk, and recording disk usage are plotted as percentages. Hover also shows MemAvailable and temperature when available.</p>
+        <p class="hint">CPU, memory, root disk, recording disk, and temperature are plotted together. Hover also shows MemAvailable and temperature when available.</p>
       </section>
     </div>
 
@@ -2036,7 +2038,8 @@ def render_page(status: Dict[str, Any]) -> str:
         {{ key: 'cpu_percent', color: '#67a8db', label: 'CPU' }},
         {{ key: 'mem_percent', color: '#e07b7b', label: 'Memory' }},
         {{ key: 'root_disk_percent', color: '#7ab08a', label: 'Root disk' }},
-        {{ key: 'recording_disk_percent', color: '#d4a34a', label: 'Recording disk' }}
+        {{ key: 'recording_disk_percent', color: '#d4a34a', label: 'Recording disk' }},
+        {{ key: 'temperature_c', color: '#ff9f6e', label: 'Temp C' }}
       ];
 
       const maxIndex = Math.max(1, points.length - 1);
