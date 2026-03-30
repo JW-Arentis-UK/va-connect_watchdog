@@ -154,7 +154,7 @@ Next steps:
 3. Check: systemctl status $SITE_SERVICE_NAME
 4. Check: systemctl status $WEB_SERVICE_NAME
 5. Check site watchdog logs: journalctl -u $SITE_SERVICE_NAME -n 50 --no-pager
-6. Open the web UI on http://<encoder-ip>:8787/
+6. Open the web UI on http://<encoder-ip>/
 7. Note: the legacy $TIMER_NAME is disabled by this installer.
 8. Easy commands:
    sudo bash $INSTALL_DIR/update_watchdog.sh

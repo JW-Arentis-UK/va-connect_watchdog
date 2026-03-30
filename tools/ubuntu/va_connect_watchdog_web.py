@@ -63,7 +63,7 @@ def load_config() -> Dict[str, Any]:
         "restart_network_before_reboot": False,
         "reboot_enabled": False,
         "web_bind": "0.0.0.0",
-        "web_port": 8787,
+        "web_port": 80,
         "web_token": "",
         "base_reboot_timeout_seconds": 300,
         "max_reboot_timeout_seconds": 3600,
@@ -115,18 +115,28 @@ def read_first_line(path_text: str) -> str:
 
 
 def hardware_identity() -> Dict[str, str]:
+    sys_vendor = read_first_line("/sys/class/dmi/id/sys_vendor")
     product_name = read_first_line("/sys/class/dmi/id/product_name")
     product_serial = read_first_line("/sys/class/dmi/id/product_serial")
     board_serial = read_first_line("/sys/class/dmi/id/board_serial")
     chassis_serial = read_first_line("/sys/class/dmi/id/chassis_serial")
+    board_name = read_first_line("/sys/class/dmi/id/board_name")
+    bios_vendor = read_first_line("/sys/class/dmi/id/bios_vendor")
+    bios_version = read_first_line("/sys/class/dmi/id/bios_version")
+    bios_date = read_first_line("/sys/class/dmi/id/bios_date")
 
     serial = product_serial or board_serial or chassis_serial or "unknown"
     model = product_name or "unknown"
     return {
+        "vendor": sys_vendor or "unknown",
         "model": model,
         "serial": serial,
+        "board_name": board_name or "unknown",
         "board_serial": board_serial or "unknown",
         "chassis_serial": chassis_serial or "unknown",
+        "bios_vendor": bios_vendor or "unknown",
+        "bios_version": bios_version or "unknown",
+        "bios_date": bios_date or "unknown",
     }
 
 
@@ -1423,7 +1433,7 @@ def render_page(status: Dict[str, Any]) -> str:
           <span class="chart-event-item"><span class="chart-event-dot detected"></span>Detected or unexpected reboot</span>
           <span class="chart-event-item"><span class="chart-event-dot note"></span>Reboot counts acknowledged</span>
         </div>
-        <p class="hint">CPU, memory, root disk, and recording disk usage are plotted as percentages.</p>
+        <p class="hint">CPU, memory, root disk, and recording disk usage are plotted as percentages. Hover also shows MemAvailable and temperature when available.</p>
       </section>
     </div>
 
@@ -1486,6 +1496,28 @@ def render_page(status: Dict[str, Any]) -> str:
       <section class="panel" style="grid-column: 1 / -1;">
         <h2>Hardware warnings</h2>
         <p><strong>Last checked:</strong> <span id="hardwareCheckedAt">{html.escape(str(status["hardware_review"].get("checked_at", "unknown")))}</span></p>
+        <div class="hardware-grid">
+          <section class="item">
+            <strong>Hardware and BIOS</strong>
+            <ul class="review-list" id="hardwareIdentitySummary">
+              <li><strong>Vendor:</strong> {html.escape(str(status["hardware_identity"].get("vendor", "unknown")))}</li>
+              <li><strong>Model:</strong> {html.escape(str(status["hardware_identity"].get("model", "unknown")))}</li>
+              <li><strong>Serial:</strong> {html.escape(str(status["hardware_identity"].get("serial", "unknown")))}</li>
+              <li><strong>Board:</strong> {html.escape(str(status["hardware_identity"].get("board_name", "unknown")))}</li>
+              <li><strong>BIOS:</strong> {html.escape(str(status["hardware_identity"].get("bios_vendor", "unknown")))} {html.escape(str(status["hardware_identity"].get("bios_version", "unknown")))}</li>
+              <li><strong>BIOS date:</strong> {html.escape(str(status["hardware_identity"].get("bios_date", "unknown")))}</li>
+            </ul>
+          </section>
+          <section class="item">
+            <strong>Current memory and temperature</strong>
+            <ul class="review-list" id="memoryThermalSummary">
+              <li><strong>Memory used:</strong> {html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("mem_percent", "unknown")))}%</li>
+              <li><strong>MemAvailable:</strong> {html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("mem_available_mb", "unknown")))} MB</li>
+              <li><strong>Cached:</strong> {html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("mem_cached_mb", "unknown")))} MB</li>
+              <li><strong>Temperature:</strong> {html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("temperature_c", "unknown")))} C</li>
+            </ul>
+          </section>
+        </div>
         <ul class="review-list" id="hardwareFindings">
           {"".join(f"<li>{html.escape(line)}</li>" for line in status["hardware_review"].get("findings", []))}
         </ul>
@@ -1612,7 +1644,7 @@ def render_page(status: Dict[str, Any]) -> str:
           </div>
           <div class="field">
             <label for="web_port">Web port</label>
-            <input id="web_port" type="number" min="1" max="65535" value="{int(cfg.get("web_port", 8787))}">
+            <input id="web_port" type="number" min="1" max="65535" value="{int(cfg.get("web_port", 80))}">
           </div>
           <div class="field">
             <label for="web_token">Web token</label>
@@ -1695,7 +1727,7 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('network_restart_cooldown_seconds').value = status.config.network_restart_cooldown_seconds || 600;
       document.getElementById('post_action_settle_seconds').value = status.config.post_action_settle_seconds || 20;
       document.getElementById('web_bind').value = status.config.web_bind || '0.0.0.0';
-      document.getElementById('web_port').value = status.config.web_port || 8787;
+      document.getElementById('web_port').value = status.config.web_port || 80;
       document.getElementById('web_token').value = status.config.web_token || '';
       document.getElementById('network_restart_command').value = status.config.network_restart_command || '';
       if (!document.getElementById('export_since').value) {{
@@ -1748,6 +1780,22 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('hardwarePstore').innerHTML = (hardwareReview.pstore_entries || []).length
         ? (hardwareReview.pstore_entries || []).map((line) => `<li>${{line}}</li>`).join('')
         : '<li>No pstore entries present.</li>';
+      const hardwareIdentity = status.hardware_identity || {{}};
+      document.getElementById('hardwareIdentitySummary').innerHTML = `
+        <li><strong>Vendor:</strong> ${{hardwareIdentity.vendor || 'unknown'}}</li>
+        <li><strong>Model:</strong> ${{hardwareIdentity.model || 'unknown'}}</li>
+        <li><strong>Serial:</strong> ${{hardwareIdentity.serial || 'unknown'}}</li>
+        <li><strong>Board:</strong> ${{hardwareIdentity.board_name || 'unknown'}}</li>
+        <li><strong>BIOS:</strong> ${{(hardwareIdentity.bios_vendor || 'unknown')}} ${{(hardwareIdentity.bios_version || 'unknown')}}</li>
+        <li><strong>BIOS date:</strong> ${{hardwareIdentity.bios_date || 'unknown'}}</li>
+      `;
+      const currentMetrics = status.state.last_metrics || {{}};
+      document.getElementById('memoryThermalSummary').innerHTML = `
+        <li><strong>Memory used:</strong> ${{Number(currentMetrics.mem_percent || 0).toFixed(1)}}%</li>
+        <li><strong>MemAvailable:</strong> ${{currentMetrics.mem_available_mb ?? 'unknown'}} MB</li>
+        <li><strong>Cached:</strong> ${{currentMetrics.mem_cached_mb ?? 'unknown'}} MB</li>
+        <li><strong>Temperature:</strong> ${{currentMetrics.temperature_c ?? 'unknown'}} C</li>
+      `;
       const memtestInfo = status.memtest_info || {{}};
       document.getElementById('memtestHint').textContent = `memtester ${{memtestInfo.installed ? 'is installed' : 'is not installed'}}. Free RAM: ${{memtestInfo.available_mb || 0}} MB. Suggested test: ${{memtestInfo.recommended_label || '1024M'}} x ${{memtestInfo.recommended_loops || 2}}.`;
       document.getElementById('memtest_size_mb').value = memtestInfo.recommended_mb || 1024;
@@ -1999,7 +2047,7 @@ def render_page(status: Dict[str, Any]) -> str:
         network_restart_cooldown_seconds: Number(document.getElementById('network_restart_cooldown_seconds').value || 600),
         post_action_settle_seconds: Number(document.getElementById('post_action_settle_seconds').value || 20),
         web_bind: document.getElementById('web_bind').value.trim(),
-        web_port: Number(document.getElementById('web_port').value || 8787),
+        web_port: Number(document.getElementById('web_port').value || 80),
         web_token: document.getElementById('web_token').value.trim(),
         network_restart_command: document.getElementById('network_restart_command').value.trim(),
         internet_hosts: parseLines('internet_hosts'),
@@ -2095,7 +2143,9 @@ def render_page(status: Dict[str, Any]) -> str:
           }})
           .map((item) => item.label);
         const eventText = nearbyEvents.length ? ` | Events: ${{nearbyEvents.join(', ')}}` : '';
-        hover.textContent = `${{point.ts || ''}} | CPU ${{Number(point.cpu_percent || 0).toFixed(1)}}% | Memory ${{Number(point.mem_percent || 0).toFixed(1)}}% | Root ${{Number(point.root_disk_percent || 0).toFixed(1)}}% | Recording ${{Number(point.recording_disk_percent || 0).toFixed(1)}}%${{eventText}}`;
+        const memAvailText = point.mem_available_mb !== undefined && point.mem_available_mb !== null ? ` | MemAvailable ${{point.mem_available_mb}} MB` : '';
+        const tempText = point.temperature_c !== undefined && point.temperature_c !== null ? ` | Temp ${{Number(point.temperature_c).toFixed(1)}} C` : '';
+        hover.textContent = `${{point.ts || ''}} | CPU ${{Number(point.cpu_percent || 0).toFixed(1)}}% | Memory ${{Number(point.mem_percent || 0).toFixed(1)}}%${{memAvailText}} | Root ${{Number(point.root_disk_percent || 0).toFixed(1)}}% | Recording ${{Number(point.recording_disk_percent || 0).toFixed(1)}}%${{tempText}}${{eventText}}`;
         drawMetrics(latestMetrics, idx);
       }});
 

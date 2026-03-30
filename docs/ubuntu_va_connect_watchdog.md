@@ -306,13 +306,13 @@ After an unexpected reboot, it also captures a previous-boot review snapshot usi
 The web UI defaults to:
 
 ```text
-http://<encoder-ip>:8787/
+http://<encoder-ip>/
 ```
 
 If you set `web_token`, open it as:
 
 ```text
-http://<encoder-ip>:8787/?token=your-token
+http://<encoder-ip>/?token=your-token
 ```
 
 From that page you can:

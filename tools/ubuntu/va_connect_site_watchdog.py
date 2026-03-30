@@ -136,16 +136,31 @@ def read_cpu_times() -> Tuple[int, int]:
     return total, idle
 
 
-def read_mem_percent() -> float:
+def read_meminfo_values() -> Dict[str, int]:
     values = {}
     for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
         key, value = line.split(":", 1)
         values[key] = int(value.strip().split()[0])
+    return values
+
+
+def read_mem_percent() -> float:
+    values = read_meminfo_values()
     total = values.get("MemTotal", 0)
     available = values.get("MemAvailable", values.get("MemFree", 0))
     if total <= 0:
         return 0.0
     return round(((total - available) / total) * 100.0, 2)
+
+
+def read_mem_available_mb() -> int:
+    values = read_meminfo_values()
+    return max(0, values.get("MemAvailable", values.get("MemFree", 0)) // 1024)
+
+
+def read_mem_cached_mb() -> int:
+    values = read_meminfo_values()
+    return max(0, values.get("Cached", 0) // 1024)
 
 
 def read_disk_percent(path_text: str) -> Optional[float]:
@@ -159,6 +174,25 @@ def read_disk_percent(path_text: str) -> Optional[float]:
         return None
     used = total - available
     return round((used / total) * 100.0, 2)
+
+
+def read_temperature_c() -> Optional[float]:
+    thermal_root = Path("/sys/class/thermal")
+    candidates: List[float] = []
+    if thermal_root.exists():
+        for zone in thermal_root.glob("thermal_zone*/temp"):
+            try:
+                raw = zone.read_text(encoding="utf-8").strip()
+                value = float(raw)
+            except Exception:
+                continue
+            if value > 1000:
+                value = value / 1000.0
+            if -20.0 <= value <= 150.0:
+                candidates.append(round(value, 1))
+    if candidates:
+        return max(candidates)
+    return None
 
 
 def command_available(name: str) -> bool:
@@ -362,8 +396,11 @@ class SiteWatchdog:
             "ts": iso_now(),
             "cpu_percent": cpu_percent,
             "mem_percent": read_mem_percent(),
+            "mem_available_mb": read_mem_available_mb(),
+            "mem_cached_mb": read_mem_cached_mb(),
             "root_disk_percent": read_disk_percent("/"),
             "recording_disk_percent": read_disk_percent("/mnt/storage"),
+            "temperature_c": read_temperature_c(),
             "load_1": round(load_1, 2),
             "load_5": round(load_5, 2),
             "load_15": round(load_15, 2),

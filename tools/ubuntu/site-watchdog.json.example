@@ -38,6 +38,6 @@
   "snapshot_cooldown_seconds": 900,
   "journal_lines": 120,
   "web_bind": "0.0.0.0",
-  "web_port": 8787,
+  "web_port": 80,
   "web_token": ""
 }
