@@ -176,23 +176,40 @@ def read_disk_percent(path_text: str) -> Optional[float]:
     return round((used / total) * 100.0, 2)
 
 
-def read_temperature_c() -> Optional[float]:
+def read_temperature_summary() -> Dict[str, object]:
     thermal_root = Path("/sys/class/thermal")
-    candidates: List[float] = []
+    sensors: List[Dict[str, object]] = []
     if thermal_root.exists():
-        for zone in thermal_root.glob("thermal_zone*/temp"):
+        for zone_temp in thermal_root.glob("thermal_zone*/temp"):
             try:
-                raw = zone.read_text(encoding="utf-8").strip()
+                raw = zone_temp.read_text(encoding="utf-8").strip()
                 value = float(raw)
             except Exception:
                 continue
             if value > 1000:
                 value = value / 1000.0
             if -20.0 <= value <= 150.0:
-                candidates.append(round(value, 1))
-    if candidates:
-        return max(candidates)
-    return None
+                zone_dir = zone_temp.parent
+                zone_name = zone_dir.name
+                sensor_name = zone_name
+                try:
+                    sensor_type = (zone_dir / "type").read_text(encoding="utf-8").strip()
+                    if sensor_type:
+                        sensor_name = f"{zone_name}:{sensor_type}"
+                except Exception:
+                    pass
+                sensors.append(
+                    {
+                        "name": sensor_name[:80],
+                        "value_c": round(value, 1),
+                    }
+                )
+    sensors.sort(key=lambda item: float(item.get("value_c", 0.0)), reverse=True)
+    return {
+        "temperature_c": sensors[0]["value_c"] if sensors else None,
+        "temperature_sensor_count": len(sensors),
+        "temperature_sensors": sensors[:8],
+    }
 
 
 def command_available(name: str) -> bool:
@@ -392,6 +409,7 @@ class SiteWatchdog:
         self.prev_cpu_idle = idle
 
         load_1, load_5, load_15 = os.getloadavg()
+        thermal = read_temperature_summary()
         metrics = {
             "ts": iso_now(),
             "cpu_percent": cpu_percent,
@@ -400,7 +418,9 @@ class SiteWatchdog:
             "mem_cached_mb": read_mem_cached_mb(),
             "root_disk_percent": read_disk_percent("/"),
             "recording_disk_percent": read_disk_percent("/mnt/storage"),
-            "temperature_c": read_temperature_c(),
+            "temperature_c": thermal["temperature_c"],
+            "temperature_sensor_count": thermal["temperature_sensor_count"],
+            "temperature_sensors": thermal["temperature_sensors"],
             "load_1": round(load_1, 2),
             "load_5": round(load_5, 2),
             "load_15": round(load_15, 2),

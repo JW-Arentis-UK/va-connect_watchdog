@@ -1171,6 +1171,16 @@ def render_page(status: Dict[str, Any]) -> str:
       margin-bottom: 6px;
       flex-wrap: wrap;
     }}
+    .chart-toolbar-main {{
+      display: grid;
+      gap: 4px;
+    }}
+    .chart-toolbar-meta {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }}
     .range-toggle {{
       display: inline-flex;
       gap: 8px;
@@ -1468,10 +1478,16 @@ def render_page(status: Dict[str, Any]) -> str:
       </section>
       <section class="panel">
         <div class="chart-toolbar">
-          <h2 id="metricsTitle">PC Stats - Last 24 Hours</h2>
-          <div class="range-toggle">
+          <div class="chart-toolbar-main">
+            <h2 id="metricsTitle">PC Stats - Last 24 Hours</h2>
+            <div class="hint" id="metricsTempSummary">Temperature summary unavailable</div>
+          </div>
+          <div class="chart-toolbar-meta">
+            <span class="hint" id="metricsSampleAt">Latest sample unknown</span>
+            <div class="range-toggle">
             <button type="button" class="range-btn active" id="range24hBtn" onclick="setMetricRange(24)">24 hours</button>
             <button type="button" class="range-btn" id="range168hBtn" onclick="setMetricRange(168)">7 days</button>
+            </div>
           </div>
         </div>
         <div class="chart-hover" id="metricsHover">Move across the graph to inspect time and values.</div>
@@ -1875,6 +1891,10 @@ def render_page(status: Dict[str, Any]) -> str:
         }}
         return Number(value).toFixed(digits);
       }};
+      const sensorSummary = (currentMetrics.temperature_sensors || [])
+        .slice(0, 3)
+        .map((item) => `${{item.name || 'sensor'}} ${{item.value_c ?? 'unknown'}} C`)
+        .join(' | ');
       document.getElementById('currentStatsAt').textContent = currentMetrics.ts ? `Latest sample ${{formatLocalTimestamp(currentMetrics.ts)}}` : 'Latest sample unknown';
       document.getElementById('currentStatsGrid').innerHTML = `
         <section class="stat-card"><div class="stat-label">CPU</div><div class="stat-value">${{formatMetricNumber(currentMetrics.cpu_percent)}}%</div></section>
@@ -1883,14 +1903,20 @@ def render_page(status: Dict[str, Any]) -> str:
         <section class="stat-card"><div class="stat-label">Cached</div><div class="stat-value" style="font-size:1rem;">${{currentMetrics.mem_cached_mb ?? 'unknown'}} MB</div></section>
         <section class="stat-card"><div class="stat-label">Root disk</div><div class="stat-value">${{formatMetricNumber(currentMetrics.root_disk_percent)}}%</div></section>
         <section class="stat-card"><div class="stat-label">Recording disk</div><div class="stat-value">${{formatMetricNumber(currentMetrics.recording_disk_percent)}}%</div></section>
-        <section class="stat-card"><div class="stat-label">Temperature</div><div class="stat-value" style="font-size:1rem;">${{currentMetrics.temperature_c ?? 'unknown'}} C</div></section>
+        <section class="stat-card"><div class="stat-label">Temp max</div><div class="stat-value" style="font-size:1rem;">${{currentMetrics.temperature_c ?? 'unknown'}} C</div></section>
         <section class="stat-card"><div class="stat-label">Load</div><div class="stat-value" style="font-size:1rem;">${{formatMetricNumber(currentMetrics.load_1, 2)}}</div></section>
       `;
+      document.getElementById('metricsSampleAt').textContent = currentMetrics.ts ? `Latest sample ${{formatLocalTimestamp(currentMetrics.ts)}}` : 'Latest sample unknown';
+      document.getElementById('metricsTempSummary').textContent = sensorSummary
+        ? `Temperature: ${{sensorSummary}}`
+        : `Temperature: ${{currentMetrics.temperature_c ?? 'unknown'}} C`;
       document.getElementById('memoryThermalSummary').innerHTML = `
         <li><strong>Memory used:</strong> ${{Number(currentMetrics.mem_percent || 0).toFixed(1)}}%</li>
         <li><strong>MemAvailable:</strong> ${{currentMetrics.mem_available_mb ?? 'unknown'}} MB</li>
         <li><strong>Cached:</strong> ${{currentMetrics.mem_cached_mb ?? 'unknown'}} MB</li>
-        <li><strong>Temperature:</strong> ${{currentMetrics.temperature_c ?? 'unknown'}} C</li>
+        <li><strong>Temperature max:</strong> ${{currentMetrics.temperature_c ?? 'unknown'}} C</li>
+        <li><strong>Thermal zones:</strong> ${{currentMetrics.temperature_sensor_count ?? 0}}</li>
+        <li><strong>Top sensors:</strong> ${{sensorSummary || 'unknown'}}</li>
       `;
       const memtestInfo = status.memtest_info || {{}};
       document.getElementById('memtestHint').textContent = `memtester ${{memtestInfo.installed ? 'is installed' : 'is not installed'}}. Free RAM: ${{memtestInfo.available_mb || 0}} MB. Suggested test: ${{memtestInfo.recommended_label || '1024M'}} x ${{memtestInfo.recommended_loops || 2}}.`;
