@@ -1849,7 +1849,7 @@ def render_page(status: Dict[str, Any]) -> str:
         }}
         return Number(value).toFixed(digits);
       }};
-      document.getElementById('currentStatsAt').textContent = currentMetrics.ts ? `Latest sample ${formatLocalTimestamp(currentMetrics.ts)}` : 'Latest sample unknown';
+      document.getElementById('currentStatsAt').textContent = currentMetrics.ts ? `Latest sample ${{formatLocalTimestamp(currentMetrics.ts)}}` : 'Latest sample unknown';
       document.getElementById('currentStatsGrid').innerHTML = `
         <section class="stat-card"><div class="stat-label">CPU</div><div class="stat-value">${{formatMetricNumber(currentMetrics.cpu_percent)}}%</div></section>
         <section class="stat-card"><div class="stat-label">Memory</div><div class="stat-value">${{formatMetricNumber(currentMetrics.mem_percent)}}%</div></section>
