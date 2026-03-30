@@ -104,6 +104,32 @@ def memtest_recommendation() -> Dict[str, Any]:
     }
 
 
+def read_first_line(path_text: str) -> str:
+    path = Path(path_text)
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore").strip()
+    except Exception:
+        return ""
+
+
+def hardware_identity() -> Dict[str, str]:
+    product_name = read_first_line("/sys/class/dmi/id/product_name")
+    product_serial = read_first_line("/sys/class/dmi/id/product_serial")
+    board_serial = read_first_line("/sys/class/dmi/id/board_serial")
+    chassis_serial = read_first_line("/sys/class/dmi/id/chassis_serial")
+
+    serial = product_serial or board_serial or chassis_serial or "unknown"
+    model = product_name or "unknown"
+    return {
+        "model": model,
+        "serial": serial,
+        "board_serial": board_serial or "unknown",
+        "chassis_serial": chassis_serial or "unknown",
+    }
+
+
 def effective_reboot_counts(state: Dict[str, Any]) -> Dict[str, int]:
     raw_watchdog = int(state.get("reboot_commands_sent_count", 0) or 0)
     raw_detected = int(state.get("reboot_detections_count", 0) or 0)
@@ -774,8 +800,10 @@ def status_payload() -> Dict[str, Any]:
     update_status = normalize_update_status(read_json(UPDATE_STATUS_PATH, {"state": "idle"}), build_info)
     memtest_info = memtest_recommendation()
     memtest_status = normalize_memtest_status(read_json(MEMTEST_STATUS_PATH, {"state": "idle"}))
+    hw_identity = hardware_identity()
     return {
         "hostname": socket.gethostname(),
+        "hardware_identity": hw_identity,
         "config": load_config(),
         "state": state,
         "build_info": build_info,
@@ -1199,7 +1227,7 @@ def render_page(status: Dict[str, Any]) -> str:
 <body>
   <div class="wrap">
     <h1>VA-Connect Encoder Watchdog</h1>
-    <div class="sub">Control page for <strong>{html.escape(status["hostname"])}</strong></div>
+    <div class="sub">Control page for <strong>{html.escape(status["hostname"])}</strong> | Hardware ID <strong>{html.escape(str(status["hardware_identity"].get("serial", "unknown")))}</strong></div>
     <div class="tabs">
       <button type="button" class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
       <button type="button" class="tab-btn" data-tab="investigation" onclick="switchTab('investigation')">Investigation</button>
@@ -1251,6 +1279,10 @@ def render_page(status: Dict[str, Any]) -> str:
         <div class="stat-value" style="font-size:1rem;">{html.escape(str(status["state"].get("last_startup_at", "unknown")))}</div>
       </section>
       <section class="stat-card">
+        <div class="stat-label">Hardware ID</div>
+        <div class="stat-value" style="font-size:1rem;">{html.escape(str(status["hardware_identity"].get("serial", "unknown")))}</div>
+      </section>
+      <section class="stat-card">
         <div class="stat-label">Build</div>
         <div class="stat-value" style="font-size:1rem;">{html.escape(str(status["build_info"].get("git_commit", "unknown")))}</div>
       </section>
@@ -1267,6 +1299,7 @@ def render_page(status: Dict[str, Any]) -> str:
         <div class="badge">{html.escape(str(cfg["web_bind"]))}:{cfg["web_port"]}</div>
         <p>Base reboot timer: <strong>{cfg["base_reboot_timeout_seconds"]}s</strong></p>
         <p>Max reboot timer: <strong>{cfg["max_reboot_timeout_seconds"]}s</strong></p>
+        <p>Hardware model: <strong>{html.escape(str(status["hardware_identity"].get("model", "unknown")))}</strong></p>
         <p>Deployed: <strong>{html.escape(str(status["build_info"].get("deployed_at", "unknown")))}</strong></p>
         <p>Config path: <code>{html.escape(status["paths"]["config"])}</code></p>
       </section>
@@ -1655,6 +1688,7 @@ def render_page(status: Dict[str, Any]) -> str:
         <section class="stat-card"><div class="stat-label">Unexpected reboots</div><div class="stat-value">${{(status.reboot_counts && status.reboot_counts.unexpected) || 0}}</div></section>
         <section class="stat-card"><div class="stat-label">Last reboot reason</div><div class="stat-value" style="font-size:1rem;">${{status.state.last_reboot_reason || 'none'}}</div></section>
         <section class="stat-card"><div class="stat-label">Last startup</div><div class="stat-value" style="font-size:1rem;">${{status.state.last_startup_at || 'unknown'}}</div></section>
+        <section class="stat-card"><div class="stat-label">Hardware ID</div><div class="stat-value" style="font-size:1rem;">${{(status.hardware_identity && status.hardware_identity.serial) || 'unknown'}}</div></section>
         <section class="stat-card"><div class="stat-label">Build</div><div class="stat-value" style="font-size:1rem;">${{(status.build_info && status.build_info.git_commit) || 'unknown'}}</div></section>
       `;
 
