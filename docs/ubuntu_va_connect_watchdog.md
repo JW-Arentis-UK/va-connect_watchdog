@@ -44,7 +44,7 @@ If the gateway can reach GitHub, the easiest first install is:
 
 ```bash
 cd ~/Desktop
-curl -fsSL -o bootstrap_watchdog_from_github.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/master/tools/ubuntu/bootstrap_watchdog_from_github.sh
+wget -O bootstrap_watchdog_from_github.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/master/tools/ubuntu/bootstrap_watchdog_from_github.sh
 bash ./bootstrap_watchdog_from_github.sh
 ```
 
@@ -169,9 +169,9 @@ That will:
 For a clean GitHub-based install on the gateway PC:
 
 ```bash
-sudo apt update && sudo apt install -y git
+sudo apt update && sudo apt install -y git wget
 cd ~/Desktop
-curl -L -o bootstrap_watchdog_from_github.sh <your-raw-script-url>
+wget -O bootstrap_watchdog_from_github.sh <your-raw-script-url>
 chmod +x bootstrap_watchdog_from_github.sh
 ./bootstrap_watchdog_from_github.sh <your-github-repo-url> main
 ```

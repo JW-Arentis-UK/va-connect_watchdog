@@ -52,7 +52,7 @@ If the gateway can reach GitHub, the quickest first-time install is:
 
 ```bash
 cd ~/Desktop
-curl -fsSL -o bootstrap_watchdog_from_github.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/master/tools/ubuntu/bootstrap_watchdog_from_github.sh
+wget -O bootstrap_watchdog_from_github.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/master/tools/ubuntu/bootstrap_watchdog_from_github.sh
 bash ./bootstrap_watchdog_from_github.sh
 ```
 
