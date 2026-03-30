@@ -1338,6 +1338,27 @@ def render_page(status: Dict[str, Any]) -> str:
       gap: 8px;
       margin-top: 8px;
     }}
+    .help-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }}
+    .help-card {{
+      border: 1px solid rgba(129, 154, 175, 0.15);
+      border-radius: 14px;
+      padding: 10px 12px;
+      background: rgba(20, 33, 44, 0.88);
+    }}
+    .help-card h3 {{
+      margin: 0 0 8px;
+      font-size: 0.92rem;
+    }}
+    .help-card p {{
+      margin: 0 0 8px;
+      color: #c9d7e2;
+      font-size: 0.84rem;
+    }}
     .link-btn {{
       display: inline-block;
       text-decoration: none;
@@ -1380,6 +1401,7 @@ def render_page(status: Dict[str, Any]) -> str:
     <div class="tabs">
       <button type="button" class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
       <button type="button" class="tab-btn" data-tab="investigation" onclick="switchTab('investigation')">Investigation</button>
+      <button type="button" class="tab-btn" data-tab="help" onclick="switchTab('help')">Help</button>
       <button type="button" class="tab-btn" data-tab="config" onclick="switchTab('config')">Config</button>
     </div>
     <section class="tab-panel active" data-tab-panel="overview">
@@ -1661,6 +1683,67 @@ def render_page(status: Dict[str, Any]) -> str:
                 {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("kernel_lines_all", []))}
               </ul>
             </div>
+          </section>
+        </div>
+      </section>
+    </div>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="help">
+    <div class="grid" style="margin-top:10px;">
+      <section class="panel" style="grid-column: 1 / -1;">
+        <h2>Help</h2>
+        <p class="hint">This page is meant to help remote fault finding on the VA-Connect encoder. The short descriptions below explain what each section means and how to use it.</p>
+        <div class="help-grid">
+          <section class="help-card">
+            <h3>Overview</h3>
+            <p><strong>Current diagnosis</strong> is the watchdog's best plain-English summary of what looks wrong right now.</p>
+            <p><strong>Current state</strong> shows whether the watchdog currently thinks the box is healthy or in fault.</p>
+            <p><strong>Unexpected reboots</strong> means the PC restarted without a recent watchdog reboot command, which can point to manual reboot, power issue, or hard crash.</p>
+          </section>
+          <section class="help-card">
+            <h3>Current PC Stats</h3>
+            <p>This row shows the most recent metric sample taken by the site watchdog.</p>
+            <p><strong>CPU</strong> and <strong>Memory</strong> are percentages. <strong>MemAvailable</strong> is free RAM available to Linux. <strong>Cached</strong> is RAM being used for cache and can usually be reclaimed.</p>
+            <p><strong>Temp max</strong> is the hottest thermal sensor currently exposed by Ubuntu. <strong>Load</strong> is the 1-minute load average.</p>
+          </section>
+          <section class="help-card">
+            <h3>Incident Timeline</h3>
+            <p>This is the short event history for the latest watchdog activity.</p>
+            <p>Use it to see the sequence of startup, fault start, recovery, snapshots, reboot actions, and reboot detections.</p>
+          </section>
+          <section class="help-card">
+            <h3>PC Stats Chart</h3>
+            <p>This chart trends the last 24 hours or 7 days of watchdog metrics.</p>
+            <p>CPU, memory, root disk, recording disk, and temperature are plotted together. Hover the graph to inspect a point in time.</p>
+            <p>The reboot markers show when the watchdog asked for a reboot or when a reboot was later detected.</p>
+          </section>
+          <section class="help-card">
+            <h3>Latest Checks</h3>
+            <p><strong>App process</strong> is whether the watched VA-Connect process is running.</p>
+            <p><strong>WAN</strong> checks prove internet reachability. <strong>TCP</strong> checks prove local devices such as the RUT or RTSP endpoint are reachable. <strong>Service</strong> checks prove selected systemd services are active.</p>
+          </section>
+          <section class="help-card">
+            <h3>Controls</h3>
+            <p><strong>Monitoring enabled</strong> turns automatic watchdog behaviour on or off.</p>
+            <p><strong>App auto-restart</strong> allows the watchdog to start the app if it disappears.</p>
+            <p><strong>Network restart before reboot</strong> tries the configured network restart command before a reboot. <strong>Reboot allowed</strong> controls whether the watchdog is allowed to reboot the PC.</p>
+          </section>
+          <section class="help-card">
+            <h3>Investigation</h3>
+            <p><strong>Likely causes</strong> is a scoring guide based on the current evidence. It helps point you at memory/platform, storage, network, or app/service problems first.</p>
+            <p><strong>Hardware warnings</strong> surfaces kernel, SMART, and persistent-crash clues. <strong>Crash review</strong> summarizes the latest previous-boot review if the box restarted.</p>
+          </section>
+          <section class="help-card">
+            <h3>Config</h3>
+            <p><strong>App match</strong> is the process text the watchdog looks for. <strong>App start command</strong> is what it runs if that process disappears.</p>
+            <p><strong>Internet hosts</strong> are public endpoints used to prove WAN access. <strong>TCP targets</strong> are local devices you want the watchdog to reach on host:port.</p>
+            <p><strong>Base reboot timeout</strong> is the first wait before reboot. <strong>Max reboot timeout</strong> is the cap after backoff increases the reboot delay.</p>
+          </section>
+          <section class="help-card">
+            <h3>Logs And Files</h3>
+            <p>The watchdog writes events to <code>/var/log/va-connect-site-watchdog/events.jsonl</code> and metrics to <code>/var/log/va-connect-site-watchdog/metrics.jsonl</code>.</p>
+            <p>Snapshots go under <code>/var/log/va-connect-site-watchdog/snapshots</code>. Current state lives in <code>/var/lib/va-connect-site-watchdog/state.json</code>.</p>
           </section>
         </div>
       </section>
