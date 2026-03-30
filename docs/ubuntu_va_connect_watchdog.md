@@ -38,6 +38,26 @@ The installer:
 
 After that, edit both config files if needed for your site.
 
+## POC-451VTC baseline
+
+The current known values from the VA-Connect encoder are:
+
+- hostname: `POC-451VTC`
+- Linux user: `vsuser`
+- project folder on the Desktop: `/home/vsuser/Desktop/va-connect-watchdog`
+- installed watchdog runtime: `/opt/va-connect-watchdog`
+- active NIC/IP: `enp3s0` on `192.168.1.100/16`
+- default gateway / RUT: `192.168.1.1`
+- VA-Connect launcher: `/home/vsuser/vsgwgui/vsgwgui`
+- remote access present: `teamviewerd`
+
+The example files now reflect those confirmed values:
+
+- `site-watchdog.json.example` monitors `192.168.1.1:80`
+- `site-watchdog.json.example` includes `teamviewerd.service`
+- `va-connect.env.example` uses `/home/vsuser/vsgwgui` as the default workdir
+- both example config files use the Desktop launcher command for `vsgwgui`
+
 ## Fastest first-time install on a new gateway
 
 If the gateway can reach GitHub, the easiest first install is:
@@ -343,6 +363,12 @@ Each snapshot contains items such as:
 - recent system journal
 - recent `NetworkManager` journal
 - recent `teamviewerd` journal
+
+For `POC-451VTC`, the current URL should be:
+
+```text
+http://192.168.1.100/
+```
 
 ## 4. Install the systemd files
 

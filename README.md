@@ -40,11 +40,26 @@ For harder remote-site faults, it also includes a continuous site watchdog that:
 ## Quick start
 
 1. Review `docs/ubuntu_va_connect_watchdog.md`.
-2. Copy the project onto the Ubuntu machine.
+2. Copy the project onto the Ubuntu machine, for example `~/Desktop/va-connect-watchdog`.
 3. Run `sudo ./tools/ubuntu/install_watchdog.sh`.
 4. Update the environment file with the real VA-Connect launch command.
 5. Update the site watchdog JSON with the real IPs and commands.
 6. Verify the `systemd` timer, the continuous site watchdog service, and the web UI service.
+
+## POC-451VTC baseline
+
+The current encoder details recovered from site are:
+
+- host: `POC-451VTC`
+- user: `vsuser`
+- source checkout: `/home/vsuser/Desktop/va-connect-watchdog`
+- installed runtime: `/opt/va-connect-watchdog`
+- encoder LAN IP: `192.168.1.100`
+- default gateway / RUT: `192.168.1.1`
+- app launcher: `/home/vsuser/vsgwgui/vsgwgui`
+- remote access service present: `teamviewerd`
+
+The example config files in `tools/ubuntu` are now prefilled to match that baseline, including the `vsgwgui` launcher command from the Desktop shortcut.
 
 ## Fastest new-gateway install
 

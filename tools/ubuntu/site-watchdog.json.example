@@ -1,4 +1,5 @@
 {
+  "_comment_host": "Baseline for POC-451VTC on 192.168.1.100 via gateway 192.168.1.1",
   "check_interval_seconds": 30,
   "ping_timeout_seconds": 3,
   "tcp_timeout_seconds": 3,
@@ -7,9 +8,7 @@
     "8.8.8.8"
   ],
   "systemd_services": [
-    "esg.service",
-    "sysops.service",
-    "bridge.service"
+    "teamviewerd.service"
   ],
   "tcp_targets": [
     {
@@ -17,8 +16,8 @@
       "port": 80
     }
   ],
-  "app_match": "vsapp",
-  "app_start_command": "systemctl restart esg.service",
+  "app_match": "/home/vsuser/vsgwgui/vsgwgui",
+  "app_start_command": "bash -c \"cd /home/vsuser/vsgwgui; /home/vsuser/vsgwgui/vsgwgui\"",
   "monitoring_enabled": true,
   "app_restart_enabled": true,
   "restart_network_before_reboot": false,
