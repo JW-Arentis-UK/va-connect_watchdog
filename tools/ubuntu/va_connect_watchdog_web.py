@@ -1108,6 +1108,28 @@ def render_page(status: Dict[str, Any]) -> str:
       font-size: 0.82rem;
       margin: 0 0 8px;
     }}
+    .chart-event-legend {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin: 10px 0 8px;
+      color: #607064;
+      font-size: 0.8rem;
+    }}
+    .chart-event-item {{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }}
+    .chart-event-dot {{
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+    }}
+    .chart-event-dot.command {{ background: #b06d10; }}
+    .chart-event-dot.detected {{ background: #b34747; }}
+    .chart-event-dot.note {{ background: #607064; }}
     .next-steps {{
       margin: 8px 0 0;
       padding-left: 18px;
@@ -1362,6 +1384,11 @@ def render_page(status: Dict[str, Any]) -> str:
         <h2>PC Stats - Last 24 Hours</h2>
         <div class="chart-hover" id="metricsHover">Move across the graph to inspect time and values.</div>
         <canvas id="metricsChart" width="1000" height="280"></canvas>
+        <div class="chart-event-legend">
+          <span class="chart-event-item"><span class="chart-event-dot command"></span>Watchdog reboot command</span>
+          <span class="chart-event-item"><span class="chart-event-dot detected"></span>Detected or unexpected reboot</span>
+          <span class="chart-event-item"><span class="chart-event-dot note"></span>Reboot counts acknowledged</span>
+        </div>
         <p class="hint">CPU, memory, root disk, and recording disk usage are plotted as percentages.</p>
       </section>
     </div>
