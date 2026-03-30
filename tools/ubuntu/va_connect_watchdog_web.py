@@ -226,7 +226,8 @@ def recent_metrics(hours: int = 24) -> List[Dict[str, Any]]:
             continue
         if epoch >= cutoff:
             points.append(item)
-    return points[-3000:]
+    max_points = 3000 if hours <= 24 else 8000
+    return points[-max_points:]
 
 
 def recent_metric_events(hours: int = 24) -> List[Dict[str, Any]]:
@@ -1130,6 +1131,33 @@ def render_page(status: Dict[str, Any]) -> str:
     .chart-event-dot.command {{ background: #b06d10; }}
     .chart-event-dot.detected {{ background: #b34747; }}
     .chart-event-dot.note {{ background: #607064; }}
+    .chart-toolbar {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }}
+    .range-toggle {{
+      display: inline-flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }}
+    .range-btn {{
+      border: 1px solid #cfdcd1;
+      background: #fff;
+      color: #27412f;
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }}
+    .range-btn.active {{
+      background: #325f86;
+      border-color: #325f86;
+      color: #fff;
+    }}
     .next-steps {{
       margin: 8px 0 0;
       padding-left: 18px;
@@ -1381,7 +1409,13 @@ def render_page(status: Dict[str, Any]) -> str:
         </div>
       </section>
       <section class="panel">
-        <h2>PC Stats - Last 24 Hours</h2>
+        <div class="chart-toolbar">
+          <h2 id="metricsTitle">PC Stats - Last 24 Hours</h2>
+          <div class="range-toggle">
+            <button type="button" class="range-btn active" id="range24hBtn" onclick="setMetricRange(24)">24 hours</button>
+            <button type="button" class="range-btn" id="range168hBtn" onclick="setMetricRange(168)">7 days</button>
+          </div>
+        </div>
         <div class="chart-hover" id="metricsHover">Move across the graph to inspect time and values.</div>
         <canvas id="metricsChart" width="1000" height="280"></canvas>
         <div class="chart-event-legend">
@@ -1632,6 +1666,7 @@ def render_page(status: Dict[str, Any]) -> str:
     const authQuery = window.location.search || '';
     let latestMetrics = [];
     let latestMetricEvents = [];
+    let metricsRangeHours = 24;
 
     function switchTab(name) {{
       document.querySelectorAll('.tab-btn').forEach((btn) => {{
@@ -1895,8 +1930,17 @@ def render_page(status: Dict[str, Any]) -> str:
       render(await response.json());
     }}
 
+    function setMetricRange(hours) {{
+      metricsRangeHours = hours;
+      document.getElementById('range24hBtn').classList.toggle('active', hours === 24);
+      document.getElementById('range168hBtn').classList.toggle('active', hours === 168);
+      document.getElementById('metricsTitle').textContent = hours === 168 ? 'PC Stats - Last 7 Days' : 'PC Stats - Last 24 Hours';
+      fetchMetrics();
+    }}
+
     async function fetchMetrics() {{
-      const response = await fetch('/api/metrics' + authQuery);
+      const separator = authQuery ? '&' : '?';
+      const response = await fetch(`/api/metrics${{authQuery}}${{separator}}hours=${{metricsRangeHours}}`);
       const payload = await response.json();
       latestMetrics = payload.points || [];
       latestMetricEvents = payload.events || [];
@@ -2043,10 +2087,11 @@ def render_page(status: Dict[str, Any]) -> str:
           return;
         }}
         const pointEpoch = Date.parse(point.ts || '');
+        const nearbyWindowMs = metricsRangeHours > 24 ? 30 * 60 * 1000 : 5 * 60 * 1000;
         const nearbyEvents = latestMetricEvents
           .filter((item) => {{
             const eventEpoch = Date.parse(item.ts || '');
-            return Number.isFinite(eventEpoch) && Number.isFinite(pointEpoch) && Math.abs(eventEpoch - pointEpoch) <= 5 * 60 * 1000;
+            return Number.isFinite(eventEpoch) && Number.isFinite(pointEpoch) && Math.abs(eventEpoch - pointEpoch) <= nearbyWindowMs;
           }})
           .map((item) => item.label);
         const eventText = nearbyEvents.length ? ` | Events: ${{nearbyEvents.join(', ')}}` : '';
@@ -2094,7 +2139,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(status_payload())
             return
         if parsed.path == "/api/metrics":
-            self._send_json({"points": recent_metrics(), "events": recent_metric_events()})
+            hours_raw = parse_qs(parsed.query).get("hours", ["24"])[0]
+            try:
+                hours = int(hours_raw)
+            except ValueError:
+                hours = 24
+            hours = 168 if hours >= 168 else 24
+            self._send_json({"points": recent_metrics(hours), "events": recent_metric_events(hours)})
             return
         if parsed.path == "/download/export-archive":
             self._send_file(safe_export_file("archive"), download_name="watchdog-incident-export.tar.gz")
