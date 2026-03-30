@@ -1446,7 +1446,7 @@ def render_page(status: Dict[str, Any]) -> str:
     <div class="analysis-grid" style="margin-top:16px;">
       <section class="panel" style="grid-column: 1 / -1;">
         <div class="chart-toolbar">
-          <h2>Current PC Stats</h2>
+        <h2>Current PC Stats Live</h2>
           <span class="hint" id="currentStatsAt">Latest sample unknown</span>
         </div>
         <div class="current-stats-grid" id="currentStatsGrid">
