@@ -46,6 +46,28 @@ For harder remote-site faults, it also includes a continuous site watchdog that:
 5. Update the site watchdog JSON with the real IPs and commands.
 6. Verify the `systemd` timer, the continuous site watchdog service, and the web UI service.
 
+## Fastest new-gateway install
+
+If the gateway can reach GitHub, the quickest first-time install is:
+
+```bash
+cd ~/Desktop
+curl -fsSL -o bootstrap_watchdog_from_github.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/master/tools/ubuntu/bootstrap_watchdog_from_github.sh
+bash ./bootstrap_watchdog_from_github.sh
+```
+
+That defaults to the public GitHub repo and installs the watchdog into:
+
+```text
+~/Desktop/va-connect-watchdog
+```
+
+If you ever want to use SSH instead of HTTPS, the same script also accepts:
+
+```bash
+bash ./bootstrap_watchdog_from_github.sh git@github.com:JW-Arentis-UK/va-connect_watchdog.git
+```
+
 ## Notes
 
 - The timer example runs once per minute.

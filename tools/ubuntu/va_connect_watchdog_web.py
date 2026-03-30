@@ -60,8 +60,8 @@ def load_config() -> Dict[str, Any]:
     defaults = {
         "monitoring_enabled": True,
         "app_restart_enabled": True,
-        "restart_network_before_reboot": True,
-        "reboot_enabled": True,
+        "restart_network_before_reboot": False,
+        "reboot_enabled": False,
         "web_bind": "0.0.0.0",
         "web_port": 8787,
         "web_token": "",
@@ -227,6 +227,52 @@ def recent_metrics(hours: int = 24) -> List[Dict[str, Any]]:
         if epoch >= cutoff:
             points.append(item)
     return points[-3000:]
+
+
+def recent_metric_events(hours: int = 24) -> List[Dict[str, Any]]:
+    if not EVENTS_PATH.exists():
+        return []
+    cutoff = time.time() - (hours * 3600)
+    marker_events = {
+        "unexpected_reboot_detected": {"label": "Unexpected reboot", "kind": "detected"},
+        "watchdog_reboot_observed": {"label": "Watchdog reboot observed", "kind": "detected"},
+        "reboot_counts_acknowledged": {"label": "Reboot counts acknowledged", "kind": "note"},
+    }
+    markers: List[Dict[str, Any]] = []
+    for line in EVENTS_PATH.read_text(encoding="utf-8").splitlines():
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        event_type = str(item.get("event", ""))
+        ts = str(item.get("ts", ""))
+        try:
+            epoch = datetime.fromisoformat(ts).timestamp()
+        except Exception:
+            continue
+        if epoch < cutoff:
+            continue
+        if event_type == "action" and str(item.get("action", "")) == "reboot":
+            markers.append(
+                {
+                    "ts": ts,
+                    "label": "Watchdog reboot command",
+                    "kind": "command",
+                    "detail": str(item.get("detail", ""))[:120],
+                }
+            )
+            continue
+        if event_type in marker_events:
+            meta = marker_events[event_type]
+            markers.append(
+                {
+                    "ts": ts,
+                    "label": meta["label"],
+                    "kind": meta["kind"],
+                    "detail": str(item.get("last_reboot_reason", "") or item.get("detail", ""))[:120],
+                }
+            )
+    return markers[-200:]
 
 
 def latest_previous_boot_snapshot() -> Optional[Path]:
@@ -1558,6 +1604,7 @@ def render_page(status: Dict[str, Any]) -> str:
     const initialStatus = {json.dumps(status)};
     const authQuery = window.location.search || '';
     let latestMetrics = [];
+    let latestMetricEvents = [];
 
     function switchTab(name) {{
       document.querySelectorAll('.tab-btn').forEach((btn) => {{
@@ -1753,6 +1800,9 @@ def render_page(status: Dict[str, Any]) -> str:
       const maxIndex = Math.max(1, points.length - 1);
       const xFor = (index) => pad + (chartWidth * index / maxIndex);
       const yFor = (value) => pad + chartHeight - ((Math.max(0, Math.min(100, Number(value || 0))) / 100) * chartHeight);
+      const firstEpoch = Date.parse(points[0].ts || '');
+      const lastEpoch = Date.parse(points[points.length - 1].ts || '');
+      const spanEpoch = Math.max(1, lastEpoch - firstEpoch);
 
       series.forEach((line, idx) => {{
         ctx.strokeStyle = line.color;
@@ -1780,6 +1830,28 @@ def render_page(status: Dict[str, Any]) -> str:
         ctx.fillText(line.label, pad + idx * 140 + 18, 20);
       }});
 
+      latestMetricEvents.forEach((event, index) => {{
+        const eventEpoch = Date.parse(event.ts || '');
+        if (!Number.isFinite(eventEpoch)) {{
+          return;
+        }}
+        const x = pad + (((eventEpoch - firstEpoch) / spanEpoch) * chartWidth);
+        if (x < pad || x > pad + chartWidth) {{
+          return;
+        }}
+        const markerColor = event.kind === 'command' ? '#b06d10' : (event.kind === 'detected' ? '#b34747' : '#607064');
+        ctx.strokeStyle = markerColor;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, pad);
+        ctx.lineTo(x, pad + chartHeight);
+        ctx.stroke();
+        ctx.fillStyle = markerColor;
+        ctx.beginPath();
+        ctx.arc(x, pad + 8 + (index % 3) * 8, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }});
+
       if (hoverIndex !== null && points[hoverIndex]) {{
         const x = xFor(hoverIndex);
         ctx.strokeStyle = '#607064';
@@ -1800,6 +1872,7 @@ def render_page(status: Dict[str, Any]) -> str:
       const response = await fetch('/api/metrics' + authQuery);
       const payload = await response.json();
       latestMetrics = payload.points || [];
+      latestMetricEvents = payload.events || [];
       drawMetrics(latestMetrics);
     }}
 
@@ -1942,7 +2015,15 @@ def render_page(status: Dict[str, Any]) -> str:
         if (!point) {{
           return;
         }}
-        hover.textContent = `${{point.ts || ''}} | CPU ${{Number(point.cpu_percent || 0).toFixed(1)}}% | Memory ${{Number(point.mem_percent || 0).toFixed(1)}}% | Root ${{Number(point.root_disk_percent || 0).toFixed(1)}}% | Recording ${{Number(point.recording_disk_percent || 0).toFixed(1)}}%`;
+        const pointEpoch = Date.parse(point.ts || '');
+        const nearbyEvents = latestMetricEvents
+          .filter((item) => {{
+            const eventEpoch = Date.parse(item.ts || '');
+            return Number.isFinite(eventEpoch) && Number.isFinite(pointEpoch) && Math.abs(eventEpoch - pointEpoch) <= 5 * 60 * 1000;
+          }})
+          .map((item) => item.label);
+        const eventText = nearbyEvents.length ? ` | Events: ${{nearbyEvents.join(', ')}}` : '';
+        hover.textContent = `${{point.ts || ''}} | CPU ${{Number(point.cpu_percent || 0).toFixed(1)}}% | Memory ${{Number(point.mem_percent || 0).toFixed(1)}}% | Root ${{Number(point.root_disk_percent || 0).toFixed(1)}}% | Recording ${{Number(point.recording_disk_percent || 0).toFixed(1)}}%${{eventText}}`;
         drawMetrics(latestMetrics, idx);
       }});
 
@@ -1986,7 +2067,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(status_payload())
             return
         if parsed.path == "/api/metrics":
-            self._send_json({"points": recent_metrics()})
+            self._send_json({"points": recent_metrics(), "events": recent_metric_events()})
             return
         if parsed.path == "/download/export-archive":
             self._send_file(safe_export_file("archive"), download_name="watchdog-incident-export.tar.gz")

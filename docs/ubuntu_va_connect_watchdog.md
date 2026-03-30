@@ -38,6 +38,35 @@ The installer:
 
 After that, edit both config files if needed for your site.
 
+## Fastest first-time install on a new gateway
+
+If the gateway can reach GitHub, the easiest first install is:
+
+```bash
+cd ~/Desktop
+curl -fsSL -o bootstrap_watchdog_from_github.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/master/tools/ubuntu/bootstrap_watchdog_from_github.sh
+bash ./bootstrap_watchdog_from_github.sh
+```
+
+That will:
+
+- install `git`
+- clone the public watchdog repo into `~/Desktop/va-connect-watchdog`
+- run the installer
+- enable the watchdog services
+
+If you prefer GitHub SSH access, the same script also accepts an SSH repo URL:
+
+```bash
+bash ./bootstrap_watchdog_from_github.sh git@github.com:JW-Arentis-UK/va-connect_watchdog.git
+```
+
+In SSH mode it will:
+
+- make an SSH key if needed
+- print the public key
+- stop and tell you to add the key if GitHub access is not ready yet
+
 ## Quick site info capture
 
 If copy and paste is awkward over the remote connection, run this from the project folder:
