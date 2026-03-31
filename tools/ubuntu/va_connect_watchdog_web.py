@@ -573,6 +573,92 @@ def clue_counter_payload(hardware_review: Dict[str, Any], crash_review: Dict[str
     return counters
 
 
+def linux_stability_payload(state: Dict[str, Any], hardware_review: Dict[str, Any], crash_review: Dict[str, Any]) -> Dict[str, Any]:
+    previous_boot_lines = [
+        str(line)
+        for line in [
+            *(crash_review.get("kernel_lines_all", []) or []),
+            *(crash_review.get("system_lines_all", []) or []),
+        ]
+    ]
+    current_warning_lines = [str(line) for line in hardware_review.get("warnings", [])]
+
+    def count_matches(lines: List[str], terms: tuple[str, ...]) -> int:
+        return sum(1 for line in lines if any(term in line.lower() for term in terms))
+
+    link_terms = ("link is down", "link up", "link down", "carrier", "nic link is down", "enp3s0")
+    igc_terms = ("igc", "igc_rd32", "reset adapter", "resetting", "watchdog")
+    pcie_terms = ("pcie link", "device now detached", "detached", "aer:", "aspm")
+    memory_terms = ("edac", "memory error", "machine check", "ibecc", "mce")
+
+    previous_counts = {
+        "link_flaps": count_matches(previous_boot_lines, link_terms),
+        "igc_errors": count_matches(previous_boot_lines, igc_terms),
+        "pcie_events": count_matches(previous_boot_lines, pcie_terms),
+        "memory_events": count_matches(previous_boot_lines, memory_terms),
+    }
+    current_counts = {
+        "link_flaps": count_matches(current_warning_lines, link_terms),
+        "igc_errors": count_matches(current_warning_lines, igc_terms),
+        "pcie_events": count_matches(current_warning_lines, pcie_terms),
+        "memory_events": count_matches(current_warning_lines, memory_terms),
+    }
+
+    strongest_previous_line = ""
+    strongest_current_line = ""
+    priority_terms = (
+        "device now detached",
+        "pcie link",
+        "igc",
+        "link is down",
+        "watchdog",
+        "edac",
+        "memory error",
+        "machine check",
+    )
+    for line in previous_boot_lines:
+        lowered = line.lower()
+        if any(term in lowered for term in priority_terms):
+            strongest_previous_line = line[:240]
+            break
+    for line in current_warning_lines:
+        lowered = line.lower()
+        if any(term in lowered for term in priority_terms):
+            strongest_current_line = line[:240]
+            break
+
+    interpretation = []
+    if previous_counts["link_flaps"] or previous_counts["igc_errors"] or previous_counts["pcie_events"]:
+        interpretation.append("Previous-boot logs contain NIC or PCIe clues, so the network path may have been involved before the restart.")
+    elif current_counts["link_flaps"] or current_counts["igc_errors"] or current_counts["pcie_events"]:
+        interpretation.append("NIC or PCIe clues are present in current warnings only, which can fit a post-repower or after-boot observation rather than the original freeze.")
+    else:
+        interpretation.append("No strong NIC or PCIe clue is standing out yet from the lines collected so far.")
+
+    if previous_counts["memory_events"]:
+        interpretation.append("Previous-boot logs contain EDAC or memory-controller clues, which keeps RAM or platform stability in scope.")
+    elif current_counts["memory_events"]:
+        interpretation.append("Memory-controller clues are present in current warnings, but they are not yet tied to the freeze window.")
+    else:
+        interpretation.append("No EDAC or memory-controller clue is standing out yet from the collected lines.")
+
+    alert_rules = [
+        {"label": "Link flap rule", "threshold": ">5 link changes / 30s", "meaning": "Flag likely NIC instability"},
+        {"label": "igc rule", "threshold": "Repeated igc/reset lines", "meaning": "Flag driver or link instability"},
+        {"label": "PCIe rule", "threshold": "Any detach / PCIe-link-lost line", "meaning": "Treat as high-priority hardware or driver clue"},
+        {"label": "Memory rule", "threshold": "Any EDAC/MCE/IBECC line", "meaning": "Treat RAM or platform stability as a live suspect"},
+    ]
+
+    return {
+        "previous_boot_counts": previous_counts,
+        "current_warning_counts": current_counts,
+        "strongest_previous_line": strongest_previous_line,
+        "strongest_current_line": strongest_current_line,
+        "interpretation": interpretation[:4],
+        "alert_rules": alert_rules,
+    }
+
+
 def fault_reporting_payload(
     state: Dict[str, Any],
     checks: Dict[str, Any],
@@ -1083,6 +1169,7 @@ def status_payload() -> Dict[str, Any]:
     hw_identity = hardware_identity()
     teamviewer = teamviewer_status_payload(config)
     clue_counters = clue_counter_payload(hardware_payload, crash_payload)
+    linux_stability = linux_stability_payload(state, hardware_payload, crash_payload)
     fault_reporting = fault_reporting_payload(
         state,
         checks,
@@ -1106,6 +1193,7 @@ def status_payload() -> Dict[str, Any]:
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "teamviewer": teamviewer,
         "clue_counters": clue_counters,
+        "linux_stability": linux_stability,
         "fault_reporting": fault_reporting,
         "next_steps": next_steps,
         "hardware_review": hardware_payload,
@@ -1262,6 +1350,18 @@ def render_page(status: Dict[str, Any]) -> str:
       font-size: 1.1rem;
       font-weight: 800;
       color: #f0f6fb;
+    }}
+    .stability-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }}
+    .stability-box {{
+      border: 1px solid rgba(122, 150, 176, 0.18);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(13, 22, 30, 0.8);
     }}
     .panel {{
       background: rgba(18, 29, 39, 0.9);
@@ -2016,6 +2116,48 @@ def render_page(status: Dict[str, Any]) -> str:
           </section>
         </div>
       </section>
+      <section class="panel" style="grid-column: 1 / -1;">
+        <h2>Linux stability</h2>
+        <p class="hint">Focused view for NIC flaps, igc resets, PCIe detach clues, and EDAC or memory-controller messages.</p>
+        <div class="stability-grid">
+          <section class="stability-box">
+            <strong>Previous boot</strong>
+            <ul class="review-list" id="linuxPreviousCounts">
+              <li>Link flaps: {int((status.get("linux_stability", {}).get("previous_boot_counts", {}) or {}).get("link_flaps", 0) or 0)}</li>
+              <li>igc/reset clues: {int((status.get("linux_stability", {}).get("previous_boot_counts", {}) or {}).get("igc_errors", 0) or 0)}</li>
+              <li>PCIe clues: {int((status.get("linux_stability", {}).get("previous_boot_counts", {}) or {}).get("pcie_events", 0) or 0)}</li>
+              <li>EDAC/memory clues: {int((status.get("linux_stability", {}).get("previous_boot_counts", {}) or {}).get("memory_events", 0) or 0)}</li>
+            </ul>
+            <p><strong>Most suspicious previous-boot line</strong></p>
+            <p id="linuxPreviousLine"><code>{html.escape(str(status.get("linux_stability", {}).get("strongest_previous_line", "No highlighted previous-boot line yet.")))}</code></p>
+          </section>
+          <section class="stability-box">
+            <strong>Current warnings</strong>
+            <ul class="review-list" id="linuxCurrentCounts">
+              <li>Link flaps: {int((status.get("linux_stability", {}).get("current_warning_counts", {}) or {}).get("link_flaps", 0) or 0)}</li>
+              <li>igc/reset clues: {int((status.get("linux_stability", {}).get("current_warning_counts", {}) or {}).get("igc_errors", 0) or 0)}</li>
+              <li>PCIe clues: {int((status.get("linux_stability", {}).get("current_warning_counts", {}) or {}).get("pcie_events", 0) or 0)}</li>
+              <li>EDAC/memory clues: {int((status.get("linux_stability", {}).get("current_warning_counts", {}) or {}).get("memory_events", 0) or 0)}</li>
+            </ul>
+            <p><strong>Most suspicious current-warning line</strong></p>
+            <p id="linuxCurrentLine"><code>{html.escape(str(status.get("linux_stability", {}).get("strongest_current_line", "No highlighted current-warning line yet.")))}</code></p>
+          </section>
+        </div>
+        <div class="grid" style="margin-top:10px;">
+          <section class="item">
+            <strong>How to read this</strong>
+            <ul class="review-list" id="linuxInterpretation">
+              {"".join(f"<li>{html.escape(line)}</li>" for line in status.get("linux_stability", {}).get("interpretation", []))}
+            </ul>
+          </section>
+          <section class="item">
+            <strong>Alert rules</strong>
+            <ul class="review-list" id="linuxAlertRules">
+              {"".join(f"<li><strong>{html.escape(str(item.get('label', 'Rule')))}:</strong> {html.escape(str(item.get('threshold', '')))} - {html.escape(str(item.get('meaning', '')))}</li>" for item in status.get("linux_stability", {}).get("alert_rules", []))}
+            </ul>
+          </section>
+        </div>
+      </section>
     </div>
     </section>
 
@@ -2070,6 +2212,7 @@ def render_page(status: Dict[str, Any]) -> str:
             <h3>Investigation</h3>
             <p><strong>Likely causes</strong> is a scoring guide based on the current evidence. It helps point you at memory/platform, storage, network, or app/service problems first.</p>
             <p><strong>Hardware warnings</strong> surfaces kernel, SMART, and persistent-crash clues. <strong>Crash review</strong> summarizes the latest previous-boot review if the box restarted.</p>
+            <p><strong>Linux stability</strong> separates previous-boot clues from current-warning clues so you can judge whether NIC or memory messages were likely before the freeze or only after repower.</p>
           </section>
           <section class="help-card">
             <h3>Config</h3>
@@ -2389,6 +2532,25 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('clueCounterStrip').innerHTML = clueCounters.map((item) => `<div class="counter-chip ${{item.count ? 'hot' : ''}}"><div class="stat-label">${{item.label || 'Clue'}}</div><div class="count">${{item.count || 0}}</div></div>`).join('') || '<div class="counter-chip"><div class="stat-label">Clues</div><div class="count">0</div></div>';
       document.getElementById('faultQuickActions').innerHTML = (faultReporting.quick_actions || []).map((item) => `<li>${{item}}</li>`).join('') || '<li>No quick actions suggested yet.</li>';
       document.getElementById('linuxStabilityClues').innerHTML = (faultReporting.stability_clues || []).map((item) => `<li>${{item}}</li>`).join('') || '<li>No Linux stability clues collected yet.</li>';
+      const linuxStability = status.linux_stability || {{}};
+      const previousCounts = linuxStability.previous_boot_counts || {{}};
+      const currentCounts = linuxStability.current_warning_counts || {{}};
+      document.getElementById('linuxPreviousCounts').innerHTML = `
+        <li>Link flaps: ${{previousCounts.link_flaps || 0}}</li>
+        <li>igc/reset clues: ${{previousCounts.igc_errors || 0}}</li>
+        <li>PCIe clues: ${{previousCounts.pcie_events || 0}}</li>
+        <li>EDAC/memory clues: ${{previousCounts.memory_events || 0}}</li>
+      `;
+      document.getElementById('linuxCurrentCounts').innerHTML = `
+        <li>Link flaps: ${{currentCounts.link_flaps || 0}}</li>
+        <li>igc/reset clues: ${{currentCounts.igc_errors || 0}}</li>
+        <li>PCIe clues: ${{currentCounts.pcie_events || 0}}</li>
+        <li>EDAC/memory clues: ${{currentCounts.memory_events || 0}}</li>
+      `;
+      document.getElementById('linuxPreviousLine').innerHTML = `<code>${{linuxStability.strongest_previous_line || 'No highlighted previous-boot line yet.'}}</code>`;
+      document.getElementById('linuxCurrentLine').innerHTML = `<code>${{linuxStability.strongest_current_line || 'No highlighted current-warning line yet.'}}</code>`;
+      document.getElementById('linuxInterpretation').innerHTML = (linuxStability.interpretation || []).map((item) => `<li>${{item}}</li>`).join('') || '<li>No Linux stability interpretation available yet.</li>';
+      document.getElementById('linuxAlertRules').innerHTML = (linuxStability.alert_rules || []).map((item) => `<li><strong>${{item.label || 'Rule'}}:</strong> ${{item.threshold || ''}} - ${{item.meaning || ''}}</li>`).join('') || '<li>No alert rules configured.</li>';
       const memtestInfo = status.memtest_info || {{}};
       document.getElementById('memtestHint').textContent = `memtester ${{memtestInfo.installed ? 'is installed' : 'is not installed'}}. Free RAM: ${{memtestInfo.available_mb || 0}} MB. Suggested test: ${{memtestInfo.recommended_label || '1024M'}} x ${{memtestInfo.recommended_loops || 2}}.`;
       document.getElementById('memtest_size_mb').value = memtestInfo.recommended_mb || 1024;
