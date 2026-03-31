@@ -3,6 +3,8 @@
 import html
 import json
 import os
+import re
+import secrets
 import shlex
 import socket
 import subprocess
@@ -70,6 +72,8 @@ def load_config() -> Dict[str, Any]:
         "internet_hosts": [],
         "tcp_targets": [],
         "systemd_services": [],
+        "teamviewer_id_command": "teamviewer info",
+        "teamviewer_password_reset_command": "teamviewer passwd {password}",
     }
     merged = {**defaults, **config}
     merged["web_port"] = int(merged["web_port"])
@@ -78,6 +82,22 @@ def load_config() -> Dict[str, Any]:
 
 def command_exists(name: str) -> bool:
     return subprocess.run(["bash", "-lc", f"command -v {shlex.quote(name)}"], capture_output=True, text=True).returncode == 0
+
+
+def run_shell(command: str, timeout: int = 15) -> Dict[str, Any]:
+    try:
+        result = subprocess.run(
+            ["bash", "-lc", command],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        output = "\n".join(part for part in [result.stdout.strip(), result.stderr.strip()] if part).strip()
+        return {"ok": result.returncode == 0, "return_code": result.returncode, "output": output}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "return_code": 124, "output": f"Timed out after {timeout}s."}
+    except Exception as exc:
+        return {"ok": False, "return_code": 1, "output": f"{type(exc).__name__}: {exc}"}
 
 
 def mem_available_mb() -> int:
@@ -178,6 +198,8 @@ def sanitize_patch(data: Dict[str, Any]) -> Dict[str, Any]:
         "web_bind",
         "web_token",
         "network_restart_command",
+        "teamviewer_id_command",
+        "teamviewer_password_reset_command",
     ]
 
     for key in bool_keys:
@@ -418,6 +440,163 @@ def hardware_review_payload(state: Dict[str, Any]) -> Dict[str, Any]:
         "smart": smart,
         "pstore_entries": pstore_entries,
         "findings": findings[:4],
+    }
+
+
+def parse_teamviewer_info(output: str) -> Dict[str, str]:
+    parsed = {"id": "", "version": "", "status": "", "device": ""}
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lower = line.lower()
+        if not parsed["id"]:
+            match = re.search(r"\b(?:id|teamviewer id)\b[^0-9]*([0-9][0-9 ]{5,})", line, re.IGNORECASE)
+            if match:
+                parsed["id"] = re.sub(r"\s+", "", match.group(1))
+        if not parsed["version"] and "version" in lower:
+            parsed["version"] = line.split(":", 1)[1].strip() if ":" in line else line
+        if not parsed["status"] and any(term in lower for term in ("status", "state", "ready", "disabled", "daemon")):
+            parsed["status"] = line.split(":", 1)[1].strip() if ":" in line else line
+        if not parsed["device"] and "device" in lower:
+            parsed["device"] = line.split(":", 1)[1].strip() if ":" in line else line
+    return parsed
+
+
+def teamviewer_status_payload(config: Dict[str, Any]) -> Dict[str, Any]:
+    installed = command_exists("teamviewer")
+    daemon_running = False
+    gui_running = False
+
+    daemon_check = run_shell("pgrep -fa teamviewerd", timeout=5)
+    if daemon_check["ok"] and daemon_check["output"]:
+        daemon_running = True
+    gui_check = run_shell("pgrep -fa TeamViewer", timeout=5)
+    if gui_check["ok"] and gui_check["output"]:
+        gui_running = True
+
+    info_output = ""
+    parsed_info: Dict[str, str] = {"id": "", "version": "", "status": "", "device": ""}
+    command = str(config.get("teamviewer_id_command", "")).strip()
+    if installed and command:
+        info_result = run_shell(command, timeout=15)
+        info_output = info_result["output"]
+        parsed_info = parse_teamviewer_info(info_output)
+        if not daemon_running and ("daemon" in info_output.lower() or "ready" in info_output.lower()):
+            daemon_running = True
+
+    summary_parts = []
+    if not installed:
+        summary_parts.append("TeamViewer CLI not found")
+    elif daemon_running:
+        summary_parts.append("daemon running")
+    else:
+        summary_parts.append("daemon not running")
+    if gui_running:
+        summary_parts.append("GUI running")
+    if parsed_info.get("id"):
+        summary_parts.append(f"ID {parsed_info['id']}")
+
+    return {
+        "installed": installed,
+        "daemon_running": daemon_running,
+        "gui_running": gui_running,
+        "id": parsed_info.get("id", ""),
+        "version": parsed_info.get("version", ""),
+        "status_text": parsed_info.get("status", "") or ("Running" if daemon_running else "Not running"),
+        "device": parsed_info.get("device", ""),
+        "summary": ", ".join(summary_parts) if summary_parts else "No TeamViewer information available.",
+        "raw_output": info_output[:1000],
+        "reset_supported": installed and bool(str(config.get("teamviewer_password_reset_command", "")).strip()),
+    }
+
+
+def reset_teamviewer_password(config: Dict[str, Any]) -> Dict[str, Any]:
+    command_template = str(config.get("teamviewer_password_reset_command", "")).strip()
+    if not command_exists("teamviewer"):
+        return {"ok": False, "message": "TeamViewer CLI is not installed on this unit."}
+    if not command_template:
+        return {"ok": False, "message": "No TeamViewer password reset command is configured."}
+
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+    password = "".join(secrets.choice(alphabet) for _ in range(10))
+    command = command_template.replace("{password}", shlex.quote(password))
+    result = run_shell(command, timeout=20)
+    if not result["ok"]:
+        return {
+            "ok": False,
+            "message": "TeamViewer password reset failed.",
+            "detail": result["output"][:500],
+        }
+    return {
+        "ok": True,
+        "message": f"TeamViewer password reset to: {password}",
+        "password": password,
+        "detail": result["output"][:500],
+    }
+
+
+def fault_reporting_payload(
+    state: Dict[str, Any],
+    checks: Dict[str, Any],
+    reboot_counts: Dict[str, int],
+    hardware_review: Dict[str, Any],
+    crash_review: Dict[str, Any],
+    suspect_scores: List[Dict[str, Any]],
+    teamviewer: Dict[str, Any],
+) -> Dict[str, Any]:
+    warning_text = " \n".join(str(line).lower() for line in hardware_review.get("warnings", []))
+    crash_text = " \n".join(
+        str(line).lower()
+        for line in [*(crash_review.get("system_lines_all", []) or []), *(crash_review.get("kernel_lines_all", []) or [])]
+    )
+    combined_text = warning_text + " \n" + crash_text
+
+    impact = "System currently healthy."
+    if state.get("fault_active"):
+        impact = summarize_fault_checks(checks)
+    elif reboot_counts.get("unexpected"):
+        impact = "The unit is up now, but it has recorded unexpected reboot activity."
+
+    primary = suspect_scores[0] if suspect_scores else {"label": "No clear suspect yet", "score": 0, "reasons": []}
+    plain_summary = f"{impact} Top suspect: {primary.get('label', 'unknown')}."
+    if primary.get("score", 0) <= 0:
+        plain_summary = impact + " No suspect category has strong evidence yet."
+
+    stability_clues = []
+    if any(term in combined_text for term in ("igc", "link is down", "carrier", "pcie link", "detached")):
+        stability_clues.append("Linux network-driver clues were seen. Intel I225 / igc link stability is worth checking.")
+    if any(term in combined_text for term in ("edac", "memory error", "machine check", "ibecc", "mce")):
+        stability_clues.append("Linux memory-controller clues were seen. RAM, EDAC, or platform stability remains a live suspect.")
+    if any(term in combined_text for term in ("out of memory", "oom", "killed process")):
+        stability_clues.append("The logs include memory-pressure signs. This may be application or system memory exhaustion.")
+    if any(term in combined_text for term in ("nvme", "i/o error", "ext4", "xfs", "buffer i/o")):
+        stability_clues.append("Linux storage clues were seen. Disk or filesystem health should be checked.")
+    if not stability_clues:
+        stability_clues.append("No strong Linux kernel/platform clue is standing out above the rest yet.")
+
+    quick_actions: List[str] = []
+    if state.get("fault_active"):
+        quick_actions.append("Check Latest checks to confirm whether the fault is app, service, LAN/TCP, or WAN.")
+    if reboot_counts.get("unexpected"):
+        quick_actions.append("Review Crash review and the latest previous-boot snapshot for the minutes before restart.")
+    if any(term in combined_text for term in ("igc", "link is down", "carrier", "pcie link")):
+        quick_actions.append("Compare the freeze time with NIC or link messages. Repeated igc or link events raise the network path suspicion.")
+    if any(term in combined_text for term in ("edac", "memory error", "machine check", "ibecc", "mce")):
+        quick_actions.append("Check whether EDAC or memory errors are repeating across incidents before changing hardware.")
+    if checks.get("app_ok") is False:
+        quick_actions.append("The app is currently missing. Confirm the launch command and whether the process stays up after restart.")
+    if teamviewer.get("installed") and not teamviewer.get("daemon_running"):
+        quick_actions.append("TeamViewer daemon is not running, so remote access may be unavailable even if the box is up.")
+    if not quick_actions:
+        quick_actions.append("Watch the timeline and chart for the next fault transition, then compare it with the previous-boot review.")
+
+    return {
+        "summary": plain_summary,
+        "impact": impact,
+        "top_suspect": primary,
+        "stability_clues": stability_clues[:4],
+        "quick_actions": quick_actions[:5],
     }
 
 
@@ -808,6 +987,7 @@ def launch_memtest(size_mb: int, loops: int) -> Dict[str, Any]:
 
 def status_payload() -> Dict[str, Any]:
     state = read_json(STATE_PATH, {})
+    config = load_config()
     checks = state.get("last_checks") or {}
     reboot_counts = effective_reboot_counts(state)
     diagnosis = "Healthy"
@@ -858,10 +1038,20 @@ def status_payload() -> Dict[str, Any]:
     memtest_info = memtest_recommendation()
     memtest_status = normalize_memtest_status(read_json(MEMTEST_STATUS_PATH, {"state": "idle"}))
     hw_identity = hardware_identity()
+    teamviewer = teamviewer_status_payload(config)
+    fault_reporting = fault_reporting_payload(
+        state,
+        checks,
+        reboot_counts,
+        hardware_payload,
+        crash_payload,
+        suspects_payload,
+        teamviewer,
+    )
     return {
         "hostname": socket.gethostname(),
         "hardware_identity": hw_identity,
-        "config": load_config(),
+        "config": config,
         "state": state,
         "build_info": build_info,
         "update_status": update_status,
@@ -870,6 +1060,8 @@ def status_payload() -> Dict[str, Any]:
         "memtest_info": memtest_info,
         "reboot_counts": reboot_counts,
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
+        "teamviewer": teamviewer,
+        "fault_reporting": fault_reporting,
         "next_steps": next_steps,
         "hardware_review": hardware_payload,
         "crash_review": crash_payload,
@@ -979,6 +1171,31 @@ def render_page(status: Dict[str, Any]) -> str:
       grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
       gap: 8px;
       margin-top: 8px;
+    }}
+    .compact-grid {{
+      display: grid;
+      grid-template-columns: minmax(340px, 1.1fr) minmax(280px, 0.9fr);
+      gap: 14px;
+      margin-top: 14px;
+    }}
+    .summary-list {{
+      margin: 8px 0 0;
+      padding-left: 18px;
+    }}
+    .summary-list li {{
+      margin: 0 0 6px;
+      color: #d5e1ea;
+    }}
+    .mini-meta {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }}
+    .operator-note {{
+      margin-top: 10px;
+      color: #a8bfce;
+      font-size: 0.86rem;
     }}
     .panel {{
       background: rgba(18, 29, 39, 0.9);
@@ -1388,6 +1605,7 @@ def render_page(status: Dict[str, Any]) -> str:
       .status-grid,
       .ops-grid,
       .bottom-grid,
+      .compact-grid,
       .hardware-grid {{
         grid-template-columns: 1fr;
       }}
@@ -1476,6 +1694,28 @@ def render_page(status: Dict[str, Any]) -> str:
       </section>
     </div>
 
+    <div class="compact-grid">
+      <section class="panel">
+        <h2>Fault summary</h2>
+        <p><strong id="faultSummaryText">{html.escape(str(status.get("fault_reporting", {}).get("summary", "No summary yet.")))}</strong></p>
+        <p id="faultImpactText">{html.escape(str(status.get("fault_reporting", {}).get("impact", "")))}</p>
+        <div class="mini-meta">
+          <span class="badge" id="faultTopSuspectBadge">{html.escape(str((status.get("fault_reporting", {}).get("top_suspect", {}) or {}).get("label", "No top suspect")))}</span>
+          <span class="badge" id="faultTopSuspectScore">Score {int((status.get("fault_reporting", {}).get("top_suspect", {}) or {}).get("score", 0) or 0)}</span>
+        </div>
+        <ul class="summary-list" id="faultQuickActions">
+          {"".join(f"<li>{html.escape(item)}</li>" for item in status.get("fault_reporting", {}).get("quick_actions", []))}
+        </ul>
+      </section>
+      <section class="panel">
+        <h2>Linux stability clues</h2>
+        <p class="hint">This is the simple operator view of the kernel and hardware evidence already collected.</p>
+        <ul class="summary-list" id="linuxStabilityClues">
+          {"".join(f"<li>{html.escape(item)}</li>" for item in status.get("fault_reporting", {}).get("stability_clues", []))}
+        </ul>
+      </section>
+    </div>
+
     <div class="analysis-grid" style="margin-top:16px;">
       <section class="panel" style="grid-column: 1 / -1;">
         <div class="chart-toolbar">
@@ -1516,10 +1756,10 @@ def render_page(status: Dict[str, Any]) -> str:
         <div class="chart-hover" id="metricsHover">Move across the graph to inspect time and values.</div>
         <canvas id="metricsChart" width="1000" height="280"></canvas>
         <div class="chart-event-legend">
-          <span class="chart-event-item"><span class="chart-event-dot temp"></span>Temperature</span>
-          <span class="chart-event-item"><span class="chart-event-dot command"></span>Watchdog reboot command</span>
-          <span class="chart-event-item"><span class="chart-event-dot detected"></span>Detected or unexpected reboot</span>
-          <span class="chart-event-item"><span class="chart-event-dot note"></span>Reboot counts acknowledged</span>
+          <span class="chart-event-item" id="legendTemp"><span class="chart-event-dot temp"></span>Temperature</span>
+          <span class="chart-event-item" id="legendCommand"><span class="chart-event-dot command"></span>Watchdog reboot command (0)</span>
+          <span class="chart-event-item" id="legendDetected"><span class="chart-event-dot detected"></span>Detected or unexpected reboot (0)</span>
+          <span class="chart-event-item" id="legendNote"><span class="chart-event-dot note"></span>Reboot counts acknowledged (0)</span>
         </div>
         <p class="hint">CPU, memory, root disk, recording disk, and temperature are plotted together. Hover also shows MemAvailable and temperature when available.</p>
       </section>
@@ -1564,6 +1804,20 @@ def render_page(status: Dict[str, Any]) -> str:
           <a class="link-btn" id="exportReadmeLink" href="/download/export-readme">Download export README</a>
           <a class="link-btn" id="exportLogLink" href="/download/export-log">Download export log</a>
         </div>
+      </section>
+      <section class="panel">
+        <h2>TeamViewer</h2>
+        <div class="mini-meta">
+          <span class="badge" id="teamviewerInstalledBadge">{'Installed' if status.get("teamviewer", {}).get("installed") else 'Not installed'}</span>
+          <span class="badge {'danger' if not status.get('teamviewer', {}).get('daemon_running') else ''}" id="teamviewerDaemonBadge">{'Daemon running' if status.get("teamviewer", {}).get("daemon_running") else 'Daemon stopped'}</span>
+          <span class="badge {'warn' if not status.get('teamviewer', {}).get('gui_running') else ''}" id="teamviewerGuiBadge">{'GUI running' if status.get("teamviewer", {}).get("gui_running") else 'GUI not running'}</span>
+        </div>
+        <p id="teamviewerSummary">{html.escape(str(status.get("teamviewer", {}).get("summary", "No TeamViewer information available.")))}</p>
+        <p><strong>ID:</strong> <span id="teamviewerId">{html.escape(str(status.get("teamviewer", {}).get("id", "unknown")))}</span></p>
+        <p><strong>Version:</strong> <span id="teamviewerVersion">{html.escape(str(status.get("teamviewer", {}).get("version", "unknown")))}</span></p>
+        <p><strong>Status:</strong> <span id="teamviewerStatus">{html.escape(str(status.get("teamviewer", {}).get("status_text", "unknown")))}</span></p>
+        <button class="secondary" id="teamviewerResetButton" onclick="runAction('reset_teamviewer_password')">Reset TeamViewer password</button>
+        <p class="operator-note" id="teamviewerResetResult">Password reset generates a new one-time password on the unit and shows it here.</p>
       </section>
       <section class="panel checks-panel">
         <h2>Latest checks</h2>
@@ -1700,6 +1954,7 @@ def render_page(status: Dict[str, Any]) -> str:
             <p><strong>Current diagnosis</strong> is the watchdog's best plain-English summary of what looks wrong right now.</p>
             <p><strong>Current state</strong> shows whether the watchdog currently thinks the box is healthy or in fault.</p>
             <p><strong>Unexpected reboots</strong> means the PC restarted without a recent watchdog reboot command, which can point to manual reboot, power issue, or hard crash.</p>
+            <p><strong>Fault summary</strong> and <strong>Linux stability clues</strong> condense the logs into the simplest operator wording the watchdog can currently justify.</p>
           </section>
           <section class="help-card">
             <h3>Current PC Stats</h3>
@@ -1716,7 +1971,12 @@ def render_page(status: Dict[str, Any]) -> str:
             <h3>PC Stats Chart</h3>
             <p>This chart trends the last 24 hours or 7 days of watchdog metrics.</p>
             <p>CPU, memory, root disk, recording disk, and temperature are plotted together. Hover the graph to inspect a point in time.</p>
-            <p>The reboot markers show when the watchdog asked for a reboot or when a reboot was later detected.</p>
+            <p>The reboot markers show when the watchdog asked for a reboot or when a reboot was later detected. Numbers in brackets show how many of each marker are visible in the current chart range.</p>
+          </section>
+          <section class="help-card">
+            <h3>TeamViewer</h3>
+            <p>This panel shows whether TeamViewer is installed, whether the daemon is up, and the detected TeamViewer ID.</p>
+            <p><strong>Reset TeamViewer password</strong> asks the local TeamViewer CLI to generate a new password and shows it immediately so you can reconnect.</p>
           </section>
           <section class="help-card">
             <h3>Latest Checks</h3>
@@ -1802,6 +2062,14 @@ def render_page(status: Dict[str, Any]) -> str:
           <div class="field">
             <label for="network_restart_command">Network restart command</label>
             <input id="network_restart_command" type="text" value="{html.escape(str(cfg.get("network_restart_command", "")))}">
+          </div>
+          <div class="field">
+            <label for="teamviewer_id_command">TeamViewer info command</label>
+            <input id="teamviewer_id_command" type="text" value="{html.escape(str(cfg.get("teamviewer_id_command", "teamviewer info")))}">
+          </div>
+          <div class="field">
+            <label for="teamviewer_password_reset_command">TeamViewer password reset command</label>
+            <input id="teamviewer_password_reset_command" type="text" value="{html.escape(str(cfg.get("teamviewer_password_reset_command", "teamviewer passwd {password}")))}">
           </div>
         </div>
         <div class="field" style="margin-top:12px;">
@@ -1910,6 +2178,8 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('web_port').value = status.config.web_port || 80;
       document.getElementById('web_token').value = status.config.web_token || '';
       document.getElementById('network_restart_command').value = status.config.network_restart_command || '';
+      document.getElementById('teamviewer_id_command').value = status.config.teamviewer_id_command || 'teamviewer info';
+      document.getElementById('teamviewer_password_reset_command').value = status.config.teamviewer_password_reset_command || 'teamviewer passwd {password}';
       if (!document.getElementById('export_since').value) {{
         const startup = status.state.last_startup_at || '';
         if (startup) {{
@@ -2003,6 +2273,32 @@ def render_page(status: Dict[str, Any]) -> str:
         <li><strong>Thermal zones:</strong> ${{currentMetrics.temperature_sensor_count ?? 0}}</li>
         <li><strong>Top sensors:</strong> ${{sensorSummary || 'unknown'}}</li>
       `;
+      const teamviewer = status.teamviewer || {{}};
+      const teamviewerInstalledBadge = document.getElementById('teamviewerInstalledBadge');
+      const teamviewerDaemonBadge = document.getElementById('teamviewerDaemonBadge');
+      const teamviewerGuiBadge = document.getElementById('teamviewerGuiBadge');
+      teamviewerInstalledBadge.className = `badge ${{teamviewer.installed ? '' : 'danger'}}`;
+      teamviewerInstalledBadge.textContent = teamviewer.installed ? 'Installed' : 'Not installed';
+      teamviewerDaemonBadge.className = `badge ${{teamviewer.daemon_running ? '' : 'danger'}}`;
+      teamviewerDaemonBadge.textContent = teamviewer.daemon_running ? 'Daemon running' : 'Daemon stopped';
+      teamviewerGuiBadge.className = `badge ${{teamviewer.gui_running ? '' : 'warn'}}`;
+      teamviewerGuiBadge.textContent = teamviewer.gui_running ? 'GUI running' : 'GUI not running';
+      document.getElementById('teamviewerSummary').textContent = teamviewer.summary || 'No TeamViewer information available.';
+      document.getElementById('teamviewerId').textContent = teamviewer.id || 'unknown';
+      document.getElementById('teamviewerVersion').textContent = teamviewer.version || 'unknown';
+      document.getElementById('teamviewerStatus').textContent = teamviewer.status_text || 'unknown';
+      document.getElementById('teamviewerResetButton').disabled = !teamviewer.reset_supported;
+      if (!teamviewer.reset_supported) {{
+        document.getElementById('teamviewerResetResult').textContent = 'Password reset is unavailable because the TeamViewer CLI or reset command is not configured on this unit.';
+      }}
+      const faultReporting = status.fault_reporting || {{}};
+      const topSuspect = faultReporting.top_suspect || {{}};
+      document.getElementById('faultSummaryText').textContent = faultReporting.summary || 'No summary yet.';
+      document.getElementById('faultImpactText').textContent = faultReporting.impact || '';
+      document.getElementById('faultTopSuspectBadge').textContent = topSuspect.label || 'No top suspect';
+      document.getElementById('faultTopSuspectScore').textContent = `Score ${{topSuspect.score || 0}}`;
+      document.getElementById('faultQuickActions').innerHTML = (faultReporting.quick_actions || []).map((item) => `<li>${{item}}</li>`).join('') || '<li>No quick actions suggested yet.</li>';
+      document.getElementById('linuxStabilityClues').innerHTML = (faultReporting.stability_clues || []).map((item) => `<li>${{item}}</li>`).join('') || '<li>No Linux stability clues collected yet.</li>';
       const memtestInfo = status.memtest_info || {{}};
       document.getElementById('memtestHint').textContent = `memtester ${{memtestInfo.installed ? 'is installed' : 'is not installed'}}. Free RAM: ${{memtestInfo.available_mb || 0}} MB. Suggested test: ${{memtestInfo.recommended_label || '1024M'}} x ${{memtestInfo.recommended_loops || 2}}.`;
       document.getElementById('memtest_size_mb').value = memtestInfo.recommended_mb || 1024;
@@ -2191,6 +2487,18 @@ def render_page(status: Dict[str, Any]) -> str:
       }}
     }}
 
+    function updateEventLegend() {{
+      const counts = latestMetricEvents.reduce((acc, item) => {{
+        const kind = item.kind || 'other';
+        acc[kind] = (acc[kind] || 0) + 1;
+        return acc;
+      }}, {{}});
+      document.getElementById('legendTemp').innerHTML = '<span class="chart-event-dot temp"></span>Temperature';
+      document.getElementById('legendCommand').innerHTML = '<span class="chart-event-dot command"></span>Watchdog reboot command (' + (counts.command || 0) + ')';
+      document.getElementById('legendDetected').innerHTML = '<span class="chart-event-dot detected"></span>Detected or unexpected reboot (' + (counts.detected || 0) + ')';
+      document.getElementById('legendNote').innerHTML = '<span class="chart-event-dot note"></span>Reboot counts acknowledged (' + (counts.note || 0) + ')';
+    }}
+
     async function fetchStatus() {{
       const response = await fetch('/api/status' + authQuery);
       render(await response.json());
@@ -2210,6 +2518,7 @@ def render_page(status: Dict[str, Any]) -> str:
       const payload = await response.json();
       latestMetrics = payload.points || [];
       latestMetricEvents = payload.events || [];
+      updateEventLegend();
       drawMetrics(latestMetrics);
     }}
 
@@ -2268,6 +2577,8 @@ def render_page(status: Dict[str, Any]) -> str:
         web_port: Number(document.getElementById('web_port').value || 80),
         web_token: document.getElementById('web_token').value.trim(),
         network_restart_command: document.getElementById('network_restart_command').value.trim(),
+        teamviewer_id_command: document.getElementById('teamviewer_id_command').value.trim(),
+        teamviewer_password_reset_command: document.getElementById('teamviewer_password_reset_command').value.trim(),
         internet_hosts: parseLines('internet_hosts'),
         systemd_services: parseLines('systemd_services'),
         tcp_targets: parseTcpTargets()
@@ -2288,8 +2599,16 @@ def render_page(status: Dict[str, Any]) -> str:
       }});
       if (!response.ok) {{
         const payload = await response.json().catch(() => ({{ message: 'Action failed.' }}));
+        if (action === 'reset_teamviewer_password') {{
+          document.getElementById('teamviewerResetResult').textContent = payload.detail ? `${{payload.message}} (${{payload.detail}})` : (payload.message || 'Action failed.');
+        }}
         alert(payload.message || 'Action failed.');
         return;
+      }}
+      const payload = await response.json().catch(() => ({{ ok: true }}));
+      if (action === 'reset_teamviewer_password') {{
+        const detail = payload.password ? `New password: ${{payload.password}}` : (payload.message || 'Password reset complete.');
+        document.getElementById('teamviewerResetResult').textContent = detail;
       }}
       await fetchStatus();
     }}
@@ -2498,6 +2817,10 @@ class Handler(BaseHTTPRequestHandler):
                 with append_path.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps({"ts": now_iso(), "event": "reboot_counts_acknowledged"}, sort_keys=True) + "\n")
                 self._send_json({"ok": True, "action": action, "message": "Reboot counts acknowledged."})
+                return
+            if action == "reset_teamviewer_password":
+                result = reset_teamviewer_password(load_config())
+                self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
                 return
             marker = action_map.get(action)
             if not marker:
