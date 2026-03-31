@@ -475,6 +475,7 @@ def teamviewer_status_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     installed = command_exists("teamviewer")
     daemon_running = False
     gui_running = False
+    id_permission_issue = False
 
     daemon_check = run_shell("pgrep -fa teamviewerd", timeout=5)
     if daemon_check["ok"] and daemon_check["output"]:
@@ -496,6 +497,7 @@ def teamviewer_status_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         info_result = run_shell(command, timeout=15)
         info_output = info_result["output"]
         parsed_info = parse_teamviewer_info(info_output)
+        id_permission_issue = "permission denied" in info_output.lower() and "global.conf" in info_output.lower()
         if not daemon_running and ("daemon" in info_output.lower() or "ready" in info_output.lower()):
             daemon_running = True
     if not parsed_info.get("version") and installed:
@@ -518,6 +520,8 @@ def teamviewer_status_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         status_text += ", GUI running"
     elif installed:
         status_text += ", GUI not running"
+    if id_permission_issue:
+        status_text += ", ID needs elevated read access"
 
     summary_parts = []
     if not installed:
@@ -528,6 +532,8 @@ def teamviewer_status_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         summary_parts.append("daemon not running")
     if gui_running:
         summary_parts.append("GUI running")
+    if id_permission_issue:
+        summary_parts.append("ID blocked by permissions")
     if parsed_info.get("id"):
         summary_parts.append(f"ID {parsed_info['id']}")
 
@@ -535,12 +541,13 @@ def teamviewer_status_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         "installed": installed,
         "daemon_running": daemon_running,
         "gui_running": gui_running,
-        "id": parsed_info.get("id", ""),
+        "id": parsed_info.get("id", "") or ("Permission denied" if id_permission_issue else ""),
         "version": parsed_info.get("version", ""),
         "status_text": status_text,
         "device": parsed_info.get("device", ""),
         "summary": ", ".join(summary_parts) if summary_parts else "No TeamViewer information available.",
         "raw_output": info_output[:1000],
+        "id_permission_issue": id_permission_issue,
         "reset_supported": installed and bool(str(config.get("teamviewer_password_reset_command", "")).strip()),
     }
 
@@ -2544,7 +2551,7 @@ def render_page(status: Dict[str, Any]) -> str:
       teamviewerGuiBadge.className = `badge ${{teamviewer.gui_running ? '' : 'warn'}}`;
       teamviewerGuiBadge.textContent = teamviewer.gui_running ? 'GUI running' : 'GUI not running';
       document.getElementById('teamviewerSummary').textContent = teamviewer.summary || 'No TeamViewer information available.';
-      document.getElementById('teamviewerId').textContent = teamviewer.id || 'unknown';
+      document.getElementById('teamviewerId').textContent = teamviewer.id || (teamviewer.id_permission_issue ? 'Permission denied' : 'unknown');
       document.getElementById('teamviewerVersion').textContent = teamviewer.version || 'unknown';
       document.getElementById('teamviewerStatus').textContent = teamviewer.status_text || 'unknown';
       document.getElementById('teamviewerResetButton').disabled = !teamviewer.reset_supported;
