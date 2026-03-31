@@ -1992,6 +1992,7 @@ def render_page(status: Dict[str, Any]) -> str:
         <button class="secondary" onclick="runAction('snapshot')">Capture snapshot</button>
         <button class="warnbtn" onclick="runAction('restart_network')">Restart network</button>
         <button class="secondary" onclick="runAction('update_watchdog')">Update from GitHub</button>
+        <button class="secondary" onclick="hardRefreshPage()">Hard refresh page</button>
         <div class="update-row">
           <span class="badge {'warn' if status['update_status'].get('state') == 'running' else ('danger' if status['update_status'].get('state') == 'failed' else '')}" id="updateState">{html.escape(str(status["update_status"].get("state", "idle")).title())}</span>
           <span id="updateMessage">{html.escape(str(status["update_status"].get("message", "No web update run yet.")))}</span>
@@ -2399,6 +2400,12 @@ def render_page(status: Dict[str, Any]) -> str:
       document.querySelectorAll('.tab-panel').forEach((panel) => {{
         panel.classList.toggle('active', panel.dataset.tabPanel === name);
       }});
+    }}
+
+    function hardRefreshPage() {{
+      const url = new URL(window.location.href);
+      url.searchParams.set('_refresh', String(Date.now()));
+      window.location.replace(url.toString());
     }}
 
     function badge(ok) {{
