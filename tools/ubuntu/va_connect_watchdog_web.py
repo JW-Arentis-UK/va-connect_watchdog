@@ -552,15 +552,20 @@ def teamviewer_status_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def reset_teamviewer_password(config: Dict[str, Any]) -> Dict[str, Any]:
+def reset_teamviewer_password(config: Dict[str, Any], requested_password: str = "") -> Dict[str, Any]:
     command_template = str(config.get("teamviewer_password_reset_command", "")).strip()
     if not command_exists("teamviewer"):
         return {"ok": False, "message": "TeamViewer CLI is not installed on this unit."}
     if not command_template:
         return {"ok": False, "message": "No TeamViewer password reset command is configured."}
 
-    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
-    password = "".join(secrets.choice(alphabet) for _ in range(10))
+    password = requested_password.strip()
+    if password:
+        if len(password) < 6:
+            return {"ok": False, "message": "Choose a TeamViewer password with at least 6 characters."}
+    else:
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+        password = "".join(secrets.choice(alphabet) for _ in range(10))
     command = command_template.replace("{password}", shlex.quote(password))
     result = run_shell(command, timeout=20)
     if not result["ok"]:
@@ -2025,7 +2030,12 @@ def render_page(status: Dict[str, Any]) -> str:
         <p><strong>ID:</strong> <span id="teamviewerId">{html.escape(str(status.get("teamviewer", {}).get("id", "unknown")))}</span></p>
         <p><strong>Version:</strong> <span id="teamviewerVersion">{html.escape(str(status.get("teamviewer", {}).get("version", "unknown")))}</span></p>
         <p><strong>Status:</strong> <span id="teamviewerStatus">{html.escape(str(status.get("teamviewer", {}).get("status_text", "unknown")))}</span></p>
+        <div class="field">
+          <label for="teamviewerManualPassword">TeamViewer password</label>
+          <input id="teamviewerManualPassword" type="text" placeholder="Enter password or leave blank to generate">
+        </div>
         <div class="mini-meta">
+          <button class="secondary" id="teamviewerSetButton" onclick="setTeamviewerPassword()">Set password</button>
           <button class="secondary" id="teamviewerStartButton" onclick="runAction('start_teamviewer')">Start TeamViewer</button>
           <button class="secondary" id="teamviewerRestartButton" onclick="runAction('restart_teamviewer')">Restart TeamViewer</button>
           <button class="secondary" id="teamviewerResetButton" onclick="runAction('reset_teamviewer_password')">Reset TeamViewer password</button>
@@ -2882,11 +2892,11 @@ def render_page(status: Dict[str, Any]) -> str:
       await fetchStatus();
     }}
 
-    async function runAction(action) {{
+    async function runAction(action, extraPayload = {{}}) {{
       const response = await fetch('/api/action' + authQuery, {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
-        body: JSON.stringify({{ action }})
+        body: JSON.stringify({{ action, ...extraPayload }})
       }});
       if (!response.ok) {{
         const payload = await response.json().catch(() => ({{ message: 'Action failed.' }}));
@@ -2902,6 +2912,11 @@ def render_page(status: Dict[str, Any]) -> str:
         document.getElementById('teamviewerResetResult').textContent = detail;
       }}
       await fetchStatus();
+    }}
+
+    async function setTeamviewerPassword() {{
+      const password = document.getElementById('teamviewerManualPassword').value.trim();
+      await runAction('reset_teamviewer_password', {{ password }});
     }}
 
     async function exportIncident() {{
@@ -3110,7 +3125,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "action": action, "message": "Reboot counts acknowledged."})
                 return
             if action == "reset_teamviewer_password":
-                result = reset_teamviewer_password(load_config())
+                result = reset_teamviewer_password(load_config(), str(data.get("password", "")))
                 self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
                 return
             if action == "start_teamviewer":
