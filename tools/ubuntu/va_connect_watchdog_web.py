@@ -2289,7 +2289,7 @@ def render_page(status: Dict[str, Any]) -> str:
           </div>
           <div class="field">
             <label for="teamviewer_password_reset_command">TeamViewer password reset command</label>
-            <input id="teamviewer_password_reset_command" type="text" value="{html.escape(str(cfg.get("teamviewer_password_reset_command", "teamviewer passwd {password}")))}">
+            <input id="teamviewer_password_reset_command" type="text" value="{html.escape(str(cfg.get("teamviewer_password_reset_command", "teamviewer passwd {{password}}")))}">
           </div>
           <div class="field">
             <label for="teamviewer_start_command">TeamViewer start command</label>
@@ -2407,7 +2407,7 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('web_token').value = status.config.web_token || '';
       document.getElementById('network_restart_command').value = status.config.network_restart_command || '';
       document.getElementById('teamviewer_id_command').value = status.config.teamviewer_id_command || 'teamviewer info';
-      document.getElementById('teamviewer_password_reset_command').value = status.config.teamviewer_password_reset_command || 'teamviewer passwd {password}';
+      document.getElementById('teamviewer_password_reset_command').value = status.config.teamviewer_password_reset_command || 'teamviewer passwd {{password}}';
       document.getElementById('teamviewer_start_command').value = status.config.teamviewer_start_command || 'systemctl start teamviewerd';
       document.getElementById('teamviewer_restart_command').value = status.config.teamviewer_restart_command || 'systemctl restart teamviewerd';
       if (!document.getElementById('export_since').value) {{
