@@ -450,7 +450,7 @@ def hardware_review_payload(state: Dict[str, Any]) -> Dict[str, Any]:
 def parse_teamviewer_info(output: str) -> Dict[str, str]:
     parsed = {"id": "", "version": "", "status": "", "device": ""}
     for raw_line in output.splitlines():
-        line = raw_line.strip()
+        line = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", raw_line).replace("\u25cf", " ").strip()
         if not line:
             continue
         lower = line.lower()
@@ -458,6 +458,10 @@ def parse_teamviewer_info(output: str) -> Dict[str, str]:
             match = re.search(r"\b(?:id|teamviewer id)\b[^0-9]*([0-9][0-9 ]{5,})", line, re.IGNORECASE)
             if match:
                 parsed["id"] = re.sub(r"\s+", "", match.group(1))
+            else:
+                loose_match = re.search(r"\b([0-9]{7,12})\b", line)
+                if loose_match:
+                    parsed["id"] = loose_match.group(1)
         if not parsed["version"] and "version" in lower:
             parsed["version"] = line.split(":", 1)[1].strip() if ":" in line else line
         if not parsed["status"] and any(term in lower for term in ("status", "state", "ready", "disabled", "daemon")):
@@ -478,6 +482,12 @@ def teamviewer_status_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     gui_check = run_shell("pgrep -fa TeamViewer", timeout=5)
     if gui_check["ok"] and gui_check["output"]:
         gui_running = True
+    daemon_state = "running" if daemon_running else "stopped"
+    if command_exists("systemctl"):
+        daemon_state_result = run_shell("systemctl is-active teamviewerd.service || systemctl is-active teamviewer.service", timeout=5)
+        cleaned_state = daemon_state_result["output"].splitlines()[0].strip().lower() if daemon_state_result["output"] else ""
+        if cleaned_state in {"active", "inactive", "failed", "activating", "deactivating"}:
+            daemon_state = cleaned_state
 
     info_output = ""
     parsed_info: Dict[str, str] = {"id": "", "version": "", "status": "", "device": ""}
@@ -488,6 +498,26 @@ def teamviewer_status_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         parsed_info = parse_teamviewer_info(info_output)
         if not daemon_running and ("daemon" in info_output.lower() or "ready" in info_output.lower()):
             daemon_running = True
+    if not parsed_info.get("version") and installed:
+        version_result = run_shell("teamviewer --version", timeout=10)
+        parsed_version = parse_teamviewer_info(version_result["output"])
+        parsed_info["version"] = parsed_version.get("version", "") or version_result["output"].splitlines()[0].strip()
+    if not parsed_info.get("version") and command_exists("dpkg-query"):
+        dpkg_result = run_shell("dpkg-query -W -f='${Version}' teamviewer", timeout=10)
+        if dpkg_result["ok"] and dpkg_result["output"]:
+            parsed_info["version"] = dpkg_result["output"].splitlines()[0].strip()
+
+    status_text = "Daemon running" if daemon_running else "Daemon stopped"
+    if daemon_state == "active":
+        status_text = "Daemon active"
+    elif daemon_state == "failed":
+        status_text = "Daemon failed"
+    elif daemon_state not in {"running", "stopped"}:
+        status_text = f"Daemon {daemon_state}"
+    if gui_running:
+        status_text += ", GUI running"
+    elif installed:
+        status_text += ", GUI not running"
 
     summary_parts = []
     if not installed:
@@ -507,7 +537,7 @@ def teamviewer_status_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         "gui_running": gui_running,
         "id": parsed_info.get("id", ""),
         "version": parsed_info.get("version", ""),
-        "status_text": parsed_info.get("status", "") or ("Running" if daemon_running else "Not running"),
+        "status_text": status_text,
         "device": parsed_info.get("device", ""),
         "summary": ", ".join(summary_parts) if summary_parts else "No TeamViewer information available.",
         "raw_output": info_output[:1000],
