@@ -74,6 +74,8 @@ def load_config() -> Dict[str, Any]:
         "systemd_services": [],
         "teamviewer_id_command": "teamviewer info",
         "teamviewer_password_reset_command": "teamviewer passwd {password}",
+        "teamviewer_start_command": "systemctl start teamviewerd",
+        "teamviewer_restart_command": "systemctl restart teamviewerd",
     }
     merged = {**defaults, **config}
     merged["web_port"] = int(merged["web_port"])
@@ -200,6 +202,8 @@ def sanitize_patch(data: Dict[str, Any]) -> Dict[str, Any]:
         "network_restart_command",
         "teamviewer_id_command",
         "teamviewer_password_reset_command",
+        "teamviewer_start_command",
+        "teamviewer_restart_command",
     ]
 
     for key in bool_keys:
@@ -536,6 +540,39 @@ def reset_teamviewer_password(config: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def run_teamviewer_command(config: Dict[str, Any], action: str) -> Dict[str, Any]:
+    key = "teamviewer_start_command" if action == "start" else "teamviewer_restart_command"
+    command = str(config.get(key, "")).strip()
+    if not command:
+        return {"ok": False, "message": f"No TeamViewer {action} command is configured."}
+    result = run_shell(command, timeout=20)
+    if not result["ok"]:
+        return {"ok": False, "message": f"TeamViewer {action} failed.", "detail": result["output"][:500]}
+    return {"ok": True, "message": f"TeamViewer {action} command sent.", "detail": result["output"][:500]}
+
+
+def clue_counter_payload(hardware_review: Dict[str, Any], crash_review: Dict[str, Any]) -> List[Dict[str, Any]]:
+    lines = [
+        str(line).lower()
+        for line in [
+            *(hardware_review.get("warnings", []) or []),
+            *(crash_review.get("system_lines_all", []) or []),
+            *(crash_review.get("kernel_lines_all", []) or []),
+        ]
+    ]
+    categories = [
+        ("igc / NIC", ("igc", "link is down", "carrier", "pcie link", "detached", "enp3s0")),
+        ("EDAC / memory", ("edac", "memory error", "machine check", "ibecc", "mce")),
+        ("Storage", ("nvme", "i/o error", "buffer i/o", "ext4", "xfs", "ata")),
+        ("App / service", ("teamviewer", "bridge", "esg", "sysops", "segfault", "oom", "killed process")),
+    ]
+    counters: List[Dict[str, Any]] = []
+    for label, terms in categories:
+        matches = [line for line in lines if any(term in line for term in terms)]
+        counters.append({"label": label, "count": len(matches), "state": "hot" if matches else "clear"})
+    return counters
+
+
 def fault_reporting_payload(
     state: Dict[str, Any],
     checks: Dict[str, Any],
@@ -559,9 +596,14 @@ def fault_reporting_payload(
         impact = "The unit is up now, but it has recorded unexpected reboot activity."
 
     primary = suspect_scores[0] if suspect_scores else {"label": "No clear suspect yet", "score": 0, "reasons": []}
-    plain_summary = f"{impact} Top suspect: {primary.get('label', 'unknown')}."
+    short_status = "Healthy now"
+    if state.get("fault_active"):
+        short_status = "Fault active now"
+    elif reboot_counts.get("unexpected"):
+        short_status = "Recovered but unexpected reboot seen"
+    plain_summary = f"{short_status}. Top suspect: {primary.get('label', 'unknown')}."
     if primary.get("score", 0) <= 0:
-        plain_summary = impact + " No suspect category has strong evidence yet."
+        plain_summary = f"{short_status}. No suspect category has strong evidence yet."
 
     stability_clues = []
     if any(term in combined_text for term in ("igc", "link is down", "carrier", "pcie link", "detached")):
@@ -592,6 +634,7 @@ def fault_reporting_payload(
         quick_actions.append("Watch the timeline and chart for the next fault transition, then compare it with the previous-boot review.")
 
     return {
+        "headline": short_status,
         "summary": plain_summary,
         "impact": impact,
         "top_suspect": primary,
@@ -1039,6 +1082,7 @@ def status_payload() -> Dict[str, Any]:
     memtest_status = normalize_memtest_status(read_json(MEMTEST_STATUS_PATH, {"state": "idle"}))
     hw_identity = hardware_identity()
     teamviewer = teamviewer_status_payload(config)
+    clue_counters = clue_counter_payload(hardware_payload, crash_payload)
     fault_reporting = fault_reporting_payload(
         state,
         checks,
@@ -1061,6 +1105,7 @@ def status_payload() -> Dict[str, Any]:
         "reboot_counts": reboot_counts,
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "teamviewer": teamviewer,
+        "clue_counters": clue_counters,
         "fault_reporting": fault_reporting,
         "next_steps": next_steps,
         "hardware_review": hardware_payload,
@@ -1196,6 +1241,27 @@ def render_page(status: Dict[str, Any]) -> str:
       margin-top: 10px;
       color: #a8bfce;
       font-size: 0.86rem;
+    }}
+    .counter-strip {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }}
+    .counter-chip {{
+      border: 1px solid rgba(122, 150, 176, 0.18);
+      border-radius: 12px;
+      padding: 8px 10px;
+      background: rgba(13, 22, 30, 0.8);
+    }}
+    .counter-chip.hot {{
+      border-color: rgba(171, 123, 42, 0.38);
+      background: rgba(76, 49, 17, 0.35);
+    }}
+    .counter-chip .count {{
+      font-size: 1.1rem;
+      font-weight: 800;
+      color: #f0f6fb;
     }}
     .panel {{
       background: rgba(18, 29, 39, 0.9);
@@ -1697,11 +1763,17 @@ def render_page(status: Dict[str, Any]) -> str:
     <div class="compact-grid">
       <section class="panel">
         <h2>Fault summary</h2>
+        <div class="mini-meta">
+          <span class="badge" id="faultHeadline">{html.escape(str(status.get("fault_reporting", {}).get("headline", "Healthy now")))}</span>
+        </div>
         <p><strong id="faultSummaryText">{html.escape(str(status.get("fault_reporting", {}).get("summary", "No summary yet.")))}</strong></p>
         <p id="faultImpactText">{html.escape(str(status.get("fault_reporting", {}).get("impact", "")))}</p>
         <div class="mini-meta">
           <span class="badge" id="faultTopSuspectBadge">{html.escape(str((status.get("fault_reporting", {}).get("top_suspect", {}) or {}).get("label", "No top suspect")))}</span>
           <span class="badge" id="faultTopSuspectScore">Score {int((status.get("fault_reporting", {}).get("top_suspect", {}) or {}).get("score", 0) or 0)}</span>
+        </div>
+        <div class="counter-strip" id="clueCounterStrip">
+          {"".join(f"<div class='counter-chip {'hot' if int(item.get('count', 0) or 0) else ''}'><div class='stat-label'>{html.escape(str(item.get('label', 'Clue')))}</div><div class='count'>{int(item.get('count', 0) or 0)}</div></div>" for item in status.get("clue_counters", []))}
         </div>
         <ul class="summary-list" id="faultQuickActions">
           {"".join(f"<li>{html.escape(item)}</li>" for item in status.get("fault_reporting", {}).get("quick_actions", []))}
@@ -1816,7 +1888,11 @@ def render_page(status: Dict[str, Any]) -> str:
         <p><strong>ID:</strong> <span id="teamviewerId">{html.escape(str(status.get("teamviewer", {}).get("id", "unknown")))}</span></p>
         <p><strong>Version:</strong> <span id="teamviewerVersion">{html.escape(str(status.get("teamviewer", {}).get("version", "unknown")))}</span></p>
         <p><strong>Status:</strong> <span id="teamviewerStatus">{html.escape(str(status.get("teamviewer", {}).get("status_text", "unknown")))}</span></p>
-        <button class="secondary" id="teamviewerResetButton" onclick="runAction('reset_teamviewer_password')">Reset TeamViewer password</button>
+        <div class="mini-meta">
+          <button class="secondary" id="teamviewerStartButton" onclick="runAction('start_teamviewer')">Start TeamViewer</button>
+          <button class="secondary" id="teamviewerRestartButton" onclick="runAction('restart_teamviewer')">Restart TeamViewer</button>
+          <button class="secondary" id="teamviewerResetButton" onclick="runAction('reset_teamviewer_password')">Reset TeamViewer password</button>
+        </div>
         <p class="operator-note" id="teamviewerResetResult">Password reset generates a new one-time password on the unit and shows it here.</p>
       </section>
       <section class="panel checks-panel">
@@ -1977,6 +2053,7 @@ def render_page(status: Dict[str, Any]) -> str:
             <h3>TeamViewer</h3>
             <p>This panel shows whether TeamViewer is installed, whether the daemon is up, and the detected TeamViewer ID.</p>
             <p><strong>Reset TeamViewer password</strong> asks the local TeamViewer CLI to generate a new password and shows it immediately so you can reconnect.</p>
+            <p><strong>Start</strong> and <strong>Restart TeamViewer</strong> send daemon control commands for remote recovery when TeamViewer itself is the problem.</p>
           </section>
           <section class="help-card">
             <h3>Latest Checks</h3>
@@ -2070,6 +2147,14 @@ def render_page(status: Dict[str, Any]) -> str:
           <div class="field">
             <label for="teamviewer_password_reset_command">TeamViewer password reset command</label>
             <input id="teamviewer_password_reset_command" type="text" value="{html.escape(str(cfg.get("teamviewer_password_reset_command", "teamviewer passwd {password}")))}">
+          </div>
+          <div class="field">
+            <label for="teamviewer_start_command">TeamViewer start command</label>
+            <input id="teamviewer_start_command" type="text" value="{html.escape(str(cfg.get("teamviewer_start_command", "systemctl start teamviewerd")))}">
+          </div>
+          <div class="field">
+            <label for="teamviewer_restart_command">TeamViewer restart command</label>
+            <input id="teamviewer_restart_command" type="text" value="{html.escape(str(cfg.get("teamviewer_restart_command", "systemctl restart teamviewerd")))}">
           </div>
         </div>
         <div class="field" style="margin-top:12px;">
@@ -2180,6 +2265,8 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('network_restart_command').value = status.config.network_restart_command || '';
       document.getElementById('teamviewer_id_command').value = status.config.teamviewer_id_command || 'teamviewer info';
       document.getElementById('teamviewer_password_reset_command').value = status.config.teamviewer_password_reset_command || 'teamviewer passwd {password}';
+      document.getElementById('teamviewer_start_command').value = status.config.teamviewer_start_command || 'systemctl start teamviewerd';
+      document.getElementById('teamviewer_restart_command').value = status.config.teamviewer_restart_command || 'systemctl restart teamviewerd';
       if (!document.getElementById('export_since').value) {{
         const startup = status.state.last_startup_at || '';
         if (startup) {{
@@ -2293,10 +2380,13 @@ def render_page(status: Dict[str, Any]) -> str:
       }}
       const faultReporting = status.fault_reporting || {{}};
       const topSuspect = faultReporting.top_suspect || {{}};
+      const clueCounters = status.clue_counters || [];
+      document.getElementById('faultHeadline').textContent = faultReporting.headline || 'Healthy now';
       document.getElementById('faultSummaryText').textContent = faultReporting.summary || 'No summary yet.';
       document.getElementById('faultImpactText').textContent = faultReporting.impact || '';
       document.getElementById('faultTopSuspectBadge').textContent = topSuspect.label || 'No top suspect';
       document.getElementById('faultTopSuspectScore').textContent = `Score ${{topSuspect.score || 0}}`;
+      document.getElementById('clueCounterStrip').innerHTML = clueCounters.map((item) => `<div class="counter-chip ${{item.count ? 'hot' : ''}}"><div class="stat-label">${{item.label || 'Clue'}}</div><div class="count">${{item.count || 0}}</div></div>`).join('') || '<div class="counter-chip"><div class="stat-label">Clues</div><div class="count">0</div></div>';
       document.getElementById('faultQuickActions').innerHTML = (faultReporting.quick_actions || []).map((item) => `<li>${{item}}</li>`).join('') || '<li>No quick actions suggested yet.</li>';
       document.getElementById('linuxStabilityClues').innerHTML = (faultReporting.stability_clues || []).map((item) => `<li>${{item}}</li>`).join('') || '<li>No Linux stability clues collected yet.</li>';
       const memtestInfo = status.memtest_info || {{}};
@@ -2579,6 +2669,8 @@ def render_page(status: Dict[str, Any]) -> str:
         network_restart_command: document.getElementById('network_restart_command').value.trim(),
         teamviewer_id_command: document.getElementById('teamviewer_id_command').value.trim(),
         teamviewer_password_reset_command: document.getElementById('teamviewer_password_reset_command').value.trim(),
+        teamviewer_start_command: document.getElementById('teamviewer_start_command').value.trim(),
+        teamviewer_restart_command: document.getElementById('teamviewer_restart_command').value.trim(),
         internet_hosts: parseLines('internet_hosts'),
         systemd_services: parseLines('systemd_services'),
         tcp_targets: parseTcpTargets()
@@ -2599,15 +2691,15 @@ def render_page(status: Dict[str, Any]) -> str:
       }});
       if (!response.ok) {{
         const payload = await response.json().catch(() => ({{ message: 'Action failed.' }}));
-        if (action === 'reset_teamviewer_password') {{
+        if (action === 'reset_teamviewer_password' || action === 'start_teamviewer' || action === 'restart_teamviewer') {{
           document.getElementById('teamviewerResetResult').textContent = payload.detail ? `${{payload.message}} (${{payload.detail}})` : (payload.message || 'Action failed.');
         }}
         alert(payload.message || 'Action failed.');
         return;
       }}
       const payload = await response.json().catch(() => ({{ ok: true }}));
-      if (action === 'reset_teamviewer_password') {{
-        const detail = payload.password ? `New password: ${{payload.password}}` : (payload.message || 'Password reset complete.');
+      if (action === 'reset_teamviewer_password' || action === 'start_teamviewer' || action === 'restart_teamviewer') {{
+        const detail = payload.password ? `New password: ${{payload.password}}` : (payload.message || 'TeamViewer action complete.');
         document.getElementById('teamviewerResetResult').textContent = detail;
       }}
       await fetchStatus();
@@ -2820,6 +2912,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if action == "reset_teamviewer_password":
                 result = reset_teamviewer_password(load_config())
+                self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+                return
+            if action == "start_teamviewer":
+                result = run_teamviewer_command(load_config(), "start")
+                self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+                return
+            if action == "restart_teamviewer":
+                result = run_teamviewer_command(load_config(), "restart")
                 self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
                 return
             marker = action_map.get(action)
