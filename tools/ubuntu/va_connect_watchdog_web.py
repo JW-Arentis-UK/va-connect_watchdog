@@ -2620,11 +2620,11 @@ def render_page(status: Dict[str, Any]) -> str:
           </div>
           <div class="field">
             <label for="hik_people_count_result_path">Result path</label>
-            <input id="hik_people_count_result_path" type="text" value="{html.escape(str(cfg.get("hik_people_count_result_path", "/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/result")))}">
+            <input id="hik_people_count_result_path" type="text" value="{html.escape(str(cfg.get("hik_people_count_result_path", "/ISAPI/Intelligent/channels/{{channel}}/framesPeopleCounting/result")))}">
           </div>
           <div class="field">
             <label for="hik_people_count_capabilities_path">Capabilities path</label>
-            <input id="hik_people_count_capabilities_path" type="text" value="{html.escape(str(cfg.get("hik_people_count_capabilities_path", "/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/capabilities")))}">
+            <input id="hik_people_count_capabilities_path" type="text" value="{html.escape(str(cfg.get("hik_people_count_capabilities_path", "/ISAPI/Intelligent/channels/{{channel}}/framesPeopleCounting/capabilities")))}">
           </div>
         </div>
         <button class="secondary" onclick="saveHikConfig()">Save Hik settings</button>
@@ -2910,8 +2910,8 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('hik_username').value = status.config.hik_username || '';
       document.getElementById('hik_password').value = status.config.hik_password || '';
       document.getElementById('hik_channel').value = status.config.hik_channel || 1;
-      document.getElementById('hik_people_count_result_path').value = status.config.hik_people_count_result_path || '/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/result';
-      document.getElementById('hik_people_count_capabilities_path').value = status.config.hik_people_count_capabilities_path || '/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/capabilities';
+      document.getElementById('hik_people_count_result_path').value = status.config.hik_people_count_result_path || '/ISAPI/Intelligent/channels/{{channel}}/framesPeopleCounting/result';
+      document.getElementById('hik_people_count_capabilities_path').value = status.config.hik_people_count_capabilities_path || '/ISAPI/Intelligent/channels/{{channel}}/framesPeopleCounting/capabilities';
       if (!document.getElementById('export_since').value) {{
         const startup = status.state.last_startup_at || '';
         if (startup) {{
