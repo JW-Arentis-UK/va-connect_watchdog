@@ -29,6 +29,8 @@ EXPORT_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-export-status.j
 EXPORT_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-export.log")
 MEMTEST_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-memtest-status.json")
 MEMTEST_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-memtest.log")
+SPEEDTEST_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-speedtest-status.json")
+SPEEDTEST_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-speedtest.log")
 SNAPSHOT_DIR = Path("/var/log/va-connect-site-watchdog/snapshots")
 
 
@@ -1087,6 +1089,19 @@ def safe_memtest_file(kind: str) -> Optional[Path]:
     return path
 
 
+def safe_speedtest_file(kind: str) -> Optional[Path]:
+    speedtest_status = read_json(SPEEDTEST_STATUS_PATH, {})
+    candidate = ""
+    if kind == "log":
+        candidate = str(speedtest_status.get("log_path", "")).strip()
+    if not candidate:
+        return None
+    path = Path(candidate)
+    if not path.exists() or not path.is_file():
+        return None
+    return path
+
+
 def normalize_memtest_status(memtest_status: Dict[str, Any]) -> Dict[str, Any]:
     status = dict(memtest_status or {})
     if status.get("state") != "running":
@@ -1099,6 +1114,21 @@ def normalize_memtest_status(memtest_status: Dict[str, Any]) -> Dict[str, Any]:
         status["finished_at"] = status.get("finished_at") or now_iso()
         status["message"] = "Memtester ran too long or got stuck. Check web-memtest.log."
         write_json(MEMTEST_STATUS_PATH, status)
+    return status
+
+
+def normalize_speedtest_status(speedtest_status: Dict[str, Any]) -> Dict[str, Any]:
+    status = dict(speedtest_status or {})
+    if status.get("state") != "running":
+        return status
+
+    started_at = parse_iso(str(status.get("started_at", "")))
+    now = datetime.utcnow().astimezone()
+    if started_at and (now - started_at).total_seconds() > 10 * 60:
+        status["state"] = "failed"
+        status["finished_at"] = status.get("finished_at") or now_iso()
+        status["message"] = "Speed test ran too long or got stuck. Check web-speedtest.log."
+        write_json(SPEEDTEST_STATUS_PATH, status)
     return status
 
 
@@ -1156,6 +1186,112 @@ def launch_memtest(size_mb: int, loops: int) -> Dict[str, Any]:
     return {"ok": True, "message": "Memory test started.", "status": payload}
 
 
+def launch_speedtest() -> Dict[str, Any]:
+    current = read_json(SPEEDTEST_STATUS_PATH, {})
+    if current.get("state") == "running":
+        return {"ok": False, "message": "Speed test already running."}
+
+    payload = {
+        "state": "running",
+        "started_at": now_iso(),
+        "finished_at": "",
+        "message": "Speed test requested from web UI.",
+        "log_path": str(SPEEDTEST_LOG_PATH),
+        "download_mbps": None,
+        "upload_mbps": None,
+        "cpu_percent": None,
+        "memory_percent": None,
+        "provider": "Cloudflare simple test",
+    }
+    write_json(SPEEDTEST_STATUS_PATH, payload)
+    SPEEDTEST_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    command = (
+        "python3 - <<'PY'\n"
+        "import json, time, urllib.request, urllib.error\n"
+        "from datetime import datetime\n"
+        "from pathlib import Path\n"
+        "status_path = Path('/var/lib/va-connect-site-watchdog/web-speedtest-status.json')\n"
+        "log_path = Path('/var/log/va-connect-site-watchdog/web-speedtest.log')\n"
+        "DOWN_URL = 'https://speed.cloudflare.com/__down?bytes=50000000'\n"
+        "UP_URL = 'https://speed.cloudflare.com/__up'\n"
+        "def read_mem_percent():\n"
+        "    values = {}\n"
+        "    for line in Path('/proc/meminfo').read_text(encoding='utf-8').splitlines():\n"
+        "        key, value = line.split(':', 1)\n"
+        "        values[key] = int(value.strip().split()[0])\n"
+        "    total = values.get('MemTotal', 0)\n"
+        "    available = values.get('MemAvailable', values.get('MemFree', 0))\n"
+        "    return round(((total - available) / total) * 100.0, 2) if total else 0.0\n"
+        "def read_cpu_percent(interval=1.0):\n"
+        "    def sample():\n"
+        "        parts = [int(v) for v in Path('/proc/stat').read_text(encoding='utf-8').splitlines()[0].split()[1:]]\n"
+        "        idle = parts[3] + (parts[4] if len(parts) > 4 else 0)\n"
+        "        total = sum(parts)\n"
+        "        return total, idle\n"
+        "    total1, idle1 = sample()\n"
+        "    time.sleep(interval)\n"
+        "    total2, idle2 = sample()\n"
+        "    total_delta = max(1, total2 - total1)\n"
+        "    idle_delta = max(0, idle2 - idle1)\n"
+        "    return round((1 - (idle_delta / total_delta)) * 100.0, 2)\n"
+        "def run_download():\n"
+        "    start = time.time()\n"
+        "    downloaded = 0\n"
+        "    with urllib.request.urlopen(DOWN_URL, timeout=30) as response:\n"
+        "        while True:\n"
+        "            chunk = response.read(65536)\n"
+        "            if not chunk:\n"
+        "                break\n"
+        "            downloaded += len(chunk)\n"
+        "    elapsed = max(0.001, time.time() - start)\n"
+        "    return round((downloaded * 8 / 1_000_000) / elapsed, 2)\n"
+        "def run_upload():\n"
+        "    payload = b'x' * 5_000_000\n"
+        "    request = urllib.request.Request(UP_URL, data=payload, method='POST')\n"
+        "    start = time.time()\n"
+        "    with urllib.request.urlopen(request, timeout=30) as response:\n"
+        "        response.read()\n"
+        "    elapsed = max(0.001, time.time() - start)\n"
+        "    return round((len(payload) * 8 / 1_000_000) / elapsed, 2)\n"
+        "result = {\n"
+        "    'state': 'failed',\n"
+        "    'finished_at': datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00',\n"
+        "    'message': 'Speed test failed. Check web-speedtest.log.',\n"
+        "}\n"
+        "with log_path.open('ab') as log:\n"
+        "    log.write((f'\\n===== Web speed test started {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
+        "    try:\n"
+        "        download = run_download()\n"
+        "        upload = run_upload()\n"
+        "        cpu = read_cpu_percent()\n"
+        "        memory = read_mem_percent()\n"
+        "        log.write((f'Download Mbps: {download}\\nUpload Mbps: {upload}\\nCPU percent: {cpu}\\nMemory percent: {memory}\\n').encode())\n"
+        "        result.update({\n"
+        "            'state': 'ok',\n"
+        "            'message': 'Speed test completed successfully.',\n"
+        "            'download_mbps': download,\n"
+        "            'upload_mbps': upload,\n"
+        "            'cpu_percent': cpu,\n"
+        "            'memory_percent': memory,\n"
+        "        })\n"
+        "    except Exception as exc:\n"
+        "        log.write((f'ERROR: {type(exc).__name__}: {exc}\\n').encode())\n"
+        "payload = json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
+        "payload.update(result)\n"
+        "payload['return_code'] = 0 if result.get('state') == 'ok' else 1\n"
+        "status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "PY"
+    )
+    subprocess.Popen(
+        ["nohup", "bash", "-lc", command],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return {"ok": True, "message": "Speed test started.", "status": payload}
+
+
 def status_payload() -> Dict[str, Any]:
     state = read_json(STATE_PATH, {})
     config = load_config()
@@ -1208,6 +1344,7 @@ def status_payload() -> Dict[str, Any]:
     update_status = normalize_update_status(read_json(UPDATE_STATUS_PATH, {"state": "idle"}), build_info)
     memtest_info = memtest_recommendation()
     memtest_status = normalize_memtest_status(read_json(MEMTEST_STATUS_PATH, {"state": "idle"}))
+    speedtest_status = normalize_speedtest_status(read_json(SPEEDTEST_STATUS_PATH, {"state": "idle"}))
     hw_identity = hardware_identity()
     teamviewer = teamviewer_status_payload(config)
     clue_counters = clue_counter_payload(hardware_payload, crash_payload)
@@ -1231,6 +1368,7 @@ def status_payload() -> Dict[str, Any]:
         "export_status": read_json(EXPORT_STATUS_PATH, {"state": "idle"}),
         "memtest_status": memtest_status,
         "memtest_info": memtest_info,
+        "speedtest_status": speedtest_status,
         "reboot_counts": reboot_counts,
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "teamviewer": teamviewer,
@@ -1255,6 +1393,8 @@ def status_payload() -> Dict[str, Any]:
             "export_log": str(EXPORT_LOG_PATH),
             "memtest_status": str(MEMTEST_STATUS_PATH),
             "memtest_log": str(MEMTEST_LOG_PATH),
+            "speedtest_status": str(SPEEDTEST_STATUS_PATH),
+            "speedtest_log": str(SPEEDTEST_LOG_PATH),
         },
     }
 
@@ -2019,6 +2159,20 @@ def render_page(status: Dict[str, Any]) -> str:
           <a class="link-btn" id="exportReadmeLink" href="/download/export-readme">Download export README</a>
           <a class="link-btn" id="exportLogLink" href="/download/export-log">Download export log</a>
         </div>
+        <p style="margin-top:12px;"><strong>Speed test</strong></p>
+        <button class="secondary" onclick="runSpeedtest()">Run speed test</button>
+        <div class="update-row">
+          <span class="badge {'warn' if status['speedtest_status'].get('state') == 'running' else ('danger' if status['speedtest_status'].get('state') == 'failed' else '')}" id="speedtestState">{html.escape(str(status["speedtest_status"].get("state", "idle")).title())}</span>
+          <span id="speedtestMessage">{html.escape(str(status["speedtest_status"].get("message", "No web speed test run yet.")))}</span>
+        </div>
+        <p class="hint" id="speedtestMeta">
+          Download {html.escape(str(status["speedtest_status"].get("download_mbps", "unknown")))} Mbps |
+          Upload {html.escape(str(status["speedtest_status"].get("upload_mbps", "unknown")))} Mbps |
+          {html.escape(str(status["speedtest_status"].get("finished_at", "not finished yet")))}
+        </p>
+        <div class="link-row">
+          <a class="link-btn" id="speedtestLogLink" href="/download/speedtest-log">Download speed test log</a>
+        </div>
       </section>
       <section class="panel">
         <h2>TeamViewer</h2>
@@ -2255,6 +2409,7 @@ def render_page(status: Dict[str, Any]) -> str:
             <p><strong>Monitoring enabled</strong> turns automatic watchdog behaviour on or off.</p>
             <p><strong>App auto-restart</strong> allows the watchdog to start the app if it disappears.</p>
             <p><strong>Network restart before reboot</strong> tries the configured network restart command before a reboot. <strong>Reboot allowed</strong> controls whether the watchdog is allowed to reboot the PC.</p>
+            <p><strong>Speed test</strong> runs a simple Cloudflare download/upload check from the codec and records Mbps along with CPU and memory usage at the time.</p>
           </section>
           <section class="help-card">
             <h3>Investigation</h3>
@@ -2616,6 +2771,29 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('memtestMessage').textContent = memtestStatus.message || 'No web memory test run yet.';
       document.getElementById('memtestMeta').textContent = memtestStatus.finished_at ? formatLocalTimestamp(memtestStatus.finished_at) : 'not finished yet';
       document.getElementById('memtestLogLink').style.display = memtestStatus.log_path ? 'inline-block' : 'none';
+      const speedtestStatus = status.speedtest_status || {{}};
+      const speedtestBadge = document.getElementById('speedtestState');
+      speedtestBadge.className = `badge ${{speedtestStatus.state === 'running' ? 'warn' : (speedtestStatus.state === 'failed' ? 'danger' : '')}}`;
+      speedtestBadge.textContent = (speedtestStatus.state || 'idle').toUpperCase();
+      document.getElementById('speedtestMessage').textContent = speedtestStatus.message || 'No web speed test run yet.';
+      const speedtestMetaParts = [];
+      if (speedtestStatus.download_mbps !== null && speedtestStatus.download_mbps !== undefined) {{
+        speedtestMetaParts.push(`Download ${{speedtestStatus.download_mbps}} Mbps`);
+      }}
+      if (speedtestStatus.upload_mbps !== null && speedtestStatus.upload_mbps !== undefined) {{
+        speedtestMetaParts.push(`Upload ${{speedtestStatus.upload_mbps}} Mbps`);
+      }}
+      if (speedtestStatus.cpu_percent !== null && speedtestStatus.cpu_percent !== undefined) {{
+        speedtestMetaParts.push(`CPU ${{speedtestStatus.cpu_percent}}%`);
+      }}
+      if (speedtestStatus.memory_percent !== null && speedtestStatus.memory_percent !== undefined) {{
+        speedtestMetaParts.push(`Memory ${{speedtestStatus.memory_percent}}%`);
+      }}
+      if (speedtestStatus.finished_at) {{
+        speedtestMetaParts.push(formatLocalTimestamp(speedtestStatus.finished_at));
+      }}
+      document.getElementById('speedtestMeta').textContent = speedtestMetaParts.join(' | ') || 'not finished yet';
+      document.getElementById('speedtestLogLink').style.display = speedtestStatus.log_path ? 'inline-block' : 'none';
       document.getElementById('crashReviewFindings').innerHTML = (crashReview.findings || []).length
         ? (crashReview.findings || []).map((line) => `<li>${{line}}</li>`).join('')
         : '<li>No crash-review findings yet.</li>';
@@ -2962,6 +3140,20 @@ def render_page(status: Dict[str, Any]) -> str:
       await fetchStatus();
     }}
 
+    async function runSpeedtest() {{
+      const response = await fetch('/api/speedtest' + authQuery, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{}})
+      }});
+      if (!response.ok) {{
+        const payload = await response.json().catch(() => ({{ message: 'Speed test failed to start.' }}));
+        alert(payload.message || 'Speed test failed to start.');
+        return;
+      }}
+      await fetchStatus();
+    }}
+
     function attachChartHover() {{
       const canvas = document.getElementById('metricsChart');
       const hover = document.getElementById('metricsHover');
@@ -3059,6 +3251,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/download/memtest-log":
             self._send_file(safe_memtest_file("log"), download_name="watchdog-memtest.log")
             return
+        if parsed.path == "/download/speedtest-log":
+            self._send_file(safe_speedtest_file("log"), download_name="watchdog-speedtest.log")
+            return
         if parsed.path in {"/", "/index.html"}:
             body = render_page(status_payload()).encode("utf-8")
             self.send_response(HTTPStatus.OK)
@@ -3104,6 +3299,11 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/memtest":
             data = self._read_json()
             result = launch_memtest(int(data.get("size_mb", 0) or 0), int(data.get("loops", 0) or 0))
+            self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+
+        if parsed.path == "/api/speedtest":
+            result = launch_speedtest()
             self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
             return
 
