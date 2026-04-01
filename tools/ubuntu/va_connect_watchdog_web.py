@@ -1376,6 +1376,16 @@ def normalize_update_status(update_status: Dict[str, Any], build_info: Dict[str,
     if status.get("state") != "running":
         return status
 
+    if status.get("mode") == "check":
+        started_at = parse_iso(str(status.get("started_at", "")))
+        now = datetime.utcnow().astimezone()
+        if started_at and (now - started_at).total_seconds() > 120:
+            status["state"] = "failed"
+            status["finished_at"] = status.get("finished_at") or now_iso()
+            status["message"] = "Update check ran too long. Check web-update.log."
+            write_json(UPDATE_STATUS_PATH, status)
+        return status
+
     started_at = parse_iso(str(status.get("started_at", "")))
     deployed_at = parse_iso(str(build_info.get("deployed_at", "")))
     now = datetime.utcnow().astimezone()
@@ -1396,6 +1406,67 @@ def normalize_update_status(update_status: Dict[str, Any], build_info: Dict[str,
         return status
 
     return status
+
+
+def launch_update_check() -> Dict[str, Any]:
+    current = read_json(UPDATE_STATUS_PATH, {})
+    if current.get("state") == "running":
+        return {"ok": False, "message": "Update task already running."}
+
+    build_info = read_json(BUILD_INFO_PATH, {})
+    payload = {
+        "state": "running",
+        "mode": "check",
+        "started_at": now_iso(),
+        "finished_at": "",
+        "message": "Checking GitHub for updates.",
+        "log_path": str(UPDATE_LOG_PATH),
+        "from_build": str(build_info.get("git_commit", "unknown")),
+        "to_build": "",
+        "update_available": False,
+    }
+    write_json(UPDATE_STATUS_PATH, payload)
+    UPDATE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    command = (
+        "python3 - <<'PY'\n"
+        "import json, subprocess\n"
+        "from datetime import datetime\n"
+        "from pathlib import Path\n"
+        "status_path = Path('/var/lib/va-connect-site-watchdog/web-update-status.json')\n"
+        "log_path = Path('/var/log/va-connect-site-watchdog/web-update.log')\n"
+        "build_info_path = Path('/opt/va-connect-watchdog/build-info.json')\n"
+        "repo_hint = ''\n"
+        "if build_info_path.exists():\n"
+        "    try:\n"
+        "        repo_hint = str(json.loads(build_info_path.read_text(encoding='utf-8')).get('source_repo_dir', '') or '')\n"
+        "    except Exception:\n"
+        "        repo_hint = ''\n"
+        "repo_dir_file = Path('/opt/va-connect-watchdog/repo-dir.txt')\n"
+        "repo_dir = repo_hint.strip() or (repo_dir_file.read_text(encoding='utf-8').strip() if repo_dir_file.exists() else '/home/vsuser/Desktop/va-connect-watchdog')\n"
+        "with log_path.open('ab') as log:\n"
+        "    log.write((f'\\n===== Web update check started {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
+        "    fetch = subprocess.run(['git', '-C', repo_dir, 'fetch', 'origin'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+        "    local = subprocess.run(['git', '-C', repo_dir, 'rev-parse', 'HEAD'], capture_output=True, text=True)\n"
+        "    remote = subprocess.run(['git', '-C', repo_dir, 'rev-parse', 'origin/master'], capture_output=True, text=True)\n"
+        "payload = json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
+        "payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "payload['return_code'] = 0 if fetch.returncode == 0 and local.returncode == 0 and remote.returncode == 0 else 1\n"
+        "payload['from_build'] = local.stdout.strip() or payload.get('from_build', 'unknown')\n"
+        "payload['to_build'] = remote.stdout.strip() or payload.get('to_build', 'unknown')\n"
+        "payload['update_available'] = bool(payload['to_build'] and payload['from_build'] and payload['to_build'] != payload['from_build'])\n"
+        "payload['state'] = 'ok' if payload['return_code'] == 0 else 'failed'\n"
+        "payload['message'] = ('Update available.' if payload['update_available'] else 'Already up to date.') if payload['state'] == 'ok' else 'Update check failed. Check web-update.log.'\n"
+        "status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "PY"
+    )
+    subprocess.Popen(
+        ["nohup", "bash", "-lc", command],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return {"ok": True, "message": "Update check started.", "status": payload}
 
 
 def normalize_export_status(export_status: Dict[str, Any]) -> Dict[str, Any]:
@@ -2679,18 +2750,17 @@ def render_page(status: Dict[str, Any]) -> str:
       min-width: 0;
     }}
     .topbar-actions {{
-      border: 1px solid rgba(129, 154, 175, 0.18);
-      border-radius: 16px;
-      padding: 7px 10px;
-      background: linear-gradient(180deg, rgba(18, 29, 39, 0.96), rgba(13, 22, 31, 0.96));
-      box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
-      flex: 1 1 520px;
-      min-width: 320px;
+      border: 1px solid rgba(129, 154, 175, 0.16);
+      border-radius: 14px;
+      padding: 6px 8px;
+      background: rgba(14, 23, 31, 0.92);
+      flex: 1 1 560px;
+      min-width: 340px;
     }}
     .topbar-strip {{
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
+      gap: 8px;
       align-items: center;
     }}
     .topbar-actions .button-row {{
@@ -2715,13 +2785,11 @@ def render_page(status: Dict[str, Any]) -> str:
       text-align: right;
       font-size: 0.72rem;
     }}
-    .topbar-label {{
-      color: #8ea5b9;
-      font-size: 0.76rem;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin: 0;
-      white-space: nowrap;
+    .topbar-actions .console-box {{
+      flex: 1 1 100%;
+      margin-top: 0;
+      max-height: 84px;
+      font-size: 0.7rem;
     }}
     .inline-fields {{
       display: grid;
@@ -2774,9 +2842,9 @@ def render_page(status: Dict[str, Any]) -> str:
       </div>
       <section class="topbar-actions">
         <div class="topbar-strip">
-          <div class="topbar-label">Page actions</div>
           <div class="button-row">
-            <button class="secondary" onclick="runAction('update_watchdog')">Update from GitHub</button>
+            <button class="secondary" onclick="runAction('check_updates')">Check for updates</button>
+            <button class="secondary" id="updateNowButton" onclick="runAction('update_watchdog')">Update now</button>
             <button class="secondary" onclick="hardRefreshPage()">Hard refresh page</button>
           </div>
           <div class="update-row">
@@ -3853,13 +3921,16 @@ def render_page(status: Dict[str, Any]) -> str:
         : '<li>No extra kernel-log lines extracted yet.</li>';
       const updateState = status.update_status || {{}};
       const updateBadge = document.getElementById('updateState');
+      const updateNowButton = document.getElementById('updateNowButton');
       updateBadge.className = `badge ${{updateState.state === 'running' ? 'warn' : (updateState.state === 'failed' ? 'danger' : '')}}`;
-      updateBadge.textContent = (updateState.state || 'idle').toUpperCase();
+      updateBadge.textContent = ((updateState.mode === 'check' ? 'check' : (updateState.state || 'idle')) || 'idle').toUpperCase();
       document.getElementById('updateMessage').textContent = updateState.message || 'No web update run yet.';
       document.getElementById('updateMeta').textContent = `${{updateState.from_build || 'unknown'}} to ${{updateState.to_build || 'unknown'}} | ${{updateState.finished_at ? formatLocalTimestamp(updateState.finished_at) : 'not finished yet'}}`;
       document.getElementById('updateConsole').textContent = (status.update_console_lines || []).length
         ? (status.update_console_lines || []).join('\n')
         : 'No update progress yet.';
+      updateNowButton.style.display = updateState.update_available ? 'inline-block' : 'none';
+      updateNowButton.disabled = updateState.state === 'running';
       const requiredTools = status.required_tools || {{}};
       const missingImportant = requiredTools.missing_important || [];
       const missingRequired = requiredTools.missing_required || [];
@@ -4530,6 +4601,10 @@ class Handler(BaseHTTPRequestHandler):
             }
             if action == "update_watchdog":
                 result = launch_update()
+                self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT)
+                return
+            if action == "check_updates":
+                result = launch_update_check()
                 self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT)
                 return
             if action == "ack_reboots":
