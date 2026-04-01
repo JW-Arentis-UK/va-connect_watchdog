@@ -2283,6 +2283,27 @@ def render_page(status: Dict[str, Any]) -> str:
       gap: 10px;
       margin-top: 10px;
     }}
+    .overview-top-grid {{
+      display: grid;
+      grid-template-columns: minmax(340px, 1.1fr) minmax(280px, 0.9fr);
+      gap: 10px;
+      margin-top: 10px;
+      align-items: start;
+    }}
+    .overview-main-grid {{
+      display: grid;
+      grid-template-columns: minmax(340px, 0.95fr) minmax(520px, 1.35fr);
+      gap: 10px;
+      margin-top: 10px;
+      align-items: start;
+    }}
+    .overview-bottom-grid {{
+      display: grid;
+      grid-template-columns: minmax(340px, 0.95fr) minmax(360px, 1.05fr);
+      gap: 10px;
+      margin-top: 10px;
+      align-items: start;
+    }}
     .ops-grid {{
       display: grid;
       grid-template-columns: repeat(4, minmax(260px, 1fr));
@@ -2317,6 +2338,55 @@ def render_page(status: Dict[str, Any]) -> str:
       color: #8ea5b9;
       font-size: 0.84rem;
       padding: 12px 4px;
+    }}
+    .compact-metrics {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }}
+    .metric-chip {{
+      border: 1px solid rgba(129, 154, 175, 0.14);
+      border-radius: 12px;
+      padding: 8px 10px;
+      background: rgba(20, 33, 44, 0.78);
+    }}
+    .metric-chip strong {{
+      display: block;
+      margin-top: 2px;
+      font-size: 1rem;
+      color: #eff6fb;
+    }}
+    .summary-lines {{
+      display: grid;
+      gap: 6px;
+      margin-top: 8px;
+      font-size: 0.84rem;
+      color: #d7e2eb;
+    }}
+    .checks-compact {{
+      display: grid;
+      gap: 8px;
+    }}
+    .check-group {{
+      border: 1px solid rgba(129, 154, 175, 0.15);
+      border-radius: 12px;
+      padding: 8px 10px;
+      background: rgba(20, 33, 44, 0.84);
+    }}
+    .check-group summary {{
+      cursor: pointer;
+      color: #dbe7f0;
+      font-weight: 700;
+      list-style: none;
+    }}
+    .check-group summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .check-list {{
+      display: grid;
+      gap: 6px;
+      margin-top: 8px;
     }}
     .hardware-grid {{
       display: grid;
@@ -2538,6 +2608,7 @@ def render_page(status: Dict[str, Any]) -> str:
       <div class="tabs">
         <button type="button" class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
         <button type="button" class="tab-btn" data-tab="investigation" onclick="switchTab('investigation')">Investigation</button>
+        <button type="button" class="tab-btn" data-tab="remote" onclick="switchTab('remote')">Remote</button>
         <button type="button" class="tab-btn" data-tab="dev" onclick="switchTab('dev')">Dev</button>
         <button type="button" class="tab-btn" data-tab="help" onclick="switchTab('help')">Help</button>
         <button type="button" class="tab-btn" data-tab="config" onclick="switchTab('config')">Config</button>
@@ -2577,60 +2648,38 @@ def render_page(status: Dict[str, Any]) -> str:
         </ol>
       </section>
     </div>
-    <div class="overview-grid">
-      <section class="stat-card">
-        <div class="stat-label">Current state</div>
-        <div class="stat-value">{'Healthy' if not status['state'].get('fault_active') else 'Fault'}</div>
+    <div class="overview-top-grid">
+      <section class="panel summary-panel" id="systemOverviewPanel">
+        <h2>System overview</h2>
+        <div class="mini-meta">
+          <span class="badge {'danger' if status['state'].get('fault_active') else ''}">{'Fault active' if status['state'].get('fault_active') else 'Healthy / idle'}</span>
+          <span class="badge">Build {html.escape(str(status["build_info"].get("git_commit", "unknown")))}</span>
+        </div>
+        <div class="summary-lines">
+          <div>Monitoring state: <strong>{html.escape(str(status["state"].get("monitoring_state", "unknown")))}</strong></div>
+          <div>Last check: <strong>{html.escape(str(status["state"].get("last_check_at", "never")))}</strong></div>
+          <div>Last healthy: <strong>{html.escape(str(status["state"].get("last_healthy_at", "unknown")))}</strong></div>
+          <div>Unexpected reboots: <strong>{int(status["reboot_counts"].get("unexpected", 0))}</strong></div>
+          <div>Detected reboots: <strong>{int(status["reboot_counts"].get("detected", 0))}</strong></div>
+          <div>Last reboot reason: <strong>{html.escape(str(status["state"].get("last_reboot_reason", "none")))}</strong></div>
+          <div>Hardware: <strong>{html.escape(str(status["hardware_identity"].get("model", "unknown")))}</strong></div>
+          <div>Hardware ID: <strong>{html.escape(str(status["hardware_identity"].get("serial", "unknown")))}</strong></div>
+        </div>
       </section>
-      <section class="stat-card">
-        <div class="stat-label">Watchdog reboot commands</div>
-        <div class="stat-value">{int(status["reboot_counts"].get("watchdog", 0))}</div>
-      </section>
-      <section class="stat-card">
-        <div class="stat-label">Detected reboots</div>
-        <div class="stat-value">{int(status["reboot_counts"].get("detected", 0))}</div>
-      </section>
-      <section class="stat-card">
-        <div class="stat-label">Unexpected reboots</div>
-        <div class="stat-value">{int(status["reboot_counts"].get("unexpected", 0))}</div>
-      </section>
-      <section class="stat-card">
-        <div class="stat-label">Last reboot reason</div>
-        <div class="stat-value" style="font-size:1rem;">{html.escape(str(status["state"].get("last_reboot_reason", "none")))}</div>
-      </section>
-      <section class="stat-card">
-        <div class="stat-label">Last startup</div>
-        <div class="stat-value" style="font-size:1rem;">{html.escape(str(status["state"].get("last_startup_at", "unknown")))}</div>
-      </section>
-      <section class="stat-card">
-        <div class="stat-label">Hardware ID</div>
-        <div class="stat-value" style="font-size:1rem;">{html.escape(str(status["hardware_identity"].get("serial", "unknown")))}</div>
-      </section>
-      <section class="stat-card">
-        <div class="stat-label">Build</div>
-        <div class="stat-value" style="font-size:1rem;">{html.escape(str(status["build_info"].get("git_commit", "unknown")))}</div>
-      </section>
-    </div>
-    <div class="status-grid">
-      <section class="panel summary-panel">
-        <div class="badge {'danger' if status['state'].get('fault_active') else ''}">{'Fault Active' if status['state'].get('fault_active') else 'Healthy / Idle'}</div>
-        <p>Monitoring state: <strong>{html.escape(str(status["state"].get("monitoring_state", "unknown")))}</strong></p>
-        <p>Last check: <strong>{html.escape(str(status["state"].get("last_check_at", "never")))}</strong></p>
-        <p>Last healthy: <strong>{html.escape(str(status["state"].get("last_healthy_at", "unknown")))}</strong></p>
-        <p>Failure count: <strong>{html.escape(str(status["state"].get("failure_count", 0)))}</strong></p>
-      </section>
-      <section class="panel summary-panel">
-        <div class="badge">{html.escape(str(cfg["web_bind"]))}:{cfg["web_port"]}</div>
-        <p>Base reboot timer: <strong>{cfg["base_reboot_timeout_seconds"]}s</strong></p>
-        <p>Max reboot timer: <strong>{cfg["max_reboot_timeout_seconds"]}s</strong></p>
-        <p>Hardware model: <strong>{html.escape(str(status["hardware_identity"].get("model", "unknown")))}</strong></p>
-        <p>Deployed: <strong>{html.escape(str(status["build_info"].get("deployed_at", "unknown")))}</strong></p>
-        <p>Config path: <code>{html.escape(status["paths"]["config"])}</code></p>
+      <section class="panel summary-panel" id="remoteSummaryPanel">
+        <h2>Remote status</h2>
+        <div class="mini-meta">
+          <span class="badge" id="teamviewerInstalledBadgeMain">{'Installed' if status.get("teamviewer", {}).get("installed") else 'Not installed'}</span>
+          <span class="badge {'danger' if not status.get('teamviewer', {}).get('daemon_running') else ''}" id="teamviewerDaemonBadgeMain">{'Daemon running' if status.get("teamviewer", {}).get("daemon_running") else 'Daemon stopped'}</span>
+          <span class="badge {'warn' if not status.get('teamviewer', {}).get('gui_running') else ''}" id="teamviewerGuiBadgeMain">{'GUI running' if status.get("teamviewer", {}).get("gui_running") else 'GUI not running'}</span>
+        </div>
+        <p id="teamviewerSummaryMain">{html.escape(str(status.get("teamviewer", {}).get("summary", "No TeamViewer information available.")))}</p>
+        <p class="hint" id="remoteSpeedtestSummary">No web speed test run yet.</p>
       </section>
     </div>
 
     <div class="compact-grid">
-      <section class="panel">
+      <section class="panel" id="faultSummaryPanel">
         <h2>Fault summary</h2>
         <div class="mini-meta">
           <span class="badge" id="faultHeadline">{html.escape(str(status.get("fault_reporting", {}).get("headline", "Healthy now")))}</span>
@@ -2648,7 +2697,7 @@ def render_page(status: Dict[str, Any]) -> str:
           {"".join(f"<li>{html.escape(item)}</li>" for item in status.get("fault_reporting", {}).get("quick_actions", []))}
         </ul>
       </section>
-      <section class="panel">
+      <section class="panel" id="linuxCluesPanel">
         <h2>Linux stability clues</h2>
         <p class="hint">This is the simple operator view of the kernel and hardware evidence already collected.</p>
         <ul class="summary-list" id="linuxStabilityClues">
@@ -2686,7 +2735,7 @@ def render_page(status: Dict[str, Any]) -> str:
     </section>
 
     <div class="analysis-grid" style="margin-top:16px;">
-      <section class="panel" style="grid-column: 1 / -1;">
+      <section class="panel" style="grid-column: 1 / -1;" id="currentStatsPanel">
         <div class="chart-toolbar">
         <h2>Current PC Stats Live</h2>
           <span class="hint" id="currentStatsAt">Latest sample unknown</span>
@@ -2708,7 +2757,7 @@ def render_page(status: Dict[str, Any]) -> str:
           {"".join(f'<div class="timeline-card {html.escape(item.get("severity", ""))}"><div class="timeline-time">{html.escape(item.get("ts", ""))}</div><div class="timeline-title">{html.escape(item.get("title", ""))}</div><div>{html.escape(item.get("detail", ""))}</div></div>' for item in status.get("timeline", []))}
         </div>
       </section>
-      <section class="panel">
+      <section class="panel" id="leadupPanel">
         <h2>Lead-up to latest reboot</h2>
         <p class="hint" id="rebootLeadupDetail">{html.escape(str(status.get("reboot_leadup", {}).get("detail", "No reboot lead-up yet.")))}</p>
         <p class="hint" id="rebootLeadupAt">{html.escape(str(status.get("reboot_leadup", {}).get("reference_at", "")))}</p>
@@ -2722,7 +2771,7 @@ def render_page(status: Dict[str, Any]) -> str:
           {"".join(f'<div class="timeline-card {html.escape(item.get("severity", ""))}"><div class="timeline-time">{html.escape(item.get("ts", ""))}</div><div class="timeline-title">{html.escape(item.get("title", ""))}</div><div>{html.escape(item.get("detail", ""))}</div></div>' for item in status.get("reboot_leadup", {}).get("events", []))}
         </div>
       </section>
-      <section class="panel">
+      <section class="panel" id="chartPanel">
         <div class="chart-toolbar">
           <div class="chart-toolbar-main">
             <h2 id="metricsTitle">PC Stats - Last 24 Hours</h2>
@@ -2750,8 +2799,8 @@ def render_page(status: Dict[str, Any]) -> str:
       </section>
     </div>
 
-    <div class="ops-grid">
-      <section class="panel controls-panel">
+    <div class="ops-grid" id="overviewOpsGrid">
+      <section class="panel controls-panel" id="controlsPanel">
         <h2>Controls</h2>
         <label>Monitoring enabled <input type="checkbox" id="monitoring_enabled" {'checked' if cfg['monitoring_enabled'] else ''}></label>
         <label>App auto-restart <input type="checkbox" id="app_restart_enabled" {'checked' if cfg['app_restart_enabled'] else ''}></label>
@@ -2803,7 +2852,7 @@ def render_page(status: Dict[str, Any]) -> str:
           </ul>
         </div>
       </section>
-      <section class="panel">
+      <section class="panel" id="teamviewerPanel">
         <h2>TeamViewer</h2>
         <div class="mini-meta">
           <span class="badge" id="teamviewerInstalledBadge">{'Installed' if status.get("teamviewer", {}).get("installed") else 'Not installed'}</span>
@@ -2826,7 +2875,7 @@ def render_page(status: Dict[str, Any]) -> str:
         </div>
         <p class="operator-note" id="teamviewerResetResult">Password reset generates a new one-time password on the unit and shows it here.</p>
       </section>
-      <section class="panel checks-panel">
+      <section class="panel checks-panel" id="latestChecksPanel">
         <h2>Latest checks</h2>
         <div class="targets" id="targets"></div>
       </section>
@@ -2835,6 +2884,8 @@ def render_page(status: Dict[str, Any]) -> str:
 
     <section class="tab-panel" data-tab-panel="investigation">
     <div class="grid" style="margin-top:16px;">
+      <div class="compact-grid" id="investigationIntroPanels" style="grid-column: 1 / -1;"></div>
+      <div class="bottom-grid" id="investigationActionPanels" style="grid-column: 1 / -1;"></div>
       <section class="panel" style="grid-column: 1 / -1;">
         <h2>Likely causes</h2>
         <p class="hint">Higher scores mean the current evidence points more strongly in that direction. This is only a guide, not proof.</p>
@@ -2990,6 +3041,10 @@ def render_page(status: Dict[str, Any]) -> str:
         </div>
       </section>
     </div>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="remote">
+    <div class="grid" style="margin-top:16px;" id="remotePanels"></div>
     </section>
 
     <section class="tab-panel" data-tab-panel="dev">
@@ -3313,7 +3368,28 @@ def render_page(status: Dict[str, Any]) -> str:
       return !!active && ids.includes(active.id);
     }}
 
+    function movePanel(panelId, targetId) {{
+      const panel = document.getElementById(panelId);
+      const target = document.getElementById(targetId);
+      if (panel && target && panel.parentElement !== target) {{
+        target.appendChild(panel);
+      }}
+    }}
+
+    function organizeLayout() {{
+      movePanel('faultSummaryPanel', 'investigationIntroPanels');
+      movePanel('linuxCluesPanel', 'investigationIntroPanels');
+      movePanel('leadupPanel', 'investigationActionPanels');
+      movePanel('controlsPanel', 'investigationActionPanels');
+      movePanel('teamviewerPanel', 'remotePanels');
+      const overviewOpsGrid = document.getElementById('overviewOpsGrid');
+      if (overviewOpsGrid) {{
+        overviewOpsGrid.style.gridTemplateColumns = '1fr';
+      }}
+    }}
+
     function render(status) {{
+      organizeLayout();
       document.getElementById('monitoring_enabled').checked = !!status.config.monitoring_enabled;
       document.getElementById('app_restart_enabled').checked = !!status.config.app_restart_enabled;
       document.getElementById('restart_network_before_reboot').checked = !!status.config.restart_network_before_reboot;
@@ -3358,12 +3434,30 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('systemd_services').value = (status.config.systemd_services || []).join('\\n');
       document.getElementById('tcp_targets').value = (status.config.tcp_targets || []).map((item) => `${{item.host}}:${{item.port}}`).join('\\n');
       const checks = status.state.last_checks || {{ pings: [], ports: [], app_ok: null }};
-      document.getElementById('targets').innerHTML = [
-        `<div class="item"><strong>App process</strong><br><span class="${{badge(!!checks.app_ok)}}">${{checks.app_ok ? 'Running' : 'Missing'}}</span></div>`,
-        ...(checks.pings || []).map((item) => `<div class="item"><strong>WAN: ${{item.host}}</strong><br><span class="${{badge(!!item.ok)}}">${{item.ok ? 'Reachable' : 'Failed'}}</span><br><code>${{item.detail || ''}}</code></div>`),
-        ...(checks.services || []).map((item) => `<div class="item"><strong>Service: ${{item.service}}</strong><br><span class="${{badge(!!item.ok)}}">${{item.ok ? 'Active' : 'Not active'}}</span><br><code>${{item.detail || ''}}</code></div>`),
-        ...(checks.ports || []).map((item) => `<div class="item"><strong>TCP: ${{item.host}}:${{item.port}}</strong><br><span class="${{badge(!!item.ok)}}">${{item.ok ? 'Reachable' : 'Failed'}}</span><br><code>${{item.detail || ''}}</code></div>`)
-      ].join('');
+      const pingCount = checks.pings || [];
+      const serviceCount = checks.services || [];
+      const tcpCount = checks.ports || [];
+      const pingOk = pingCount.filter((item) => item.ok).length;
+      const serviceOk = serviceCount.filter((item) => item.ok).length;
+      const tcpOk = tcpCount.filter((item) => item.ok).length;
+      const detailBlock = (items, formatter) => items.length
+        ? `<div class="check-list">${{items.map(formatter).join('')}}</div>`
+        : `<div class="timeline-empty">No checks configured in this section.</div>`;
+      document.getElementById('targets').innerHTML = `
+        <div class="item"><strong>App process</strong><br><span class="${{badge(!!checks.app_ok)}}">${{checks.app_ok ? 'Running' : 'Missing'}}</span></div>
+        <details class="check-group" ${{pingOk !== pingCount.length ? 'open' : ''}}>
+          <summary>WAN pings: ${{pingOk}}/${{pingCount.length}} reachable</summary>
+          ${{detailBlock(pingCount, (item) => `<div class="item"><strong>${{item.host}}</strong><br><span class="${{badge(!!item.ok)}}">${{item.ok ? 'Reachable' : 'Failed'}}</span><br><code>${{item.detail || ''}}</code></div>`)}}
+        </details>
+        <details class="check-group" ${{serviceOk !== serviceCount.length ? 'open' : ''}}>
+          <summary>Services: ${{serviceOk}}/${{serviceCount.length}} active</summary>
+          ${{detailBlock(serviceCount, (item) => `<div class="item"><strong>${{item.service}}</strong><br><span class="${{badge(!!item.ok)}}">${{item.ok ? 'Active' : 'Not active'}}</span><br><code>${{item.detail || ''}}</code></div>`)}}
+        </details>
+        <details class="check-group" ${{tcpOk !== tcpCount.length ? 'open' : ''}}>
+          <summary>TCP targets: ${{tcpOk}}/${{tcpCount.length}} reachable</summary>
+          ${{detailBlock(tcpCount, (item) => `<div class="item"><strong>${{item.host}}:${{item.port}}</strong><br><span class="${{badge(!!item.ok)}}">${{item.ok ? 'Reachable' : 'Failed'}}</span><br><code>${{item.detail || ''}}</code></div>`)}}
+        </details>
+      `;
 
       document.getElementById('events').innerHTML = (status.recent_events || []).map((event) => {{
         const summary = event.summary || {{ title: (event.event || 'event'), detail: '', severity: 'info', ts: event.ts || '' }};
@@ -3417,14 +3511,14 @@ def render_page(status: Dict[str, Any]) -> str:
         .join(' | ');
       document.getElementById('currentStatsAt').textContent = currentMetrics.ts ? `Latest sample ${{formatLocalTimestamp(currentMetrics.ts)}}` : 'Latest sample unknown';
       document.getElementById('currentStatsGrid').innerHTML = `
-        <section class="stat-card"><div class="stat-label">CPU</div><div class="stat-value">${{formatMetricNumber(currentMetrics.cpu_percent)}}%</div></section>
-        <section class="stat-card"><div class="stat-label">Memory</div><div class="stat-value">${{formatMetricNumber(currentMetrics.mem_percent)}}%</div></section>
-        <section class="stat-card"><div class="stat-label">MemAvailable</div><div class="stat-value" style="font-size:1rem;">${{currentMetrics.mem_available_mb ?? 'unknown'}} MB</div></section>
-        <section class="stat-card"><div class="stat-label">Cached</div><div class="stat-value" style="font-size:1rem;">${{currentMetrics.mem_cached_mb ?? 'unknown'}} MB</div></section>
-        <section class="stat-card"><div class="stat-label">Root disk</div><div class="stat-value">${{formatMetricNumber(currentMetrics.root_disk_percent)}}%</div></section>
-        <section class="stat-card"><div class="stat-label">Recording disk</div><div class="stat-value">${{formatMetricNumber(currentMetrics.recording_disk_percent)}}%</div></section>
-        <section class="stat-card"><div class="stat-label">Temp max</div><div class="stat-value" style="font-size:1rem;">${{currentMetrics.temperature_c ?? 'unknown'}} C</div></section>
-        <section class="stat-card"><div class="stat-label">Load</div><div class="stat-value" style="font-size:1rem;">${{formatMetricNumber(currentMetrics.load_1, 2)}}</div></section>
+        <div class="metric-chip"><div class="stat-label">CPU</div><strong>${{formatMetricNumber(currentMetrics.cpu_percent)}}%</strong></div>
+        <div class="metric-chip"><div class="stat-label">Memory</div><strong>${{formatMetricNumber(currentMetrics.mem_percent)}}%</strong></div>
+        <div class="metric-chip"><div class="stat-label">MemAvailable</div><strong>${{currentMetrics.mem_available_mb ?? 'unknown'}} MB</strong></div>
+        <div class="metric-chip"><div class="stat-label">Cached</div><strong>${{currentMetrics.mem_cached_mb ?? 'unknown'}} MB</strong></div>
+        <div class="metric-chip"><div class="stat-label">Root disk</div><strong>${{formatMetricNumber(currentMetrics.root_disk_percent)}}%</strong></div>
+        <div class="metric-chip"><div class="stat-label">Recording disk</div><strong>${{formatMetricNumber(currentMetrics.recording_disk_percent)}}%</strong></div>
+        <div class="metric-chip"><div class="stat-label">Temp max</div><strong>${{currentMetrics.temperature_c ?? 'unknown'}} C</strong></div>
+        <div class="metric-chip"><div class="stat-label">Load</div><strong>${{formatMetricNumber(currentMetrics.load_1, 2)}}</strong></div>
       `;
       document.getElementById('metricsSampleAt').textContent = currentMetrics.ts ? `Latest sample ${{formatLocalTimestamp(currentMetrics.ts)}}` : 'Latest sample unknown';
       document.getElementById('metricsTempSummary').textContent = sensorSummary
@@ -3439,9 +3533,20 @@ def render_page(status: Dict[str, Any]) -> str:
         <li><strong>Top sensors:</strong> ${{sensorSummary || 'unknown'}}</li>
       `;
       const teamviewer = status.teamviewer || {{}};
+      const speedtestStatus = status.speedtest_status || {{}};
+      const teamviewerInstalledBadgeMain = document.getElementById('teamviewerInstalledBadgeMain');
+      const teamviewerDaemonBadgeMain = document.getElementById('teamviewerDaemonBadgeMain');
+      const teamviewerGuiBadgeMain = document.getElementById('teamviewerGuiBadgeMain');
       const teamviewerInstalledBadge = document.getElementById('teamviewerInstalledBadge');
       const teamviewerDaemonBadge = document.getElementById('teamviewerDaemonBadge');
       const teamviewerGuiBadge = document.getElementById('teamviewerGuiBadge');
+      teamviewerInstalledBadgeMain.className = `badge ${{teamviewer.installed ? '' : 'danger'}}`;
+      teamviewerInstalledBadgeMain.textContent = teamviewer.installed ? 'Installed' : 'Not installed';
+      teamviewerDaemonBadgeMain.className = `badge ${{teamviewer.daemon_running ? '' : 'danger'}}`;
+      teamviewerDaemonBadgeMain.textContent = teamviewer.daemon_running ? 'Daemon running' : 'Daemon stopped';
+      teamviewerGuiBadgeMain.className = `badge ${{teamviewer.gui_running ? '' : 'warn'}}`;
+      teamviewerGuiBadgeMain.textContent = teamviewer.gui_running ? 'GUI running' : 'GUI not running';
+      document.getElementById('teamviewerSummaryMain').textContent = teamviewer.summary || 'No TeamViewer information available.';
       teamviewerInstalledBadge.className = `badge ${{teamviewer.installed ? '' : 'danger'}}`;
       teamviewerInstalledBadge.textContent = teamviewer.installed ? 'Installed' : 'Not installed';
       teamviewerDaemonBadge.className = `badge ${{teamviewer.daemon_running ? '' : 'danger'}}`;
@@ -3452,6 +3557,9 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('teamviewerId').textContent = teamviewer.id || (teamviewer.id_permission_issue ? 'Permission denied' : 'unknown');
       document.getElementById('teamviewerVersion').textContent = teamviewer.version || 'unknown';
       document.getElementById('teamviewerStatus').textContent = teamviewer.status_text || 'unknown';
+      document.getElementById('remoteSpeedtestSummary').textContent = speedtestStatus.finished_at
+        ? `Last speed test: Down ${{speedtestStatus.download_mbps ?? 'n/a'}} Mbps | Up ${{speedtestStatus.upload_mbps ?? 'n/a'}} Mbps | ${{formatLocalTimestamp(speedtestStatus.finished_at)}}`
+        : 'No web speed test run yet.';
       document.getElementById('teamviewerResetButton').disabled = !teamviewer.reset_supported;
       if (!teamviewer.reset_supported) {{
         document.getElementById('teamviewerResetResult').textContent = 'Password reset is unavailable because the TeamViewer CLI or reset command is not configured on this unit.';
@@ -3497,7 +3605,6 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('memtestMessage').textContent = memtestStatus.message || 'No web memory test run yet.';
       document.getElementById('memtestMeta').textContent = memtestStatus.finished_at ? formatLocalTimestamp(memtestStatus.finished_at) : 'not finished yet';
       document.getElementById('memtestLogLink').style.display = memtestStatus.log_path ? 'inline-block' : 'none';
-      const speedtestStatus = status.speedtest_status || {{}};
       const speedtestBadge = document.getElementById('speedtestState');
       speedtestBadge.className = `badge ${{speedtestStatus.state === 'running' ? 'warn' : (speedtestStatus.state === 'failed' ? 'danger' : '')}}`;
       speedtestBadge.textContent = (speedtestStatus.state || 'idle').toUpperCase();
