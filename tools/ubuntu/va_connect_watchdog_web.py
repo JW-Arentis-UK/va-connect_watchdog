@@ -1369,6 +1369,7 @@ def launch_export(since_time: str, until_time: str) -> Dict[str, Any]:
         return {"ok": False, "message": "Provide both since and until times."}
 
     site_label = socket.gethostname()
+    request_id = secrets.token_hex(8)
     download_names = export_download_names(
         {
             "site_label": site_label,
@@ -1381,6 +1382,7 @@ def launch_export(since_time: str, until_time: str) -> Dict[str, Any]:
         "started_at": now_iso(),
         "finished_at": "",
         "message": "Incident export requested from web UI.",
+        "request_id": request_id,
         "since": since_time,
         "until": until_time,
         "site_label": site_label,
@@ -1395,8 +1397,6 @@ def launch_export(since_time: str, until_time: str) -> Dict[str, Any]:
     write_json(EXPORT_STATUS_PATH, payload)
     EXPORT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    since_q = shlex.quote(since_time)
-    until_q = shlex.quote(until_time)
     command = (
         "python3 - <<'PY'\n"
         "import json, subprocess\n"
@@ -1404,20 +1404,27 @@ def launch_export(since_time: str, until_time: str) -> Dict[str, Any]:
         "from pathlib import Path\n"
         "status_path = Path('/var/lib/va-connect-site-watchdog/web-export-status.json')\n"
         "log_path = Path('/var/log/va-connect-site-watchdog/web-export.log')\n"
+        "request_id = " + repr(request_id) + "\n"
         "cmd = ['bash', '/opt/va-connect-watchdog/export_watchdog_incident.sh', '--since', " + repr(since_time) + ", '--until', " + repr(until_time) + "]\n"
         "with log_path.open('ab') as log:\n"
-        "    log.write((f'\\n===== Web export started {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
+        "    log.write((f'\\n===== Web export started request_id={request_id} {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
         "    result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, text=True)\n"
         "payload = json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
         "payload['state'] = 'ok' if result.returncode == 0 else 'failed'\n"
         "payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
         "payload['return_code'] = result.returncode\n"
+        "payload['folder'] = ''\n"
+        "payload['archive'] = ''\n"
         "try:\n"
         "    lines = log_path.read_text(encoding='utf-8', errors='ignore').splitlines()\n"
         "except Exception:\n"
         "    lines = []\n"
-        "    \n"
-        "for line in reversed(lines):\n"
+        "section_start = 0\n"
+        "marker = f'===== Web export started request_id={request_id} '\n"
+        "for index, line in enumerate(lines):\n"
+        "    if line.startswith(marker):\n"
+        "        section_start = index + 1\n"
+        "for line in lines[section_start:]:\n"
         "    if line.startswith('  Folder: '):\n"
         "        payload['folder'] = line.split(': ', 1)[1]\n"
         "    if line.startswith('  Archive: '):\n"
@@ -3369,6 +3376,22 @@ def render_page(status: Dict[str, Any]) -> str:
       window.location.replace(url.toString());
     }}
 
+    function buildAuthedUrl(path, extraParams = {{}}) {{
+      const url = new URL(path, window.location.origin);
+      const currentParams = new URLSearchParams(window.location.search || '');
+      currentParams.forEach((value, key) => {{
+        if (key !== '_refresh') {{
+          url.searchParams.set(key, value);
+        }}
+      }});
+      Object.entries(extraParams || {{}}).forEach(([key, value]) => {{
+        if (value !== undefined && value !== null && value !== '') {{
+          url.searchParams.set(key, String(value));
+        }}
+      }});
+      return `${{url.pathname}}${{url.search}}`;
+    }}
+
     function badge(ok) {{
       return ok ? 'badge' : 'badge danger';
     }}
@@ -3812,9 +3835,16 @@ def render_page(status: Dict[str, Any]) -> str:
         exportMetaParts.push(formatLocalTimestamp(exportState.finished_at));
       }}
       document.getElementById('exportMeta').textContent = exportMetaParts.join(' | ') || 'No incident export run yet.';
-      document.getElementById('exportArchiveLink').style.display = exportState.archive ? 'inline-block' : 'none';
-      document.getElementById('exportReadmeLink').style.display = exportState.folder ? 'inline-block' : 'none';
-      document.getElementById('exportLogLink').style.display = exportState.log_path ? 'inline-block' : 'none';
+      const exportToken = exportState.request_id || exportState.finished_at || exportState.export_label || '';
+      const exportArchiveLink = document.getElementById('exportArchiveLink');
+      const exportReadmeLink = document.getElementById('exportReadmeLink');
+      const exportLogLink = document.getElementById('exportLogLink');
+      exportArchiveLink.href = buildAuthedUrl('/download/export-archive', {{ export: exportToken }});
+      exportReadmeLink.href = buildAuthedUrl('/download/export-readme', {{ export: exportToken }});
+      exportLogLink.href = buildAuthedUrl('/download/export-log', {{ export: exportToken }});
+      exportArchiveLink.style.display = exportState.archive ? 'inline-block' : 'none';
+      exportReadmeLink.style.display = exportState.folder ? 'inline-block' : 'none';
+      exportLogLink.style.display = exportState.log_path ? 'inline-block' : 'none';
 
       document.querySelector('.overview-grid').innerHTML = `
         <section class="stat-card"><div class="stat-label">Current state</div><div class="stat-value">${{status.state.fault_active ? 'Fault' : 'Healthy'}}</div></section>
@@ -4277,6 +4307,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(body)
 
@@ -4323,6 +4356,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
             self.end_headers()
             self.wfile.write(body)
             return
@@ -4338,6 +4374,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(body)
 
