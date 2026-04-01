@@ -4326,10 +4326,11 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
 
     async function runAction(action, extraPayload = {{}}) {{
+      const requestPayload = Object.assign({{ action: action }}, extraPayload || {{}});
       const response = await fetch('/api/action' + authQuery, {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
-        body: JSON.stringify({{ action, ...extraPayload }})
+        body: JSON.stringify(requestPayload)
       }});
       if (!response.ok) {{
         const payload = await response.json().catch(() => ({{ message: 'Action failed.' }}));
