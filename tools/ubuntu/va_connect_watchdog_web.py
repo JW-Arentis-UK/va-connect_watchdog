@@ -31,6 +31,7 @@ MEMTEST_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-memtest-status
 MEMTEST_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-memtest.log")
 SPEEDTEST_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-speedtest-status.json")
 SPEEDTEST_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-speedtest.log")
+SPEEDTEST_HISTORY_PATH = Path("/var/log/va-connect-site-watchdog/speedtests.jsonl")
 SNAPSHOT_DIR = Path("/var/log/va-connect-site-watchdog/snapshots")
 
 
@@ -266,6 +267,18 @@ def recent_metrics(hours: int = 24) -> List[Dict[str, Any]]:
             points.append(item)
     max_points = 3000 if hours <= 24 else 8000
     return points[-max_points:]
+
+
+def recent_speedtests(limit: int = 10) -> List[Dict[str, Any]]:
+    if not SPEEDTEST_HISTORY_PATH.exists():
+        return []
+    items = []
+    for line in SPEEDTEST_HISTORY_PATH.read_text(encoding="utf-8").splitlines()[-limit:]:
+        try:
+            items.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return list(reversed(items))
 
 
 def recent_metric_events(hours: int = 24) -> List[Dict[str, Any]]:
@@ -936,6 +949,68 @@ def build_incident_timeline(events: List[Dict[str, Any]]) -> List[Dict[str, str]
     return interesting
 
 
+def metric_at_or_before(ts_value: str) -> Dict[str, Any]:
+    target = parse_iso(ts_value)
+    if target is None or not METRICS_PATH.exists():
+        return {}
+    latest: Dict[str, Any] = {}
+    for line in METRICS_PATH.read_text(encoding="utf-8").splitlines():
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts = parse_iso(str(item.get("ts", "")))
+        if ts is None or ts > target:
+            continue
+        latest = item
+    return latest
+
+
+def reboot_leadup_payload(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    reboot_event = None
+    for event in events:
+        if str(event.get("event", "")) in {"unexpected_reboot_detected", "watchdog_reboot_observed"}:
+            reboot_event = event
+            break
+    if reboot_event is None:
+        return {
+            "available": False,
+            "title": "No reboot lead-up yet",
+            "detail": "When a reboot is detected, this section will show the last events and last sampled PC stats before it.",
+            "events": [],
+            "last_metrics": {},
+            "reference_at": "",
+        }
+
+    reference_at = str(reboot_event.get("last_check_at") or reboot_event.get("ts") or "")
+    reference_dt = parse_iso(reference_at)
+    leadup_events: List[Dict[str, str]] = []
+    if reference_dt is not None:
+        for event in reversed(events):
+            ts = parse_iso(str(event.get("ts", "")))
+            if ts is None or ts > reference_dt:
+                continue
+            if (reference_dt - ts).total_seconds() > 30 * 60:
+                break
+            leadup_events.append(summarize_event(event))
+            if len(leadup_events) >= 8:
+                break
+        leadup_events.reverse()
+
+    metrics = metric_at_or_before(reference_at)
+    detail = "Showing the last sampled PC stats and recent events before the reboot-detection point."
+    if not metrics:
+        detail = "A reboot was detected, but no metric sample was found before the detection point."
+    return {
+        "available": True,
+        "title": "Lead-up to latest reboot",
+        "detail": detail,
+        "events": leadup_events,
+        "last_metrics": metrics,
+        "reference_at": reference_at,
+    }
+
+
 def crash_review_payload() -> Dict[str, Any]:
     snapshot = latest_previous_boot_snapshot()
     if snapshot is None:
@@ -1215,6 +1290,7 @@ def launch_speedtest() -> Dict[str, Any]:
         "log_path = Path('/var/log/va-connect-site-watchdog/web-speedtest.log')\n"
         "DOWN_URL = 'https://speed.cloudflare.com/__down?bytes=50000000'\n"
         "UP_URL = 'https://speed.cloudflare.com/__up'\n"
+        "HEADERS = {'User-Agent': 'Mozilla/5.0 VA-Connect-Watchdog-SpeedTest'}\n"
         "def read_mem_percent():\n"
         "    values = {}\n"
         "    for line in Path('/proc/meminfo').read_text(encoding='utf-8').splitlines():\n"
@@ -1238,7 +1314,8 @@ def launch_speedtest() -> Dict[str, Any]:
         "def run_download():\n"
         "    start = time.time()\n"
         "    downloaded = 0\n"
-        "    with urllib.request.urlopen(DOWN_URL, timeout=30) as response:\n"
+        "    request = urllib.request.Request(DOWN_URL, headers=HEADERS)\n"
+        "    with urllib.request.urlopen(request, timeout=30) as response:\n"
         "        while True:\n"
         "            chunk = response.read(65536)\n"
         "            if not chunk:\n"
@@ -1248,7 +1325,9 @@ def launch_speedtest() -> Dict[str, Any]:
         "    return round((downloaded * 8 / 1_000_000) / elapsed, 2)\n"
         "def run_upload():\n"
         "    payload = b'x' * 5_000_000\n"
-        "    request = urllib.request.Request(UP_URL, data=payload, method='POST')\n"
+        "    upload_headers = dict(HEADERS)\n"
+        "    upload_headers['Content-Type'] = 'application/octet-stream'\n"
+        "    request = urllib.request.Request(UP_URL, data=payload, method='POST', headers=upload_headers)\n"
         "    start = time.time()\n"
         "    with urllib.request.urlopen(request, timeout=30) as response:\n"
         "        response.read()\n"
@@ -1281,6 +1360,17 @@ def launch_speedtest() -> Dict[str, Any]:
         "payload.update(result)\n"
         "payload['return_code'] = 0 if result.get('state') == 'ok' else 1\n"
         "status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "history_path = Path('/var/log/va-connect-site-watchdog/speedtests.jsonl')\n"
+        "history_path.parent.mkdir(parents=True, exist_ok=True)\n"
+        "with history_path.open('a', encoding='utf-8') as history:\n"
+        "    history.write(json.dumps({\n"
+        "        'ts': result.get('finished_at', datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'),\n"
+        "        'state': result.get('state', 'failed'),\n"
+        "        'download_mbps': result.get('download_mbps'),\n"
+        "        'upload_mbps': result.get('upload_mbps'),\n"
+        "        'cpu_percent': result.get('cpu_percent'),\n"
+        "        'memory_percent': result.get('memory_percent'),\n"
+        "    }, sort_keys=True) + '\\n')\n"
         "PY"
     )
     subprocess.Popen(
@@ -1345,6 +1435,8 @@ def status_payload() -> Dict[str, Any]:
     memtest_info = memtest_recommendation()
     memtest_status = normalize_memtest_status(read_json(MEMTEST_STATUS_PATH, {"state": "idle"}))
     speedtest_status = normalize_speedtest_status(read_json(SPEEDTEST_STATUS_PATH, {"state": "idle"}))
+    speedtest_history = recent_speedtests()
+    reboot_leadup = reboot_leadup_payload(events)
     hw_identity = hardware_identity()
     teamviewer = teamviewer_status_payload(config)
     clue_counters = clue_counter_payload(hardware_payload, crash_payload)
@@ -1369,6 +1461,8 @@ def status_payload() -> Dict[str, Any]:
         "memtest_status": memtest_status,
         "memtest_info": memtest_info,
         "speedtest_status": speedtest_status,
+        "speedtest_history": speedtest_history,
+        "reboot_leadup": reboot_leadup,
         "reboot_counts": reboot_counts,
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "teamviewer": teamviewer,
@@ -1818,7 +1912,7 @@ def render_page(status: Dict[str, Any]) -> str:
     .timeline-title {{ font-weight: 700; margin-bottom: 3px; }}
     .analysis-grid {{
       display: grid;
-      grid-template-columns: minmax(320px, 0.85fr) minmax(420px, 1.4fr);
+      grid-template-columns: minmax(320px, 0.95fr) minmax(420px, 1.35fr);
       gap: 10px;
       align-items: start;
     }}
@@ -1830,7 +1924,7 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
     .ops-grid {{
       display: grid;
-      grid-template-columns: minmax(360px, 1fr) minmax(480px, 1fr);
+      grid-template-columns: minmax(300px, 0.95fr) minmax(300px, 0.95fr) minmax(360px, 1.15fr);
       gap: 10px;
       margin-top: 10px;
       align-items: start;
@@ -1847,7 +1941,7 @@ def render_page(status: Dict[str, Any]) -> str:
       gap: 14px;
     }}
     .timeline-panel {{
-      min-height: 250px;
+      min-height: 200px;
     }}
     .checks-panel {{
       min-height: 320px;
@@ -2094,6 +2188,20 @@ def render_page(status: Dict[str, Any]) -> str:
         </div>
       </section>
       <section class="panel">
+        <h2>Lead-up to latest reboot</h2>
+        <p class="hint" id="rebootLeadupDetail">{html.escape(str(status.get("reboot_leadup", {}).get("detail", "No reboot lead-up yet.")))}</p>
+        <p class="hint" id="rebootLeadupAt">{html.escape(str(status.get("reboot_leadup", {}).get("reference_at", "")))}</p>
+        <div class="current-stats-grid" id="rebootLeadupStats">
+          <section class="stat-card"><div class="stat-label">CPU</div><div class="stat-value">{html.escape(str((status.get("reboot_leadup", {}).get("last_metrics", {}) or {}).get("cpu_percent", "unknown")))}%</div></section>
+          <section class="stat-card"><div class="stat-label">Memory</div><div class="stat-value">{html.escape(str((status.get("reboot_leadup", {}).get("last_metrics", {}) or {}).get("mem_percent", "unknown")))}%</div></section>
+          <section class="stat-card"><div class="stat-label">MemAvailable</div><div class="stat-value" style="font-size:1rem;">{html.escape(str((status.get("reboot_leadup", {}).get("last_metrics", {}) or {}).get("mem_available_mb", "unknown")))} MB</div></section>
+          <section class="stat-card"><div class="stat-label">Temp</div><div class="stat-value" style="font-size:1rem;">{html.escape(str((status.get("reboot_leadup", {}).get("last_metrics", {}) or {}).get("temperature_c", "unknown")))} C</div></section>
+        </div>
+        <div class="timeline" id="rebootLeadupTimeline" style="margin-top:10px; max-height:220px;">
+          {"".join(f'<div class="timeline-card {html.escape(item.get("severity", ""))}"><div class="timeline-time">{html.escape(item.get("ts", ""))}</div><div class="timeline-title">{html.escape(item.get("title", ""))}</div><div>{html.escape(item.get("detail", ""))}</div></div>' for item in status.get("reboot_leadup", {}).get("events", []))}
+        </div>
+      </section>
+      <section class="panel">
         <div class="chart-toolbar">
           <div class="chart-toolbar-main">
             <h2 id="metricsTitle">PC Stats - Last 24 Hours</h2>
@@ -2172,6 +2280,11 @@ def render_page(status: Dict[str, Any]) -> str:
         </p>
         <div class="link-row">
           <a class="link-btn" id="speedtestLogLink" href="/download/speedtest-log">Download speed test log</a>
+        </div>
+        <div class="review-scroll" style="margin-top:10px;">
+          <ul class="review-list" id="speedtestHistory">
+            {"".join(f"<li>{html.escape(str(item.get('ts', 'unknown')))} | {html.escape(str(item.get('state', 'unknown')))} | Down {html.escape(str(item.get('download_mbps', 'n/a')))} Mbps | Up {html.escape(str(item.get('upload_mbps', 'n/a')))} Mbps</li>" for item in status.get("speedtest_history", []))}
+          </ul>
         </div>
       </section>
       <section class="panel">
@@ -2794,6 +2907,18 @@ def render_page(status: Dict[str, Any]) -> str:
       }}
       document.getElementById('speedtestMeta').textContent = speedtestMetaParts.join(' | ') || 'not finished yet';
       document.getElementById('speedtestLogLink').style.display = speedtestStatus.log_path ? 'inline-block' : 'none';
+      document.getElementById('speedtestHistory').innerHTML = (status.speedtest_history || []).map((item) => `<li>${{formatLocalTimestamp(item.ts || '')}} | ${{item.state || 'unknown'}} | Down ${{item.download_mbps ?? 'n/a'}} Mbps | Up ${{item.upload_mbps ?? 'n/a'}} Mbps</li>`).join('') || '<li>No speed test history yet.</li>';
+      const rebootLeadup = status.reboot_leadup || {{}};
+      const rebootLeadupMetrics = rebootLeadup.last_metrics || {{}};
+      document.getElementById('rebootLeadupDetail').textContent = rebootLeadup.detail || 'No reboot lead-up yet.';
+      document.getElementById('rebootLeadupAt').textContent = rebootLeadup.reference_at ? `Reference point ${{formatLocalTimestamp(rebootLeadup.reference_at)}}` : '';
+      document.getElementById('rebootLeadupStats').innerHTML = `
+        <section class="stat-card"><div class="stat-label">CPU</div><div class="stat-value">${{rebootLeadupMetrics.cpu_percent ?? 'unknown'}}%</div></section>
+        <section class="stat-card"><div class="stat-label">Memory</div><div class="stat-value">${{rebootLeadupMetrics.mem_percent ?? 'unknown'}}%</div></section>
+        <section class="stat-card"><div class="stat-label">MemAvailable</div><div class="stat-value" style="font-size:1rem;">${{rebootLeadupMetrics.mem_available_mb ?? 'unknown'}} MB</div></section>
+        <section class="stat-card"><div class="stat-label">Temp</div><div class="stat-value" style="font-size:1rem;">${{rebootLeadupMetrics.temperature_c ?? 'unknown'}} C</div></section>
+      `;
+      document.getElementById('rebootLeadupTimeline').innerHTML = (rebootLeadup.events || []).map((item) => `<div class="timeline-card ${{item.severity || ''}}"><div class="timeline-time">${{formatLocalTimestamp(item.ts || '')}}</div><div class="timeline-title">${{item.title || ''}}</div><div>${{item.detail || ''}}</div></div>`).join('') || '<div class="timeline-empty">No lead-up events captured yet.</div>';
       document.getElementById('crashReviewFindings').innerHTML = (crashReview.findings || []).length
         ? (crashReview.findings || []).map((line) => `<li>${{line}}</li>`).join('')
         : '<li>No crash-review findings yet.</li>';
