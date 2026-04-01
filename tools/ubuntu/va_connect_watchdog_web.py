@@ -24,11 +24,13 @@ CONFIG_PATH = Path(os.environ.get("SITE_WATCHDOG_CONFIG", "/opt/va-connect-watch
 STATE_PATH = Path("/var/lib/va-connect-site-watchdog/state.json")
 EVENTS_PATH = Path("/var/log/va-connect-site-watchdog/events.jsonl")
 METRICS_PATH = Path("/var/log/va-connect-site-watchdog/metrics.jsonl")
+INCIDENTS_PATH = Path("/var/log/va-connect-site-watchdog/incidents.jsonl")
 BUILD_INFO_PATH = Path("/opt/va-connect-watchdog/build-info.json")
 UPDATE_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-update-status.json")
 UPDATE_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-update.log")
 EXPORT_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-export-status.json")
 EXPORT_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-export.log")
+INCIDENT_EXPORTS_PATH = Path("/var/lib/va-connect-site-watchdog/incident-export-status.json")
 MEMTEST_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-memtest-status.json")
 MEMTEST_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-memtest.log")
 SPEEDTEST_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-speedtest-status.json")
@@ -87,6 +89,33 @@ def export_download_names(export_status: Dict[str, Any]) -> Dict[str, str]:
         "readme": f"{base}_incident-pack-readme.txt",
         "log": f"{base}_incident-pack.log",
     }
+
+
+def incident_export_names(incident: Dict[str, Any]) -> Dict[str, str]:
+    names = export_download_names(
+        {
+            "site_label": incident.get("site_label") or socket.gethostname(),
+            "since": incident.get("window_since", ""),
+            "until": incident.get("window_until", ""),
+        }
+    )
+    incident_token = slugify_label(str(incident.get("incident_id", "incident")))
+    base = f"{names['base']}_{incident_token}"
+    return {
+        "base": base,
+        "archive": f"{base}_incident-pack.tar.gz",
+        "readme": f"{base}_incident-pack-readme.txt",
+        "log": f"{base}_incident-pack.log",
+    }
+
+
+def read_incident_export_statuses() -> Dict[str, Dict[str, Any]]:
+    raw = read_json(INCIDENT_EXPORTS_PATH, {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def write_incident_export_statuses(payload: Dict[str, Dict[str, Any]]) -> None:
+    write_json(INCIDENT_EXPORTS_PATH, payload)
 
 
 def latest_log_block(path: Path, start_prefix: str, max_lines: int = 10) -> List[str]:
@@ -375,6 +404,19 @@ def all_events() -> List[Dict[str, Any]]:
         except json.JSONDecodeError:
             continue
     return events
+
+
+def all_incidents() -> List[Dict[str, Any]]:
+    if not INCIDENTS_PATH.exists():
+        return []
+    incidents: List[Dict[str, Any]] = []
+    for line in INCIDENTS_PATH.read_text(encoding="utf-8", errors="ignore").splitlines():
+        try:
+            incidents.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    incidents.sort(key=lambda item: str(item.get("reboot_detected_at") or item.get("ts") or ""), reverse=True)
+    return incidents
 
 
 def recent_metrics(hours: int = 24) -> List[Dict[str, Any]]:
@@ -1014,14 +1056,14 @@ def fault_reporting_payload(
     if state.get("fault_active"):
         impact = summarize_fault_checks(checks)
     elif reboot_counts.get("unexpected"):
-        impact = "The unit is up now, but it has recorded unexpected reboot activity."
+        impact = "The unit is up now, but it became non-functional and required an unplanned reboot or repower to recover."
 
     primary = suspect_scores[0] if suspect_scores else {"label": "No clear suspect yet", "score": 0, "reasons": []}
     short_status = "Healthy now"
     if state.get("fault_active"):
         short_status = "Fault active now"
     elif reboot_counts.get("unexpected"):
-        short_status = "Recovered but unexpected reboot seen"
+        short_status = "Recovered after unplanned reboot or repower"
     plain_summary = f"{short_status}. Top suspect: {primary.get('label', 'unknown')}."
     if primary.get("score", 0) <= 0:
         plain_summary = f"{short_status}. No suspect category has strong evidence yet."
@@ -1437,6 +1479,52 @@ def reboot_leadup_payload(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def incidents_payload(limit: int = 12) -> List[Dict[str, Any]]:
+    statuses = read_incident_export_statuses()
+    changed = False
+    rows: List[Dict[str, Any]] = []
+    for incident in all_incidents()[:limit]:
+        incident_id = str(incident.get("incident_id", "")).strip()
+        export_status = normalize_incident_export_status(statuses.get(incident_id, {"state": "idle"}))
+        if export_status != statuses.get(incident_id, {"state": "idle"}):
+            statuses[incident_id] = export_status
+            changed = True
+        watchdog_requested = bool(incident.get("watchdog_requested_reboot"))
+        classification = str(incident.get("classification", "") or ("watchdog_reboot" if watchdog_requested else "manual_relay_recovery_suspected"))
+        kind_label = "Watchdog reboot" if watchdog_requested else ("Manual/relay recovery suspected" if classification == "manual_relay_recovery_suspected" else "Unexpected reboot")
+        checks = dict(incident.get("last_checks") or {})
+        rows.append(
+            {
+                "incident_id": incident_id,
+                "incident_time": str(incident.get("incident_time", "")),
+                "last_known_healthy_at": str(incident.get("last_known_healthy_at", "")),
+                "reboot_detected_at": str(incident.get("reboot_detected_at") or incident.get("ts", "")),
+                "suspected_reason": str(incident.get("suspected_reason", "")),
+                "reporting_text": str(incident.get("reporting_text", "")),
+                "watchdog_requested_reboot": watchdog_requested,
+                "kind_label": kind_label,
+                "classification": classification,
+                "window_since": str(incident.get("window_since", "")),
+                "window_until": str(incident.get("window_until", "")),
+                "previous_boot_id": str(incident.get("previous_boot_id", "")),
+                "current_boot_id": str(incident.get("current_boot_id", "")),
+                "snapshot_path": str(incident.get("snapshot_path", "")),
+                "last_sampled_pc_stats": dict(incident.get("last_sampled_pc_stats") or {}),
+                "last_successful_watchdog_check_at": str(incident.get("last_successful_watchdog_check_at", "")),
+                "last_wan_ok_at": str(incident.get("last_wan_ok_at", "")),
+                "last_lan_ok_at": str(incident.get("last_lan_ok_at", "")),
+                "last_app_ok_at": str(incident.get("last_app_ok_at", "")),
+                "last_services_ok_at": str(incident.get("last_services_ok_at", "")),
+                "last_checks": checks,
+                "export_status": export_status,
+                "export_console_lines": incident_export_log_excerpt(export_status, 6),
+            }
+        )
+    if changed:
+        write_incident_export_statuses(statuses)
+    return rows
+
+
 def crash_review_payload() -> Dict[str, Any]:
     snapshot = latest_previous_boot_snapshot()
     if snapshot is None:
@@ -1711,6 +1799,157 @@ def launch_quick_export() -> Dict[str, Any]:
             f"to {window.get('until', 'unknown')}."
         )
     return result
+
+
+def normalize_incident_export_status(status: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(status or {})
+    if payload.get("state") != "running":
+        return payload
+    started_at = parse_iso(str(payload.get("started_at", "")))
+    log_path = Path(str(payload.get("log_path", "")).strip()) if payload.get("log_path") else None
+    if log_path and log_path.exists():
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception:
+            lines = []
+        finish_marker = f"===== Incident export finished request_id={payload.get('request_id', '')} "
+        for line in lines:
+            if line.startswith("  Folder: "):
+                payload["folder"] = line.split(": ", 1)[1]
+            if line.startswith("  Archive: "):
+                payload["archive"] = line.split(": ", 1)[1]
+            if line.startswith(finish_marker):
+                payload["finished_at"] = payload.get("finished_at") or now_iso()
+                payload["return_code"] = 0 if "return_code=0" in line else int(payload.get("return_code", 1) or 1)
+                payload["state"] = "ok" if int(payload.get("return_code", 1) or 1) == 0 and payload.get("archive") else "failed"
+                payload["message"] = (
+                    "Incident pack ready."
+                    if payload["state"] == "ok"
+                    else "Incident pack failed. Check the incident export log."
+                )
+                return payload
+    if started_at and (datetime.utcnow().astimezone() - started_at).total_seconds() > 30 * 60:
+        payload["state"] = "failed"
+        payload["finished_at"] = payload.get("finished_at") or now_iso()
+        payload["message"] = "Incident pack ran too long or got stuck. Check the incident export log."
+    return payload
+
+
+def incident_export_log_excerpt(status: Dict[str, Any], max_lines: int = 8) -> List[str]:
+    log_path = Path(str(status.get("log_path", "")).strip()) if status.get("log_path") else None
+    if not log_path or not log_path.exists():
+        return []
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return []
+    return [line.rstrip() for line in lines if line.strip()][-max_lines:]
+
+
+def incident_by_id(incident_id: str) -> Optional[Dict[str, Any]]:
+    for incident in all_incidents():
+        if str(incident.get("incident_id", "")) == incident_id:
+            return incident
+    return None
+
+
+def launch_incident_export(incident_id: str) -> Dict[str, Any]:
+    incident = incident_by_id(incident_id)
+    if incident is None:
+        return {"ok": False, "message": "Incident not found."}
+    statuses = read_incident_export_statuses()
+    current = normalize_incident_export_status(statuses.get(incident_id, {}))
+    if current.get("state") == "running":
+        return {"ok": False, "message": "This incident pack is already running."}
+
+    request_id = secrets.token_hex(8)
+    log_path = Path(f"/var/log/va-connect-site-watchdog/incident-export-{slugify_label(incident_id)}.log")
+    names = incident_export_names(incident)
+    payload = {
+        "incident_id": incident_id,
+        "request_id": request_id,
+        "state": "running",
+        "started_at": now_iso(),
+        "finished_at": "",
+        "message": "Generating incident pack for this reboot event.",
+        "since": str(incident.get("window_since", "")).strip(),
+        "until": str(incident.get("window_until", "")).strip(),
+        "log_path": str(log_path),
+        "folder": "",
+        "archive": "",
+        "download_archive_name": names["archive"],
+        "download_readme_name": names["readme"],
+        "download_log_name": names["log"],
+    }
+    statuses[incident_id] = payload
+    write_incident_export_statuses(statuses)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    command = (
+        "python3 - <<'PY'\n"
+        "import json, subprocess\n"
+        "from datetime import datetime\n"
+        "from pathlib import Path\n"
+        f"status_path = Path({repr(str(INCIDENT_EXPORTS_PATH))})\n"
+        f"log_path = Path({repr(str(log_path))})\n"
+        f"incident_id = {repr(incident_id)}\n"
+        f"request_id = {repr(request_id)}\n"
+        f"since_time = {repr(payload['since'])}\n"
+        f"until_time = {repr(payload['until'])}\n"
+        "cmd = ['bash', '/opt/va-connect-watchdog/export_watchdog_incident.sh', '--since', since_time, '--until', until_time]\n"
+        "with log_path.open('ab') as log:\n"
+        "    log.write((f'\\n===== Incident export started request_id={request_id} {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
+        "    result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+        "    log.write((f'===== Incident export finished request_id={request_id} return_code={result.returncode} {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
+        "payloads = json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
+        "payload = payloads.get(incident_id, {})\n"
+        "payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "payload['return_code'] = result.returncode\n"
+        "payload['state'] = 'ok' if result.returncode == 0 else 'failed'\n"
+        "payload['folder'] = ''\n"
+        "payload['archive'] = ''\n"
+        "try:\n"
+        "    lines = log_path.read_text(encoding='utf-8', errors='ignore').splitlines()\n"
+        "except Exception:\n"
+        "    lines = []\n"
+        "for line in lines:\n"
+        "    if line.startswith('  Folder: '):\n"
+        "        payload['folder'] = line.split(': ', 1)[1]\n"
+        "    if line.startswith('  Archive: '):\n"
+        "        payload['archive'] = line.split(': ', 1)[1]\n"
+        "payload['message'] = 'Incident pack ready.' if result.returncode == 0 else 'Incident pack failed. Check the incident export log.'\n"
+        "payloads[incident_id] = payload\n"
+        "status_path.write_text(json.dumps(payloads, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "PY"
+    )
+    subprocess.Popen(
+        ["nohup", "bash", "-lc", command],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return {"ok": True, "message": "Incident pack generation started.", "status": payload}
+
+
+def safe_incident_export_file(incident_id: str, kind: str) -> Optional[Path]:
+    statuses = read_incident_export_statuses()
+    status = normalize_incident_export_status(statuses.get(incident_id, {}))
+    if status != statuses.get(incident_id, {}):
+        statuses[incident_id] = status
+        write_incident_export_statuses(statuses)
+    candidate = ""
+    folder = str(status.get("folder", "")).strip()
+    archive = str(status.get("archive", "")).strip()
+    if kind == "archive":
+        candidate = archive or (str(Path(folder).with_suffix(".tar.gz")) if folder else "")
+    elif kind == "folder_readme":
+        candidate = str(Path(folder) / "README.txt") if folder else ""
+    elif kind == "log":
+        candidate = str(status.get("log_path", "")).strip()
+    if candidate:
+        path = Path(candidate)
+        if path.exists() and path.is_file():
+            return path
+    return None
 
 
 def safe_export_file(kind: str) -> Optional[Path]:
@@ -2127,6 +2366,7 @@ def status_payload() -> Dict[str, Any]:
     speedtest_history = recent_speedtests()
     reboot_leadup = reboot_leadup_payload(events)
     quick_export = quick_export_window(events_all, state)
+    incidents = incidents_payload()
     hik_status = read_json(HIK_STATUS_PATH, {"state": "idle", "enabled": bool(config.get("hik_enabled"))})
     hw_identity = hardware_identity()
     teamviewer = teamviewer_status_payload(config)
@@ -2150,6 +2390,7 @@ def status_payload() -> Dict[str, Any]:
         "update_status": update_status,
         "export_status": export_status,
         "quick_export": quick_export,
+        "incidents": incidents,
         "update_console_lines": latest_log_block(UPDATE_LOG_PATH, "===== Web update started ", 10),
         "export_console_lines": export_log_excerpt(export_status, 10),
         "memtest_status": memtest_status,
@@ -2176,11 +2417,13 @@ def status_payload() -> Dict[str, Any]:
             "state": str(STATE_PATH),
             "events": str(EVENTS_PATH),
             "metrics": str(METRICS_PATH),
+            "incidents": str(INCIDENTS_PATH),
             "build_info": str(BUILD_INFO_PATH),
             "update_status": str(UPDATE_STATUS_PATH),
             "update_log": str(UPDATE_LOG_PATH),
             "export_status": str(EXPORT_STATUS_PATH),
             "export_log": str(EXPORT_LOG_PATH),
+            "incident_export_status": str(INCIDENT_EXPORTS_PATH),
             "memtest_status": str(MEMTEST_STATUS_PATH),
             "memtest_log": str(MEMTEST_LOG_PATH),
             "speedtest_status": str(SPEEDTEST_STATUS_PATH),
@@ -2430,6 +2673,65 @@ def render_page(status: Dict[str, Any]) -> str:
       padding: 8px 10px;
       background: rgba(22, 35, 46, 0.86);
       font-size: 0.83rem;
+    }}
+    .incident-list {{
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+    }}
+    .incident-row {{
+      border: 1px solid rgba(130, 153, 173, 0.15);
+      border-radius: 12px;
+      padding: 9px 10px;
+      background: rgba(20, 33, 44, 0.88);
+    }}
+    .incident-head {{
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 6px;
+    }}
+    .incident-title {{
+      font-weight: 700;
+      font-size: 0.92rem;
+    }}
+    .incident-summary {{
+      color: #d8e4ee;
+      font-size: 0.84rem;
+      margin-bottom: 6px;
+    }}
+    .incident-meta {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+      gap: 6px 10px;
+      font-size: 0.76rem;
+      color: #a9bdce;
+    }}
+    .incident-actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+      align-items: center;
+    }}
+    .incident-actions .link-btn {{
+      margin-top: 0;
+    }}
+    .incident-console {{
+      margin-top: 8px;
+      max-height: 92px;
+      overflow: auto;
+      white-space: pre-wrap;
+      font-family: Consolas, monospace;
+      font-size: 0.72rem;
+      line-height: 1.35;
+      background: rgba(8, 14, 19, 0.82);
+      border: 1px solid rgba(130, 153, 173, 0.12);
+      border-radius: 10px;
+      padding: 8px;
+      color: #b6c7d6;
     }}
     .stat-card {{
       border: 1px solid rgba(130, 153, 173, 0.15);
@@ -3041,6 +3343,32 @@ def render_page(status: Dict[str, Any]) -> str:
         <p class="hint" id="remoteSpeedtestSummary">No web speed test run yet.</p>
       </section>
     </div>
+
+    <section class="panel" style="margin-top:10px;" id="incidentsPanel">
+      <h2>Unplanned repowers</h2>
+      <p class="hint">Each row captures the outage context and lets you generate or download a pack for that specific reboot event.</p>
+      <div class="incident-list" id="incidentsList">
+        {"".join(
+          f"<div class='incident-row'>"
+          f"<div class='incident-head'><div class='incident-title'>{html.escape(str(item.get('kind_label', 'Incident')))}</div><span class='badge {'warn' if not item.get('watchdog_requested_reboot') else ''}'>{html.escape(str(item.get('classification', 'incident')).replace('_', ' ').title())}</span></div>"
+          f"<div class='incident-summary'>{html.escape(str(item.get('reporting_text', 'No incident wording available.')))}</div>"
+          f"<div class='incident-meta'>"
+          f"<div>Incident time: <strong>{html.escape(str(item.get('incident_time', 'unknown')))}</strong></div>"
+          f"<div>Last healthy: <strong>{html.escape(str(item.get('last_known_healthy_at', 'unknown')))}</strong></div>"
+          f"<div>Reboot detected: <strong>{html.escape(str(item.get('reboot_detected_at', 'unknown')))}</strong></div>"
+          f"<div>Reason: <strong>{html.escape(str(item.get('suspected_reason', 'unknown')))}</strong></div>"
+          f"</div>"
+          f"<div class='incident-actions'>"
+          f"<button class='secondary' onclick=\"runIncidentExport('{html.escape(str(item.get('incident_id', '')))}')\">{'Generate incident pack' if not (item.get('export_status', {}) or {}).get('archive') else 'Refresh incident pack'}</button>"
+          f"<a class='link-btn' href='/download/incident-archive?id={html.escape(str(item.get('incident_id', '')))}'>Download pack</a>"
+          f"<a class='link-btn' href='/download/incident-log?id={html.escape(str(item.get('incident_id', '')))}'>Download log</a>"
+          f"</div>"
+          f"<div class='incident-console'>{html.escape(chr(10).join((item.get('export_console_lines', []) or ['No incident pack run yet.'])[-6:]))}</div>"
+          f"</div>"
+          for item in status.get('incidents', [])
+        ) or '<div class=\"timeline-empty\">No reboot incidents recorded yet.</div>'}
+      </div>
+    </section>
 
     <div class="compact-grid">
       <section class="panel" id="faultSummaryPanel">
@@ -3770,6 +4098,16 @@ def render_page(status: Dict[str, Any]) -> str:
         }});
       }};
 
+      window.runIncidentExport = function (incidentId) {{
+        postJson('/api/action', {{ action: 'incident_export', incident_id: incidentId }}, function (status, body) {{
+          if (status >= 200 && status < 300) {{
+            reloadSoon();
+            return;
+          }}
+          alert((body && body.message) || 'Incident export failed.');
+        }});
+      }};
+
       window.runSpeedtest = function () {{
         postJson('/api/speedtest', {{}}, function (status, body) {{
           if (status >= 200 && status < 300) {{
@@ -4337,6 +4675,42 @@ def render_page(status: Dict[str, Any]) -> str:
       exportArchiveLink.style.display = exportState.archive ? 'inline-block' : 'none';
       exportReadmeLink.style.display = exportState.folder ? 'inline-block' : 'none';
       exportLogLink.style.display = exportState.log_path ? 'inline-block' : 'none';
+      document.getElementById('incidentsList').innerHTML = (status.incidents || []).map((item) => {{
+        const incidentExport = item.export_status || {{}};
+        const incidentToken = item.incident_id || '';
+        const archiveHref = buildAuthedUrl('/download/incident-archive', {{ id: incidentToken, export: incidentExport.request_id || incidentExport.finished_at || '' }});
+        const logHref = buildAuthedUrl('/download/incident-log', {{ id: incidentToken, export: incidentExport.request_id || incidentExport.finished_at || '' }});
+        const badgeClass = item.watchdog_requested_reboot ? '' : 'warn';
+        const exportButtonLabel = incidentExport.state === 'running'
+          ? 'Generating incident pack...'
+          : (incidentExport.archive ? 'Refresh incident pack' : 'Generate incident pack');
+        const exportConsole = (item.export_console_lines || []).length
+          ? (item.export_console_lines || []).join('\n')
+          : 'No incident pack run yet.';
+        return `
+          <div class="incident-row">
+            <div class="incident-head">
+              <div class="incident-title">${{item.kind_label || 'Incident'}}</div>
+              <span class="badge ${{badgeClass}}">${{(item.classification || 'incident').replace(/_/g, ' ')}}</span>
+            </div>
+            <div class="incident-summary">${{item.reporting_text || 'No incident wording available.'}}</div>
+            <div class="incident-meta">
+              <div>Incident time: <strong>${{formatLocalTimestamp(item.incident_time || '')}}</strong></div>
+              <div>Last healthy: <strong>${{formatLocalTimestamp(item.last_known_healthy_at || '')}}</strong></div>
+              <div>Reboot detected: <strong>${{formatLocalTimestamp(item.reboot_detected_at || '')}}</strong></div>
+              <div>Reason: <strong>${{item.suspected_reason || 'unknown'}}</strong></div>
+              <div>Watchdog requested: <strong>${{item.watchdog_requested_reboot ? 'Yes' : 'No'}}</strong></div>
+              <div>Window: <strong>${{item.window_since || 'unknown'}} to ${{item.window_until || 'unknown'}}</strong></div>
+            </div>
+            <div class="incident-actions">
+              <button class="secondary ${{incidentExport.state === 'running' ? 'status-running' : (incidentExport.state === 'failed' ? 'status-failed' : '')}}" onclick="runIncidentExport('${{incidentToken}}')" ${{incidentExport.state === 'running' ? 'disabled' : ''}}>${{exportButtonLabel}}</button>
+              <a class="link-btn" href="${{archiveHref}}" style="display:${{incidentExport.archive ? 'inline-block' : 'none'}}">Download pack</a>
+              <a class="link-btn" href="${{logHref}}" style="display:${{incidentExport.log_path ? 'inline-block' : 'none'}}">Download log</a>
+            </div>
+            <div class="incident-console">${{exportConsole}}</div>
+          </div>
+        `;
+      }}).join('') || '<div class="timeline-empty">No reboot incidents recorded yet.</div>';
 
       document.querySelector('.overview-grid').innerHTML = `
         <section class="stat-card"><div class="stat-label">Current state</div><div class="stat-value">${{status.state.fault_active ? 'Fault' : 'Healthy'}}</div></section>
@@ -4697,6 +5071,20 @@ def render_page(status: Dict[str, Any]) -> str:
       await fetchStatus();
     }}
 
+    async function runIncidentExport(incidentId) {{
+      const response = await fetch('/api/action' + authQuery, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ action: 'incident_export', incident_id: incidentId }})
+      }});
+      if (!response.ok) {{
+        const payload = await response.json().catch(() => ({{ message: 'Incident export failed.' }}));
+        alert(payload.message || 'Incident export failed.');
+        return;
+      }}
+      await fetchStatus();
+    }}
+
     async function runMemtest() {{
       const response = await fetch('/api/memtest' + authQuery, {{
         method: 'POST',
@@ -4853,6 +5241,16 @@ class Handler(BaseHTTPRequestHandler):
             export_status = read_json(EXPORT_STATUS_PATH, {})
             self._send_file(safe_export_file("log"), download_name=export_download_names(export_status)["log"])
             return
+        if parsed.path == "/download/incident-archive":
+            incident_id = parse_qs(parsed.query).get("id", [""])[0]
+            incident = incident_by_id(incident_id) or {"incident_id": incident_id}
+            self._send_file(safe_incident_export_file(incident_id, "archive"), download_name=incident_export_names(incident)["archive"])
+            return
+        if parsed.path == "/download/incident-log":
+            incident_id = parse_qs(parsed.query).get("id", [""])[0]
+            incident = incident_by_id(incident_id) or {"incident_id": incident_id}
+            self._send_file(safe_incident_export_file(incident_id, "log"), download_name=incident_export_names(incident)["log"])
+            return
         if parsed.path == "/download/memtest-log":
             self._send_file(safe_memtest_file("log"), download_name="watchdog-memtest.log")
             return
@@ -4971,6 +5369,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if action == "quick_export":
                 result = launch_quick_export()
+                self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+                return
+            if action == "incident_export":
+                result = launch_incident_export(str(data.get("incident_id", "")).strip())
                 self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
                 return
             marker = action_map.get(action)

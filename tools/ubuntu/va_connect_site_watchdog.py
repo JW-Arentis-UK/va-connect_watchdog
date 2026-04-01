@@ -8,13 +8,14 @@ import socket
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
 DEFAULT_CONFIG_PATH = "/opt/va-connect-watchdog/site-watchdog.json"
 DEFAULT_MANUAL_DIR = "/var/lib/va-connect-site-watchdog"
+DEFAULT_INCIDENTS_PATH = "/var/log/va-connect-site-watchdog/incidents.jsonl"
 
 
 def utc_now() -> datetime:
@@ -23,6 +24,25 @@ def utc_now() -> datetime:
 
 def iso_now() -> str:
     return utc_now().isoformat(timespec="seconds")
+
+
+def parse_iso(value: str) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        try:
+            return datetime.fromisoformat(raw)
+        except Exception:
+            return None
+
+
+def local_export_time(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc).astimezone()
+    return value.astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def read_json(path: Path, default):
@@ -362,6 +382,7 @@ class SiteWatchdog:
         self.log_path = Path(str(config["json_log"]))
         self.metrics_path = Path(str(config.get("metrics_file", "/var/log/va-connect-site-watchdog/metrics.jsonl")))
         self.snapshot_dir = Path(str(config["snapshot_dir"]))
+        self.incidents_path = Path(str(config.get("incidents_file", DEFAULT_INCIDENTS_PATH)))
         self.manual_dir = Path(str(config.get("manual_dir", DEFAULT_MANUAL_DIR)))
         self.prev_cpu_total, self.prev_cpu_idle = read_cpu_times()
         self.state = read_json(
@@ -378,6 +399,10 @@ class SiteWatchdog:
                 "last_metrics": None,
                 "last_check_at": None,
                 "last_healthy_at": None,
+                "last_wan_ok_at": None,
+                "last_lan_ok_at": None,
+                "last_app_ok_at": None,
+                "last_services_ok_at": None,
                 "monitoring_state": "starting",
                 "hostname": socket.gethostname(),
                 "boot_id": read_boot_id(),
@@ -437,6 +462,62 @@ class SiteWatchdog:
             )
         return metrics
 
+    def record_reboot_incident(
+        self,
+        previous_boot_id: str,
+        current_boot_id: str,
+        last_check_at: str,
+        reboot_detected_at: str,
+        reboot_was_requested: bool,
+        snapshot_path: Optional[Path],
+    ) -> None:
+        anchor_dt = parse_iso(last_check_at) or parse_iso(str(self.state.get("last_healthy_at") or "")) or parse_iso(reboot_detected_at)
+        reboot_dt = parse_iso(reboot_detected_at) or utc_now()
+        if anchor_dt is None:
+            anchor_dt = reboot_dt - timedelta(minutes=5)
+        window_since = local_export_time(anchor_dt - timedelta(minutes=5))
+        window_until = local_export_time(reboot_dt + timedelta(minutes=5))
+        incident_id = f"{reboot_dt.astimezone().strftime('%Y%m%d_%H%M%S')}_{current_boot_id[:8]}"
+        last_checks = dict(self.state.get("last_checks") or {})
+        incident = {
+            "incident_id": incident_id,
+            "ts": reboot_detected_at,
+            "incident_time": last_check_at or str(self.state.get("last_healthy_at") or reboot_detected_at),
+            "last_known_healthy_at": str(self.state.get("last_healthy_at") or ""),
+            "reboot_detected_at": reboot_detected_at,
+            "window_since": window_since,
+            "window_until": window_until,
+            "previous_boot_id": previous_boot_id,
+            "current_boot_id": current_boot_id,
+            "watchdog_requested_reboot": reboot_was_requested,
+            "classification": "watchdog_reboot" if reboot_was_requested else "manual_relay_recovery_suspected",
+            "title": "Watchdog reboot" if reboot_was_requested else "Unexpected reboot",
+            "reporting_text": (
+                "Watchdog requested a reboot after the unit stayed non-functional."
+                if reboot_was_requested
+                else "Unit became non-functional and required an unplanned hard reboot or repower to recover."
+            ),
+            "suspected_reason": (
+                "Watchdog itself requested the reboot."
+                if reboot_was_requested
+                else "Watchdog did not request reboot. Manual reboot, GSM relay, power-cycle, or crash recovery is more likely."
+            ),
+            "last_wan_ok_at": str(self.state.get("last_wan_ok_at") or ""),
+            "last_lan_ok_at": str(self.state.get("last_lan_ok_at") or ""),
+            "last_app_ok_at": str(self.state.get("last_app_ok_at") or ""),
+            "last_services_ok_at": str(self.state.get("last_services_ok_at") or ""),
+            "last_successful_watchdog_check_at": last_check_at,
+            "last_sampled_pc_stats": dict(self.state.get("last_metrics") or {}),
+            "last_checks": last_checks,
+            "snapshot_path": str(snapshot_path) if snapshot_path is not None else "",
+            "export_generated_at": "",
+            "export_archive_path": "",
+            "export_folder_path": "",
+            "export_log_path": "",
+        }
+        append_jsonl(self.incidents_path, incident)
+        self.log_event("incident_recorded", incident_id=incident_id, classification=incident["classification"], title=incident["title"])
+
     def inspect_boot_transition(self) -> None:
         current_boot_id = read_boot_id()
         previous_boot_id = str(self.state.get("boot_id") or "")
@@ -452,6 +533,10 @@ class SiteWatchdog:
                 "current_boot_id": current_boot_id,
                 "last_check_at": last_check_at,
             }
+            snapshot_path = capture_previous_boot_snapshot(
+                self.snapshot_dir,
+                max_journal_lines=int(self.config["journal_lines"]),
+            )
             if reboot_was_requested:
                 self.state["last_reboot_reason"] = "watchdog reboot observed"
                 self.log_event("watchdog_reboot_observed", **event)
@@ -459,12 +544,16 @@ class SiteWatchdog:
                 self.state["unexpected_reboot_count"] = int(self.state.get("unexpected_reboot_count", 0)) + 1
                 self.state["last_reboot_reason"] = "unexpected reboot detected after boot"
                 self.log_event("unexpected_reboot_detected", **event)
-            snapshot_path = capture_previous_boot_snapshot(
-                self.snapshot_dir,
-                max_journal_lines=int(self.config["journal_lines"]),
-            )
             if snapshot_path is not None:
                 self.log_event("snapshot", reason="previous-boot-review", path=str(snapshot_path))
+            self.record_reboot_incident(
+                previous_boot_id=previous_boot_id,
+                current_boot_id=current_boot_id,
+                last_check_at=last_check_at,
+                reboot_detected_at=str(self.state.get("last_startup_at") or iso_now()),
+                reboot_was_requested=reboot_was_requested,
+                snapshot_path=snapshot_path,
+            )
 
         self.state["boot_id"] = current_boot_id
         self.refresh_hardware_health(force=True)
@@ -605,6 +694,14 @@ class SiteWatchdog:
         self.state["monitoring_state"] = "active"
         self.state["last_checks"] = checks
         self.state["last_check_at"] = iso_now()
+        if checks["internet_ok"]:
+            self.state["last_wan_ok_at"] = self.state["last_check_at"]
+        if checks["lan_ok"]:
+            self.state["last_lan_ok_at"] = self.state["last_check_at"]
+        if checks["app_ok"]:
+            self.state["last_app_ok_at"] = self.state["last_check_at"]
+        if checks["services_ok"]:
+            self.state["last_services_ok_at"] = self.state["last_check_at"]
         if run_only_checks:
             write_json(self.state_path, self.state)
             self.log_event("manual_check", checks=checks)
