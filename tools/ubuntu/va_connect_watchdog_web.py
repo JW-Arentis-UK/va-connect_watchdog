@@ -1361,6 +1361,54 @@ def normalize_update_status(update_status: Dict[str, Any], build_info: Dict[str,
     return status
 
 
+def normalize_export_status(export_status: Dict[str, Any]) -> Dict[str, Any]:
+    status = dict(export_status or {})
+    if status.get("state") != "running":
+        return status
+
+    request_id = str(status.get("request_id", "")).strip()
+    started_at = parse_iso(str(status.get("started_at", "")))
+    now = datetime.utcnow().astimezone()
+    lines: List[str] = []
+    try:
+        lines = EXPORT_LOG_PATH.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        lines = []
+
+    if request_id and lines:
+        marker = f"===== Web export started request_id={request_id} "
+        finish_marker = f"===== Web export finished request_id={request_id} "
+        section_start = None
+        finished_line = ""
+        for index, line in enumerate(lines):
+            if line.startswith(marker):
+                section_start = index + 1
+            if line.startswith(finish_marker):
+                finished_line = line
+        if section_start is not None:
+            for line in lines[section_start:]:
+                if line.startswith("===== Web export started request_id="):
+                    break
+                if line.startswith("  Folder: "):
+                    status["folder"] = line.split(": ", 1)[1]
+                if line.startswith("  Archive: "):
+                    status["archive"] = line.split(": ", 1)[1]
+            if finished_line:
+                status["finished_at"] = status.get("finished_at") or now_iso()
+                status["return_code"] = 0 if "return_code=0" in finished_line else int(status.get("return_code", 1) or 1)
+                status["state"] = "ok" if int(status.get("return_code", 1) or 1) == 0 and status.get("archive") else "failed"
+                status["message"] = "Incident export ready." if status["state"] == "ok" else "Incident export failed. Check web-export.log."
+                write_json(EXPORT_STATUS_PATH, status)
+                return status
+
+    if started_at and (now - started_at).total_seconds() > 30 * 60:
+        status["state"] = "failed"
+        status["finished_at"] = status.get("finished_at") or now_iso()
+        status["message"] = "Incident export ran too long or got stuck. Check web-export.log."
+        write_json(EXPORT_STATUS_PATH, status)
+    return status
+
+
 def launch_export(since_time: str, until_time: str) -> Dict[str, Any]:
     current = read_json(EXPORT_STATUS_PATH, {})
     if current.get("state") == "running":
@@ -1409,6 +1457,7 @@ def launch_export(since_time: str, until_time: str) -> Dict[str, Any]:
         "with log_path.open('ab') as log:\n"
         "    log.write((f'\\n===== Web export started request_id={request_id} {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
         "    result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+        "    log.write((f'===== Web export finished request_id={request_id} return_code={result.returncode} {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
         "payload = json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
         "payload['state'] = 'ok' if result.returncode == 0 else 'failed'\n"
         "payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
@@ -1829,6 +1878,7 @@ def status_payload() -> Dict[str, Any]:
         summarized_events.append(enriched)
     build_info = read_json(BUILD_INFO_PATH, {})
     update_status = normalize_update_status(read_json(UPDATE_STATUS_PATH, {"state": "idle"}), build_info)
+    export_status = normalize_export_status(read_json(EXPORT_STATUS_PATH, {"state": "idle"}))
     memtest_info = memtest_recommendation()
     memtest_status = normalize_memtest_status(read_json(MEMTEST_STATUS_PATH, {"state": "idle"}))
     speedtest_status = normalize_speedtest_status(read_json(SPEEDTEST_STATUS_PATH, {"state": "idle"}))
@@ -1855,7 +1905,7 @@ def status_payload() -> Dict[str, Any]:
         "state": state,
         "build_info": build_info,
         "update_status": update_status,
-        "export_status": read_json(EXPORT_STATUS_PATH, {"state": "idle"}),
+        "export_status": export_status,
         "memtest_status": memtest_status,
         "memtest_info": memtest_info,
         "speedtest_status": speedtest_status,
