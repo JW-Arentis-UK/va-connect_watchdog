@@ -2629,6 +2629,17 @@ def render_page(status: Dict[str, Any]) -> str:
         </div>
         <button class="secondary" onclick="saveHikConfig()">Save Hik settings</button>
         <button class="secondary" onclick="runHikProbe()">Probe Hik people count</button>
+        <p style="margin-top:12px;"><strong>Saved Hik settings</strong></p>
+        <ul class="review-list" id="hikSavedSettings">
+          <li>Enabled: {html.escape(str(bool(cfg.get("hik_enabled"))))}</li>
+          <li>Scheme: {html.escape(str(cfg.get("hik_scheme", "http")))}</li>
+          <li>Host: {html.escape(str(cfg.get("hik_host", "")))}</li>
+          <li>Username: {html.escape(str(cfg.get("hik_username", "")))}</li>
+          <li>Password: {'set' if str(cfg.get('hik_password', '')).strip() else 'empty'}</li>
+          <li>Channel: {int(cfg.get("hik_channel", 1) or 1)}</li>
+          <li>Result path: {html.escape(str(cfg.get("hik_people_count_result_path", "")))}</li>
+          <li>Capabilities path: {html.escape(str(cfg.get("hik_people_count_capabilities_path", "")))}</li>
+        </ul>
         <div class="update-row">
           <span class="badge {'warn' if status.get('hik_status', {}).get('state') == 'idle' else ('danger' if status.get('hik_status', {}).get('state') == 'failed' else '')}" id="hikState">{html.escape(str(status.get("hik_status", {}).get("state", "idle")).title())}</span>
           <span id="hikMessage">{html.escape(str(status.get("hik_status", {}).get("message", "No Hik probe run yet.")))}</span>
@@ -2883,6 +2894,11 @@ def render_page(status: Dict[str, Any]) -> str:
       return `${{date.getFullYear()}}-${{pad(date.getMonth() + 1)}}-${{pad(date.getDate())}}T${{pad(date.getHours())}}:${{pad(date.getMinutes())}}`;
     }}
 
+    function isEditingAny(ids) {{
+      const active = document.activeElement;
+      return !!active && ids.includes(active.id);
+    }}
+
     function render(status) {{
       document.getElementById('monitoring_enabled').checked = !!status.config.monitoring_enabled;
       document.getElementById('app_restart_enabled').checked = !!status.config.app_restart_enabled;
@@ -2904,14 +2920,17 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('teamviewer_password_reset_command').value = status.config.teamviewer_password_reset_command || 'teamviewer passwd {{password}}';
       document.getElementById('teamviewer_start_command').value = status.config.teamviewer_start_command || 'systemctl start teamviewerd';
       document.getElementById('teamviewer_restart_command').value = status.config.teamviewer_restart_command || 'systemctl restart teamviewerd';
-      document.getElementById('hik_enabled').checked = !!status.config.hik_enabled;
-      document.getElementById('hik_scheme').value = status.config.hik_scheme || 'http';
-      document.getElementById('hik_host').value = status.config.hik_host || '';
-      document.getElementById('hik_username').value = status.config.hik_username || '';
-      document.getElementById('hik_password').value = status.config.hik_password || '';
-      document.getElementById('hik_channel').value = status.config.hik_channel || 1;
-      document.getElementById('hik_people_count_result_path').value = status.config.hik_people_count_result_path || '/ISAPI/Intelligent/channels/{{channel}}/framesPeopleCounting/result';
-      document.getElementById('hik_people_count_capabilities_path').value = status.config.hik_people_count_capabilities_path || '/ISAPI/Intelligent/channels/{{channel}}/framesPeopleCounting/capabilities';
+      const hikFieldIds = ['hik_enabled', 'hik_scheme', 'hik_host', 'hik_username', 'hik_password', 'hik_channel', 'hik_people_count_result_path', 'hik_people_count_capabilities_path'];
+      if (!isEditingAny(hikFieldIds)) {{
+        document.getElementById('hik_enabled').checked = !!status.config.hik_enabled;
+        document.getElementById('hik_scheme').value = status.config.hik_scheme || 'http';
+        document.getElementById('hik_host').value = status.config.hik_host || '';
+        document.getElementById('hik_username').value = status.config.hik_username || '';
+        document.getElementById('hik_password').value = status.config.hik_password || '';
+        document.getElementById('hik_channel').value = status.config.hik_channel || 1;
+        document.getElementById('hik_people_count_result_path').value = status.config.hik_people_count_result_path || '/ISAPI/Intelligent/channels/{{channel}}/framesPeopleCounting/result';
+        document.getElementById('hik_people_count_capabilities_path').value = status.config.hik_people_count_capabilities_path || '/ISAPI/Intelligent/channels/{{channel}}/framesPeopleCounting/capabilities';
+      }}
       if (!document.getElementById('export_since').value) {{
         const startup = status.state.last_startup_at || '';
         if (startup) {{
@@ -3097,6 +3116,16 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('hikCounts').innerHTML = Object.entries(hikStatus.parsed_counts || {{}}).map(([key, value]) => `<li><strong>${{key}}</strong>: ${{value}}</li>`).join('') || '<li>No people-count values parsed yet.</li>';
       document.getElementById('hikCapabilitiesRaw').textContent = hikStatus.capabilities_excerpt || '';
       document.getElementById('hikResultRaw').textContent = hikStatus.result_excerpt || '';
+      document.getElementById('hikSavedSettings').innerHTML = `
+        <li>Enabled: ${{status.config.hik_enabled ? 'true' : 'false'}}</li>
+        <li>Scheme: ${{status.config.hik_scheme || 'http'}}</li>
+        <li>Host: ${{status.config.hik_host || ''}}</li>
+        <li>Username: ${{status.config.hik_username || ''}}</li>
+        <li>Password: ${{(status.config.hik_password || '').trim() ? 'set' : 'empty'}}</li>
+        <li>Channel: ${{status.config.hik_channel || 1}}</li>
+        <li>Result path: ${{status.config.hik_people_count_result_path || ''}}</li>
+        <li>Capabilities path: ${{status.config.hik_people_count_capabilities_path || ''}}</li>
+      `;
       const rebootLeadup = status.reboot_leadup || {{}};
       const rebootLeadupMetrics = rebootLeadup.last_metrics || {{}};
       document.getElementById('rebootLeadupDetail').textContent = rebootLeadup.detail || 'No reboot lead-up yet.';
