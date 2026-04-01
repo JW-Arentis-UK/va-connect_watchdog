@@ -3355,25 +3355,7 @@ def render_page(status: Dict[str, Any]) -> str:
       <h2>Unplanned repowers</h2>
       <p class="hint">Each row captures the outage context and lets you generate or download a pack for that specific reboot event.</p>
       <div class="incident-list" id="incidentsList">
-        {"".join(
-          f"<div class='incident-row'>"
-          f"<div class='incident-head'><div class='incident-title'>{html.escape(str(item.get('kind_label', 'Incident')))}</div><span class='badge {'warn' if not item.get('watchdog_requested_reboot') else ''}'>{html.escape(str(item.get('classification', 'incident')).replace('_', ' ').title())}</span></div>"
-          f"<div class='incident-summary'>{html.escape(str(item.get('reporting_text', 'No incident wording available.')))}</div>"
-          f"<div class='incident-meta'>"
-          f"<div>Incident time: <strong>{html.escape(str(item.get('incident_time', 'unknown')))}</strong></div>"
-          f"<div>Last healthy: <strong>{html.escape(str(item.get('last_known_healthy_at', 'unknown')))}</strong></div>"
-          f"<div>Reboot detected: <strong>{html.escape(str(item.get('reboot_detected_at', 'unknown')))}</strong></div>"
-          f"<div>Reason: <strong>{html.escape(str(item.get('suspected_reason', 'unknown')))}</strong></div>"
-          f"</div>"
-          f"<div class='incident-actions'>"
-          f"<button class='secondary' onclick=\"runIncidentExport('{html.escape(str(item.get('incident_id', '')))}')\">{'Generate incident pack' if not (item.get('export_status', {}) or {}).get('archive') else 'Refresh incident pack'}</button>"
-          f"<a class='link-btn' href='/download/incident-archive?id={html.escape(str(item.get('incident_id', '')))}'>Download pack</a>"
-          f"<a class='link-btn' href='/download/incident-log?id={html.escape(str(item.get('incident_id', '')))}'>Download log</a>"
-          f"</div>"
-          f"<div class='incident-console'>{html.escape(chr(10).join((item.get('export_console_lines', []) or ['No incident pack run yet.'])[-6:]))}</div>"
-          f"</div>"
-          for item in status.get('incidents', [])
-        ) or '<div class=\"timeline-empty\">No reboot incidents recorded yet.</div>'}
+        <div class="timeline-empty">Loading incident history...</div>
       </div>
     </section>
 
