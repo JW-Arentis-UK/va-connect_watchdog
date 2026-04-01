@@ -1763,8 +1763,9 @@ def render_page(status: Dict[str, Any]) -> str:
     p {{ margin: 0 0 10px; }}
     .sub {{ color: #8ea5b9; margin-bottom: 12px; font-size: 0.88rem; }}
     .navline {{
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(320px, auto);
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
       gap: 14px;
       align-items: center;
       margin-bottom: 10px;
@@ -1773,6 +1774,7 @@ def render_page(status: Dict[str, Any]) -> str:
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
+      flex: 1 1 420px;
       min-width: 0;
     }}
     .tab-btn {{
@@ -2159,6 +2161,8 @@ def render_page(status: Dict[str, Any]) -> str:
       padding: 9px 12px;
       background: linear-gradient(180deg, rgba(18, 29, 39, 0.96), rgba(13, 22, 31, 0.96));
       box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
+      flex: 1 1 520px;
+      min-width: 320px;
     }}
     .topbar-strip {{
       display: flex;
@@ -2208,7 +2212,6 @@ def render_page(status: Dict[str, Any]) -> str:
       margin-top: 6px;
     }}
     @media (max-width: 1100px) {{
-      .navline,
       .hero,
       .analysis-grid,
       .status-grid,
@@ -2217,6 +2220,13 @@ def render_page(status: Dict[str, Any]) -> str:
       .compact-grid,
       .hardware-grid {{
         grid-template-columns: 1fr;
+      }}
+      .navline {{
+        flex-direction: column;
+        align-items: stretch;
+      }}
+      .topbar-actions {{
+        min-width: 0;
       }}
     }}
   </style>
