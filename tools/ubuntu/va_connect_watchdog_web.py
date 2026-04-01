@@ -58,6 +58,37 @@ def now_iso() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat() + "+00:00"
 
 
+def slugify_label(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9]+", "-", str(value or "").strip()).strip("-").lower()
+    return cleaned or "watchdog"
+
+
+def export_time_token(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "unknown"
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"):
+        try:
+            parsed = datetime.strptime(raw, fmt)
+            return parsed.strftime("%Y%m%d-%H%M%S")
+        except ValueError:
+            continue
+    return slugify_label(raw)
+
+
+def export_download_names(export_status: Dict[str, Any]) -> Dict[str, str]:
+    site_label = slugify_label(str(export_status.get("site_label") or socket.gethostname()))
+    since_token = export_time_token(str(export_status.get("since", "")))
+    until_token = export_time_token(str(export_status.get("until", "")))
+    base = f"{site_label}_{since_token}_to_{until_token}"
+    return {
+        "base": base,
+        "archive": f"{base}_incident-pack.tar.gz",
+        "readme": f"{base}_incident-pack-readme.txt",
+        "log": f"{base}_incident-pack.log",
+    }
+
+
 def parse_iso(value: str) -> Optional[datetime]:
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -1337,6 +1368,14 @@ def launch_export(since_time: str, until_time: str) -> Dict[str, Any]:
     if not since_time.strip() or not until_time.strip():
         return {"ok": False, "message": "Provide both since and until times."}
 
+    site_label = socket.gethostname()
+    download_names = export_download_names(
+        {
+            "site_label": site_label,
+            "since": since_time,
+            "until": until_time,
+        }
+    )
     payload = {
         "state": "running",
         "started_at": now_iso(),
@@ -1344,9 +1383,14 @@ def launch_export(since_time: str, until_time: str) -> Dict[str, Any]:
         "message": "Incident export requested from web UI.",
         "since": since_time,
         "until": until_time,
+        "site_label": site_label,
+        "export_label": download_names["base"],
         "folder": "",
         "archive": "",
         "log_path": str(EXPORT_LOG_PATH),
+        "download_archive_name": download_names["archive"],
+        "download_readme_name": download_names["readme"],
+        "download_log_name": download_names["log"],
     }
     write_json(EXPORT_STATUS_PATH, payload)
     EXPORT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1378,7 +1422,7 @@ def launch_export(since_time: str, until_time: str) -> Dict[str, Any]:
         "        payload['folder'] = line.split(': ', 1)[1]\n"
         "    if line.startswith('  Archive: '):\n"
         "        payload['archive'] = line.split(': ', 1)[1]\n"
-        "payload['message'] = 'Incident export created.' if result.returncode == 0 else 'Incident export failed. Check web-export.log.'\n"
+        "payload['message'] = 'Incident export ready.' if result.returncode == 0 else 'Incident export failed. Check web-export.log.'\n"
         "status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
         "PY"
     )
@@ -2071,6 +2115,10 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
     button.secondary {{ background: #486458; }}
     button.warnbtn {{ background: #8a6521; }}
+    button.status-running {{ background: #8a6521; }}
+    button.status-failed {{ background: #7a3434; }}
+    button.status-ready {{ background: #486458; }}
+    button:disabled {{ opacity: 0.92; cursor: wait; }}
     .targets, .events {{ display: grid; gap: 8px; }}
     .targets {{ grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }}
     .item {{
@@ -2823,12 +2871,13 @@ def render_page(status: Dict[str, Any]) -> str:
             <input id="export_until" type="datetime-local">
           </div>
         </div>
-        <button class="secondary" onclick="exportIncident()">Export incident pack</button>
-        <div class="update-row">
-          <span class="badge {'warn' if status['export_status'].get('state') == 'running' else ('danger' if status['export_status'].get('state') == 'failed' else '')}" id="exportState">{html.escape(str(status["export_status"].get("state", "idle")).title())}</span>
-          <span id="exportMessage">{html.escape(str(status["export_status"].get("message", "No incident export run yet.")))}</span>
-        </div>
-        <p class="hint" id="exportMeta">{html.escape(str(status["export_status"].get("folder", "")))} {html.escape(str(status["export_status"].get("archive", "")))}</p>
+        <button
+          class="secondary {'status-running' if status['export_status'].get('state') == 'running' else ('status-failed' if status['export_status'].get('state') == 'failed' else ('status-ready' if status['export_status'].get('state') == 'ok' else ''))}"
+          id="exportButton"
+          onclick="exportIncident()"
+          {'disabled' if status['export_status'].get('state') == 'running' else ''}
+        >{html.escape(str(status["export_status"].get("button_label", "Export incident pack")))}</button>
+        <p class="hint" id="exportMeta">{html.escape(str(status["export_status"].get("message", "No incident export run yet.")))}</p>
         <div class="link-row">
           <a class="link-btn" id="exportArchiveLink" href="/download/export-archive">Download export archive</a>
           <a class="link-btn" id="exportReadmeLink" href="/download/export-readme">Download export README</a>
@@ -3714,21 +3763,42 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('toolsInstallMeta').textContent = toolsMetaParts.join(' | ') || 'Install missing SMART and EDAC packages from here when needed.';
       document.getElementById('toolsInstallLogLink').style.display = toolsInstallState.log_path ? 'inline-block' : 'none';
       const exportState = status.export_status || {{}};
-      const exportBadge = document.getElementById('exportState');
-      exportBadge.className = `badge ${{exportState.state === 'running' ? 'warn' : (exportState.state === 'failed' ? 'danger' : '')}}`;
-      exportBadge.textContent = (exportState.state || 'idle').toUpperCase();
-      document.getElementById('exportMessage').textContent = exportState.message || 'No incident export run yet.';
+      const exportButton = document.getElementById('exportButton');
+      const exportDownloadName = exportState.download_archive_name || 'incident pack';
+      if (exportState.state === 'running') {{
+        exportButton.textContent = `Exporting ${{exportDownloadName}}`;
+        exportButton.className = 'secondary status-running';
+        exportButton.disabled = true;
+      }} else if (exportState.state === 'failed') {{
+        exportButton.textContent = 'Export failed, try again';
+        exportButton.className = 'secondary status-failed';
+        exportButton.disabled = false;
+      }} else if (exportState.state === 'ok') {{
+        exportButton.textContent = `Export ready: ${{exportDownloadName}}`;
+        exportButton.className = 'secondary status-ready';
+        exportButton.disabled = false;
+      }} else {{
+        exportButton.textContent = 'Export incident pack';
+        exportButton.className = 'secondary';
+        exportButton.disabled = false;
+      }}
       const exportMetaParts = [];
+      if (exportState.message) {{
+        exportMetaParts.push(exportState.message);
+      }}
+      if (exportState.export_label) {{
+        exportMetaParts.push(exportState.export_label);
+      }}
       if (exportState.folder) {{
         exportMetaParts.push(exportState.folder);
       }}
-      if (exportState.archive) {{
-        exportMetaParts.push(exportState.archive);
+      if (exportState.since || exportState.until) {{
+        exportMetaParts.push(`${{exportState.since || 'unknown'}} to ${{exportState.until || 'unknown'}}`);
       }}
       if (exportState.finished_at) {{
         exportMetaParts.push(formatLocalTimestamp(exportState.finished_at));
       }}
-      document.getElementById('exportMeta').textContent = exportMetaParts.join(' | ') || 'not finished yet';
+      document.getElementById('exportMeta').textContent = exportMetaParts.join(' | ') || 'No incident export run yet.';
       document.getElementById('exportArchiveLink').style.display = exportState.archive ? 'inline-block' : 'none';
       document.getElementById('exportReadmeLink').style.display = exportState.folder ? 'inline-block' : 'none';
       document.getElementById('exportLogLink').style.display = exportState.log_path ? 'inline-block' : 'none';
@@ -4215,13 +4285,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"points": recent_metrics(hours), "events": recent_metric_events(hours)})
             return
         if parsed.path == "/download/export-archive":
-            self._send_file(safe_export_file("archive"), download_name="watchdog-incident-export.tar.gz")
+            export_status = read_json(EXPORT_STATUS_PATH, {})
+            self._send_file(safe_export_file("archive"), download_name=export_download_names(export_status)["archive"])
             return
         if parsed.path == "/download/export-readme":
-            self._send_file(safe_export_file("folder_readme"), download_name="watchdog-incident-export-readme.txt")
+            export_status = read_json(EXPORT_STATUS_PATH, {})
+            self._send_file(safe_export_file("folder_readme"), download_name=export_download_names(export_status)["readme"])
             return
         if parsed.path == "/download/export-log":
-            self._send_file(safe_export_file("log"), download_name="watchdog-incident-export.log")
+            export_status = read_json(EXPORT_STATUS_PATH, {})
+            self._send_file(safe_export_file("log"), download_name=export_download_names(export_status)["log"])
             return
         if parsed.path == "/download/memtest-log":
             self._send_file(safe_memtest_file("log"), download_name="watchdog-memtest.log")
