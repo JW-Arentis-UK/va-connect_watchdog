@@ -16,6 +16,8 @@ from mimetypes import guess_type
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
+from urllib.request import HTTPBasicAuthHandler, HTTPDigestAuthHandler, HTTPPasswordMgrWithDefaultRealm, build_opener, Request
+import xml.etree.ElementTree as ET
 
 
 CONFIG_PATH = Path(os.environ.get("SITE_WATCHDOG_CONFIG", "/opt/va-connect-watchdog/site-watchdog.json"))
@@ -32,6 +34,7 @@ MEMTEST_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-memtest.log")
 SPEEDTEST_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-speedtest-status.json")
 SPEEDTEST_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-speedtest.log")
 SPEEDTEST_HISTORY_PATH = Path("/var/log/va-connect-site-watchdog/speedtests.jsonl")
+HIK_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-hik-status.json")
 SNAPSHOT_DIR = Path("/var/log/va-connect-site-watchdog/snapshots")
 
 
@@ -79,6 +82,14 @@ def load_config() -> Dict[str, Any]:
         "teamviewer_password_reset_command": "teamviewer passwd {password}",
         "teamviewer_start_command": "systemctl start teamviewerd",
         "teamviewer_restart_command": "systemctl restart teamviewerd",
+        "hik_enabled": False,
+        "hik_scheme": "http",
+        "hik_host": "",
+        "hik_username": "",
+        "hik_password": "",
+        "hik_channel": 1,
+        "hik_people_count_result_path": "/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/result",
+        "hik_people_count_capabilities_path": "/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/capabilities",
     }
     merged = {**defaults, **config}
     merged["web_port"] = int(merged["web_port"])
@@ -187,6 +198,7 @@ def sanitize_patch(data: Dict[str, Any]) -> Dict[str, Any]:
         "app_restart_enabled",
         "restart_network_before_reboot",
         "reboot_enabled",
+        "hik_enabled",
     ]
     int_keys = [
         "base_reboot_timeout_seconds",
@@ -207,6 +219,12 @@ def sanitize_patch(data: Dict[str, Any]) -> Dict[str, Any]:
         "teamviewer_password_reset_command",
         "teamviewer_start_command",
         "teamviewer_restart_command",
+        "hik_scheme",
+        "hik_host",
+        "hik_username",
+        "hik_password",
+        "hik_people_count_result_path",
+        "hik_people_count_capabilities_path",
     ]
 
     for key in bool_keys:
@@ -233,6 +251,8 @@ def sanitize_patch(data: Dict[str, Any]) -> Dict[str, Any]:
             if host and 1 <= port <= 65535:
                 targets.append({"host": host, "port": port})
         patch["tcp_targets"] = targets
+    if "hik_channel" in data:
+        patch["hik_channel"] = max(1, int(data["hik_channel"]))
     return patch
 
 
@@ -784,6 +804,94 @@ def fault_reporting_payload(
         "stability_clues": stability_clues[:4],
         "quick_actions": quick_actions[:5],
     }
+
+
+def xml_leaf_values(raw_xml: str) -> Dict[str, str]:
+    values: Dict[str, str] = {}
+    try:
+        root = ET.fromstring(raw_xml)
+    except Exception:
+        return values
+    for node in root.iter():
+        if list(node):
+            continue
+        tag = str(node.tag).split("}", 1)[-1]
+        text = (node.text or "").strip()
+        if text and tag not in values:
+            values[tag] = text
+    return values
+
+
+def hik_request(config: Dict[str, Any], path_template: str, timeout: int = 8) -> Dict[str, Any]:
+    scheme = str(config.get("hik_scheme", "http")).strip() or "http"
+    host = str(config.get("hik_host", "")).strip()
+    username = str(config.get("hik_username", "")).strip()
+    password = str(config.get("hik_password", "")).strip()
+    channel = int(config.get("hik_channel", 1) or 1)
+    if not host:
+        return {"ok": False, "message": "Hik host is empty.", "status": 0, "body": ""}
+    path = str(path_template or "").strip().format(channel=channel)
+    url = f"{scheme}://{host}{path}"
+    password_mgr = HTTPPasswordMgrWithDefaultRealm()
+    password_mgr.add_password(None, url, username, password)
+    opener = build_opener(HTTPDigestAuthHandler(password_mgr), HTTPBasicAuthHandler(password_mgr))
+    request = Request(url, headers={"User-Agent": "VA-Connect-Watchdog-HikProbe"})
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8", errors="ignore")
+            return {"ok": True, "message": "ok", "status": getattr(response, "status", 200), "body": body}
+    except Exception as exc:
+        return {"ok": False, "message": f"{type(exc).__name__}: {exc}", "status": 0, "body": ""}
+
+
+def parse_hik_people_count(raw_xml: str) -> Dict[str, Any]:
+    values = xml_leaf_values(raw_xml)
+    parsed: Dict[str, Any] = {}
+    candidate_tags = {
+        "peopleEntering": "entering",
+        "peopleExiting": "exiting",
+        "entered": "entered",
+        "exited": "exited",
+        "currentPeopleNumber": "current",
+        "peopleNum": "current",
+        "numOfPeople": "current",
+        "peopleCounting": "current",
+    }
+    for tag, output_key in candidate_tags.items():
+        if tag in values:
+            parsed[output_key] = values[tag]
+    return parsed
+
+
+def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
+    if not bool(config.get("hik_enabled")):
+        return {"enabled": False, "message": "Hik probe disabled.", "state": "idle"}
+    host = str(config.get("hik_host", "")).strip()
+    if not host:
+        return {"enabled": True, "message": "Hik host not configured.", "state": "idle"}
+
+    capabilities = hik_request(config, str(config.get("hik_people_count_capabilities_path", "")))
+    result = hik_request(config, str(config.get("hik_people_count_result_path", "")))
+    parsed = parse_hik_people_count(result.get("body", ""))
+
+    state = "ok" if result.get("ok") else "failed"
+    message = "Hik people-count probe completed." if result.get("ok") else f"Hik probe failed: {result.get('message', 'unknown error')}"
+    payload = {
+        "enabled": True,
+        "state": state,
+        "message": message,
+        "checked_at": now_iso(),
+        "host": host,
+        "capabilities_ok": bool(capabilities.get("ok")),
+        "result_ok": bool(result.get("ok")),
+        "capabilities_status": int(capabilities.get("status", 0) or 0),
+        "result_status": int(result.get("status", 0) or 0),
+        "parsed_counts": parsed,
+        "capabilities_excerpt": str(capabilities.get("body", ""))[:800],
+        "result_excerpt": str(result.get("body", ""))[:800],
+    }
+    write_json(HIK_STATUS_PATH, payload)
+    return payload
 
 
 def suspect_scores_payload(state: Dict[str, Any], crash_review: Dict[str, Any], hardware_review: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1437,6 +1545,7 @@ def status_payload() -> Dict[str, Any]:
     speedtest_status = normalize_speedtest_status(read_json(SPEEDTEST_STATUS_PATH, {"state": "idle"}))
     speedtest_history = recent_speedtests()
     reboot_leadup = reboot_leadup_payload(events)
+    hik_status = read_json(HIK_STATUS_PATH, {"state": "idle", "enabled": bool(config.get("hik_enabled"))})
     hw_identity = hardware_identity()
     teamviewer = teamviewer_status_payload(config)
     clue_counters = clue_counter_payload(hardware_payload, crash_payload)
@@ -1463,6 +1572,7 @@ def status_payload() -> Dict[str, Any]:
         "speedtest_status": speedtest_status,
         "speedtest_history": speedtest_history,
         "reboot_leadup": reboot_leadup,
+        "hik_status": hik_status,
         "reboot_counts": reboot_counts,
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "teamviewer": teamviewer,
@@ -1489,6 +1599,7 @@ def status_payload() -> Dict[str, Any]:
             "memtest_log": str(MEMTEST_LOG_PATH),
             "speedtest_status": str(SPEEDTEST_STATUS_PATH),
             "speedtest_log": str(SPEEDTEST_LOG_PATH),
+            "hik_status": str(HIK_STATUS_PATH),
         },
     }
 
@@ -2061,6 +2172,7 @@ def render_page(status: Dict[str, Any]) -> str:
     <div class="tabs">
       <button type="button" class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
       <button type="button" class="tab-btn" data-tab="investigation" onclick="switchTab('investigation')">Investigation</button>
+      <button type="button" class="tab-btn" data-tab="dev" onclick="switchTab('dev')">Dev</button>
       <button type="button" class="tab-btn" data-tab="help" onclick="switchTab('help')">Help</button>
       <button type="button" class="tab-btn" data-tab="config" onclick="switchTab('config')">Config</button>
     </div>
@@ -2476,6 +2588,66 @@ def render_page(status: Dict[str, Any]) -> str:
     </div>
     </section>
 
+    <section class="tab-panel" data-tab-panel="dev">
+    <div class="bottom-grid">
+      <section class="panel">
+        <h2>Dev</h2>
+        <p class="hint">Use this tab to test new integrations before they graduate into the operator view.</p>
+        <div class="formgrid">
+          <div class="field">
+            <label>Hik enabled</label>
+            <input id="hik_enabled" type="checkbox" {'checked' if cfg.get('hik_enabled') else ''}>
+          </div>
+          <div class="field">
+            <label for="hik_scheme">Hik scheme</label>
+            <input id="hik_scheme" type="text" value="{html.escape(str(cfg.get("hik_scheme", "http")))}">
+          </div>
+          <div class="field">
+            <label for="hik_host">Hik host</label>
+            <input id="hik_host" type="text" value="{html.escape(str(cfg.get("hik_host", "")))}">
+          </div>
+          <div class="field">
+            <label for="hik_username">Hik username</label>
+            <input id="hik_username" type="text" value="{html.escape(str(cfg.get("hik_username", "")))}">
+          </div>
+          <div class="field">
+            <label for="hik_password">Hik password</label>
+            <input id="hik_password" type="text" value="{html.escape(str(cfg.get("hik_password", "")))}">
+          </div>
+          <div class="field">
+            <label for="hik_channel">Hik channel</label>
+            <input id="hik_channel" type="number" min="1" value="{int(cfg.get("hik_channel", 1))}">
+          </div>
+          <div class="field">
+            <label for="hik_people_count_result_path">Result path</label>
+            <input id="hik_people_count_result_path" type="text" value="{html.escape(str(cfg.get("hik_people_count_result_path", "/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/result")))}">
+          </div>
+          <div class="field">
+            <label for="hik_people_count_capabilities_path">Capabilities path</label>
+            <input id="hik_people_count_capabilities_path" type="text" value="{html.escape(str(cfg.get("hik_people_count_capabilities_path", "/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/capabilities")))}">
+          </div>
+        </div>
+        <button class="secondary" onclick="saveHikConfig()">Save Hik settings</button>
+        <button class="secondary" onclick="runHikProbe()">Probe Hik people count</button>
+        <div class="update-row">
+          <span class="badge {'warn' if status.get('hik_status', {}).get('state') == 'idle' else ('danger' if status.get('hik_status', {}).get('state') == 'failed' else '')}" id="hikState">{html.escape(str(status.get("hik_status", {}).get("state", "idle")).title())}</span>
+          <span id="hikMessage">{html.escape(str(status.get("hik_status", {}).get("message", "No Hik probe run yet.")))}</span>
+        </div>
+        <p class="hint" id="hikMeta">{html.escape(str(status.get("hik_status", {}).get("checked_at", "")))}</p>
+        <ul class="review-list" id="hikCounts">
+          {"".join(f"<li><strong>{html.escape(str(key))}</strong>: {html.escape(str(value))}</li>" for key, value in (status.get('hik_status', {}).get('parsed_counts', {}) or {}).items())}
+        </ul>
+      </section>
+      <section class="panel">
+        <h2>Hik Raw</h2>
+        <p><strong>Capabilities</strong></p>
+        <div class="review-scroll"><code id="hikCapabilitiesRaw">{html.escape(str(status.get("hik_status", {}).get("capabilities_excerpt", "")))}</code></div>
+        <p style="margin-top:10px;"><strong>Result</strong></p>
+        <div class="review-scroll"><code id="hikResultRaw">{html.escape(str(status.get("hik_status", {}).get("result_excerpt", "")))}</code></div>
+      </section>
+    </div>
+    </section>
+
     <section class="tab-panel" data-tab-panel="help">
     <div class="grid" style="margin-top:10px;">
       <section class="panel" style="grid-column: 1 / -1;">
@@ -2732,6 +2904,14 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('teamviewer_password_reset_command').value = status.config.teamviewer_password_reset_command || 'teamviewer passwd {{password}}';
       document.getElementById('teamviewer_start_command').value = status.config.teamviewer_start_command || 'systemctl start teamviewerd';
       document.getElementById('teamviewer_restart_command').value = status.config.teamviewer_restart_command || 'systemctl restart teamviewerd';
+      document.getElementById('hik_enabled').checked = !!status.config.hik_enabled;
+      document.getElementById('hik_scheme').value = status.config.hik_scheme || 'http';
+      document.getElementById('hik_host').value = status.config.hik_host || '';
+      document.getElementById('hik_username').value = status.config.hik_username || '';
+      document.getElementById('hik_password').value = status.config.hik_password || '';
+      document.getElementById('hik_channel').value = status.config.hik_channel || 1;
+      document.getElementById('hik_people_count_result_path').value = status.config.hik_people_count_result_path || '/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/result';
+      document.getElementById('hik_people_count_capabilities_path').value = status.config.hik_people_count_capabilities_path || '/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/capabilities';
       if (!document.getElementById('export_since').value) {{
         const startup = status.state.last_startup_at || '';
         if (startup) {{
@@ -2908,6 +3088,15 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('speedtestMeta').textContent = speedtestMetaParts.join(' | ') || 'not finished yet';
       document.getElementById('speedtestLogLink').style.display = speedtestStatus.log_path ? 'inline-block' : 'none';
       document.getElementById('speedtestHistory').innerHTML = (status.speedtest_history || []).map((item) => `<li>${{formatLocalTimestamp(item.ts || '')}} | ${{item.state || 'unknown'}} | Down ${{item.download_mbps ?? 'n/a'}} Mbps | Up ${{item.upload_mbps ?? 'n/a'}} Mbps</li>`).join('') || '<li>No speed test history yet.</li>';
+      const hikStatus = status.hik_status || {{}};
+      const hikBadge = document.getElementById('hikState');
+      hikBadge.className = `badge ${{hikStatus.state === 'failed' ? 'danger' : (hikStatus.state === 'idle' ? 'warn' : '')}}`;
+      hikBadge.textContent = (hikStatus.state || 'idle').toUpperCase();
+      document.getElementById('hikMessage').textContent = hikStatus.message || 'No Hik probe run yet.';
+      document.getElementById('hikMeta').textContent = hikStatus.checked_at ? formatLocalTimestamp(hikStatus.checked_at) : '';
+      document.getElementById('hikCounts').innerHTML = Object.entries(hikStatus.parsed_counts || {{}}).map(([key, value]) => `<li><strong>${{key}}</strong>: ${{value}}</li>`).join('') || '<li>No people-count values parsed yet.</li>';
+      document.getElementById('hikCapabilitiesRaw').textContent = hikStatus.capabilities_excerpt || '';
+      document.getElementById('hikResultRaw').textContent = hikStatus.result_excerpt || '';
       const rebootLeadup = status.reboot_leadup || {{}};
       const rebootLeadupMetrics = rebootLeadup.last_metrics || {{}};
       document.getElementById('rebootLeadupDetail').textContent = rebootLeadup.detail || 'No reboot lead-up yet.';
@@ -3190,6 +3379,14 @@ def render_page(status: Dict[str, Any]) -> str:
         teamviewer_password_reset_command: document.getElementById('teamviewer_password_reset_command').value.trim(),
         teamviewer_start_command: document.getElementById('teamviewer_start_command').value.trim(),
         teamviewer_restart_command: document.getElementById('teamviewer_restart_command').value.trim(),
+        hik_enabled: document.getElementById('hik_enabled').checked,
+        hik_scheme: document.getElementById('hik_scheme').value.trim(),
+        hik_host: document.getElementById('hik_host').value.trim(),
+        hik_username: document.getElementById('hik_username').value.trim(),
+        hik_password: document.getElementById('hik_password').value.trim(),
+        hik_channel: Number(document.getElementById('hik_channel').value || 1),
+        hik_people_count_result_path: document.getElementById('hik_people_count_result_path').value.trim(),
+        hik_people_count_capabilities_path: document.getElementById('hik_people_count_capabilities_path').value.trim(),
         internet_hosts: parseLines('internet_hosts'),
         systemd_services: parseLines('systemd_services'),
         tcp_targets: parseTcpTargets()
@@ -3199,6 +3396,38 @@ def render_page(status: Dict[str, Any]) -> str:
         headers: {{ 'Content-Type': 'application/json' }},
         body: JSON.stringify(payload)
       }});
+      await fetchStatus();
+    }}
+
+    async function saveHikConfig() {{
+      await fetch('/api/config' + authQuery, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{
+          hik_enabled: document.getElementById('hik_enabled').checked,
+          hik_scheme: document.getElementById('hik_scheme').value.trim(),
+          hik_host: document.getElementById('hik_host').value.trim(),
+          hik_username: document.getElementById('hik_username').value.trim(),
+          hik_password: document.getElementById('hik_password').value.trim(),
+          hik_channel: Number(document.getElementById('hik_channel').value || 1),
+          hik_people_count_result_path: document.getElementById('hik_people_count_result_path').value.trim(),
+          hik_people_count_capabilities_path: document.getElementById('hik_people_count_capabilities_path').value.trim()
+        }})
+      }});
+      await fetchStatus();
+    }}
+
+    async function runHikProbe() {{
+      const response = await fetch('/api/action' + authQuery, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ action: 'hik_probe' }})
+      }});
+      if (!response.ok) {{
+        const payload = await response.json().catch(() => ({{ message: 'Hik probe failed.' }}));
+        alert(payload.message || 'Hik probe failed.');
+        return;
+      }}
       await fetchStatus();
     }}
 
@@ -3467,6 +3696,10 @@ class Handler(BaseHTTPRequestHandler):
             if action == "restart_teamviewer":
                 result = run_teamviewer_command(load_config(), "restart")
                 self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+                return
+            if action == "hik_probe":
+                result = hik_probe_payload(load_config())
+                self._send_json(result, HTTPStatus.OK if result.get("state") != "failed" else HTTPStatus.BAD_REQUEST)
                 return
             marker = action_map.get(action)
             if not marker:
