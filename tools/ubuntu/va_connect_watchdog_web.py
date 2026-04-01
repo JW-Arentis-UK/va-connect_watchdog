@@ -3898,6 +3898,16 @@ def render_page(status: Dict[str, Any]) -> str:
       return `${{date.getFullYear()}}-${{pad(date.getMonth() + 1)}}-${{pad(date.getDate())}}T${{pad(date.getHours())}}:${{pad(date.getMinutes())}}`;
     }}
 
+    function coerceDateTimeInputValue(ts) {{
+      if (!ts) {{
+        return '';
+      }}
+      if (/^\\d{{4}}-\\d{{2}}-\\d{{2}} \\d{{2}}:\\d{{2}}(:\\d{{2}})?$/.test(ts)) {{
+        return ts.slice(0, 16).replace(' ', 'T');
+      }}
+      return formatLocalDateTimeInput(ts);
+    }}
+
     function isEditingAny(ids) {{
       const active = document.activeElement;
       return !!active && ids.includes(active.id);
@@ -3959,8 +3969,8 @@ def render_page(status: Dict[str, Any]) -> str:
       if (!document.getElementById('export_since').value) {{
         const quickWindow = status.quick_export || {{}};
         if (quickWindow.since && quickWindow.until) {{
-          document.getElementById('export_since').value = formatLocalDateTimeInput(new Date(quickWindow.since.replace(' ', 'T')).toISOString());
-          document.getElementById('export_until').value = formatLocalDateTimeInput(new Date(quickWindow.until.replace(' ', 'T')).toISOString());
+          document.getElementById('export_since').value = coerceDateTimeInputValue(quickWindow.since);
+          document.getElementById('export_until').value = coerceDateTimeInputValue(quickWindow.until);
         }} else {{
           const startup = status.state.last_startup_at || '';
           if (startup) {{
