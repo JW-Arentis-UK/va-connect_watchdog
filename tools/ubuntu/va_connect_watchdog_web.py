@@ -9,7 +9,7 @@ import shlex
 import socket
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from mimetypes import guess_type
@@ -363,6 +363,18 @@ def recent_events(limit: int = 30) -> List[Dict[str, Any]]:
         except json.JSONDecodeError:
             continue
     return list(reversed(events))
+
+
+def all_events() -> List[Dict[str, Any]]:
+    if not EVENTS_PATH.exists():
+        return []
+    events: List[Dict[str, Any]] = []
+    for line in EVENTS_PATH.read_text(encoding="utf-8").splitlines():
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return events
 
 
 def recent_metrics(hours: int = 24) -> List[Dict[str, Any]]:
@@ -1320,6 +1332,66 @@ def metric_at_or_before(ts_value: str) -> Dict[str, Any]:
     return latest
 
 
+def export_dt_string(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc).astimezone()
+    return value.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def quick_export_window(events: List[Dict[str, Any]], state: Dict[str, Any]) -> Dict[str, Any]:
+    startup_at = parse_iso(str(state.get("last_startup_at", "")))
+    reboot_event = None
+    for event in reversed(events):
+        if str(event.get("event", "")) in {"unexpected_reboot_detected", "watchdog_reboot_observed"}:
+            reboot_event = event
+            break
+
+    reboot_anchor = startup_at
+    if reboot_anchor is None and reboot_event is not None:
+        reboot_anchor = parse_iso(str(reboot_event.get("ts", "")))
+    if reboot_anchor is None:
+        return {
+            "available": False,
+            "message": "No reboot/startup point is available yet for a quick incident export.",
+            "since": "",
+            "until": "",
+            "pre_event_at": "",
+            "reboot_at": "",
+            "pre_event_title": "",
+        }
+
+    last_pre_event = None
+    for event in reversed(events):
+        event_dt = parse_iso(str(event.get("ts", "")))
+        if event_dt is None or event_dt >= reboot_anchor:
+            continue
+        last_pre_event = event
+        break
+
+    pre_event_dt = parse_iso(str((last_pre_event or {}).get("ts", ""))) if last_pre_event else None
+    if pre_event_dt is None:
+        pre_event_dt = reboot_anchor - timedelta(minutes=5)
+
+    since_dt = pre_event_dt - timedelta(minutes=5)
+    until_dt = reboot_anchor + timedelta(minutes=5)
+    summary = summarize_event(last_pre_event or {"event": "unknown", "ts": export_dt_string(pre_event_dt)})
+    if last_pre_event is None:
+        summary = {
+            "title": "No pre-reboot event found",
+            "detail": "Falling back to five minutes before the startup point.",
+        }
+
+    return {
+        "available": True,
+        "since": export_dt_string(since_dt),
+        "until": export_dt_string(until_dt),
+        "pre_event_at": export_dt_string(pre_event_dt),
+        "reboot_at": export_dt_string(reboot_anchor),
+        "pre_event_title": str(summary.get("title", "Last event")),
+        "message": f"Captures 5 minutes before {summary.get('title', 'the last event')} and 5 minutes after the reboot/startup point.",
+    }
+
+
 def reboot_leadup_payload(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     reboot_event = None
     for event in events:
@@ -1624,6 +1696,21 @@ def launch_export(since_time: str, until_time: str) -> Dict[str, Any]:
         start_new_session=True,
     )
     return {"ok": True, "message": "Export started.", "status": payload}
+
+
+def launch_quick_export() -> Dict[str, Any]:
+    state = read_json(STATE_PATH, {})
+    window = quick_export_window(all_events(), state)
+    if not window.get("available"):
+        return {"ok": False, "message": window.get("message", "Quick export window is not available yet.")}
+    result = launch_export(str(window.get("since", "")).strip(), str(window.get("until", "")).strip())
+    if result.get("ok") and isinstance(result.get("status"), dict):
+        result["status"]["quick_window"] = window
+        result["message"] = (
+            f"Quick incident export started from {window.get('since', 'unknown')} "
+            f"to {window.get('until', 'unknown')}."
+        )
+    return result
 
 
 def safe_export_file(kind: str) -> Optional[Path]:
@@ -2025,6 +2112,7 @@ def status_payload() -> Dict[str, Any]:
     next_steps.append("If it freezes overnight again, compare the last event time with the next boot's previous-boot snapshot.")
 
     events = recent_events()
+    events_all = all_events()
     summarized_events = []
     for event in events:
         enriched = dict(event)
@@ -2038,6 +2126,7 @@ def status_payload() -> Dict[str, Any]:
     speedtest_status = normalize_speedtest_status(read_json(SPEEDTEST_STATUS_PATH, {"state": "idle"}))
     speedtest_history = recent_speedtests()
     reboot_leadup = reboot_leadup_payload(events)
+    quick_export = quick_export_window(events_all, state)
     hik_status = read_json(HIK_STATUS_PATH, {"state": "idle", "enabled": bool(config.get("hik_enabled"))})
     hw_identity = hardware_identity()
     teamviewer = teamviewer_status_payload(config)
@@ -2060,6 +2149,7 @@ def status_payload() -> Dict[str, Any]:
         "build_info": build_info,
         "update_status": update_status,
         "export_status": export_status,
+        "quick_export": quick_export,
         "update_console_lines": latest_log_block(UPDATE_LOG_PATH, "===== Web update started ", 10),
         "export_console_lines": export_log_excerpt(export_status, 10),
         "memtest_status": memtest_status,
@@ -3095,6 +3185,8 @@ def render_page(status: Dict[str, Any]) -> str:
             <input id="export_until" type="datetime-local">
           </div>
         </div>
+        <button class="secondary" id="quickExportButton" onclick="quickExportIncident()">Quick incident export</button>
+        <p class="hint" id="quickExportMeta">{html.escape(str(status.get("quick_export", {}).get("message", "Quick export will appear when a reboot/startup point is available.")))}</p>
         <button
           class="secondary {'status-running' if status['export_status'].get('state') == 'running' else ('status-failed' if status['export_status'].get('state') == 'failed' else ('status-ready' if status['export_status'].get('state') == 'ok' else ''))}"
           id="exportButton"
@@ -3664,6 +3756,20 @@ def render_page(status: Dict[str, Any]) -> str:
         }});
       }};
 
+      window.quickExportIncident = function () {{
+        postJson('/api/action', {{ action: 'quick_export' }}, function (status, body) {{
+          if (status >= 200 && status < 300) {{
+            var meta = document.getElementById('quickExportMeta');
+            if (meta && body && body.message) {{
+              meta.textContent = body.message;
+            }}
+            reloadSoon();
+            return;
+          }}
+          alert((body && body.message) || 'Quick export failed.');
+        }});
+      }};
+
       window.runSpeedtest = function () {{
         postJson('/api/speedtest', {{}}, function (status, body) {{
           if (status >= 200 && status < 300) {{
@@ -3851,12 +3957,18 @@ def render_page(status: Dict[str, Any]) -> str:
         document.getElementById('hik_people_count_capabilities_path').value = status.config.hik_people_count_capabilities_path || '/ISAPI/Intelligent/channels/{{channel}}/framesPeopleCounting/capabilities';
       }}
       if (!document.getElementById('export_since').value) {{
-        const startup = status.state.last_startup_at || '';
-        if (startup) {{
-          const startupDate = new Date(startup);
-          const sinceDate = new Date(startupDate.getTime() - (30 * 60000));
-          document.getElementById('export_since').value = formatLocalDateTimeInput(sinceDate.toISOString());
-          document.getElementById('export_until').value = formatLocalDateTimeInput(startupDate.toISOString());
+        const quickWindow = status.quick_export || {{}};
+        if (quickWindow.since && quickWindow.until) {{
+          document.getElementById('export_since').value = formatLocalDateTimeInput(new Date(quickWindow.since.replace(' ', 'T')).toISOString());
+          document.getElementById('export_until').value = formatLocalDateTimeInput(new Date(quickWindow.until.replace(' ', 'T')).toISOString());
+        }} else {{
+          const startup = status.state.last_startup_at || '';
+          if (startup) {{
+            const startupDate = new Date(startup);
+            const sinceDate = new Date(startupDate.getTime() - (30 * 60000));
+            document.getElementById('export_since').value = formatLocalDateTimeInput(sinceDate.toISOString());
+            document.getElementById('export_until').value = formatLocalDateTimeInput(startupDate.toISOString());
+          }}
         }}
       }}
       document.getElementById('internet_hosts').value = (status.config.internet_hosts || []).join('\\n');
@@ -4161,6 +4273,8 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('toolsInstallLogLink').style.display = toolsInstallState.log_path && showInstallRow ? 'inline-block' : 'none';
       const exportState = status.export_status || {{}};
       const exportButton = document.getElementById('exportButton');
+      const quickExport = status.quick_export || {{}};
+      const quickExportButton = document.getElementById('quickExportButton');
       const exportDownloadName = exportState.download_archive_name || 'incident pack';
       if (exportState.state === 'running') {{
         exportButton.textContent = `Exporting ${{exportDownloadName}}`;
@@ -4196,6 +4310,10 @@ def render_page(status: Dict[str, Any]) -> str:
         exportMetaParts.push(formatLocalTimestamp(exportState.finished_at));
       }}
       document.getElementById('exportMeta').textContent = exportMetaParts.join(' | ') || 'No incident export run yet.';
+      document.getElementById('quickExportMeta').textContent = quickExport.message || 'Quick export will appear when a reboot/startup point is available.';
+      quickExportButton.style.display = quickExport.available ? 'inline-block' : 'none';
+      quickExportButton.disabled = exportState.state === 'running';
+      quickExportButton.textContent = exportState.state === 'running' ? 'Quick export running...' : 'Quick incident export';
       document.getElementById('exportConsole').textContent = (status.export_console_lines || []).length
         ? (status.export_console_lines || []).join('\n')
         : 'No export progress yet.';
@@ -4551,6 +4669,24 @@ def render_page(status: Dict[str, Any]) -> str:
       await fetchStatus();
     }}
 
+    async function quickExportIncident() {{
+      const response = await fetch('/api/action' + authQuery, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ action: 'quick_export' }})
+      }});
+      if (!response.ok) {{
+        const payload = await response.json().catch(() => ({{ message: 'Quick export failed.' }}));
+        alert(payload.message || 'Quick export failed.');
+        return;
+      }}
+      const payload = await response.json().catch(() => ({{ ok: true }}));
+      if (payload && payload.message) {{
+        document.getElementById('quickExportMeta').textContent = payload.message;
+      }}
+      await fetchStatus();
+    }}
+
     async function runMemtest() {{
       const response = await fetch('/api/memtest' + authQuery, {{
         method: 'POST',
@@ -4822,6 +4958,10 @@ class Handler(BaseHTTPRequestHandler):
             if action == "install_required_tools":
                 result = launch_required_tools_install()
                 self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT)
+                return
+            if action == "quick_export":
+                result = launch_quick_export()
+                self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
                 return
             marker = action_map.get(action)
             if not marker:
