@@ -3280,7 +3280,7 @@ def render_page(status: Dict[str, Any]) -> str:
       <div class="tabs">
         <button type="button" class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
         <button type="button" class="tab-btn" data-tab="investigation" onclick="switchTab('investigation')">Investigation</button>
-        <button type="button" class="tab-btn" data-tab="remote" onclick="switchTab('remote')">Remote</button>
+        <button type="button" class="tab-btn" data-tab="remote" onclick="switchTab('remote')">TeamViewer</button>
         <button type="button" class="tab-btn" data-tab="dev" onclick="switchTab('dev')">Dev</button>
         <button type="button" class="tab-btn" data-tab="help" onclick="switchTab('help')">Help</button>
         <button type="button" class="tab-btn" data-tab="config" onclick="switchTab('config')">Config</button>
@@ -3350,6 +3350,10 @@ def render_page(status: Dict[str, Any]) -> str:
         <p class="hint" id="remoteSpeedtestSummary">No web speed test run yet.</p>
       </section>
     </div>
+    <section class="panel" style="margin-top:10px;" id="statusOverviewPanel">
+      <h2>Status</h2>
+      <div class="overview-grid"></div>
+    </section>
 
     <section class="panel" style="margin-top:10px;" id="incidentsPanel">
       <h2>Unplanned repowers</h2>
@@ -3481,7 +3485,35 @@ def render_page(status: Dict[str, Any]) -> str:
     </div>
 
     <div class="ops-grid" id="overviewOpsGrid">
-      <section class="panel controls-panel" id="controlsPanel">
+      <section class="panel controls-panel" id="speedtestPanel">
+        <h2>Speed test</h2>
+        <button class="secondary" onclick="runSpeedtest()">Run speed test</button>
+        <div class="update-row">
+          <span class="badge {'warn' if status['speedtest_status'].get('state') == 'running' else ('danger' if status['speedtest_status'].get('state') == 'failed' else '')}" id="speedtestState">{html.escape(str(status["speedtest_status"].get("state", "idle")).title())}</span>
+          <span id="speedtestMessage">{html.escape(str(status["speedtest_status"].get("message", "No web speed test run yet.")))}</span>
+        </div>
+        <p class="hint" id="speedtestMeta">
+          Download {html.escape(str(status["speedtest_status"].get("download_mbps", "unknown")))} Mbps |
+          Upload {html.escape(str(status["speedtest_status"].get("upload_mbps", "unknown")))} Mbps |
+          {html.escape(str(status["speedtest_status"].get("finished_at", "not finished yet")))}
+        </p>
+        <div class="link-row">
+          <a class="link-btn" id="speedtestLogLink" href="/download/speedtest-log">Download speed test log</a>
+        </div>
+        <div class="review-scroll" style="margin-top:10px;">
+          <ul class="review-list" id="speedtestHistory">
+            {"".join(f"<li>{html.escape(str(item.get('ts', 'unknown')))} | {html.escape(str(item.get('state', 'unknown')))} | Down {html.escape(str(item.get('download_mbps', 'n/a')))} Mbps | Up {html.escape(str(item.get('upload_mbps', 'n/a')))} Mbps</li>" for item in status.get("speedtest_history", []))}
+          </ul>
+        </div>
+      </section>
+    </div>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="investigation">
+    <div class="grid" style="margin-top:16px;">
+      <div class="compact-grid" id="investigationIntroPanels" style="grid-column: 1 / -1;"></div>
+      <div class="bottom-grid" id="investigationActionPanels" style="grid-column: 1 / -1;"></div>
+      <section class="panel controls-panel" id="controlsPanel" style="grid-column: 1 / -1;">
         <h2>Controls</h2>
         <label>Monitoring enabled <input type="checkbox" id="monitoring_enabled" {'checked' if cfg['monitoring_enabled'] else ''}></label>
         <label>App auto-restart <input type="checkbox" id="app_restart_enabled" {'checked' if cfg['app_restart_enabled'] else ''}></label>
@@ -3517,60 +3549,11 @@ def render_page(status: Dict[str, Any]) -> str:
           <a class="link-btn" id="exportReadmeLink" href="/download/export-readme">Download export README</a>
           <a class="link-btn" id="exportLogLink" href="/download/export-log">Download export log</a>
         </div>
-        <p style="margin-top:12px;"><strong>Speed test</strong></p>
-        <button class="secondary" onclick="runSpeedtest()">Run speed test</button>
-        <div class="update-row">
-          <span class="badge {'warn' if status['speedtest_status'].get('state') == 'running' else ('danger' if status['speedtest_status'].get('state') == 'failed' else '')}" id="speedtestState">{html.escape(str(status["speedtest_status"].get("state", "idle")).title())}</span>
-          <span id="speedtestMessage">{html.escape(str(status["speedtest_status"].get("message", "No web speed test run yet.")))}</span>
-        </div>
-        <p class="hint" id="speedtestMeta">
-          Download {html.escape(str(status["speedtest_status"].get("download_mbps", "unknown")))} Mbps |
-          Upload {html.escape(str(status["speedtest_status"].get("upload_mbps", "unknown")))} Mbps |
-          {html.escape(str(status["speedtest_status"].get("finished_at", "not finished yet")))}
-        </p>
-        <div class="link-row">
-          <a class="link-btn" id="speedtestLogLink" href="/download/speedtest-log">Download speed test log</a>
-        </div>
-        <div class="review-scroll" style="margin-top:10px;">
-          <ul class="review-list" id="speedtestHistory">
-            {"".join(f"<li>{html.escape(str(item.get('ts', 'unknown')))} | {html.escape(str(item.get('state', 'unknown')))} | Down {html.escape(str(item.get('download_mbps', 'n/a')))} Mbps | Up {html.escape(str(item.get('upload_mbps', 'n/a')))} Mbps</li>" for item in status.get("speedtest_history", []))}
-          </ul>
-        </div>
       </section>
-      <section class="panel" id="teamviewerPanel">
-        <h2>TeamViewer</h2>
-        <div class="mini-meta">
-          <span class="badge" id="teamviewerInstalledBadge">{'Installed' if status.get("teamviewer", {}).get("installed") else 'Not installed'}</span>
-          <span class="badge {'danger' if not status.get('teamviewer', {}).get('daemon_running') else ''}" id="teamviewerDaemonBadge">{'Daemon running' if status.get("teamviewer", {}).get("daemon_running") else 'Daemon stopped'}</span>
-          <span class="badge {'warn' if not status.get('teamviewer', {}).get('gui_running') else ''}" id="teamviewerGuiBadge">{'GUI running' if status.get("teamviewer", {}).get("gui_running") else 'GUI not running'}</span>
-        </div>
-        <p id="teamviewerSummary">{html.escape(str(status.get("teamviewer", {}).get("summary", "No TeamViewer information available.")))}</p>
-        <p><strong>ID:</strong> <span id="teamviewerId">{html.escape(str(status.get("teamviewer", {}).get("id", "unknown")))}</span></p>
-        <p><strong>Version:</strong> <span id="teamviewerVersion">{html.escape(str(status.get("teamviewer", {}).get("version", "unknown")))}</span></p>
-        <p><strong>Status:</strong> <span id="teamviewerStatus">{html.escape(str(status.get("teamviewer", {}).get("status_text", "unknown")))}</span></p>
-        <div class="field">
-          <label for="teamviewerManualPassword">TeamViewer password</label>
-          <input id="teamviewerManualPassword" type="text" placeholder="Enter password or leave blank to generate">
-        </div>
-        <div class="mini-meta">
-          <button class="secondary" id="teamviewerSetButton" onclick="setTeamviewerPassword()">Set password</button>
-          <button class="secondary" id="teamviewerStartButton" onclick="runAction('start_teamviewer')">Start TeamViewer</button>
-          <button class="secondary" id="teamviewerRestartButton" onclick="runAction('restart_teamviewer')">Restart TeamViewer</button>
-          <button class="secondary" id="teamviewerResetButton" onclick="runAction('reset_teamviewer_password')">Reset TeamViewer password</button>
-        </div>
-        <p class="operator-note" id="teamviewerResetResult">Password reset generates a new one-time password on the unit and shows it here.</p>
-      </section>
-      <section class="panel checks-panel" id="latestChecksPanel">
+      <section class="panel checks-panel" id="latestChecksPanel" style="grid-column: 1 / -1;">
         <h2>Latest checks</h2>
         <div class="targets" id="targets"></div>
       </section>
-    </div>
-    </section>
-
-    <section class="tab-panel" data-tab-panel="investigation">
-    <div class="grid" style="margin-top:16px;">
-      <div class="compact-grid" id="investigationIntroPanels" style="grid-column: 1 / -1;"></div>
-      <div class="bottom-grid" id="investigationActionPanels" style="grid-column: 1 / -1;"></div>
       <section class="panel" style="grid-column: 1 / -1;">
         <h2>Likely causes</h2>
         <p class="hint">Higher scores mean the current evidence points more strongly in that direction. This is only a guide, not proof.</p>
@@ -3729,7 +3712,31 @@ def render_page(status: Dict[str, Any]) -> str:
     </section>
 
     <section class="tab-panel" data-tab-panel="remote">
-    <div class="grid" style="margin-top:16px;" id="remotePanels"></div>
+    <div class="grid" style="margin-top:16px;" id="remotePanels">
+      <section class="panel" id="teamviewerPanel">
+        <h2>TeamViewer</h2>
+        <div class="mini-meta">
+          <span class="badge" id="teamviewerInstalledBadge">{'Installed' if status.get("teamviewer", {}).get("installed") else 'Not installed'}</span>
+          <span class="badge {'danger' if not status.get('teamviewer', {}).get('daemon_running') else ''}" id="teamviewerDaemonBadge">{'Daemon running' if status.get("teamviewer", {}).get("daemon_running") else 'Daemon stopped'}</span>
+          <span class="badge {'warn' if not status.get('teamviewer', {}).get('gui_running') else ''}" id="teamviewerGuiBadge">{'GUI running' if status.get("teamviewer", {}).get("gui_running") else 'GUI not running'}</span>
+        </div>
+        <p id="teamviewerSummary">{html.escape(str(status.get("teamviewer", {}).get("summary", "No TeamViewer information available.")))}</p>
+        <p><strong>ID:</strong> <span id="teamviewerId">{html.escape(str(status.get("teamviewer", {}).get("id", "unknown")))}</span></p>
+        <p><strong>Version:</strong> <span id="teamviewerVersion">{html.escape(str(status.get("teamviewer", {}).get("version", "unknown")))}</span></p>
+        <p><strong>Status:</strong> <span id="teamviewerStatus">{html.escape(str(status.get("teamviewer", {}).get("status_text", "unknown")))}</span></p>
+        <div class="field">
+          <label for="teamviewerManualPassword">TeamViewer password</label>
+          <input id="teamviewerManualPassword" type="text" placeholder="Enter password or leave blank to generate">
+        </div>
+        <div class="mini-meta">
+          <button class="secondary" id="teamviewerSetButton" onclick="setTeamviewerPassword()">Set password</button>
+          <button class="secondary" id="teamviewerStartButton" onclick="runAction('start_teamviewer')">Start TeamViewer</button>
+          <button class="secondary" id="teamviewerRestartButton" onclick="runAction('restart_teamviewer')">Restart TeamViewer</button>
+          <button class="secondary" id="teamviewerResetButton" onclick="runAction('reset_teamviewer_password')">Reset TeamViewer password</button>
+        </div>
+        <p class="operator-note" id="teamviewerResetResult">Password reset generates a new one-time password on the unit and shows it here.</p>
+      </section>
+    </div>
     </section>
 
     <section class="tab-panel" data-tab-panel="dev">
@@ -4252,12 +4259,6 @@ def render_page(status: Dict[str, Any]) -> str:
       movePanel('faultSummaryPanel', 'investigationIntroPanels');
       movePanel('linuxCluesPanel', 'investigationIntroPanels');
       movePanel('leadupPanel', 'investigationActionPanels');
-      movePanel('controlsPanel', 'investigationActionPanels');
-      movePanel('teamviewerPanel', 'remotePanels');
-      const overviewOpsGrid = document.getElementById('overviewOpsGrid');
-      if (overviewOpsGrid) {{
-        overviewOpsGrid.style.gridTemplateColumns = '1fr';
-      }}
     }}
 
     function render(status) {{
@@ -4512,7 +4513,14 @@ def render_page(status: Dict[str, Any]) -> str:
       hikBadge.textContent = (hikStatus.state || 'idle').toUpperCase();
       document.getElementById('hikMessage').textContent = hikStatus.message || 'No Hik probe run yet.';
       document.getElementById('hikMeta').textContent = hikStatus.checked_at ? formatLocalTimestamp(hikStatus.checked_at) : '';
-      document.getElementById('hikCounts').innerHTML = Object.entries(hikStatus.parsed_counts || {{}}).map(([key, value]) => `<li><strong>${{key}}</strong>: ${{value}}</li>`).join('') || '<li>No people-count values parsed yet.</li>';
+      const hikCounts = hikStatus.parsed_counts || {{}};
+      const hikCountLines = [];
+      for (const key in hikCounts) {{
+        if (Object.prototype.hasOwnProperty.call(hikCounts, key)) {{
+          hikCountLines.push(`<li><strong>${{key}}</strong>: ${{hikCounts[key]}}</li>`);
+        }}
+      }}
+      document.getElementById('hikCounts').innerHTML = hikCountLines.join('') || '<li>No people-count values parsed yet.</li>';
       document.getElementById('hikCapabilitiesRaw').textContent = hikStatus.capabilities_excerpt || '';
       document.getElementById('hikResultRaw').textContent = hikStatus.result_excerpt || '';
       document.getElementById('hikSavedSettings').innerHTML = `
@@ -4701,16 +4709,19 @@ def render_page(status: Dict[str, Any]) -> str:
         `;
       }}).join('') || '<div class="timeline-empty">No reboot incidents recorded yet.</div>';
 
-      document.querySelector('.overview-grid').innerHTML = `
-        <section class="stat-card"><div class="stat-label">Current state</div><div class="stat-value">${{status.state.fault_active ? 'Fault' : 'Healthy'}}</div></section>
-        <section class="stat-card"><div class="stat-label">Watchdog reboot commands</div><div class="stat-value">${{(status.reboot_counts && status.reboot_counts.watchdog) || 0}}</div></section>
-        <section class="stat-card"><div class="stat-label">Detected reboots</div><div class="stat-value">${{(status.reboot_counts && status.reboot_counts.detected) || 0}}</div></section>
-        <section class="stat-card"><div class="stat-label">Unexpected reboots</div><div class="stat-value">${{(status.reboot_counts && status.reboot_counts.unexpected) || 0}}</div></section>
-        <section class="stat-card"><div class="stat-label">Last reboot reason</div><div class="stat-value" style="font-size:1rem;">${{status.state.last_reboot_reason || 'none'}}</div></section>
-        <section class="stat-card"><div class="stat-label">Last startup</div><div class="stat-value" style="font-size:1rem;">${{formatLocalTimestamp(status.state.last_startup_at || '')}}</div></section>
-        <section class="stat-card"><div class="stat-label">Hardware ID</div><div class="stat-value" style="font-size:1rem;">${{(status.hardware_identity && status.hardware_identity.serial) || 'unknown'}}</div></section>
-        <section class="stat-card"><div class="stat-label">Build</div><div class="stat-value" style="font-size:1rem;">${{(status.build_info && status.build_info.git_commit) || 'unknown'}}</div></section>
-      `;
+      const overviewGrid = document.querySelector('.overview-grid');
+      if (overviewGrid) {{
+        overviewGrid.innerHTML = `
+          <section class="stat-card"><div class="stat-label">Current state</div><div class="stat-value">${{status.state.fault_active ? 'Fault' : 'Healthy'}}</div></section>
+          <section class="stat-card"><div class="stat-label">Watchdog reboot commands</div><div class="stat-value">${{(status.reboot_counts && status.reboot_counts.watchdog) || 0}}</div></section>
+          <section class="stat-card"><div class="stat-label">Detected reboots</div><div class="stat-value">${{(status.reboot_counts && status.reboot_counts.detected) || 0}}</div></section>
+          <section class="stat-card"><div class="stat-label">Unexpected reboots</div><div class="stat-value">${{(status.reboot_counts && status.reboot_counts.unexpected) || 0}}</div></section>
+          <section class="stat-card"><div class="stat-label">Last reboot reason</div><div class="stat-value" style="font-size:1rem;">${{status.state.last_reboot_reason || 'none'}}</div></section>
+          <section class="stat-card"><div class="stat-label">Last startup</div><div class="stat-value" style="font-size:1rem;">${{formatLocalTimestamp(status.state.last_startup_at || '')}}</div></section>
+          <section class="stat-card"><div class="stat-label">Hardware ID</div><div class="stat-value" style="font-size:1rem;">${{(status.hardware_identity && status.hardware_identity.serial) || 'unknown'}}</div></section>
+          <section class="stat-card"><div class="stat-label">Build</div><div class="stat-value" style="font-size:1rem;">${{(status.build_info && status.build_info.git_commit) || 'unknown'}}</div></section>
+        `;
+      }}
 
       const heroMain = document.querySelector('.hero-main');
       heroMain.innerHTML = `
