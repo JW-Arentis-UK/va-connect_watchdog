@@ -2157,21 +2157,39 @@ def render_page(status: Dict[str, Any]) -> str:
       background: linear-gradient(180deg, rgba(18, 29, 39, 0.96), rgba(13, 22, 31, 0.96));
       box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
     }}
+    .topbar-strip {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }}
     .topbar-actions .button-row {{
       margin-top: 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
     }}
     .topbar-actions .update-row {{
-      margin-top: 8px;
+      margin-top: 0;
+      min-width: 0;
+      flex: 1 1 180px;
     }}
     .topbar-actions .hint {{
-      margin: 6px 0 0;
+      margin: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1 1 220px;
+      min-width: 0;
     }}
     .topbar-label {{
       color: #8ea5b9;
       font-size: 0.76rem;
       text-transform: uppercase;
       letter-spacing: 0.08em;
-      margin-bottom: 8px;
+      margin: 0;
+      white-space: nowrap;
     }}
     .inline-fields {{
       display: grid;
@@ -2207,16 +2225,18 @@ def render_page(status: Dict[str, Any]) -> str:
         <div class="sub">Control page for <strong>{html.escape(status["hostname"])}</strong> | Hardware ID <strong>{html.escape(str(status["hardware_identity"].get("serial", "unknown")))}</strong></div>
       </div>
       <section class="topbar-actions">
-        <div class="topbar-label">Page actions</div>
-        <div class="button-row">
-          <button class="secondary" onclick="runAction('update_watchdog')">Update from GitHub</button>
-          <button class="secondary" onclick="hardRefreshPage()">Hard refresh page</button>
+        <div class="topbar-strip">
+          <div class="topbar-label">Page actions</div>
+          <div class="button-row">
+            <button class="secondary" onclick="runAction('update_watchdog')">Update from GitHub</button>
+            <button class="secondary" onclick="hardRefreshPage()">Hard refresh page</button>
+          </div>
+          <div class="update-row">
+            <span class="badge {'warn' if status['update_status'].get('state') == 'running' else ('danger' if status['update_status'].get('state') == 'failed' else '')}" id="updateState">{html.escape(str(status["update_status"].get("state", "idle")).title())}</span>
+            <span id="updateMessage">{html.escape(str(status["update_status"].get("message", "No web update run yet.")))}</span>
+          </div>
+          <p class="hint" id="updateMeta">{html.escape(str(status["update_status"].get("from_build", "unknown")))} to {html.escape(str(status["update_status"].get("to_build", "unknown")))} | {html.escape(str(status["update_status"].get("finished_at", "not finished yet")))}</p>
         </div>
-        <div class="update-row">
-          <span class="badge {'warn' if status['update_status'].get('state') == 'running' else ('danger' if status['update_status'].get('state') == 'failed' else '')}" id="updateState">{html.escape(str(status["update_status"].get("state", "idle")).title())}</span>
-          <span id="updateMessage">{html.escape(str(status["update_status"].get("message", "No web update run yet.")))}</span>
-        </div>
-        <p class="hint" id="updateMeta">{html.escape(str(status["update_status"].get("from_build", "unknown")))} to {html.escape(str(status["update_status"].get("to_build", "unknown")))} | {html.escape(str(status["update_status"].get("finished_at", "not finished yet")))}</p>
       </section>
     </div>
     <div class="tabs">
