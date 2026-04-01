@@ -126,6 +126,33 @@ def export_log_excerpt(export_status: Dict[str, Any], max_lines: int = 10) -> Li
     return block[-max_lines:]
 
 
+def export_search_roots(export_status: Dict[str, Any]) -> List[Path]:
+    roots: List[Path] = []
+    folder = str(export_status.get("folder", "")).strip()
+    archive = str(export_status.get("archive", "")).strip()
+    if archive:
+        roots.append(Path(archive).parent)
+    if folder:
+        roots.append(Path(folder).parent)
+    roots.extend([Path("/root/Desktop"), Path("/home/vsuser/Desktop")])
+    home_root = Path("/home")
+    if home_root.exists():
+        try:
+            for child in home_root.iterdir():
+                roots.append(child / "Desktop")
+        except Exception:
+            pass
+    unique: List[Path] = []
+    seen = set()
+    for root in roots:
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(root)
+    return unique
+
+
 def parse_iso(value: str) -> Optional[datetime]:
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -1600,7 +1627,7 @@ def launch_export(since_time: str, until_time: str) -> Dict[str, Any]:
 
 
 def safe_export_file(kind: str) -> Optional[Path]:
-    export_status = read_json(EXPORT_STATUS_PATH, {})
+    export_status = normalize_export_status(read_json(EXPORT_STATUS_PATH, {}))
     candidate = ""
     folder = str(export_status.get("folder", "")).strip()
     archive = str(export_status.get("archive", "")).strip()
@@ -1619,18 +1646,7 @@ def safe_export_file(kind: str) -> Optional[Path]:
             return path
 
     if kind == "archive":
-        search_roots = []
-        if archive:
-            search_roots.append(Path(archive).parent)
-        if folder:
-            search_roots.append(Path(folder).parent)
-        search_roots.extend([Path("/home/vsuser/Desktop"), Path("/root/Desktop")])
-        seen = set()
-        for root in search_roots:
-            root_str = str(root)
-            if root_str in seen:
-                continue
-            seen.add(root_str)
+        for root in export_search_roots(export_status):
             if not root.exists():
                 continue
             matches = sorted(root.glob("watchdog_incident_export_*.tar.gz"), key=lambda item: item.stat().st_mtime, reverse=True)
@@ -1638,18 +1654,7 @@ def safe_export_file(kind: str) -> Optional[Path]:
                 return matches[0]
 
     if kind == "folder_readme":
-        search_roots = []
-        if folder:
-            search_roots.append(Path(folder).parent)
-        elif archive:
-            search_roots.append(Path(archive).parent)
-        search_roots.extend([Path("/home/vsuser/Desktop"), Path("/root/Desktop")])
-        seen = set()
-        for root in search_roots:
-            root_str = str(root)
-            if root_str in seen:
-                continue
-            seen.add(root_str)
+        for root in export_search_roots(export_status):
             if not root.exists():
                 continue
             matches = sorted(root.glob("watchdog_incident_export_*/README.txt"), key=lambda item: item.stat().st_mtime, reverse=True)
