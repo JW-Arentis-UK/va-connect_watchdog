@@ -412,9 +412,11 @@ def all_incidents() -> List[Dict[str, Any]]:
     incidents: List[Dict[str, Any]] = []
     for line in INCIDENTS_PATH.read_text(encoding="utf-8", errors="ignore").splitlines():
         try:
-            incidents.append(json.loads(line))
+            item = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if isinstance(item, dict):
+            incidents.append(item)
     incidents.sort(key=lambda item: str(item.get("reboot_detected_at") or item.get("ts") or ""), reverse=True)
     return incidents
 
@@ -1485,6 +1487,8 @@ def incidents_payload(limit: int = 12) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for incident in all_incidents()[:limit]:
         incident_id = str(incident.get("incident_id", "")).strip()
+        if not incident_id:
+            continue
         export_status = normalize_incident_export_status(statuses.get(incident_id, {"state": "idle"}))
         if export_status != statuses.get(incident_id, {"state": "idle"}):
             statuses[incident_id] = export_status
@@ -2366,7 +2370,10 @@ def status_payload() -> Dict[str, Any]:
     speedtest_history = recent_speedtests()
     reboot_leadup = reboot_leadup_payload(events)
     quick_export = quick_export_window(events_all, state)
-    incidents = incidents_payload()
+    try:
+        incidents = incidents_payload()
+    except Exception:
+        incidents = []
     hik_status = read_json(HIK_STATUS_PATH, {"state": "idle", "enabled": bool(config.get("hik_enabled"))})
     hw_identity = hardware_identity()
     teamviewer = teamviewer_status_payload(config)
