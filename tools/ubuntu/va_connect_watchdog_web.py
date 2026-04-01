@@ -2764,13 +2764,13 @@ def render_page(status: Dict[str, Any]) -> str:
         <span class="badge" id="requiredToolsMissingCount">{len(status.get("required_tools", {}).get("missing_important", []))} missing or inactive</span>
       </div>
       <p class="tool-summary" id="requiredToolsSummary">{'Missing: ' + ', '.join(str(item) for item in status.get("required_tools", {}).get("missing_important", [])) if status.get("required_tools", {}).get("missing_important") else 'All key support tools and services look available.'}</p>
-      <div class="mini-meta" style="margin-top:10px;">
-        <button class="secondary" onclick="installRequiredTools()">Install missing tools</button>
+      <div class="mini-meta" style="margin-top:10px;" id="toolsInstallRow">
+        <button class="secondary" id="installToolsButton" onclick="installRequiredTools()">Install missing tools</button>
         <span class="badge {'warn' if status.get('required_tools', {}).get('install_status', {}).get('state') == 'running' else ('danger' if status.get('required_tools', {}).get('install_status', {}).get('state') == 'failed' else '')}" id="toolsInstallState">{html.escape(str(status.get("required_tools", {}).get("install_status", {}).get("state", "idle")).title())}</span>
         <span id="toolsInstallMessage">{html.escape(str(status.get("required_tools", {}).get("install_status", {}).get("message", "No tool install run yet.")))}</span>
       </div>
       <p class="hint" id="toolsInstallMeta">{html.escape(", ".join(status.get("required_tools", {}).get("install_status", {}).get("packages", []) or []))} {html.escape(str(status.get("required_tools", {}).get("install_status", {}).get("finished_at", "")))}</p>
-      <div class="link-row">
+      <div class="link-row" id="toolsInstallLinks">
         <a class="link-btn" id="toolsInstallLogLink" href="/download/tools-install-log">Download tool install log</a>
       </div>
       <details class="tool-expand">
@@ -3731,13 +3731,17 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('updateMessage').textContent = updateState.message || 'No web update run yet.';
       document.getElementById('updateMeta').textContent = `${{updateState.from_build || 'unknown'}} to ${{updateState.to_build || 'unknown'}} | ${{updateState.finished_at ? formatLocalTimestamp(updateState.finished_at) : 'not finished yet'}}`;
       const requiredTools = status.required_tools || {{}};
+      const missingImportant = requiredTools.missing_important || [];
+      const missingRequired = requiredTools.missing_required || [];
       const requiredHeadline = document.getElementById('requiredToolsHeadline');
-      requiredHeadline.className = `badge ${{(requiredTools.missing_required || []).length ? 'danger' : ''}}`;
-      requiredHeadline.textContent = (requiredTools.missing_required || []).length ? 'Missing required tools' : 'Required tools ready';
-      document.getElementById('requiredToolsMissingCount').textContent = `${{(requiredTools.missing_important || []).length}} missing or inactive`;
-      document.getElementById('requiredToolsSummary').textContent = (requiredTools.missing_important || []).length
-        ? `Missing: ${{(requiredTools.missing_important || []).join(', ')}}`
-        : 'All key support tools and services look available.';
+      requiredHeadline.className = `badge ${{missingRequired.length ? 'danger' : ''}}`;
+      requiredHeadline.textContent = missingRequired.length ? 'Missing tools' : 'Tools ready';
+      const requiredMissingCount = document.getElementById('requiredToolsMissingCount');
+      requiredMissingCount.textContent = `${{missingImportant.length}} missing`;
+      requiredMissingCount.style.display = missingImportant.length ? 'inline-block' : 'none';
+      document.getElementById('requiredToolsSummary').textContent = missingImportant.length
+        ? `Missing: ${{missingImportant.join(', ')}}`
+        : 'SMART, EDAC, TeamViewer CLI, and watchdog services look available.';
       document.getElementById('requiredToolsGrid').innerHTML = (requiredTools.items || []).map((item) => `
         <div class="tool-card">
           <div class="tool-head">
@@ -3749,10 +3753,13 @@ def render_page(status: Dict[str, Any]) -> str:
         </div>
       `).join('') || '<div class="timeline-empty">No tool status available yet.</div>';
       const toolsInstallState = requiredTools.install_status || {{}};
+      const toolsInstallRow = document.getElementById('toolsInstallRow');
+      const toolsInstallLinks = document.getElementById('toolsInstallLinks');
+      const installToolsButton = document.getElementById('installToolsButton');
       const toolsBadge = document.getElementById('toolsInstallState');
       toolsBadge.className = `badge ${{toolsInstallState.state === 'running' ? 'warn' : (toolsInstallState.state === 'failed' ? 'danger' : '')}}`;
       toolsBadge.textContent = (toolsInstallState.state || 'idle').toUpperCase();
-      document.getElementById('toolsInstallMessage').textContent = toolsInstallState.message || 'No tool install run yet.';
+      document.getElementById('toolsInstallMessage').textContent = toolsInstallState.message || '';
       const toolsMetaParts = [];
       if ((toolsInstallState.packages || []).length) {{
         toolsMetaParts.push((toolsInstallState.packages || []).join(', '));
@@ -3760,8 +3767,14 @@ def render_page(status: Dict[str, Any]) -> str:
       if (toolsInstallState.finished_at) {{
         toolsMetaParts.push(formatLocalTimestamp(toolsInstallState.finished_at));
       }}
-      document.getElementById('toolsInstallMeta').textContent = toolsMetaParts.join(' | ') || 'Install missing SMART and EDAC packages from here when needed.';
-      document.getElementById('toolsInstallLogLink').style.display = toolsInstallState.log_path ? 'inline-block' : 'none';
+      const showInstallRow = missingImportant.length > 0 || toolsInstallState.state === 'running' || toolsInstallState.state === 'failed';
+      toolsInstallRow.style.display = showInstallRow ? 'flex' : 'none';
+      installToolsButton.style.display = missingImportant.length > 0 ? 'inline-block' : 'none';
+      installToolsButton.disabled = toolsInstallState.state === 'running';
+      document.getElementById('toolsInstallMeta').textContent = toolsMetaParts.join(' | ');
+      document.getElementById('toolsInstallMeta').style.display = toolsMetaParts.length && showInstallRow ? 'block' : 'none';
+      toolsInstallLinks.style.display = toolsInstallState.log_path && showInstallRow ? 'flex' : 'none';
+      document.getElementById('toolsInstallLogLink').style.display = toolsInstallState.log_path && showInstallRow ? 'inline-block' : 'none';
       const exportState = status.export_status || {{}};
       const exportButton = document.getElementById('exportButton');
       const exportDownloadName = exportState.download_archive_name || 'incident pack';
