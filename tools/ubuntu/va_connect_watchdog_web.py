@@ -9,7 +9,7 @@ import shlex
 import socket
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from mimetypes import guess_type
@@ -35,6 +35,8 @@ SPEEDTEST_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-speedtest-st
 SPEEDTEST_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-speedtest.log")
 SPEEDTEST_HISTORY_PATH = Path("/var/log/va-connect-site-watchdog/speedtests.jsonl")
 HIK_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-hik-status.json")
+TOOLS_INSTALL_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/web-tools-install-status.json")
+TOOLS_INSTALL_LOG_PATH = Path("/var/log/va-connect-site-watchdog/web-tools-install.log")
 SNAPSHOT_DIR = Path("/var/log/va-connect-site-watchdog/snapshots")
 
 
@@ -286,7 +288,54 @@ def recent_metrics(hours: int = 24) -> List[Dict[str, Any]]:
         if epoch >= cutoff:
             points.append(item)
     max_points = 3000 if hours <= 24 else 8000
-    return points[-max_points:]
+    real_points = points[-max_points:]
+    if not real_points:
+        return []
+
+    epochs: List[float] = []
+    for item in real_points:
+        try:
+            epochs.append(datetime.fromisoformat(str(item.get("ts", ""))).timestamp())
+        except Exception:
+            continue
+    diffs = sorted(
+        diff for diff in (
+            epochs[index] - epochs[index - 1]
+            for index in range(1, len(epochs))
+        )
+        if diff > 0
+    )
+    expected_step = int(diffs[len(diffs) // 2]) if diffs else 30
+    expected_step = max(30, min(expected_step, 15 * 60))
+    gap_threshold = max(expected_step * 3, 180)
+    start_epoch = cutoff
+    end_epoch = time.time()
+
+    def iso_from_epoch(epoch: float) -> str:
+        return datetime.fromtimestamp(epoch, tz=timezone.utc).replace(microsecond=0).isoformat()
+
+    enriched: List[Dict[str, Any]] = []
+    first_epoch = epochs[0] if epochs else None
+    if first_epoch and first_epoch - start_epoch > gap_threshold:
+        enriched.append({"ts": iso_from_epoch(start_epoch), "gap": True})
+
+    for index, item in enumerate(real_points):
+        enriched.append(item)
+        if index >= len(real_points) - 1:
+            continue
+        try:
+            current_epoch = datetime.fromisoformat(str(item.get("ts", ""))).timestamp()
+            next_epoch = datetime.fromisoformat(str(real_points[index + 1].get("ts", ""))).timestamp()
+        except Exception:
+            continue
+        if (next_epoch - current_epoch) > gap_threshold:
+            enriched.append({"ts": iso_from_epoch(current_epoch + expected_step), "gap": True})
+            enriched.append({"ts": iso_from_epoch(next_epoch - expected_step), "gap": True})
+
+    last_epoch = epochs[-1] if epochs else None
+    if last_epoch and end_epoch - last_epoch > gap_threshold:
+        enriched.append({"ts": iso_from_epoch(end_epoch), "gap": True})
+    return enriched
 
 
 def recent_speedtests(limit: int = 10) -> List[Dict[str, Any]]:
@@ -345,6 +394,108 @@ def recent_metric_events(hours: int = 24) -> List[Dict[str, Any]]:
                 }
             )
     return markers[-200:]
+
+
+def service_status_payload(service_name: str) -> Dict[str, Any]:
+    installed = False
+    active = False
+    enabled = False
+    detail = "systemctl not available."
+    if command_exists("systemctl"):
+        installed_result = run_shell(f"systemctl status {shlex.quote(service_name)} >/dev/null 2>&1", timeout=5)
+        active_result = run_shell(f"systemctl is-active {shlex.quote(service_name)}", timeout=5)
+        enabled_result = run_shell(f"systemctl is-enabled {shlex.quote(service_name)}", timeout=5)
+        installed = installed_result["return_code"] in {0, 3, 4}
+        active = active_result["output"].splitlines()[0].strip().lower() == "active" if active_result["output"] else False
+        enabled = enabled_result["output"].splitlines()[0].strip().lower() == "enabled" if enabled_result["output"] else False
+        detail = []
+        detail.append("installed" if installed else "not installed")
+        detail.append("active" if active else "not active")
+        detail.append("enabled" if enabled else "not enabled")
+        detail = ", ".join(detail)
+    return {
+        "service": service_name,
+        "installed": installed,
+        "active": active,
+        "enabled": enabled,
+        "ok": installed and active,
+        "detail": detail,
+    }
+
+
+def required_tools_payload(config: Dict[str, Any]) -> Dict[str, Any]:
+    smartmontools_pkg = run_shell("dpkg-query -W -f='${Status}' smartmontools", timeout=10)
+    edac_utils_pkg = run_shell("dpkg-query -W -f='${Status}' edac-utils", timeout=10)
+    site_service = service_status_payload("va-connect-site-watchdog.service")
+    web_service = service_status_payload("va-connect-watchdog-web.service")
+    tools = [
+        {
+            "id": "smartmontools_pkg",
+            "label": "smartmontools package",
+            "why": "Needed for SMART disk evidence when the PC hangs or storage looks suspicious.",
+            "ok": smartmontools_pkg["ok"] and "installed" in smartmontools_pkg["output"].lower(),
+            "detail": smartmontools_pkg["output"] or "Package not installed.",
+            "required": True,
+        },
+        {
+            "id": "smartctl_cli",
+            "label": "smartctl CLI",
+            "why": "Lets the watchdog collect disk health and self-test clues from the encoder drives.",
+            "ok": command_exists("smartctl"),
+            "detail": "smartctl available in PATH." if command_exists("smartctl") else "smartctl command not found.",
+            "required": False,
+        },
+        {
+            "id": "edac_utils_pkg",
+            "label": "edac-utils package",
+            "why": "Needed to surface memory-controller and correctable RAM error evidence after hard freezes.",
+            "ok": edac_utils_pkg["ok"] and "installed" in edac_utils_pkg["output"].lower(),
+            "detail": edac_utils_pkg["output"] or "Package not installed.",
+            "required": True,
+        },
+        {
+            "id": "edac_util_cli",
+            "label": "edac-util CLI",
+            "why": "Lets the page check for EDAC memory error counters without shell access.",
+            "ok": command_exists("edac-util"),
+            "detail": "edac-util available in PATH." if command_exists("edac-util") else "edac-util command not found.",
+            "required": False,
+        },
+        {
+            "id": "teamviewer_cli",
+            "label": "TeamViewer CLI",
+            "why": "Needed for password reset and quick remote-recovery actions from the web page.",
+            "ok": command_exists("teamviewer"),
+            "detail": "teamviewer command available." if command_exists("teamviewer") else "teamviewer command not found.",
+            "required": False,
+        },
+        {
+            "id": "site_watchdog_service",
+            "label": "Site watchdog service",
+            "why": "This is the background monitor that collects checks, metrics, and reboot evidence.",
+            "ok": site_service["ok"],
+            "detail": site_service["detail"],
+            "required": False,
+        },
+        {
+            "id": "web_watchdog_service",
+            "label": "Watchdog web service",
+            "why": "This is the operator page itself. If it is not active, remote diagnosis becomes harder.",
+            "ok": web_service["ok"],
+            "detail": web_service["detail"],
+            "required": False,
+        },
+    ]
+    missing_required = [item["label"] for item in tools if item.get("required") and not item.get("ok")]
+    missing_important = [item["label"] for item in tools if not item.get("ok")]
+    install_status = read_json(TOOLS_INSTALL_STATUS_PATH, {"state": "idle"})
+    return {
+        "items": tools,
+        "missing_required": missing_required,
+        "missing_important": missing_important,
+        "healthy": not missing_required,
+        "install_status": install_status,
+    }
 
 
 def latest_previous_boot_snapshot() -> Optional[Path]:
@@ -1285,6 +1436,19 @@ def safe_speedtest_file(kind: str) -> Optional[Path]:
     return path
 
 
+def safe_tools_install_file(kind: str) -> Optional[Path]:
+    install_status = read_json(TOOLS_INSTALL_STATUS_PATH, {})
+    candidate = ""
+    if kind == "log":
+        candidate = str(install_status.get("log_path", "")).strip()
+    if not candidate:
+        return None
+    path = Path(candidate)
+    if not path.exists() or not path.is_file():
+        return None
+    return path
+
+
 def normalize_memtest_status(memtest_status: Dict[str, Any]) -> Dict[str, Any]:
     status = dict(memtest_status or {})
     if status.get("state") != "running":
@@ -1312,6 +1476,21 @@ def normalize_speedtest_status(speedtest_status: Dict[str, Any]) -> Dict[str, An
         status["finished_at"] = status.get("finished_at") or now_iso()
         status["message"] = "Speed test ran too long or got stuck. Check web-speedtest.log."
         write_json(SPEEDTEST_STATUS_PATH, status)
+    return status
+
+
+def normalize_tools_install_status(install_status: Dict[str, Any]) -> Dict[str, Any]:
+    status = dict(install_status or {})
+    if status.get("state") != "running":
+        return status
+
+    started_at = parse_iso(str(status.get("started_at", "")))
+    now = datetime.utcnow().astimezone()
+    if started_at and (now - started_at).total_seconds() > 30 * 60:
+        status["state"] = "failed"
+        status["finished_at"] = status.get("finished_at") or now_iso()
+        status["message"] = "Tool install ran too long or got stuck. Check web-tools-install.log."
+        write_json(TOOLS_INSTALL_STATUS_PATH, status)
     return status
 
 
@@ -1490,6 +1669,61 @@ def launch_speedtest() -> Dict[str, Any]:
     return {"ok": True, "message": "Speed test started.", "status": payload}
 
 
+def launch_required_tools_install() -> Dict[str, Any]:
+    current = read_json(TOOLS_INSTALL_STATUS_PATH, {})
+    if current.get("state") == "running":
+        return {"ok": False, "message": "Tool install already running."}
+
+    tools_status = required_tools_payload(load_config())
+    packages = []
+    if "smartmontools package" in tools_status.get("missing_required", []):
+        packages.append("smartmontools")
+    if "edac-utils package" in tools_status.get("missing_required", []):
+        packages.append("edac-utils")
+    if not packages:
+        return {"ok": False, "message": "All required tools are already installed."}
+
+    payload = {
+        "state": "running",
+        "started_at": now_iso(),
+        "finished_at": "",
+        "message": "Installing missing required tools from web UI.",
+        "log_path": str(TOOLS_INSTALL_LOG_PATH),
+        "packages": packages,
+    }
+    write_json(TOOLS_INSTALL_STATUS_PATH, payload)
+    TOOLS_INSTALL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    command = (
+        "python3 - <<'PY'\n"
+        "import json, subprocess\n"
+        "from datetime import datetime\n"
+        "from pathlib import Path\n"
+        "status_path = Path('/var/lib/va-connect-site-watchdog/web-tools-install-status.json')\n"
+        "log_path = Path('/var/log/va-connect-site-watchdog/web-tools-install.log')\n"
+        f"packages = {packages!r}\n"
+        "cmd = ['bash', '-lc', 'export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y ' + ' '.join(packages)]\n"
+        "with log_path.open('ab') as log:\n"
+        "    log.write((f'\\n===== Web tool install started {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
+        "    log.write((('Packages: ' + ', '.join(packages) + '\\n').encode()))\n"
+        "    result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)\n"
+        "payload = json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
+        "payload['state'] = 'ok' if result.returncode == 0 else 'failed'\n"
+        "payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "payload['return_code'] = result.returncode\n"
+        "payload['message'] = 'Required tools installed successfully.' if result.returncode == 0 else 'Tool install failed. Check web-tools-install.log.'\n"
+        "status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "PY"
+    )
+    subprocess.Popen(
+        ["nohup", "bash", "-lc", command],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return {"ok": True, "message": "Tool install started.", "status": payload}
+
+
 def status_payload() -> Dict[str, Any]:
     state = read_json(STATE_PATH, {})
     config = load_config()
@@ -1527,8 +1761,12 @@ def status_payload() -> Dict[str, Any]:
     hardware_payload = hardware_review_payload(state)
     crash_payload = crash_review_payload()
     suspects_payload = suspect_scores_payload(state, crash_payload, hardware_payload)
+    required_tools = required_tools_payload(config)
+    required_tools["install_status"] = normalize_tools_install_status(required_tools.get("install_status", {"state": "idle"}))
     if hardware_payload.get("warnings"):
         next_steps.append("Review Hardware warnings for EDAC, storage, or persistent-crash clues that may explain a hard freeze.")
+    if required_tools.get("missing_required"):
+        next_steps.insert(0, "Install the missing required tools on the Overview page so SMART and EDAC evidence can be collected remotely.")
     next_steps.append("Use PC stats to look for CPU, memory, or disk changes building before a reboot or hang.")
     next_steps.append("If it freezes overnight again, compare the last event time with the next boot's previous-boot snapshot.")
 
@@ -1573,6 +1811,7 @@ def status_payload() -> Dict[str, Any]:
         "speedtest_history": speedtest_history,
         "reboot_leadup": reboot_leadup,
         "hik_status": hik_status,
+        "required_tools": required_tools,
         "reboot_counts": reboot_counts,
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "teamviewer": teamviewer,
@@ -1600,6 +1839,8 @@ def status_payload() -> Dict[str, Any]:
             "speedtest_status": str(SPEEDTEST_STATUS_PATH),
             "speedtest_log": str(SPEEDTEST_LOG_PATH),
             "hik_status": str(HIK_STATUS_PATH),
+            "tools_install_status": str(TOOLS_INSTALL_STATUS_PATH),
+            "tools_install_log": str(TOOLS_INSTALL_LOG_PATH),
         },
     }
 
@@ -2044,7 +2285,7 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
     .ops-grid {{
       display: grid;
-      grid-template-columns: minmax(300px, 0.95fr) minmax(300px, 0.95fr) minmax(360px, 1.15fr);
+      grid-template-columns: repeat(4, minmax(260px, 1fr));
       gap: 10px;
       margin-top: 10px;
       align-items: start;
@@ -2087,6 +2328,44 @@ def render_page(status: Dict[str, Any]) -> str:
     .smart-table {{
       display: grid;
       gap: 8px;
+    }}
+    .tool-grid {{
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }}
+    .tool-card {{
+      border: 1px solid rgba(129, 154, 175, 0.15);
+      border-radius: 12px;
+      padding: 9px 10px;
+      background: rgba(20, 33, 44, 0.88);
+    }}
+    .tool-head {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+    }}
+    .tool-title {{
+      font-weight: 700;
+    }}
+    .tool-status.ok {{
+      color: #98f5a7;
+    }}
+    .tool-status.bad {{
+      color: #ff9f9f;
+    }}
+    .tool-why {{
+      margin-top: 5px;
+      color: #c9d7e2;
+      font-size: 0.82rem;
+    }}
+    .tool-detail {{
+      margin-top: 5px;
+      color: #8ea5b9;
+      font-size: 0.78rem;
+      word-break: break-word;
     }}
     .suspect-grid {{
       display: grid;
@@ -2362,6 +2641,30 @@ def render_page(status: Dict[str, Any]) -> str:
       </section>
     </div>
 
+    <section class="panel" style="margin-top:14px;">
+      <h2>Required tools</h2>
+      <p class="hint">These tools make SMART, EDAC, TeamViewer recovery, and watchdog evidence collection work without shell access.</p>
+      <div class="mini-meta">
+        <span class="badge {'danger' if status.get('required_tools', {}).get('missing_required') else ''}" id="requiredToolsHeadline">{'Missing required tools' if status.get('required_tools', {}).get('missing_required') else 'Required tools ready'}</span>
+        <span class="badge" id="requiredToolsMissingCount">{len(status.get("required_tools", {}).get("missing_important", []))} missing or inactive</span>
+      </div>
+      <div class="tool-grid" id="requiredToolsGrid">
+        {"".join(
+          f"<div class='tool-card'><div class='tool-head'><span class='tool-title'>{html.escape(str(item.get('label', 'Tool')))}</span><span class='tool-status {'ok' if item.get('ok') else 'bad'}'>{'Tick Ready' if item.get('ok') else 'Cross Missing'}</span></div><div class='tool-why'>{html.escape(str(item.get('why', '')))}</div><div class='tool-detail'>{html.escape(str(item.get('detail', '')))}</div></div>"
+          for item in status.get("required_tools", {}).get("items", [])
+        )}
+      </div>
+      <div class="mini-meta" style="margin-top:10px;">
+        <button class="secondary" onclick="installRequiredTools()">Install missing tools</button>
+        <span class="badge {'warn' if status.get('required_tools', {}).get('install_status', {}).get('state') == 'running' else ('danger' if status.get('required_tools', {}).get('install_status', {}).get('state') == 'failed' else '')}" id="toolsInstallState">{html.escape(str(status.get("required_tools", {}).get("install_status", {}).get("state", "idle")).title())}</span>
+        <span id="toolsInstallMessage">{html.escape(str(status.get("required_tools", {}).get("install_status", {}).get("message", "No tool install run yet.")))}</span>
+      </div>
+      <p class="hint" id="toolsInstallMeta">{html.escape(", ".join(status.get("required_tools", {}).get("install_status", {}).get("packages", []) or []))} {html.escape(str(status.get("required_tools", {}).get("install_status", {}).get("finished_at", "")))}</p>
+      <div class="link-row">
+        <a class="link-btn" id="toolsInstallLogLink" href="/download/tools-install-log">Download tool install log</a>
+      </div>
+    </section>
+
     <div class="analysis-grid" style="margin-top:16px;">
       <section class="panel" style="grid-column: 1 / -1;">
         <div class="chart-toolbar">
@@ -2408,6 +2711,7 @@ def render_page(status: Dict[str, Any]) -> str:
           <div class="chart-toolbar-meta">
             <span class="hint" id="metricsSampleAt">Latest sample unknown</span>
             <div class="range-toggle">
+            <button type="button" class="range-btn" id="range1hBtn" onclick="setMetricRange(1)">1 hour</button>
             <button type="button" class="range-btn active" id="range24hBtn" onclick="setMetricRange(24)">24 hours</button>
             <button type="button" class="range-btn" id="range168hBtn" onclick="setMetricRange(168)">7 days</button>
             </div>
@@ -2417,11 +2721,12 @@ def render_page(status: Dict[str, Any]) -> str:
         <canvas id="metricsChart" width="1000" height="280"></canvas>
         <div class="chart-event-legend">
           <span class="chart-event-item" id="legendTemp"><span class="chart-event-dot temp"></span>Temperature</span>
+          <span class="chart-event-item" id="legendGap"><span class="chart-event-dot note"></span>No samples / watchdog offline</span>
           <span class="chart-event-item" id="legendCommand"><span class="chart-event-dot command"></span>Watchdog reboot command (0)</span>
           <span class="chart-event-item" id="legendDetected"><span class="chart-event-dot detected"></span>Detected or unexpected reboot (0)</span>
           <span class="chart-event-item" id="legendNote"><span class="chart-event-dot note"></span>Reboot counts acknowledged (0)</span>
         </div>
-        <p class="hint">CPU, memory, root disk, recording disk, and temperature are plotted together. Hover also shows MemAvailable and temperature when available.</p>
+        <p class="hint">CPU, memory, root disk, recording disk, and temperature are plotted together. Gaps stay blank when the watchdog was not sampling. Hover also shows MemAvailable and temperature when available.</p>
       </section>
     </div>
 
@@ -2942,6 +3247,16 @@ def render_page(status: Dict[str, Any]) -> str:
       return ok ? 'badge' : 'badge danger';
     }}
 
+    function metricRangeLabel(hours) {{
+      if (hours === 1) {{
+        return 'PC Stats - Last Hour';
+      }}
+      if (hours === 168) {{
+        return 'PC Stats - Last 7 Days';
+      }}
+      return 'PC Stats - Last 24 Hours';
+    }}
+
     function formatLocalTimestamp(ts) {{
       if (!ts) {{
         return 'unknown';
@@ -3237,6 +3552,35 @@ def render_page(status: Dict[str, Any]) -> str:
       updateBadge.textContent = (updateState.state || 'idle').toUpperCase();
       document.getElementById('updateMessage').textContent = updateState.message || 'No web update run yet.';
       document.getElementById('updateMeta').textContent = `${{updateState.from_build || 'unknown'}} to ${{updateState.to_build || 'unknown'}} | ${{updateState.finished_at ? formatLocalTimestamp(updateState.finished_at) : 'not finished yet'}}`;
+      const requiredTools = status.required_tools || {{}};
+      const requiredHeadline = document.getElementById('requiredToolsHeadline');
+      requiredHeadline.className = `badge ${{(requiredTools.missing_required || []).length ? 'danger' : ''}}`;
+      requiredHeadline.textContent = (requiredTools.missing_required || []).length ? 'Missing required tools' : 'Required tools ready';
+      document.getElementById('requiredToolsMissingCount').textContent = `${{(requiredTools.missing_important || []).length}} missing or inactive`;
+      document.getElementById('requiredToolsGrid').innerHTML = (requiredTools.items || []).map((item) => `
+        <div class="tool-card">
+          <div class="tool-head">
+            <span class="tool-title">${{item.label || 'Tool'}}</span>
+            <span class="tool-status ${{item.ok ? 'ok' : 'bad'}}">${{item.ok ? 'Tick Ready' : 'Cross Missing'}}</span>
+          </div>
+          <div class="tool-why">${{item.why || ''}}</div>
+          <div class="tool-detail">${{item.detail || ''}}</div>
+        </div>
+      `).join('') || '<div class="timeline-empty">No tool status available yet.</div>';
+      const toolsInstallState = requiredTools.install_status || {{}};
+      const toolsBadge = document.getElementById('toolsInstallState');
+      toolsBadge.className = `badge ${{toolsInstallState.state === 'running' ? 'warn' : (toolsInstallState.state === 'failed' ? 'danger' : '')}}`;
+      toolsBadge.textContent = (toolsInstallState.state || 'idle').toUpperCase();
+      document.getElementById('toolsInstallMessage').textContent = toolsInstallState.message || 'No tool install run yet.';
+      const toolsMetaParts = [];
+      if ((toolsInstallState.packages || []).length) {{
+        toolsMetaParts.push((toolsInstallState.packages || []).join(', '));
+      }}
+      if (toolsInstallState.finished_at) {{
+        toolsMetaParts.push(formatLocalTimestamp(toolsInstallState.finished_at));
+      }}
+      document.getElementById('toolsInstallMeta').textContent = toolsMetaParts.join(' | ') || 'Install missing SMART and EDAC packages from here when needed.';
+      document.getElementById('toolsInstallLogLink').style.display = toolsInstallState.log_path ? 'inline-block' : 'none';
       const exportState = status.export_status || {{}};
       const exportBadge = document.getElementById('exportState');
       exportBadge.className = `badge ${{exportState.state === 'running' ? 'warn' : (exportState.state === 'failed' ? 'danger' : '')}}`;
@@ -3327,33 +3671,40 @@ def render_page(status: Dict[str, Any]) -> str:
         {{ key: 'temperature_c', color: '#ff9f6e', label: 'Temp C' }}
       ];
 
-      const maxIndex = Math.max(1, points.length - 1);
-      const xFor = (index) => pad + (chartWidth * index / maxIndex);
-      const yFor = (value) => pad + chartHeight - ((Math.max(0, Math.min(100, Number(value || 0))) / 100) * chartHeight);
-      const firstEpoch = Date.parse(points[0].ts || '');
-      const lastEpoch = Date.parse(points[points.length - 1].ts || '');
+      const epochs = points.map((point) => Date.parse(point.ts || '')).filter((epoch) => Number.isFinite(epoch));
+      const firstEpoch = epochs.length ? epochs[0] : Date.now();
+      const lastEpoch = epochs.length ? epochs[epochs.length - 1] : (firstEpoch + 1);
       const spanEpoch = Math.max(1, lastEpoch - firstEpoch);
+      const xForEpoch = (epoch) => pad + (((epoch - firstEpoch) / spanEpoch) * chartWidth);
+      const yFor = (value) => pad + chartHeight - ((Math.max(0, Math.min(100, Number(value || 0))) / 100) * chartHeight);
 
       series.forEach((line, idx) => {{
         ctx.strokeStyle = line.color;
         ctx.lineWidth = 2;
-        ctx.beginPath();
         let started = false;
-        points.forEach((point, index) => {{
+        points.forEach((point) => {{
+          const pointEpoch = Date.parse(point.ts || '');
           const value = point[line.key];
-          if (value === null || value === undefined || Number.isNaN(Number(value))) {{
+          if (!Number.isFinite(pointEpoch) || point.gap || value === null || value === undefined || Number.isNaN(Number(value))) {{
+            if (started) {{
+              ctx.stroke();
+              started = false;
+            }}
             return;
           }}
-          const x = xFor(index);
+          const x = xForEpoch(pointEpoch);
           const y = yFor(value);
           if (!started) {{
+            ctx.beginPath();
             ctx.moveTo(x, y);
             started = true;
           }} else {{
             ctx.lineTo(x, y);
           }}
         }});
-        ctx.stroke();
+        if (started) {{
+          ctx.stroke();
+        }}
         ctx.fillStyle = line.color;
         ctx.fillRect(pad + idx * 140, 10, 12, 12);
         ctx.fillStyle = '#d8e6f1';
@@ -3365,7 +3716,7 @@ def render_page(status: Dict[str, Any]) -> str:
         if (!Number.isFinite(eventEpoch)) {{
           return;
         }}
-        const x = pad + (((eventEpoch - firstEpoch) / spanEpoch) * chartWidth);
+        const x = xForEpoch(eventEpoch);
         if (x < pad || x > pad + chartWidth) {{
           return;
         }}
@@ -3383,13 +3734,16 @@ def render_page(status: Dict[str, Any]) -> str:
       }});
 
       if (hoverIndex !== null && points[hoverIndex]) {{
-        const x = xFor(hoverIndex);
-        ctx.strokeStyle = '#8ea5b9';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(x, pad);
-        ctx.lineTo(x, pad + chartHeight);
-        ctx.stroke();
+        const hoverEpoch = Date.parse(points[hoverIndex].ts || '');
+        if (Number.isFinite(hoverEpoch)) {{
+          const x = xForEpoch(hoverEpoch);
+          ctx.strokeStyle = '#8ea5b9';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(x, pad);
+          ctx.lineTo(x, pad + chartHeight);
+          ctx.stroke();
+        }}
       }}
     }}
 
@@ -3400,6 +3754,7 @@ def render_page(status: Dict[str, Any]) -> str:
         return acc;
       }}, {{}});
       document.getElementById('legendTemp').innerHTML = '<span class="chart-event-dot temp"></span>Temperature';
+      document.getElementById('legendGap').innerHTML = '<span class="chart-event-dot note"></span>No samples / watchdog offline';
       document.getElementById('legendCommand').innerHTML = '<span class="chart-event-dot command"></span>Watchdog reboot command (' + (counts.command || 0) + ')';
       document.getElementById('legendDetected').innerHTML = '<span class="chart-event-dot detected"></span>Detected or unexpected reboot (' + (counts.detected || 0) + ')';
       document.getElementById('legendNote').innerHTML = '<span class="chart-event-dot note"></span>Reboot counts acknowledged (' + (counts.note || 0) + ')';
@@ -3412,9 +3767,10 @@ def render_page(status: Dict[str, Any]) -> str:
 
     function setMetricRange(hours) {{
       metricsRangeHours = hours;
+      document.getElementById('range1hBtn').classList.toggle('active', hours === 1);
       document.getElementById('range24hBtn').classList.toggle('active', hours === 24);
       document.getElementById('range168hBtn').classList.toggle('active', hours === 168);
-      document.getElementById('metricsTitle').textContent = hours === 168 ? 'PC Stats - Last 7 Days' : 'PC Stats - Last 24 Hours';
+      document.getElementById('metricsTitle').textContent = metricRangeLabel(hours);
       fetchMetrics();
     }}
 
@@ -3616,6 +3972,10 @@ def render_page(status: Dict[str, Any]) -> str:
       await fetchStatus();
     }}
 
+    async function installRequiredTools() {{
+      await runAction('install_required_tools');
+    }}
+
     function attachChartHover() {{
       const canvas = document.getElementById('metricsChart');
       const hover = document.getElementById('metricsHover');
@@ -3633,13 +3993,34 @@ def render_page(status: Dict[str, Any]) -> str:
         const pad = 40;
         const chartWidth = canvas.width - pad * 2;
         const clamped = Math.max(pad, Math.min(pad + chartWidth, x));
-        const idx = Math.round(((clamped - pad) / chartWidth) * Math.max(1, latestMetrics.length - 1));
+        const firstEpoch = Date.parse((latestMetrics[0] || {{}}).ts || '');
+        const lastEpoch = Date.parse((latestMetrics[latestMetrics.length - 1] || {{}}).ts || '');
+        const spanEpoch = Math.max(1, lastEpoch - firstEpoch);
+        const targetEpoch = firstEpoch + (((clamped - pad) / chartWidth) * spanEpoch);
+        let idx = 0;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        latestMetrics.forEach((item, index) => {{
+          const epoch = Date.parse(item.ts || '');
+          if (!Number.isFinite(epoch)) {{
+            return;
+          }}
+          const distance = Math.abs(epoch - targetEpoch);
+          if (distance < bestDistance) {{
+            bestDistance = distance;
+            idx = index;
+          }}
+        }});
         const point = latestMetrics[idx];
         if (!point) {{
           return;
         }}
         const pointEpoch = Date.parse(point.ts || '');
         const nearbyWindowMs = metricsRangeHours > 24 ? 30 * 60 * 1000 : 5 * 60 * 1000;
+        if (point.gap) {{
+          hover.textContent = `${{formatLocalTimestamp(point.ts || '')}} | No watchdog sample in this period.`;
+          drawMetrics(latestMetrics, idx);
+          return;
+        }}
         const nearbyEvents = latestMetricEvents
           .filter((item) => {{
             const eventEpoch = Date.parse(item.ts || '');
@@ -3698,7 +4079,7 @@ class Handler(BaseHTTPRequestHandler):
                 hours = int(hours_raw)
             except ValueError:
                 hours = 24
-            hours = 168 if hours >= 168 else 24
+            hours = 168 if hours >= 168 else (24 if hours >= 24 else 1)
             self._send_json({"points": recent_metrics(hours), "events": recent_metric_events(hours)})
             return
         if parsed.path == "/download/export-archive":
@@ -3715,6 +4096,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/download/speedtest-log":
             self._send_file(safe_speedtest_file("log"), download_name="watchdog-speedtest.log")
+            return
+        if parsed.path == "/download/tools-install-log":
+            self._send_file(safe_tools_install_file("log"), download_name="watchdog-tools-install.log")
             return
         if parsed.path in {"/", "/index.html"}:
             body = render_page(status_payload()).encode("utf-8")
@@ -3808,6 +4192,10 @@ class Handler(BaseHTTPRequestHandler):
             if action == "hik_probe":
                 result = hik_probe_payload(load_config())
                 self._send_json(result, HTTPStatus.OK if result.get("state") != "failed" else HTTPStatus.BAD_REQUEST)
+                return
+            if action == "install_required_tools":
+                result = launch_required_tools_install()
+                self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.CONFLICT)
                 return
             marker = action_map.get(action)
             if not marker:
