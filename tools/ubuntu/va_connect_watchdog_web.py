@@ -1762,11 +1762,18 @@ def render_page(status: Dict[str, Any]) -> str:
     h2 {{ margin: 0 0 10px; font-size: 0.95rem; }}
     p {{ margin: 0 0 10px; }}
     .sub {{ color: #8ea5b9; margin-bottom: 12px; font-size: 0.88rem; }}
+    .navline {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, auto);
+      gap: 14px;
+      align-items: center;
+      margin-bottom: 10px;
+    }}
     .tabs {{
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      margin-bottom: 10px;
+      min-width: 0;
     }}
     .tab-btn {{
       border: 1px solid rgba(133, 159, 180, 0.24);
@@ -2141,10 +2148,6 @@ def render_page(status: Dict[str, Any]) -> str:
       font-weight: 600;
     }}
     .topbar {{
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(320px, 440px);
-      gap: 16px;
-      align-items: start;
       margin-bottom: 8px;
     }}
     .topbar-main {{
@@ -2153,7 +2156,7 @@ def render_page(status: Dict[str, Any]) -> str:
     .topbar-actions {{
       border: 1px solid rgba(129, 154, 175, 0.18);
       border-radius: 16px;
-      padding: 12px 14px;
+      padding: 9px 12px;
       background: linear-gradient(180deg, rgba(18, 29, 39, 0.96), rgba(13, 22, 31, 0.96));
       box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
     }}
@@ -2180,8 +2183,9 @@ def render_page(status: Dict[str, Any]) -> str:
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      flex: 1 1 220px;
+      flex: 1 1 180px;
       min-width: 0;
+      text-align: right;
     }}
     .topbar-label {{
       color: #8ea5b9;
@@ -2204,7 +2208,7 @@ def render_page(status: Dict[str, Any]) -> str:
       margin-top: 6px;
     }}
     @media (max-width: 1100px) {{
-      .topbar,
+      .navline,
       .hero,
       .analysis-grid,
       .status-grid,
@@ -2224,6 +2228,15 @@ def render_page(status: Dict[str, Any]) -> str:
         <h1>VA-Connect Encoder Watchdog</h1>
         <div class="sub">Control page for <strong>{html.escape(status["hostname"])}</strong> | Hardware ID <strong>{html.escape(str(status["hardware_identity"].get("serial", "unknown")))}</strong></div>
       </div>
+    </div>
+    <div class="navline">
+      <div class="tabs">
+        <button type="button" class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
+        <button type="button" class="tab-btn" data-tab="investigation" onclick="switchTab('investigation')">Investigation</button>
+        <button type="button" class="tab-btn" data-tab="dev" onclick="switchTab('dev')">Dev</button>
+        <button type="button" class="tab-btn" data-tab="help" onclick="switchTab('help')">Help</button>
+        <button type="button" class="tab-btn" data-tab="config" onclick="switchTab('config')">Config</button>
+      </div>
       <section class="topbar-actions">
         <div class="topbar-strip">
           <div class="topbar-label">Page actions</div>
@@ -2238,13 +2251,6 @@ def render_page(status: Dict[str, Any]) -> str:
           <p class="hint" id="updateMeta">{html.escape(str(status["update_status"].get("from_build", "unknown")))} to {html.escape(str(status["update_status"].get("to_build", "unknown")))} | {html.escape(str(status["update_status"].get("finished_at", "not finished yet")))}</p>
         </div>
       </section>
-    </div>
-    <div class="tabs">
-      <button type="button" class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
-      <button type="button" class="tab-btn" data-tab="investigation" onclick="switchTab('investigation')">Investigation</button>
-      <button type="button" class="tab-btn" data-tab="dev" onclick="switchTab('dev')">Dev</button>
-      <button type="button" class="tab-btn" data-tab="help" onclick="switchTab('help')">Help</button>
-      <button type="button" class="tab-btn" data-tab="config" onclick="switchTab('config')">Config</button>
     </div>
     <section class="tab-panel active" data-tab-panel="overview">
     <div class="hero">
