@@ -1602,20 +1602,61 @@ def launch_export(since_time: str, until_time: str) -> Dict[str, Any]:
 def safe_export_file(kind: str) -> Optional[Path]:
     export_status = read_json(EXPORT_STATUS_PATH, {})
     candidate = ""
+    folder = str(export_status.get("folder", "")).strip()
+    archive = str(export_status.get("archive", "")).strip()
     if kind == "archive":
-        candidate = str(export_status.get("archive", "")).strip()
+        candidate = archive
+        if not candidate and folder:
+            candidate = str(Path(folder).with_suffix(".tar.gz"))
     elif kind == "log":
         candidate = str(export_status.get("log_path", "")).strip()
     elif kind == "folder_readme":
-        folder = str(export_status.get("folder", "")).strip()
         if folder:
             candidate = str(Path(folder) / "README.txt")
-    if not candidate:
-        return None
-    path = Path(candidate)
-    if not path.exists() or not path.is_file():
-        return None
-    return path
+    if candidate:
+        path = Path(candidate)
+        if path.exists() and path.is_file():
+            return path
+
+    if kind == "archive":
+        search_roots = []
+        if archive:
+            search_roots.append(Path(archive).parent)
+        if folder:
+            search_roots.append(Path(folder).parent)
+        search_roots.extend([Path("/home/vsuser/Desktop"), Path("/root/Desktop")])
+        seen = set()
+        for root in search_roots:
+            root_str = str(root)
+            if root_str in seen:
+                continue
+            seen.add(root_str)
+            if not root.exists():
+                continue
+            matches = sorted(root.glob("watchdog_incident_export_*.tar.gz"), key=lambda item: item.stat().st_mtime, reverse=True)
+            if matches:
+                return matches[0]
+
+    if kind == "folder_readme":
+        search_roots = []
+        if folder:
+            search_roots.append(Path(folder).parent)
+        elif archive:
+            search_roots.append(Path(archive).parent)
+        search_roots.extend([Path("/home/vsuser/Desktop"), Path("/root/Desktop")])
+        seen = set()
+        for root in search_roots:
+            root_str = str(root)
+            if root_str in seen:
+                continue
+            seen.add(root_str)
+            if not root.exists():
+                continue
+            matches = sorted(root.glob("watchdog_incident_export_*/README.txt"), key=lambda item: item.stat().st_mtime, reverse=True)
+            if matches:
+                return matches[0]
+
+    return None
 
 
 def safe_memtest_file(kind: str) -> Optional[Path]:
