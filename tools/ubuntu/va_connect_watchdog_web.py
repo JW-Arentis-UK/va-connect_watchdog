@@ -4143,6 +4143,127 @@ def render_page(status: Dict[str, Any]) -> str:
           reloadSoon();
         }});
       }};
+
+      function fetchJson(path, callback) {{
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', path + authQuery(), true);
+        xhr.onreadystatechange = function () {{
+          if (xhr.readyState !== 4) {{
+            return;
+          }}
+          var body = {{}};
+          try {{
+            body = JSON.parse(xhr.responseText || '{{}}');
+          }} catch (err) {{
+            body = {{}};
+          }}
+          callback(xhr.status, body);
+        }};
+        xhr.send();
+      }}
+
+      function drawLegacyMetrics(points) {{
+        var canvas = document.getElementById('metricsChart');
+        if (!canvas || !canvas.getContext) {{
+          return;
+        }}
+        var ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#0f1820';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        var pad = 40;
+        var chartWidth = canvas.width - pad * 2;
+        var chartHeight = canvas.height - pad * 2;
+        ctx.strokeStyle = '#29404f';
+        ctx.lineWidth = 1;
+        for (var i = 0; i <= 4; i += 1) {{
+          var y = pad + (chartHeight / 4) * i;
+          ctx.beginPath();
+          ctx.moveTo(pad, y);
+          ctx.lineTo(pad + chartWidth, y);
+          ctx.stroke();
+        }}
+        if (!points || !points.length) {{
+          ctx.fillStyle = '#8ea5b9';
+          ctx.font = '16px Segoe UI';
+          ctx.fillText('No metrics collected yet.', pad, canvas.height / 2);
+          return;
+        }}
+        var epochs = [];
+        for (var j = 0; j < points.length; j += 1) {{
+          var epoch = Date.parse((points[j] || {{}}).ts || '');
+          if (!isNaN(epoch)) {{
+            epochs.push(epoch);
+          }}
+        }}
+        if (!epochs.length) {{
+          ctx.fillStyle = '#8ea5b9';
+          ctx.font = '16px Segoe UI';
+          ctx.fillText('No timestamped metrics available.', pad, canvas.height / 2);
+          return;
+        }}
+        var firstEpoch = epochs[0];
+        var lastEpoch = epochs[epochs.length - 1];
+        var spanEpoch = Math.max(1, lastEpoch - firstEpoch);
+        ctx.strokeStyle = '#67a8db';
+        ctx.lineWidth = 2;
+        var started = false;
+        for (var k = 0; k < points.length; k += 1) {{
+          var point = points[k] || {{}};
+          if (point.gap) {{
+            if (started) {{
+              ctx.stroke();
+              started = false;
+            }}
+            continue;
+          }}
+          var pointEpoch = Date.parse(point.ts || '');
+          var value = Number(point.cpu_percent || 0);
+          if (isNaN(pointEpoch) || isNaN(value)) {{
+            continue;
+          }}
+          var x = pad + (((pointEpoch - firstEpoch) / spanEpoch) * chartWidth);
+          var yPoint = pad + chartHeight - ((Math.max(0, Math.min(100, value)) / 100) * chartHeight);
+          if (!started) {{
+            ctx.beginPath();
+            ctx.moveTo(x, yPoint);
+            started = true;
+          }} else {{
+            ctx.lineTo(x, yPoint);
+          }}
+        }}
+        if (started) {{
+          ctx.stroke();
+        }}
+      }}
+
+      window.setMetricRange = function (hours) {{
+        var h = Number(hours) || 24;
+        var b1 = document.getElementById('range1hBtn');
+        var b24 = document.getElementById('range24hBtn');
+        var b168 = document.getElementById('range168hBtn');
+        if (b1) b1.classList[h === 1 ? 'add' : 'remove']('active');
+        if (b24) b24.classList[h === 24 ? 'add' : 'remove']('active');
+        if (b168) b168.classList[h === 168 ? 'add' : 'remove']('active');
+        var title = document.getElementById('metricsTitle');
+        if (title) {{
+          title.textContent = h === 1 ? 'PC Stats - Last Hour' : (h === 168 ? 'PC Stats - Last 7 Days' : 'PC Stats - Last 24 Hours');
+        }}
+        var sep = authQuery() ? '&' : '?';
+        fetchJson('/api/metrics' + sep + 'hours=' + h, function (_status, body) {{
+          var points = (body && body.points) ? body.points : [];
+          drawLegacyMetrics(points);
+          var sample = document.getElementById('metricsSampleAt');
+          if (sample) {{
+            var latest = points.length ? ((points[points.length - 1] || {{}}).ts || '') : '';
+            sample.textContent = latest ? ('Latest sample ' + latest) : 'Latest sample unknown';
+          }}
+        }});
+      }};
+
+      if (document.getElementById('metricsChart')) {{
+        window.setMetricRange(24);
+      }}
     }})();
   </script>
   <script>
@@ -4175,11 +4296,15 @@ def render_page(status: Dict[str, Any]) -> str:
           url.searchParams.set(key, value);
         }}
       }});
-      Object.entries(extraParams || {{}}).forEach(([key, value]) => {{
-        if (value !== undefined && value !== null && value !== '') {{
-          url.searchParams.set(key, String(value));
+      const params = extraParams || {{}};
+      for (const key in params) {{
+        if (Object.prototype.hasOwnProperty.call(params, key)) {{
+          const value = params[key];
+          if (value !== undefined && value !== null && value !== '') {{
+            url.searchParams.set(key, String(value));
+          }}
         }}
-      }});
+      }}
       return `${{url.pathname}}${{url.search}}`;
     }}
 
