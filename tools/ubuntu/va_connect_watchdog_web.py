@@ -1924,8 +1924,8 @@ def render_page(status: Dict[str, Any]) -> str:
         linear-gradient(180deg, #0d151c 0%, #111c24 55%, #0b1319 100%);
       color: #e7eef5;
     }}
-    .wrap {{ max-width: 1540px; margin: 0 auto; padding: 12px; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }}
+    .wrap {{ max-width: 1540px; margin: 0 auto; padding: 10px; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }}
     .overview-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-top: 10px; }}
     .current-stats-grid {{
       display: grid;
@@ -1995,7 +1995,7 @@ def render_page(status: Dict[str, Any]) -> str:
       background: rgba(18, 29, 39, 0.9);
       border: 1px solid rgba(122, 150, 176, 0.18);
       border-radius: 16px;
-      padding: 12px;
+      padding: 10px 11px;
       box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
       backdrop-filter: blur(10px);
     }}
@@ -2007,9 +2007,9 @@ def render_page(status: Dict[str, Any]) -> str:
       display: flex;
       flex-wrap: wrap;
       justify-content: space-between;
-      gap: 14px;
+      gap: 10px;
       align-items: center;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }}
     .tabs {{
       display: flex;
@@ -2089,22 +2089,22 @@ def render_page(status: Dict[str, Any]) -> str:
     .hero {{
       display: grid;
       grid-template-columns: minmax(240px, 1.1fr) minmax(180px, 0.9fr);
-      gap: 10px;
-      margin-top: 10px;
+      gap: 8px;
+      margin-top: 8px;
     }}
     .hero-main {{
       border: 1px solid rgba(122, 150, 176, 0.18);
       border-radius: 18px;
-      padding: 14px;
+      padding: 11px 12px;
       background: linear-gradient(135deg, rgba(53, 93, 128, 0.34), rgba(47, 78, 62, 0.22));
     }}
-    .hero-title {{ font-size: 1.18rem; font-weight: 800; margin: 3px 0 8px; }}
-    .hero-detail {{ font-size: 0.9rem; color: #b8c9d8; }}
+    .hero-title {{ font-size: 1.08rem; font-weight: 800; margin: 2px 0 6px; }}
+    .hero-detail {{ font-size: 0.85rem; color: #b8c9d8; }}
     .status-strip {{
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 10px;
+      gap: 6px;
+      margin-top: 8px;
     }}
     .stat-label {{ color: #8da4b8; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; }}
     .stat-value {{ font-size: 1.18rem; font-weight: 700; margin-top: 3px; }}
@@ -2188,7 +2188,7 @@ def render_page(status: Dict[str, Any]) -> str:
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
+      gap: 8px;
       margin-bottom: 6px;
       flex-wrap: wrap;
     }}
@@ -2323,16 +2323,16 @@ def render_page(status: Dict[str, Any]) -> str:
       gap: 14px;
     }}
     .timeline-panel {{
-      min-height: 200px;
+      min-height: 160px;
     }}
     .checks-panel {{
-      min-height: 320px;
+      min-height: 220px;
     }}
     .controls-panel {{
       min-height: 240px;
     }}
     .summary-panel {{
-      min-height: 150px;
+      min-height: 120px;
     }}
     .timeline-empty {{
       color: #8ea5b9;
@@ -2341,27 +2341,27 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
     .compact-metrics {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-      gap: 8px;
-      margin-top: 8px;
+      grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+      gap: 6px;
+      margin-top: 6px;
     }}
     .metric-chip {{
       border: 1px solid rgba(129, 154, 175, 0.14);
       border-radius: 12px;
-      padding: 8px 10px;
+      padding: 7px 8px;
       background: rgba(20, 33, 44, 0.78);
     }}
     .metric-chip strong {{
       display: block;
       margin-top: 2px;
-      font-size: 1rem;
+      font-size: 0.92rem;
       color: #eff6fb;
     }}
     .summary-lines {{
       display: grid;
-      gap: 6px;
-      margin-top: 8px;
-      font-size: 0.84rem;
+      gap: 4px;
+      margin-top: 6px;
+      font-size: 0.81rem;
       color: #d7e2eb;
     }}
     .checks-compact {{
@@ -2371,13 +2371,14 @@ def render_page(status: Dict[str, Any]) -> str:
     .check-group {{
       border: 1px solid rgba(129, 154, 175, 0.15);
       border-radius: 12px;
-      padding: 8px 10px;
+      padding: 6px 8px;
       background: rgba(20, 33, 44, 0.84);
     }}
     .check-group summary {{
       cursor: pointer;
       color: #dbe7f0;
       font-weight: 700;
+      font-size: 0.83rem;
       list-style: none;
     }}
     .check-group summary::-webkit-details-marker {{
@@ -2386,7 +2387,7 @@ def render_page(status: Dict[str, Any]) -> str:
     .check-list {{
       display: grid;
       gap: 6px;
-      margin-top: 8px;
+      margin-top: 6px;
     }}
     .hardware-grid {{
       display: grid;
@@ -2440,7 +2441,7 @@ def render_page(status: Dict[str, Any]) -> str:
     .tool-summary {{
       margin-top: 8px;
       color: #c9d7e2;
-      font-size: 0.84rem;
+      font-size: 0.8rem;
     }}
     .tool-expand {{
       margin-top: 8px;
@@ -2523,7 +2524,7 @@ def render_page(status: Dict[str, Any]) -> str:
     .topbar-actions {{
       border: 1px solid rgba(129, 154, 175, 0.18);
       border-radius: 16px;
-      padding: 9px 12px;
+      padding: 7px 10px;
       background: linear-gradient(180deg, rgba(18, 29, 39, 0.96), rgba(13, 22, 31, 0.96));
       box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
       flex: 1 1 520px;
@@ -2539,7 +2540,7 @@ def render_page(status: Dict[str, Any]) -> str:
       margin-top: 0;
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
+      gap: 6px;
       align-items: center;
     }}
     .topbar-actions .update-row {{
@@ -2555,6 +2556,7 @@ def render_page(status: Dict[str, Any]) -> str:
       flex: 1 1 180px;
       min-width: 0;
       text-align: right;
+      font-size: 0.72rem;
     }}
     .topbar-label {{
       color: #8ea5b9;
