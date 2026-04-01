@@ -89,6 +89,43 @@ def export_download_names(export_status: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
+def latest_log_block(path: Path, start_prefix: str, max_lines: int = 10) -> List[str]:
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return []
+    start_index = 0
+    for index, line in enumerate(lines):
+        if line.startswith(start_prefix):
+            start_index = index
+    block = [line.rstrip() for line in lines[start_index:] if line.strip()]
+    return block[-max_lines:]
+
+
+def export_log_excerpt(export_status: Dict[str, Any], max_lines: int = 10) -> List[str]:
+    if not EXPORT_LOG_PATH.exists():
+        return []
+    try:
+        lines = EXPORT_LOG_PATH.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return []
+    request_id = str(export_status.get("request_id", "")).strip()
+    start_index = 0
+    if request_id:
+        marker = f"===== Web export started request_id={request_id} "
+        for index, line in enumerate(lines):
+            if line.startswith(marker):
+                start_index = index
+    else:
+        for index, line in enumerate(lines):
+            if line.startswith("===== Web export started "):
+                start_index = index
+    block = [line.rstrip() for line in lines[start_index:] if line.strip()]
+    return block[-max_lines:]
+
+
 def parse_iso(value: str) -> Optional[datetime]:
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -1906,6 +1943,8 @@ def status_payload() -> Dict[str, Any]:
         "build_info": build_info,
         "update_status": update_status,
         "export_status": export_status,
+        "update_console_lines": latest_log_block(UPDATE_LOG_PATH, "===== Web update started ", 10),
+        "export_console_lines": export_log_excerpt(export_status, 10),
         "memtest_status": memtest_status,
         "memtest_info": memtest_info,
         "speedtest_status": speedtest_status,
@@ -2559,6 +2598,19 @@ def render_page(status: Dict[str, Any]) -> str:
       cursor: pointer;
       user-select: none;
     }}
+    .console-box {{
+      margin-top: 8px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(129, 154, 175, 0.14);
+      background: rgba(8, 14, 19, 0.92);
+      color: #a8c1d6;
+      font: 0.73rem/1.35 Consolas, monospace;
+      max-height: 120px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }}
     .suspect-grid {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -2732,6 +2784,7 @@ def render_page(status: Dict[str, Any]) -> str:
             <span id="updateMessage">{html.escape(str(status["update_status"].get("message", "No web update run yet.")))}</span>
           </div>
           <p class="hint" id="updateMeta">{html.escape(str(status["update_status"].get("from_build", "unknown")))} to {html.escape(str(status["update_status"].get("to_build", "unknown")))} | {html.escape(str(status["update_status"].get("finished_at", "not finished yet")))}</p>
+          <div class="console-box" id="updateConsole">{html.escape(chr(10).join(status.get("update_console_lines", []) or ["No update progress yet."]))}</div>
         </div>
       </section>
     </div>
@@ -2935,6 +2988,7 @@ def render_page(status: Dict[str, Any]) -> str:
           {'disabled' if status['export_status'].get('state') == 'running' else ''}
         >{html.escape(str(status["export_status"].get("button_label", "Export incident pack")))}</button>
         <p class="hint" id="exportMeta">{html.escape(str(status["export_status"].get("message", "No incident export run yet.")))}</p>
+        <div class="console-box" id="exportConsole">{html.escape(chr(10).join(status.get("export_console_lines", []) or ["No export progress yet."]))}</div>
         <div class="link-row">
           <a class="link-btn" id="exportArchiveLink" href="/download/export-archive">Download export archive</a>
           <a class="link-btn" id="exportReadmeLink" href="/download/export-readme">Download export README</a>
@@ -3803,6 +3857,9 @@ def render_page(status: Dict[str, Any]) -> str:
       updateBadge.textContent = (updateState.state || 'idle').toUpperCase();
       document.getElementById('updateMessage').textContent = updateState.message || 'No web update run yet.';
       document.getElementById('updateMeta').textContent = `${{updateState.from_build || 'unknown'}} to ${{updateState.to_build || 'unknown'}} | ${{updateState.finished_at ? formatLocalTimestamp(updateState.finished_at) : 'not finished yet'}}`;
+      document.getElementById('updateConsole').textContent = (status.update_console_lines || []).length
+        ? (status.update_console_lines || []).join('\n')
+        : 'No update progress yet.';
       const requiredTools = status.required_tools || {{}};
       const missingImportant = requiredTools.missing_important || [];
       const missingRequired = requiredTools.missing_required || [];
@@ -3885,6 +3942,9 @@ def render_page(status: Dict[str, Any]) -> str:
         exportMetaParts.push(formatLocalTimestamp(exportState.finished_at));
       }}
       document.getElementById('exportMeta').textContent = exportMetaParts.join(' | ') || 'No incident export run yet.';
+      document.getElementById('exportConsole').textContent = (status.export_console_lines || []).length
+        ? (status.export_console_lines || []).join('\n')
+        : 'No export progress yet.';
       const exportToken = exportState.request_id || exportState.finished_at || exportState.export_label || '';
       const exportArchiveLink = document.getElementById('exportArchiveLink');
       const exportReadmeLink = document.getElementById('exportReadmeLink');
