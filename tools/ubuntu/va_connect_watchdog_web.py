@@ -3568,6 +3568,10 @@ def render_page(status: Dict[str, Any]) -> str:
       return ok ? 'badge' : 'badge danger';
     }}
 
+    function fallback(value, alt) {{
+      return value === undefined || value === null ? alt : value;
+    }}
+
     function metricRangeLabel(hours) {{
       if (hours === 1) {{
         return 'PC Stats - Last Hour';
@@ -3753,29 +3757,29 @@ def render_page(status: Dict[str, Any]) -> str:
       }};
       const sensorSummary = (currentMetrics.temperature_sensors || [])
         .slice(0, 3)
-        .map((item) => `${{item.name || 'sensor'}} ${{item.value_c ?? 'unknown'}} C`)
+        .map((item) => `${{item.name || 'sensor'}} ${{fallback(item.value_c, 'unknown')}} C`)
         .join(' | ');
       document.getElementById('currentStatsAt').textContent = currentMetrics.ts ? `Latest sample ${{formatLocalTimestamp(currentMetrics.ts)}}` : 'Latest sample unknown';
       document.getElementById('currentStatsGrid').innerHTML = `
         <div class="metric-chip"><div class="stat-label">CPU</div><strong>${{formatMetricNumber(currentMetrics.cpu_percent)}}%</strong></div>
         <div class="metric-chip"><div class="stat-label">Memory</div><strong>${{formatMetricNumber(currentMetrics.mem_percent)}}%</strong></div>
-        <div class="metric-chip"><div class="stat-label">MemAvailable</div><strong>${{currentMetrics.mem_available_mb ?? 'unknown'}} MB</strong></div>
-        <div class="metric-chip"><div class="stat-label">Cached</div><strong>${{currentMetrics.mem_cached_mb ?? 'unknown'}} MB</strong></div>
+        <div class="metric-chip"><div class="stat-label">MemAvailable</div><strong>${{fallback(currentMetrics.mem_available_mb, 'unknown')}} MB</strong></div>
+        <div class="metric-chip"><div class="stat-label">Cached</div><strong>${{fallback(currentMetrics.mem_cached_mb, 'unknown')}} MB</strong></div>
         <div class="metric-chip"><div class="stat-label">Root disk</div><strong>${{formatMetricNumber(currentMetrics.root_disk_percent)}}%</strong></div>
         <div class="metric-chip"><div class="stat-label">Recording disk</div><strong>${{formatMetricNumber(currentMetrics.recording_disk_percent)}}%</strong></div>
-        <div class="metric-chip"><div class="stat-label">Temp max</div><strong>${{currentMetrics.temperature_c ?? 'unknown'}} C</strong></div>
+        <div class="metric-chip"><div class="stat-label">Temp max</div><strong>${{fallback(currentMetrics.temperature_c, 'unknown')}} C</strong></div>
         <div class="metric-chip"><div class="stat-label">Load</div><strong>${{formatMetricNumber(currentMetrics.load_1, 2)}}</strong></div>
       `;
       document.getElementById('metricsSampleAt').textContent = currentMetrics.ts ? `Latest sample ${{formatLocalTimestamp(currentMetrics.ts)}}` : 'Latest sample unknown';
       document.getElementById('metricsTempSummary').textContent = sensorSummary
         ? `Temperature: ${{sensorSummary}}`
-        : `Temperature: ${{currentMetrics.temperature_c ?? 'unknown'}} C`;
+        : `Temperature: ${{fallback(currentMetrics.temperature_c, 'unknown')}} C`;
       document.getElementById('memoryThermalSummary').innerHTML = `
         <li><strong>Memory used:</strong> ${{Number(currentMetrics.mem_percent || 0).toFixed(1)}}%</li>
-        <li><strong>MemAvailable:</strong> ${{currentMetrics.mem_available_mb ?? 'unknown'}} MB</li>
-        <li><strong>Cached:</strong> ${{currentMetrics.mem_cached_mb ?? 'unknown'}} MB</li>
-        <li><strong>Temperature max:</strong> ${{currentMetrics.temperature_c ?? 'unknown'}} C</li>
-        <li><strong>Thermal zones:</strong> ${{currentMetrics.temperature_sensor_count ?? 0}}</li>
+        <li><strong>MemAvailable:</strong> ${{fallback(currentMetrics.mem_available_mb, 'unknown')}} MB</li>
+        <li><strong>Cached:</strong> ${{fallback(currentMetrics.mem_cached_mb, 'unknown')}} MB</li>
+        <li><strong>Temperature max:</strong> ${{fallback(currentMetrics.temperature_c, 'unknown')}} C</li>
+        <li><strong>Thermal zones:</strong> ${{fallback(currentMetrics.temperature_sensor_count, 0)}}</li>
         <li><strong>Top sensors:</strong> ${{sensorSummary || 'unknown'}}</li>
       `;
       const teamviewer = status.teamviewer || {{}};
@@ -3804,7 +3808,7 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('teamviewerVersion').textContent = teamviewer.version || 'unknown';
       document.getElementById('teamviewerStatus').textContent = teamviewer.status_text || 'unknown';
       document.getElementById('remoteSpeedtestSummary').textContent = speedtestStatus.finished_at
-        ? `Last speed test: Down ${{speedtestStatus.download_mbps ?? 'n/a'}} Mbps | Up ${{speedtestStatus.upload_mbps ?? 'n/a'}} Mbps | ${{formatLocalTimestamp(speedtestStatus.finished_at)}}`
+        ? `Last speed test: Down ${{fallback(speedtestStatus.download_mbps, 'n/a')}} Mbps | Up ${{fallback(speedtestStatus.upload_mbps, 'n/a')}} Mbps | ${{formatLocalTimestamp(speedtestStatus.finished_at)}}`
         : 'No web speed test run yet.';
       document.getElementById('teamviewerResetButton').disabled = !teamviewer.reset_supported;
       if (!teamviewer.reset_supported) {{
@@ -3873,7 +3877,7 @@ def render_page(status: Dict[str, Any]) -> str:
       }}
       document.getElementById('speedtestMeta').textContent = speedtestMetaParts.join(' | ') || 'not finished yet';
       document.getElementById('speedtestLogLink').style.display = speedtestStatus.log_path ? 'inline-block' : 'none';
-      document.getElementById('speedtestHistory').innerHTML = (status.speedtest_history || []).map((item) => `<li>${{formatLocalTimestamp(item.ts || '')}} | ${{item.state || 'unknown'}} | Down ${{item.download_mbps ?? 'n/a'}} Mbps | Up ${{item.upload_mbps ?? 'n/a'}} Mbps</li>`).join('') || '<li>No speed test history yet.</li>';
+      document.getElementById('speedtestHistory').innerHTML = (status.speedtest_history || []).map((item) => `<li>${{formatLocalTimestamp(item.ts || '')}} | ${{item.state || 'unknown'}} | Down ${{fallback(item.download_mbps, 'n/a')}} Mbps | Up ${{fallback(item.upload_mbps, 'n/a')}} Mbps</li>`).join('') || '<li>No speed test history yet.</li>';
       const hikStatus = status.hik_status || {{}};
       const hikBadge = document.getElementById('hikState');
       hikBadge.className = `badge ${{hikStatus.state === 'failed' ? 'danger' : (hikStatus.state === 'idle' ? 'warn' : '')}}`;
@@ -3898,10 +3902,10 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('rebootLeadupDetail').textContent = rebootLeadup.detail || 'No reboot lead-up yet.';
       document.getElementById('rebootLeadupAt').textContent = rebootLeadup.reference_at ? `Reference point ${{formatLocalTimestamp(rebootLeadup.reference_at)}}` : '';
       document.getElementById('rebootLeadupStats').innerHTML = `
-        <section class="stat-card"><div class="stat-label">CPU</div><div class="stat-value">${{rebootLeadupMetrics.cpu_percent ?? 'unknown'}}%</div></section>
-        <section class="stat-card"><div class="stat-label">Memory</div><div class="stat-value">${{rebootLeadupMetrics.mem_percent ?? 'unknown'}}%</div></section>
-        <section class="stat-card"><div class="stat-label">MemAvailable</div><div class="stat-value" style="font-size:1rem;">${{rebootLeadupMetrics.mem_available_mb ?? 'unknown'}} MB</div></section>
-        <section class="stat-card"><div class="stat-label">Temp</div><div class="stat-value" style="font-size:1rem;">${{rebootLeadupMetrics.temperature_c ?? 'unknown'}} C</div></section>
+        <section class="stat-card"><div class="stat-label">CPU</div><div class="stat-value">${{fallback(rebootLeadupMetrics.cpu_percent, 'unknown')}}%</div></section>
+        <section class="stat-card"><div class="stat-label">Memory</div><div class="stat-value">${{fallback(rebootLeadupMetrics.mem_percent, 'unknown')}}%</div></section>
+        <section class="stat-card"><div class="stat-label">MemAvailable</div><div class="stat-value" style="font-size:1rem;">${{fallback(rebootLeadupMetrics.mem_available_mb, 'unknown')}} MB</div></section>
+        <section class="stat-card"><div class="stat-label">Temp</div><div class="stat-value" style="font-size:1rem;">${{fallback(rebootLeadupMetrics.temperature_c, 'unknown')}} C</div></section>
       `;
       document.getElementById('rebootLeadupTimeline').innerHTML = (rebootLeadup.events || []).map((item) => `<div class="timeline-card ${{item.severity || ''}}"><div class="timeline-time">${{formatLocalTimestamp(item.ts || '')}}</div><div class="timeline-title">${{item.title || ''}}</div><div>${{item.detail || ''}}</div></div>`).join('') || '<div class="timeline-empty">No lead-up events captured yet.</div>';
       document.getElementById('crashReviewFindings').innerHTML = (crashReview.findings || []).length
