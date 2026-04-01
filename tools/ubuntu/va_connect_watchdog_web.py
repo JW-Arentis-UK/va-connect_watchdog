@@ -2332,12 +2332,12 @@ def render_page(status: Dict[str, Any]) -> str:
     .tool-grid {{
       display: grid;
       gap: 8px;
-      margin-top: 10px;
+      margin-top: 8px;
     }}
     .tool-card {{
       border: 1px solid rgba(129, 154, 175, 0.15);
       border-radius: 12px;
-      padding: 9px 10px;
+      padding: 7px 9px;
       background: rgba(20, 33, 44, 0.88);
     }}
     .tool-head {{
@@ -2366,6 +2366,22 @@ def render_page(status: Dict[str, Any]) -> str:
       color: #8ea5b9;
       font-size: 0.78rem;
       word-break: break-word;
+    }}
+    .tool-summary {{
+      margin-top: 8px;
+      color: #c9d7e2;
+      font-size: 0.84rem;
+    }}
+    .tool-expand {{
+      margin-top: 8px;
+      border-top: 1px solid rgba(129, 154, 175, 0.12);
+      padding-top: 6px;
+    }}
+    .tool-expand summary {{
+      color: #8ea5b9;
+      font-size: 0.8rem;
+      cursor: pointer;
+      user-select: none;
     }}
     .suspect-grid {{
       display: grid;
@@ -2648,12 +2664,7 @@ def render_page(status: Dict[str, Any]) -> str:
         <span class="badge {'danger' if status.get('required_tools', {}).get('missing_required') else ''}" id="requiredToolsHeadline">{'Missing required tools' if status.get('required_tools', {}).get('missing_required') else 'Required tools ready'}</span>
         <span class="badge" id="requiredToolsMissingCount">{len(status.get("required_tools", {}).get("missing_important", []))} missing or inactive</span>
       </div>
-      <div class="tool-grid" id="requiredToolsGrid">
-        {"".join(
-          f"<div class='tool-card'><div class='tool-head'><span class='tool-title'>{html.escape(str(item.get('label', 'Tool')))}</span><span class='tool-status {'ok' if item.get('ok') else 'bad'}'>{'Tick Ready' if item.get('ok') else 'Cross Missing'}</span></div><div class='tool-why'>{html.escape(str(item.get('why', '')))}</div><div class='tool-detail'>{html.escape(str(item.get('detail', '')))}</div></div>"
-          for item in status.get("required_tools", {}).get("items", [])
-        )}
-      </div>
+      <p class="tool-summary" id="requiredToolsSummary">{'Missing: ' + ', '.join(str(item) for item in status.get("required_tools", {}).get("missing_important", [])) if status.get("required_tools", {}).get("missing_important") else 'All key support tools and services look available.'}</p>
       <div class="mini-meta" style="margin-top:10px;">
         <button class="secondary" onclick="installRequiredTools()">Install missing tools</button>
         <span class="badge {'warn' if status.get('required_tools', {}).get('install_status', {}).get('state') == 'running' else ('danger' if status.get('required_tools', {}).get('install_status', {}).get('state') == 'failed' else '')}" id="toolsInstallState">{html.escape(str(status.get("required_tools", {}).get("install_status", {}).get("state", "idle")).title())}</span>
@@ -2663,6 +2674,15 @@ def render_page(status: Dict[str, Any]) -> str:
       <div class="link-row">
         <a class="link-btn" id="toolsInstallLogLink" href="/download/tools-install-log">Download tool install log</a>
       </div>
+      <details class="tool-expand">
+        <summary>Show tool details</summary>
+        <div class="tool-grid" id="requiredToolsGrid">
+          {"".join(
+            f"<div class='tool-card'><div class='tool-head'><span class='tool-title'>{html.escape(str(item.get('label', 'Tool')))}</span><span class='tool-status {'ok' if item.get('ok') else 'bad'}'>{'Tick Ready' if item.get('ok') else 'Cross Missing'}</span></div><div class='tool-why'>{html.escape(str(item.get('why', '')))}</div><div class='tool-detail'>{html.escape(str(item.get('detail', '')))}</div></div>"
+            for item in status.get("required_tools", {}).get("items", [])
+          )}
+        </div>
+      </details>
     </section>
 
     <div class="analysis-grid" style="margin-top:16px;">
@@ -3557,6 +3577,9 @@ def render_page(status: Dict[str, Any]) -> str:
       requiredHeadline.className = `badge ${{(requiredTools.missing_required || []).length ? 'danger' : ''}}`;
       requiredHeadline.textContent = (requiredTools.missing_required || []).length ? 'Missing required tools' : 'Required tools ready';
       document.getElementById('requiredToolsMissingCount').textContent = `${{(requiredTools.missing_important || []).length}} missing or inactive`;
+      document.getElementById('requiredToolsSummary').textContent = (requiredTools.missing_important || []).length
+        ? `Missing: ${{(requiredTools.missing_important || []).join(', ')}}`
+        : 'All key support tools and services look available.';
       document.getElementById('requiredToolsGrid').innerHTML = (requiredTools.items || []).map((item) => `
         <div class="tool-card">
           <div class="tool-head">
