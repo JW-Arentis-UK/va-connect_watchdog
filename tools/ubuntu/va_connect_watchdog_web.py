@@ -3527,6 +3527,139 @@ def render_page(status: Dict[str, Any]) -> str:
     </section>
   </div>
   <script>
+    (function () {{
+      function authQuery() {{
+        return window.location.search || '';
+      }}
+
+      function postJson(path, payload, callback) {{
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', path + authQuery(), true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.onreadystatechange = function () {{
+          if (xhr.readyState !== 4) {{
+            return;
+          }}
+          var body = {{}};
+          try {{
+            body = JSON.parse(xhr.responseText || '{{}}');
+          }} catch (err) {{
+            body = {{}};
+          }}
+          callback(xhr.status, body);
+        }};
+        xhr.send(JSON.stringify(payload || {{}}));
+      }}
+
+      function reloadSoon() {{
+        window.setTimeout(function () {{
+          window.location.reload();
+        }}, 900);
+      }}
+
+      window.switchTab = function (name) {{
+        var buttons = document.getElementsByClassName('tab-btn');
+        var panels = document.getElementsByClassName('tab-panel');
+        var i;
+        for (i = 0; i < buttons.length; i += 1) {{
+          buttons[i].classList[buttons[i].getAttribute('data-tab') === name ? 'add' : 'remove']('active');
+        }}
+        for (i = 0; i < panels.length; i += 1) {{
+          panels[i].classList[panels[i].getAttribute('data-tab-panel') === name ? 'add' : 'remove']('active');
+        }}
+      }};
+
+      window.hardRefreshPage = function () {{
+        var joiner = window.location.search ? '&' : '?';
+        window.location.href = window.location.pathname + (window.location.search || '') + joiner + '_refresh=' + new Date().getTime();
+      }};
+
+      window.runAction = function (action, extraPayload) {{
+        var payload = {{ action: action }};
+        var key;
+        extraPayload = extraPayload || {{}};
+        for (key in extraPayload) {{
+          if (Object.prototype.hasOwnProperty.call(extraPayload, key)) {{
+            payload[key] = extraPayload[key];
+          }}
+        }}
+        postJson('/api/action', payload, function (status, body) {{
+          if (status >= 200 && status < 300) {{
+            if (action === 'reset_teamviewer_password' || action === 'start_teamviewer' || action === 'restart_teamviewer') {{
+              var result = document.getElementById('teamviewerResetResult');
+              if (result) {{
+                result.textContent = body.password ? ('New password: ' + body.password) : (body.message || 'Action complete.');
+              }}
+            }}
+            reloadSoon();
+            return;
+          }}
+          alert((body && body.message) || 'Action failed.');
+        }});
+      }};
+
+      window.setTeamviewerPassword = function () {{
+        var input = document.getElementById('teamviewerManualPassword');
+        window.runAction('reset_teamviewer_password', {{ password: input ? input.value : '' }});
+      }};
+
+      window.exportIncident = function () {{
+        var since = document.getElementById('export_since');
+        var until = document.getElementById('export_until');
+        postJson('/api/export', {{
+          since: since && since.value ? since.value.replace('T', ' ') : '',
+          until: until && until.value ? until.value.replace('T', ' ') : ''
+        }}, function (status, body) {{
+          if (status >= 200 && status < 300) {{
+            reloadSoon();
+            return;
+          }}
+          alert((body && body.message) || 'Export failed.');
+        }});
+      }};
+
+      window.runSpeedtest = function () {{
+        postJson('/api/speedtest', {{}}, function (status, body) {{
+          if (status >= 200 && status < 300) {{
+            reloadSoon();
+            return;
+          }}
+          alert((body && body.message) || 'Speed test failed to start.');
+        }});
+      }};
+
+      window.runMemtest = function () {{
+        var size = document.getElementById('memtest_size_mb');
+        var loops = document.getElementById('memtest_loops');
+        postJson('/api/memtest', {{
+          size_mb: size && size.value ? Number(size.value) : 1024,
+          loops: loops && loops.value ? Number(loops.value) : 2
+        }}, function (status, body) {{
+          if (status >= 200 && status < 300) {{
+            reloadSoon();
+            return;
+          }}
+          alert((body && body.message) || 'Memory test failed to start.');
+        }});
+      }};
+
+      window.installRequiredTools = function () {{
+        window.runAction('install_required_tools');
+      }};
+
+      window.saveSettings = function () {{
+        postJson('/api/config', {{
+          monitoring_enabled: !!(document.getElementById('monitoring_enabled') || {{}}).checked,
+          app_restart_enabled: !!(document.getElementById('app_restart_enabled') || {{}}).checked,
+          restart_network_before_reboot: !!(document.getElementById('restart_network_before_reboot') || {{}}).checked,
+          reboot_enabled: !!(document.getElementById('reboot_enabled') || {{}}).checked
+        }}, function () {{
+          reloadSoon();
+        }});
+      }};
+    }})();
+  </script>
+  <script>
     const initialStatus = {json.dumps(status)};
     const authQuery = window.location.search || '';
     let latestMetrics = [];
