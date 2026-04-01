@@ -431,11 +431,10 @@ def recent_metrics(hours: int = 24) -> List[Dict[str, Any]]:
             item = json.loads(line)
         except json.JSONDecodeError:
             continue
-        ts = item.get("ts", "")
-        try:
-            epoch = datetime.fromisoformat(ts).timestamp()
-        except Exception:
+        ts = parse_iso(str(item.get("ts", "")))
+        if ts is None:
             continue
+        epoch = ts.timestamp()
         if epoch >= cutoff:
             points.append(item)
     max_points = 3000 if hours <= 24 else 8000
@@ -445,10 +444,10 @@ def recent_metrics(hours: int = 24) -> List[Dict[str, Any]]:
 
     epochs: List[float] = []
     for item in real_points:
-        try:
-            epochs.append(datetime.fromisoformat(str(item.get("ts", ""))).timestamp())
-        except Exception:
+        ts = parse_iso(str(item.get("ts", "")))
+        if ts is None:
             continue
+        epochs.append(ts.timestamp())
     diffs = sorted(
         diff for diff in (
             epochs[index] - epochs[index - 1]
@@ -474,11 +473,12 @@ def recent_metrics(hours: int = 24) -> List[Dict[str, Any]]:
         enriched.append(item)
         if index >= len(real_points) - 1:
             continue
-        try:
-            current_epoch = datetime.fromisoformat(str(item.get("ts", ""))).timestamp()
-            next_epoch = datetime.fromisoformat(str(real_points[index + 1].get("ts", ""))).timestamp()
-        except Exception:
+        current_ts = parse_iso(str(item.get("ts", "")))
+        next_ts = parse_iso(str(real_points[index + 1].get("ts", "")))
+        if current_ts is None or next_ts is None:
             continue
+        current_epoch = current_ts.timestamp()
+        next_epoch = next_ts.timestamp()
         if (next_epoch - current_epoch) > gap_threshold:
             enriched.append({"ts": iso_from_epoch(current_epoch + expected_step), "gap": True})
             enriched.append({"ts": iso_from_epoch(next_epoch - expected_step), "gap": True})
@@ -518,10 +518,10 @@ def recent_metric_events(hours: int = 24) -> List[Dict[str, Any]]:
             continue
         event_type = str(item.get("event", ""))
         ts = str(item.get("ts", ""))
-        try:
-            epoch = datetime.fromisoformat(ts).timestamp()
-        except Exception:
+        event_dt = parse_iso(ts)
+        if event_dt is None:
             continue
+        epoch = event_dt.timestamp()
         if epoch < cutoff:
             continue
         if event_type == "action" and str(item.get("action", "")) == "reboot":
@@ -4146,7 +4146,12 @@ def render_page(status: Dict[str, Any]) -> str:
 
       function fetchJson(path, callback) {{
         var xhr = new XMLHttpRequest();
-        xhr.open('GET', path + authQuery(), true);
+        var query = authQuery();
+        var url = path;
+        if (query) {{
+          url += (path.indexOf('?') >= 0 ? '&' : '?') + query.substring(1);
+        }}
+        xhr.open('GET', url, true);
         xhr.onreadystatechange = function () {{
           if (xhr.readyState !== 4) {{
             return;
