@@ -3415,7 +3415,7 @@ def render_page(status: Dict[str, Any]) -> str:
     <div class="topbar">
       <div class="topbar-main">
         <h1>VA-Connect Encoder Watchdog</h1>
-        <div class="sub">Control page for <strong>{html.escape(status["hostname"])}</strong> | Hardware ID <strong>{html.escape(str(status["hardware_identity"].get("serial", "unknown")))}</strong></div>
+        <div class="sub">Control page for <strong>{html.escape(status["hostname"])}</strong> | Hardware ID <strong>{html.escape(str(status["hardware_identity"].get("serial", "unknown")))}</strong> | Build <strong id="topBuildCommit">{html.escape(str(status["build_info"].get("git_commit", "unknown")))}</strong></div>
       </div>
     </div>
     <div class="navline">
@@ -4535,6 +4535,10 @@ def render_page(status: Dict[str, Any]) -> str:
 
     function render(status) {{
       organizeLayout();
+      const topBuildCommit = document.getElementById('topBuildCommit');
+      if (topBuildCommit) {{
+        topBuildCommit.textContent = (status.build_info && status.build_info.git_commit) || 'unknown';
+      }}
       document.getElementById('monitoring_enabled').checked = !!status.config.monitoring_enabled;
       document.getElementById('app_restart_enabled').checked = !!status.config.app_restart_enabled;
       document.getElementById('restart_network_before_reboot').checked = !!status.config.restart_network_before_reboot;
@@ -5290,9 +5294,11 @@ def render_page(status: Dict[str, Any]) -> str:
     async function runHikProbe() {{
       const hikMessage = document.getElementById('hikMessage');
       const hikState = document.getElementById('hikState');
+      const hikMeta = document.getElementById('hikMeta');
       hikMessage.textContent = 'Running Hik probe...';
       hikState.className = 'badge warn';
       hikState.textContent = 'RUNNING';
+      hikMeta.textContent = `Probe requested ${{formatLocalTimestamp(new Date().toISOString())}}`;
       try {{
         const response = await fetch('/api/action' + authQuery, {{
           method: 'POST',
@@ -5300,6 +5306,18 @@ def render_page(status: Dict[str, Any]) -> str:
           body: JSON.stringify({{ action: 'hik_probe' }})
         }});
         const payload = await response.json().catch(() => ({{ message: 'Hik probe failed.' }}));
+        if (payload && typeof payload === 'object') {{
+          if (payload.state) {{
+            hikState.textContent = String(payload.state).toUpperCase();
+            hikState.className = `badge ${{payload.state === 'failed' ? 'danger' : (payload.state === 'running' || payload.state === 'idle' ? 'warn' : '')}}`;
+          }}
+          if (payload.message) {{
+            hikMessage.textContent = payload.message;
+          }}
+          if (payload.checked_at) {{
+            hikMeta.textContent = `Last checked ${{formatLocalTimestamp(payload.checked_at)}}`;
+          }}
+        }}
         if (!response.ok) {{
           hikMessage.textContent = payload.message || 'Hik probe failed.';
         }}
