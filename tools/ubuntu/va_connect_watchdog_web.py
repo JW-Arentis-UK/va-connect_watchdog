@@ -1246,10 +1246,24 @@ def hik_attempt_probe(config: Dict[str, Any], path_candidates: List[str]) -> Dic
 
 def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     if not bool(config.get("hik_enabled")):
-        return {"enabled": False, "message": "Hik probe disabled.", "state": "idle"}
+        payload = {"enabled": False, "message": "Hik probe disabled.", "state": "idle", "checked_at": now_iso()}
+        write_json(HIK_STATUS_PATH, payload)
+        return payload
     host = str(config.get("hik_host", "")).strip()
     if not host:
-        return {"enabled": True, "message": "Hik host not configured.", "state": "idle"}
+        payload = {"enabled": True, "message": "Hik host not configured.", "state": "idle", "checked_at": now_iso()}
+        write_json(HIK_STATUS_PATH, payload)
+        return payload
+
+    started_at = now_iso()
+    running_payload = {
+        "enabled": True,
+        "state": "running",
+        "message": "Running Hik people-count probe...",
+        "checked_at": started_at,
+        "host": host,
+    }
+    write_json(HIK_STATUS_PATH, running_payload)
 
     device_info = hik_request(config, "/ISAPI/System/deviceInfo")
     device_values = xml_leaf_values(str(device_info.get("body", "")))
@@ -1300,6 +1314,7 @@ def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         "state": state,
         "message": message,
         "checked_at": now_iso(),
+        "started_at": started_at,
         "host": host,
         "capabilities_ok": bool(capabilities.get("ok")),
         "result_ok": bool(result.get("ok")),
