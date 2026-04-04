@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from mimetypes import guess_type
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import HTTPBasicAuthHandler, HTTPDigestAuthHandler, HTTPPasswordMgrWithDefaultRealm, build_opener, Request
 import xml.etree.ElementTree as ET
@@ -1133,6 +1134,8 @@ def hik_request(config: Dict[str, Any], path_template: str, timeout: int = 8) ->
     if not host:
         return {"ok": False, "message": "Hik host is empty.", "status": 0, "body": ""}
     path = str(path_template or "").strip().format(channel=channel)
+    if not path.startswith("/"):
+        path = f"/{path}"
     url = f"{scheme}://{host}{path}"
     password_mgr = HTTPPasswordMgrWithDefaultRealm()
     password_mgr.add_password(None, url, username, password)
@@ -1141,28 +1144,104 @@ def hik_request(config: Dict[str, Any], path_template: str, timeout: int = 8) ->
     try:
         with opener.open(request, timeout=timeout) as response:
             body = response.read().decode("utf-8", errors="ignore")
-            return {"ok": True, "message": "ok", "status": getattr(response, "status", 200), "body": body}
+            return {"ok": True, "message": "ok", "status": getattr(response, "status", 200), "body": body, "path": path, "url": url}
+    except HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", errors="ignore")
+        except Exception:
+            body = ""
+        return {"ok": False, "message": f"HTTPError: {exc}", "status": int(getattr(exc, "code", 0) or 0), "body": body, "path": path, "url": url}
+    except URLError as exc:
+        return {"ok": False, "message": f"URLError: {exc}", "status": 0, "body": "", "path": path, "url": url}
     except Exception as exc:
-        return {"ok": False, "message": f"{type(exc).__name__}: {exc}", "status": 0, "body": ""}
+        return {"ok": False, "message": f"{type(exc).__name__}: {exc}", "status": 0, "body": "", "path": path, "url": url}
 
 
 def parse_hik_people_count(raw_xml: str) -> Dict[str, Any]:
     values = xml_leaf_values(raw_xml)
     parsed: Dict[str, Any] = {}
-    candidate_tags = {
-        "peopleEntering": "entering",
-        "peopleExiting": "exiting",
-        "entered": "entered",
-        "exited": "exited",
-        "currentPeopleNumber": "current",
-        "peopleNum": "current",
-        "numOfPeople": "current",
-        "peopleCounting": "current",
-    }
-    for tag, output_key in candidate_tags.items():
-        if tag in values:
-            parsed[output_key] = values[tag]
+    if not raw_xml.strip():
+        return parsed
+    candidate_tags = [
+        ("peopleEntering", "entering"),
+        ("peopleExiting", "exiting"),
+        ("enterNum", "entering"),
+        ("outNum", "exiting"),
+        ("entered", "entered"),
+        ("exited", "exited"),
+        ("in", "entering"),
+        ("out", "exiting"),
+        ("currentPeopleNumber", "current"),
+        ("peopleNum", "current"),
+        ("numOfPeople", "current"),
+        ("total", "total"),
+        ("totalCount", "total"),
+        ("peopleCounting", "current"),
+        ("realTimeCount", "current"),
+    ]
+    lower_values = {str(k).lower(): v for k, v in values.items()}
+    for tag, output_key in candidate_tags:
+        value = values.get(tag)
+        if value is None:
+            value = lower_values.get(tag.lower())
+        if value is None:
+            continue
+        parsed[output_key] = value
+    if not parsed:
+        for tag, value in values.items():
+            tag_l = str(tag).lower()
+            if not re.search(r"(people|person|count|enter|exit|in|out|num|total)", tag_l):
+                continue
+            if re.fullmatch(r"[+-]?\d+(?:\.\d+)?", str(value).strip()):
+                parsed[tag] = value
     return parsed
+
+
+def hik_path_candidates(path_template: str, fallback_paths: List[str]) -> List[str]:
+    ordered: List[str] = []
+    seeds = [str(path_template or "").strip()] + list(fallback_paths)
+    swap_words = [
+        ("framesPeopleCounting", "peopleCounting"),
+        ("peopleCounting", "framesPeopleCounting"),
+        ("peopleCounting", "personCounting"),
+        ("personCounting", "peopleCounting"),
+    ]
+    for seed in seeds:
+        if not seed:
+            continue
+        if not seed.startswith("/"):
+            seed = f"/{seed}"
+        if seed not in ordered:
+            ordered.append(seed)
+        for old, new in swap_words:
+            if old not in seed:
+                continue
+            variant = seed.replace(old, new)
+            if variant not in ordered:
+                ordered.append(variant)
+    return ordered
+
+
+def hik_attempt_probe(config: Dict[str, Any], path_candidates: List[str]) -> Dict[str, Any]:
+    attempts: List[Dict[str, Any]] = []
+    chosen: Optional[Dict[str, Any]] = None
+    for path in path_candidates:
+        response = hik_request(config, path)
+        attempt = {
+            "path": str(response.get("path", path)),
+            "url": str(response.get("url", "")),
+            "ok": bool(response.get("ok")),
+            "status": int(response.get("status", 0) or 0),
+            "message": str(response.get("message", "")),
+        }
+        attempts.append(attempt)
+        if chosen is None:
+            chosen = response
+        if response.get("ok"):
+            chosen = response
+            break
+    return {"attempts": attempts, "response": chosen or {"ok": False, "message": "No path candidates.", "status": 0, "body": ""}}
 
 
 def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -1172,12 +1251,39 @@ def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     if not host:
         return {"enabled": True, "message": "Hik host not configured.", "state": "idle"}
 
-    capabilities = hik_request(config, str(config.get("hik_people_count_capabilities_path", "")))
-    result = hik_request(config, str(config.get("hik_people_count_result_path", "")))
+    capabilities_probe = hik_attempt_probe(
+        config,
+        hik_path_candidates(
+            str(config.get("hik_people_count_capabilities_path", "")),
+            [
+                "/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/capabilities",
+                "/ISAPI/Intelligent/channels/{channel}/peopleCounting/capabilities",
+                "/ISAPI/Intelligent/channels/{channel}/personCounting/capabilities",
+            ],
+        ),
+    )
+    result_probe = hik_attempt_probe(
+        config,
+        hik_path_candidates(
+            str(config.get("hik_people_count_result_path", "")),
+            [
+                "/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/result",
+                "/ISAPI/Intelligent/channels/{channel}/peopleCounting/result",
+                "/ISAPI/Intelligent/channels/{channel}/personCounting/result",
+            ],
+        ),
+    )
+    capabilities = capabilities_probe.get("response", {})
+    result = result_probe.get("response", {})
     parsed = parse_hik_people_count(result.get("body", ""))
 
     state = "ok" if result.get("ok") else "failed"
-    message = "Hik people-count probe completed." if result.get("ok") else f"Hik probe failed: {result.get('message', 'unknown error')}"
+    if result.get("ok") and parsed:
+        message = f"Hik people-count probe completed ({len(parsed)} value(s) parsed)."
+    elif result.get("ok"):
+        message = "Hik endpoint reachable but no count values were parsed."
+    else:
+        message = f"Hik probe failed: {result.get('message', 'unknown error')}"
     payload = {
         "enabled": True,
         "state": state,
@@ -1188,6 +1294,10 @@ def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         "result_ok": bool(result.get("ok")),
         "capabilities_status": int(capabilities.get("status", 0) or 0),
         "result_status": int(result.get("status", 0) or 0),
+        "capabilities_path_used": str(capabilities.get("path", "")),
+        "result_path_used": str(result.get("path", "")),
+        "capabilities_attempts": capabilities_probe.get("attempts", []),
+        "result_attempts": result_probe.get("attempts", []),
         "parsed_counts": parsed,
         "capabilities_excerpt": str(capabilities.get("body", ""))[:800],
         "result_excerpt": str(result.get("body", ""))[:800],
@@ -4642,7 +4752,18 @@ def render_page(status: Dict[str, Any]) -> str:
       hikBadge.className = `badge ${{hikStatus.state === 'failed' ? 'danger' : (hikStatus.state === 'idle' ? 'warn' : '')}}`;
       hikBadge.textContent = (hikStatus.state || 'idle').toUpperCase();
       document.getElementById('hikMessage').textContent = hikStatus.message || 'No Hik probe run yet.';
-      document.getElementById('hikMeta').textContent = hikStatus.checked_at ? formatLocalTimestamp(hikStatus.checked_at) : '';
+      const hikMetaParts = [];
+      if (hikStatus.checked_at) {{
+        hikMetaParts.push(formatLocalTimestamp(hikStatus.checked_at));
+      }}
+      if (hikStatus.result_path_used) {{
+        hikMetaParts.push(`Result path: ${{hikStatus.result_path_used}}`);
+      }}
+      const hikFailedAttempts = (hikStatus.result_attempts || []).filter((item) => !item.ok);
+      if (hikFailedAttempts.length) {{
+        hikMetaParts.push(`${{hikFailedAttempts.length}} failed path attempt(s)`);
+      }}
+      document.getElementById('hikMeta').textContent = hikMetaParts.join(' | ');
       const hikCounts = hikStatus.parsed_counts || {{}};
       const hikCountLines = [];
       for (const key in hikCounts) {{
