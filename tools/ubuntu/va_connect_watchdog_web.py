@@ -5187,7 +5187,8 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
 
     async function fetchStatus() {{
-      const response = await fetch('/api/status' + authQuery);
+      const separator = authQuery ? '&' : '?';
+      const response = await fetch(`/api/status${{authQuery}}${{separator}}_ts=${{Date.now()}}`, {{ cache: 'no-store' }});
       render(await response.json());
     }}
 
@@ -5202,7 +5203,7 @@ def render_page(status: Dict[str, Any]) -> str:
 
     async function fetchMetrics() {{
       const separator = authQuery ? '&' : '?';
-      const response = await fetch(`/api/metrics${{authQuery}}${{separator}}hours=${{metricsRangeHours}}`);
+      const response = await fetch(`/api/metrics${{authQuery}}${{separator}}hours=${{metricsRangeHours}}&__ts=${{Date.now()}}`, {{ cache: 'no-store' }});
       const payload = await response.json();
       latestMetrics = payload.points || [];
       latestMetricEvents = payload.events || [];
@@ -5324,6 +5325,7 @@ def render_page(status: Dict[str, Any]) -> str:
       try {{
         const response = await fetch('/api/action' + authQuery, {{
           method: 'POST',
+          cache: 'no-store',
           headers: {{ 'Content-Type': 'application/json' }},
           body: JSON.stringify({{ action: 'hik_probe' }})
         }});
