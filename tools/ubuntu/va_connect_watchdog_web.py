@@ -3963,6 +3963,8 @@ def render_page(status: Dict[str, Any]) -> str:
       </section>
       <section class="panel">
         <h2>Hik Raw</h2>
+        <p><strong>Probe console</strong></p>
+        <div class="console-box" id="hikProbeConsoleRaw" style="min-height:96px;">No Hik probe output yet.</div>
         <p><strong>Capabilities</strong></p>
         <div class="review-scroll"><code id="hikCapabilitiesRaw">{html.escape(str(status.get("hik_status", {}).get("capabilities_excerpt", "")))}</code></div>
         <p style="margin-top:10px;"><strong>Result</strong></p>
@@ -4854,6 +4856,20 @@ def render_page(status: Dict[str, Any]) -> str:
         }}
         hikConsole.textContent = consoleLines.join('\n');
       }}
+      const hikConsoleRaw = document.getElementById('hikProbeConsoleRaw');
+      if (hikConsoleRaw) {{
+        const consoleLines = [];
+        consoleLines.push(`[${{hikStatus.checked_at || 'unknown'}}] state=${{hikStatus.state || 'idle'}}`);
+        consoleLines.push(`message: ${{hikStatus.message || 'No Hik probe run yet.'}}`);
+        consoleLines.push(`deviceInfo: ok=${{hikStatus.device_info_ok ? 'true' : 'false'}} status=${{hikStatus.device_info_status || 0}} model=${{hikStatus.device_model || 'unknown'}}`);
+        for (const attempt of (hikStatus.capabilities_attempts || [])) {{
+          consoleLines.push(`capabilities: ${{attempt.ok ? 'OK' : 'FAIL'}} [${{attempt.status || 0}}] ${{attempt.path || ''}}`);
+        }}
+        for (const attempt of (hikStatus.result_attempts || [])) {{
+          consoleLines.push(`result: ${{attempt.ok ? 'OK' : 'FAIL'}} [${{attempt.status || 0}}] ${{attempt.path || ''}}`);
+        }}
+        hikConsoleRaw.textContent = consoleLines.join('\n');
+      }}
       document.getElementById('hikCapabilitiesRaw').textContent = hikStatus.capabilities_excerpt || '';
       document.getElementById('hikResultRaw').textContent = hikStatus.result_excerpt || '';
       document.getElementById('hikSavedSettings').innerHTML = `
@@ -5330,6 +5346,7 @@ def render_page(status: Dict[str, Any]) -> str:
       const hikState = document.getElementById('hikState');
       const hikMeta = document.getElementById('hikMeta');
       const hikProbeConsole = document.getElementById('hikProbeConsole');
+      const hikProbeConsoleRaw = document.getElementById('hikProbeConsoleRaw');
       if (hikMessage) {{
         hikMessage.textContent = 'Running Hik probe...';
       }}
@@ -5342,6 +5359,9 @@ def render_page(status: Dict[str, Any]) -> str:
       }}
       if (hikProbeConsole) {{
         hikProbeConsole.textContent = `[${{new Date().toISOString()}}] Starting Hik probe...\nWaiting for response...`;
+      }}
+      if (hikProbeConsoleRaw) {{
+        hikProbeConsoleRaw.textContent = `[${{new Date().toISOString()}}] Starting Hik probe...\nWaiting for response...`;
       }}
       try {{
         const response = await fetch('/api/action' + authQuery, {{
@@ -5362,6 +5382,19 @@ def render_page(status: Dict[str, Any]) -> str:
             lines.push(`result: ${{attempt.ok ? 'OK' : 'FAIL'}} [${{attempt.status || 0}}] ${{attempt.path || ''}}`);
           }}
           hikProbeConsole.textContent = lines.join('\n');
+        }}
+        if (hikProbeConsoleRaw && payload && typeof payload === 'object') {{
+          const lines = [];
+          lines.push(`[${{payload.checked_at || new Date().toISOString()}}] state=${{payload.state || 'unknown'}}`);
+          lines.push(`message: ${{payload.message || 'none'}}`);
+          lines.push(`deviceInfo: ok=${{payload.device_info_ok ? 'true' : 'false'}} status=${{payload.device_info_status || 0}} model=${{payload.device_model || 'unknown'}}`);
+          for (const attempt of (payload.capabilities_attempts || [])) {{
+            lines.push(`capabilities: ${{attempt.ok ? 'OK' : 'FAIL'}} [${{attempt.status || 0}}] ${{attempt.path || ''}}`);
+          }}
+          for (const attempt of (payload.result_attempts || [])) {{
+            lines.push(`result: ${{attempt.ok ? 'OK' : 'FAIL'}} [${{attempt.status || 0}}] ${{attempt.path || ''}}`);
+          }}
+          hikProbeConsoleRaw.textContent = lines.join('\n');
         }}
         if (payload && typeof payload === 'object') {{
           if (payload.state) {{
@@ -5392,6 +5425,9 @@ def render_page(status: Dict[str, Any]) -> str:
         }}
         if (hikProbeConsole) {{
           hikProbeConsole.textContent = `[${{new Date().toISOString()}}] Probe request failed before completion.`;
+        }}
+        if (hikProbeConsoleRaw) {{
+          hikProbeConsoleRaw.textContent = `[${{new Date().toISOString()}}] Probe request failed before completion.`;
         }}
       }}
       await fetchStatus();
