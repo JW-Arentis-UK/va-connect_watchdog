@@ -1133,7 +1133,18 @@ def hik_request(config: Dict[str, Any], path_template: str, timeout: int = 8) ->
     channel = int(config.get("hik_channel", 1) or 1)
     if not host:
         return {"ok": False, "message": "Hik host is empty.", "status": 0, "body": ""}
-    path = str(path_template or "").strip().format(channel=channel)
+    raw_path = str(path_template or "").strip()
+    try:
+        path = raw_path.format(channel=channel)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "message": f"Invalid Hik path template '{raw_path}': {type(exc).__name__}: {exc}",
+            "status": 0,
+            "body": "",
+            "path": raw_path,
+            "url": "",
+        }
     if not path.startswith("/"):
         path = f"/{path}"
     url = f"{scheme}://{host}{path}"
@@ -1245,13 +1256,15 @@ def hik_attempt_probe(config: Dict[str, Any], path_candidates: List[str]) -> Dic
 
 
 def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
+    prior_status = read_json(HIK_STATUS_PATH, {})
+    probe_sequence = int(prior_status.get("probe_sequence", 0) or 0) + 1
     if not bool(config.get("hik_enabled")):
-        payload = {"enabled": False, "message": "Hik probe disabled.", "state": "idle", "checked_at": now_iso()}
+        payload = {"enabled": False, "message": "Hik probe disabled.", "state": "idle", "checked_at": now_iso(), "probe_sequence": probe_sequence}
         write_json(HIK_STATUS_PATH, payload)
         return payload
     host = str(config.get("hik_host", "")).strip()
     if not host:
-        payload = {"enabled": True, "message": "Hik host not configured.", "state": "idle", "checked_at": now_iso()}
+        payload = {"enabled": True, "message": "Hik host not configured.", "state": "idle", "checked_at": now_iso(), "probe_sequence": probe_sequence}
         write_json(HIK_STATUS_PATH, payload)
         return payload
 
@@ -1262,6 +1275,7 @@ def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         "message": "Running Hik people-count probe...",
         "checked_at": started_at,
         "host": host,
+        "probe_sequence": probe_sequence,
     }
     write_json(HIK_STATUS_PATH, running_payload)
 
@@ -1316,6 +1330,7 @@ def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         "checked_at": now_iso(),
         "started_at": started_at,
         "host": host,
+        "probe_sequence": probe_sequence,
         "capabilities_ok": bool(capabilities.get("ok")),
         "result_ok": bool(result.get("ok")),
         "capabilities_status": int(capabilities.get("status", 0) or 0),
@@ -4790,6 +4805,7 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('hikMessage').textContent = hikStatus.message || 'No Hik probe run yet.';
       const hikMetaParts = [];
       if (hikStatus.checked_at) {{
+        hikMetaParts.push(`Probe #${{hikStatus.probe_sequence || '?'}}`);
         hikMetaParts.push(formatLocalTimestamp(hikStatus.checked_at));
       }}
       if (hikStatus.device_model) {{
@@ -5326,7 +5342,7 @@ def render_page(status: Dict[str, Any]) -> str:
           }}
           if (payload.checked_at) {{
             if (hikMeta) {{
-              hikMeta.textContent = `Last checked ${{formatLocalTimestamp(payload.checked_at)}}`;
+              hikMeta.textContent = `Probe #${{payload.probe_sequence || '?'}} | Last checked ${{formatLocalTimestamp(payload.checked_at)}}`;
             }}
           }}
         }}
@@ -5704,8 +5720,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
                 return
             if action == "hik_probe":
-                result = hik_probe_payload(load_config())
-                self._send_json(result, HTTPStatus.OK if result.get("state") != "failed" else HTTPStatus.BAD_REQUEST)
+                try:
+                    result = hik_probe_payload(load_config())
+                    self._send_json(result, HTTPStatus.OK if result.get("state") != "failed" else HTTPStatus.BAD_REQUEST)
+                except Exception as exc:
+                    payload = {
+                        "enabled": True,
+                        "state": "failed",
+                        "message": f"Hik probe crashed: {type(exc).__name__}: {exc}",
+                        "checked_at": now_iso(),
+                    }
+                    write_json(HIK_STATUS_PATH, payload)
+                    self._send_json(payload, HTTPStatus.BAD_REQUEST)
                 return
             if action == "install_required_tools":
                 result = launch_required_tools_install()
