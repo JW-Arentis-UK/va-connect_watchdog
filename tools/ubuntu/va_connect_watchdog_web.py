@@ -3940,6 +3940,7 @@ def render_page(status: Dict[str, Any]) -> str:
         </div>
         <button class="secondary" onclick="saveHikConfig()">Save Hik settings</button>
         <button class="secondary" id="hikProbeButton" onclick="runHikProbe()">Probe Hik people count</button>
+        <div class="console-box" id="hikProbeConsole">No Hik probe output yet.</div>
         <p style="margin-top:12px;"><strong>Saved Hik settings</strong></p>
         <ul class="review-list" id="hikSavedSettings">
           <li>Enabled: {html.escape(str(bool(cfg.get("hik_enabled"))))}</li>
@@ -4839,6 +4840,20 @@ def render_page(status: Dict[str, Any]) -> str:
         hikCountLines.push(`<li><strong>Device info check failed</strong>: ${{hikStatus.device_info_message || 'unknown error'}}</li>`);
       }}
       document.getElementById('hikCounts').innerHTML = hikCountLines.join('') || '<li>No people-count values parsed yet.</li>';
+      const hikConsole = document.getElementById('hikProbeConsole');
+      if (hikConsole) {{
+        const consoleLines = [];
+        consoleLines.push(`[${{hikStatus.checked_at || 'unknown'}}] state=${{hikStatus.state || 'idle'}}`);
+        consoleLines.push(`message: ${{hikStatus.message || 'No Hik probe run yet.'}}`);
+        consoleLines.push(`deviceInfo: ok=${{hikStatus.device_info_ok ? 'true' : 'false'}} status=${{hikStatus.device_info_status || 0}} model=${{hikStatus.device_model || 'unknown'}}`);
+        for (const attempt of (hikStatus.capabilities_attempts || [])) {{
+          consoleLines.push(`capabilities: ${{attempt.ok ? 'OK' : 'FAIL'}} [${{attempt.status || 0}}] ${{attempt.path || ''}}`);
+        }}
+        for (const attempt of (hikStatus.result_attempts || [])) {{
+          consoleLines.push(`result: ${{attempt.ok ? 'OK' : 'FAIL'}} [${{attempt.status || 0}}] ${{attempt.path || ''}}`);
+        }}
+        hikConsole.textContent = consoleLines.join('\n');
+      }}
       document.getElementById('hikCapabilitiesRaw').textContent = hikStatus.capabilities_excerpt || '';
       document.getElementById('hikResultRaw').textContent = hikStatus.result_excerpt || '';
       document.getElementById('hikSavedSettings').innerHTML = `
@@ -5314,6 +5329,7 @@ def render_page(status: Dict[str, Any]) -> str:
       const hikMessage = document.getElementById('hikMessage');
       const hikState = document.getElementById('hikState');
       const hikMeta = document.getElementById('hikMeta');
+      const hikProbeConsole = document.getElementById('hikProbeConsole');
       if (hikMessage) {{
         hikMessage.textContent = 'Running Hik probe...';
       }}
@@ -5324,6 +5340,9 @@ def render_page(status: Dict[str, Any]) -> str:
       if (hikMeta) {{
         hikMeta.textContent = `Probe requested ${{formatLocalTimestamp(new Date().toISOString())}}`;
       }}
+      if (hikProbeConsole) {{
+        hikProbeConsole.textContent = `[${{new Date().toISOString()}}] Starting Hik probe...\nWaiting for response...`;
+      }}
       try {{
         const response = await fetch('/api/action' + authQuery, {{
           method: 'POST',
@@ -5331,6 +5350,19 @@ def render_page(status: Dict[str, Any]) -> str:
           body: JSON.stringify({{ action: 'hik_probe' }})
         }});
         const payload = await response.json().catch(() => ({{ message: 'Hik probe failed.' }}));
+        if (hikProbeConsole && payload && typeof payload === 'object') {{
+          const lines = [];
+          lines.push(`[${{payload.checked_at || new Date().toISOString()}}] state=${{payload.state || 'unknown'}}`);
+          lines.push(`message: ${{payload.message || 'none'}}`);
+          lines.push(`deviceInfo: ok=${{payload.device_info_ok ? 'true' : 'false'}} status=${{payload.device_info_status || 0}} model=${{payload.device_model || 'unknown'}}`);
+          for (const attempt of (payload.capabilities_attempts || [])) {{
+            lines.push(`capabilities: ${{attempt.ok ? 'OK' : 'FAIL'}} [${{attempt.status || 0}}] ${{attempt.path || ''}}`);
+          }}
+          for (const attempt of (payload.result_attempts || [])) {{
+            lines.push(`result: ${{attempt.ok ? 'OK' : 'FAIL'}} [${{attempt.status || 0}}] ${{attempt.path || ''}}`);
+          }}
+          hikProbeConsole.textContent = lines.join('\n');
+        }}
         if (payload && typeof payload === 'object') {{
           if (payload.state) {{
             if (hikState) {{
@@ -5357,6 +5389,9 @@ def render_page(status: Dict[str, Any]) -> str:
       }} catch (_error) {{
         if (hikMessage) {{
           hikMessage.textContent = 'Hik probe request failed before completion.';
+        }}
+        if (hikProbeConsole) {{
+          hikProbeConsole.textContent = `[${{new Date().toISOString()}}] Probe request failed before completion.`;
         }}
       }}
       await fetchStatus();
