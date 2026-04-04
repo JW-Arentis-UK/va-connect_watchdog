@@ -3921,7 +3921,7 @@ def render_page(status: Dict[str, Any]) -> str:
           </div>
         </div>
         <button class="secondary" onclick="saveHikConfig()">Save Hik settings</button>
-        <button class="secondary" onclick="runHikProbe()">Probe Hik people count</button>
+        <button class="secondary" id="hikProbeButton" onclick="runHikProbe()">Probe Hik people count</button>
         <p style="margin-top:12px;"><strong>Saved Hik settings</strong></p>
         <ul class="review-list" id="hikSavedSettings">
           <li>Enabled: {html.escape(str(bool(cfg.get("hik_enabled"))))}</li>
@@ -5295,10 +5295,16 @@ def render_page(status: Dict[str, Any]) -> str:
       const hikMessage = document.getElementById('hikMessage');
       const hikState = document.getElementById('hikState');
       const hikMeta = document.getElementById('hikMeta');
-      hikMessage.textContent = 'Running Hik probe...';
-      hikState.className = 'badge warn';
-      hikState.textContent = 'RUNNING';
-      hikMeta.textContent = `Probe requested ${{formatLocalTimestamp(new Date().toISOString())}}`;
+      if (hikMessage) {{
+        hikMessage.textContent = 'Running Hik probe...';
+      }}
+      if (hikState) {{
+        hikState.className = 'badge warn';
+        hikState.textContent = 'RUNNING';
+      }}
+      if (hikMeta) {{
+        hikMeta.textContent = `Probe requested ${{formatLocalTimestamp(new Date().toISOString())}}`;
+      }}
       try {{
         const response = await fetch('/api/action' + authQuery, {{
           method: 'POST',
@@ -5308,21 +5314,31 @@ def render_page(status: Dict[str, Any]) -> str:
         const payload = await response.json().catch(() => ({{ message: 'Hik probe failed.' }}));
         if (payload && typeof payload === 'object') {{
           if (payload.state) {{
-            hikState.textContent = String(payload.state).toUpperCase();
-            hikState.className = `badge ${{payload.state === 'failed' ? 'danger' : (payload.state === 'running' || payload.state === 'idle' ? 'warn' : '')}}`;
+            if (hikState) {{
+              hikState.textContent = String(payload.state).toUpperCase();
+              hikState.className = `badge ${{payload.state === 'failed' ? 'danger' : (payload.state === 'running' || payload.state === 'idle' ? 'warn' : '')}}`;
+            }}
           }}
           if (payload.message) {{
-            hikMessage.textContent = payload.message;
+            if (hikMessage) {{
+              hikMessage.textContent = payload.message;
+            }}
           }}
           if (payload.checked_at) {{
-            hikMeta.textContent = `Last checked ${{formatLocalTimestamp(payload.checked_at)}}`;
+            if (hikMeta) {{
+              hikMeta.textContent = `Last checked ${{formatLocalTimestamp(payload.checked_at)}}`;
+            }}
           }}
         }}
         if (!response.ok) {{
-          hikMessage.textContent = payload.message || 'Hik probe failed.';
+          if (hikMessage) {{
+            hikMessage.textContent = payload.message || 'Hik probe failed.';
+          }}
         }}
       }} catch (_error) {{
-        hikMessage.textContent = 'Hik probe request failed before completion.';
+        if (hikMessage) {{
+          hikMessage.textContent = 'Hik probe request failed before completion.';
+        }}
       }}
       await fetchStatus();
     }}
@@ -5506,6 +5522,13 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
 
     render(initialStatus);
+    const hikProbeButton = document.getElementById('hikProbeButton');
+    if (hikProbeButton) {{
+      hikProbeButton.addEventListener('click', function(event) {{
+        event.preventDefault();
+        runHikProbe();
+      }});
+    }}
     fetchMetrics();
     attachChartHover();
     setInterval(fetchStatus, 15000);
