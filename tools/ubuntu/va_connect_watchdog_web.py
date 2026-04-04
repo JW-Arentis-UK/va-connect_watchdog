@@ -1251,6 +1251,9 @@ def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     if not host:
         return {"enabled": True, "message": "Hik host not configured.", "state": "idle"}
 
+    device_info = hik_request(config, "/ISAPI/System/deviceInfo")
+    device_values = xml_leaf_values(str(device_info.get("body", "")))
+
     capabilities_probe = hik_attempt_probe(
         config,
         hik_path_candidates(
@@ -1259,6 +1262,8 @@ def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
                 "/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/capabilities",
                 "/ISAPI/Intelligent/channels/{channel}/peopleCounting/capabilities",
                 "/ISAPI/Intelligent/channels/{channel}/personCounting/capabilities",
+                "/ISAPI/Intelligent/channels/{channel}/Shield/peopleCounting/capabilities",
+                "/ISAPI/System/Video/inputs/channels/{channel}/counting/capabilities",
             ],
         ),
     )
@@ -1270,6 +1275,8 @@ def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
                 "/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/result",
                 "/ISAPI/Intelligent/channels/{channel}/peopleCounting/result",
                 "/ISAPI/Intelligent/channels/{channel}/personCounting/result",
+                "/ISAPI/Intelligent/channels/{channel}/Shield/peopleCounting",
+                "/ISAPI/System/Video/inputs/channels/{channel}/counting",
             ],
         ),
     )
@@ -1282,6 +1289,10 @@ def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         message = f"Hik people-count probe completed ({len(parsed)} value(s) parsed)."
     elif result.get("ok"):
         message = "Hik endpoint reachable but no count values were parsed."
+    elif device_info.get("ok") and int(result.get("status", 0) or 0) in {401, 403}:
+        message = "Camera is reachable but people-count endpoint is denied (401/403). Feature may be unsupported or blocked by permissions."
+    elif not device_info.get("ok"):
+        message = f"Hik camera auth/connectivity check failed: {device_info.get('message', 'unknown error')}"
     else:
         message = f"Hik probe failed: {result.get('message', 'unknown error')}"
     payload = {
@@ -1294,6 +1305,12 @@ def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         "result_ok": bool(result.get("ok")),
         "capabilities_status": int(capabilities.get("status", 0) or 0),
         "result_status": int(result.get("status", 0) or 0),
+        "device_info_ok": bool(device_info.get("ok")),
+        "device_info_status": int(device_info.get("status", 0) or 0),
+        "device_info_message": str(device_info.get("message", "")),
+        "device_model": str(device_values.get("model", "")),
+        "device_name": str(device_values.get("deviceName", "")),
+        "firmware_version": str(device_values.get("firmwareVersion", "")),
         "capabilities_path_used": str(capabilities.get("path", "")),
         "result_path_used": str(result.get("path", "")),
         "capabilities_attempts": capabilities_probe.get("attempts", []),
@@ -4756,6 +4773,9 @@ def render_page(status: Dict[str, Any]) -> str:
       if (hikStatus.checked_at) {{
         hikMetaParts.push(formatLocalTimestamp(hikStatus.checked_at));
       }}
+      if (hikStatus.device_model) {{
+        hikMetaParts.push(`Model: ${{hikStatus.device_model}}`);
+      }}
       if (hikStatus.result_path_used) {{
         hikMetaParts.push(`Result path: ${{hikStatus.result_path_used}}`);
       }}
@@ -4770,6 +4790,15 @@ def render_page(status: Dict[str, Any]) -> str:
         if (Object.prototype.hasOwnProperty.call(hikCounts, key)) {{
           hikCountLines.push(`<li><strong>${{key}}</strong>: ${{hikCounts[key]}}</li>`);
         }}
+      }}
+      if ((hikStatus.result_attempts || []).length) {{
+        hikCountLines.push(`<li><strong>Endpoint attempts</strong>:</li>`);
+        for (const attempt of (hikStatus.result_attempts || [])) {{
+          hikCountLines.push(`<li>${{attempt.ok ? 'OK' : 'FAIL'}} [${{attempt.status || 0}}] ${{attempt.path || ''}}</li>`);
+        }}
+      }}
+      if (!hikStatus.device_info_ok) {{
+        hikCountLines.push(`<li><strong>Device info check failed</strong>: ${{hikStatus.device_info_message || 'unknown error'}}</li>`);
       }}
       document.getElementById('hikCounts').innerHTML = hikCountLines.join('') || '<li>No people-count values parsed yet.</li>';
       document.getElementById('hikCapabilitiesRaw').textContent = hikStatus.capabilities_excerpt || '';
