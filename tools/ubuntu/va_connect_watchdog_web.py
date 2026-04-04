@@ -5273,15 +5273,23 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
 
     async function runHikProbe() {{
-      const response = await fetch('/api/action' + authQuery, {{
-        method: 'POST',
-        headers: {{ 'Content-Type': 'application/json' }},
-        body: JSON.stringify({{ action: 'hik_probe' }})
-      }});
-      if (!response.ok) {{
+      const hikMessage = document.getElementById('hikMessage');
+      const hikState = document.getElementById('hikState');
+      hikMessage.textContent = 'Running Hik probe...';
+      hikState.className = 'badge warn';
+      hikState.textContent = 'RUNNING';
+      try {{
+        const response = await fetch('/api/action' + authQuery, {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ action: 'hik_probe' }})
+        }});
         const payload = await response.json().catch(() => ({{ message: 'Hik probe failed.' }}));
-        alert(payload.message || 'Hik probe failed.');
-        return;
+        if (!response.ok) {{
+          hikMessage.textContent = payload.message || 'Hik probe failed.';
+        }}
+      }} catch (_error) {{
+        hikMessage.textContent = 'Hik probe request failed before completion.';
       }}
       await fetchStatus();
     }}
