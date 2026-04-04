@@ -1356,6 +1356,32 @@ def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def hik_console_text(hik_status: Dict[str, Any]) -> str:
+    if not isinstance(hik_status, dict):
+        return "No Hik probe output yet."
+    lines: List[str] = []
+    checked_at = str(hik_status.get("checked_at", "")).strip() or "unknown"
+    lines.append(f"[{checked_at}] state={str(hik_status.get('state', 'idle'))}")
+    lines.append(f"message: {str(hik_status.get('message', 'No Hik probe run yet.'))}")
+    lines.append(
+        "deviceInfo: "
+        f"ok={'true' if hik_status.get('device_info_ok') else 'false'} "
+        f"status={int(hik_status.get('device_info_status', 0) or 0)} "
+        f"model={str(hik_status.get('device_model', 'unknown') or 'unknown')}"
+    )
+    for attempt in hik_status.get("capabilities_attempts", []) or []:
+        lines.append(
+            f"capabilities: {'OK' if attempt.get('ok') else 'FAIL'} "
+            f"[{int(attempt.get('status', 0) or 0)}] {str(attempt.get('path', ''))}"
+        )
+    for attempt in hik_status.get("result_attempts", []) or []:
+        lines.append(
+            f"result: {'OK' if attempt.get('ok') else 'FAIL'} "
+            f"[{int(attempt.get('status', 0) or 0)}] {str(attempt.get('path', ''))}"
+        )
+    return "\n".join(lines) if lines else "No Hik probe output yet."
+
+
 def suspect_scores_payload(state: Dict[str, Any], crash_review: Dict[str, Any], hardware_review: Dict[str, Any]) -> List[Dict[str, Any]]:
     checks = state.get("last_checks") or {}
     suspects = {
@@ -3940,7 +3966,8 @@ def render_page(status: Dict[str, Any]) -> str:
         </div>
         <button class="secondary" onclick="saveHikConfig()">Save Hik settings</button>
         <button class="secondary" id="hikProbeButton" onclick="runHikProbe()">Probe Hik people count</button>
-        <div class="console-box" id="hikProbeConsole">No Hik probe output yet.</div>
+        <a class="link-btn" href="/run-hik-probe" style="margin-left:6px;">Probe fallback</a>
+        <div class="console-box" id="hikProbeConsole">{html.escape(hik_console_text(status.get("hik_status", {})))}</div>
         <p style="margin-top:12px;"><strong>Saved Hik settings</strong></p>
         <ul class="review-list" id="hikSavedSettings">
           <li>Enabled: {html.escape(str(bool(cfg.get("hik_enabled"))))}</li>
@@ -3964,7 +3991,7 @@ def render_page(status: Dict[str, Any]) -> str:
       <section class="panel">
         <h2>Hik Raw</h2>
         <p><strong>Probe console</strong></p>
-        <div class="console-box" id="hikProbeConsoleRaw" style="min-height:96px;">No Hik probe output yet.</div>
+        <div class="console-box" id="hikProbeConsoleRaw" style="min-height:96px;">{html.escape(hik_console_text(status.get("hik_status", {})))}</div>
         <p><strong>Capabilities</strong></p>
         <div class="review-scroll"><code id="hikCapabilitiesRaw">{html.escape(str(status.get("hik_status", {}).get("capabilities_excerpt", "")))}</code></div>
         <p style="margin-top:10px;"><strong>Result</strong></p>
@@ -5653,6 +5680,15 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/status":
             self._send_json(status_payload())
+            return
+        if parsed.path == "/run-hik-probe":
+            hik_probe_payload(load_config())
+            self.send_response(HTTPStatus.SEE_OTHER)
+            self.send_header("Location", "/?tab=dev")
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+            self.end_headers()
             return
         if parsed.path == "/api/metrics":
             hours_raw = parse_qs(parsed.query).get("hours", ["24"])[0]
