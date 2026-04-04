@@ -1311,10 +1311,13 @@ def hik_probe_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     capabilities = capabilities_probe.get("response", {})
     result = result_probe.get("response", {})
     parsed = parse_hik_people_count(result.get("body", ""))
+    result_values = xml_leaf_values(str(result.get("body", "")))
 
     state = "ok" if result.get("ok") else "failed"
     if result.get("ok") and parsed:
         message = f"Hik people-count probe completed ({len(parsed)} value(s) parsed)."
+    elif result.get("ok") and "Shield/peopleCounting" in str(result.get("path", "")) and str(result_values.get("enabled", "")).lower() == "false":
+        message = "Hik Shield endpoint is reachable, but people counting is disabled in camera settings (enabled=false)."
     elif result.get("ok"):
         message = "Hik endpoint reachable but no count values were parsed."
     elif device_info.get("ok") and int(result.get("status", 0) or 0) in {401, 403}:
