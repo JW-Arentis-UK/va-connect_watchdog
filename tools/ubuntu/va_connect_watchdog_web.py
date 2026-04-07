@@ -5061,19 +5061,19 @@ def render_page(status: Dict[str, Any]) -> str:
       const updateMessageEl = document.getElementById('updateMessage');
       if (updateState.state === 'running') {{
         if (updateMessageEl) {{
-          updateMessageEl.textContent = `Updating to ${targetBuild}...`;
+          updateMessageEl.textContent = `Updating to ${{targetBuild}}...`;
         }}
       }} else if (updateState.state === 'ok') {{
         if (updateMessageEl) {{
-          updateMessageEl.textContent = `Update to ${targetBuild} completed.`;
+          updateMessageEl.textContent = `Update to ${{targetBuild}} completed.`;
         }}
       }} else if (updateState.state === 'failed') {{
         if (updateMessageEl) {{
-          updateMessageEl.textContent = `Update to ${targetBuild} failed.`;
+          updateMessageEl.textContent = `Update to ${{targetBuild}} failed.`;
         }}
       }} else {{
         if (updateMessageEl) {{
-          updateMessageEl.textContent = `Current build ${targetBuild}.`;
+          updateMessageEl.textContent = `Current build ${{targetBuild}}.`;
         }}
       }}
       const updateMetaParts = [];
