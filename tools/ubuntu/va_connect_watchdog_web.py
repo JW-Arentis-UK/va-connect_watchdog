@@ -5024,7 +5024,7 @@ def render_page(status: Dict[str, Any]) -> str:
         for (const attempt of (hikStatus.result_attempts || [])) {{
           consoleLines.push(`result: ${{attempt.ok ? 'OK' : 'FAIL'}} [${{attempt.status || 0}}] ${{attempt.path || ''}}`);
         }}
-        hikConsole.textContent = consoleLines.join('\n');
+        hikConsole.textContent = consoleLines.join('\\n');
       }}
       const hikConsoleRaw = document.getElementById('hikProbeConsoleRaw');
       if (hikConsoleRaw) {{
@@ -5038,7 +5038,7 @@ def render_page(status: Dict[str, Any]) -> str:
         for (const attempt of (hikStatus.result_attempts || [])) {{
           consoleLines.push(`result: ${{attempt.ok ? 'OK' : 'FAIL'}} [${{attempt.status || 0}}] ${{attempt.path || ''}}`);
         }}
-        hikConsoleRaw.textContent = consoleLines.join('\n');
+        hikConsoleRaw.textContent = consoleLines.join('\\n');
       }}
       document.getElementById('hikCapabilitiesRaw').textContent = hikStatus.capabilities_excerpt || '';
       document.getElementById('hikResultRaw').textContent = hikStatus.result_excerpt || '';
@@ -5116,7 +5116,7 @@ def render_page(status: Dict[str, Any]) -> str:
       if (updateConsole) {{
         if (updateState.state === 'failed') {{
           updateConsole.style.display = 'block';
-          updateConsole.textContent = updateConsoleLines.length ? updateConsoleLines.slice(-10).join('\n') : 'Update failed with no log lines.';
+          updateConsole.textContent = updateConsoleLines.length ? updateConsoleLines.slice(-10).join('\\n') : 'Update failed with no log lines.';
         }} else {{
           updateConsole.style.display = 'none';
           updateConsole.textContent = '';
@@ -5230,7 +5230,7 @@ def render_page(status: Dict[str, Any]) -> str:
       quickExportButton.disabled = exportState.state === 'running';
       quickExportButton.textContent = exportState.state === 'running' ? 'Quick export running...' : 'Quick incident export';
       document.getElementById('exportConsole').textContent = (status.export_console_lines || []).length
-        ? (status.export_console_lines || []).join('\n')
+        ? (status.export_console_lines || []).join('\\n')
         : 'No export progress yet.';
       const exportToken = exportState.request_id || exportState.finished_at || exportState.export_label || '';
       const exportArchiveLink = document.getElementById('exportArchiveLink');
@@ -5256,7 +5256,7 @@ def render_page(status: Dict[str, Any]) -> str:
             ? 'Generating incident pack...'
             : (incidentExport.archive ? 'Refresh incident pack' : 'Generate incident pack');
           const exportConsole = (item && Array.isArray(item.export_console_lines) && item.export_console_lines.length)
-            ? item.export_console_lines.join('\n')
+            ? item.export_console_lines.join('\\n')
             : 'No incident pack run yet.';
           const reason = String((item && item.suspected_reason) || 'unknown');
           const kind = String((item && item.kind_label) || 'Incident');
@@ -5632,10 +5632,10 @@ def render_page(status: Dict[str, Any]) -> str:
         hikMeta.textContent = `Probe requested ${{formatLocalTimestamp(new Date().toISOString())}}`;
       }}
       if (hikProbeConsole) {{
-        hikProbeConsole.textContent = `[${{new Date().toISOString()}}] Starting Hik probe...\nWaiting for response...`;
+        hikProbeConsole.textContent = `[${{new Date().toISOString()}}] Starting Hik probe...\\nWaiting for response...`;
       }}
       if (hikProbeConsoleRaw) {{
-        hikProbeConsoleRaw.textContent = `[${{new Date().toISOString()}}] Starting Hik probe...\nWaiting for response...`;
+        hikProbeConsoleRaw.textContent = `[${{new Date().toISOString()}}] Starting Hik probe...\\nWaiting for response...`;
       }}
       try {{
         const response = await fetch('/api/action' + authQuery, {{
@@ -5655,7 +5655,7 @@ def render_page(status: Dict[str, Any]) -> str:
           for (const attempt of (payload.result_attempts || [])) {{
             lines.push(`result: ${{attempt.ok ? 'OK' : 'FAIL'}} [${{attempt.status || 0}}] ${{attempt.path || ''}}`);
           }}
-          hikProbeConsole.textContent = lines.join('\n');
+          hikProbeConsole.textContent = lines.join('\\n');
         }}
         if (hikProbeConsoleRaw && payload && typeof payload === 'object') {{
           const lines = [];
@@ -5668,7 +5668,7 @@ def render_page(status: Dict[str, Any]) -> str:
           for (const attempt of (payload.result_attempts || [])) {{
             lines.push(`result: ${{attempt.ok ? 'OK' : 'FAIL'}} [${{attempt.status || 0}}] ${{attempt.path || ''}}`);
           }}
-          hikProbeConsoleRaw.textContent = lines.join('\n');
+          hikProbeConsoleRaw.textContent = lines.join('\\n');
         }}
         if (payload && typeof payload === 'object') {{
           if (payload.state) {{
