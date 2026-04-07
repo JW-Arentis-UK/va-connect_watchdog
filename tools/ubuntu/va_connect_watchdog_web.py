@@ -4265,8 +4265,19 @@ def render_page(status: Dict[str, Any]) -> str:
       }};
 
       window.hardRefreshPage = function () {{
-        var joiner = window.location.search ? '&' : '?';
-        window.location.href = window.location.pathname + (window.location.search || '') + joiner + '_refresh=' + new Date().getTime();
+        try {{
+          var url = new URL(window.location.href);
+          url.searchParams.set('_refresh', String(Date.now()));
+          var activeBtn = document.querySelector('.tab-btn.active');
+          var activeTab = activeBtn ? activeBtn.getAttribute('data-tab') : '';
+          if (activeTab) {{
+            url.searchParams.set('tab', activeTab);
+          }}
+          window.location.replace(url.toString());
+        }} catch (_err) {{
+          var joiner = window.location.search ? '&' : '?';
+          window.location.href = window.location.pathname + (window.location.search || '') + joiner + '_refresh=' + new Date().getTime();
+        }}
       }};
 
       window.runAction = function (action, extraPayload) {{
@@ -4536,9 +4547,18 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
 
     function hardRefreshPage() {{
-      const url = new URL(window.location.href);
-      url.searchParams.set('_refresh', String(Date.now()));
-      window.location.replace(url.toString());
+      try {{
+        const url = new URL(window.location.href);
+        url.searchParams.set('_refresh', String(Date.now()));
+        const activeBtn = document.querySelector('.tab-btn.active');
+        const activeTab = activeBtn ? activeBtn.dataset.tab : '';
+        if (activeTab) {{
+          url.searchParams.set('tab', activeTab);
+        }}
+        window.location.replace(url.toString());
+      }} catch (_err) {{
+        window.location.reload();
+      }}
     }}
 
     function buildAuthedUrl(path, extraParams = {{}}) {{
@@ -5014,10 +5034,28 @@ def render_page(status: Dict[str, Any]) -> str:
       updateBadge.className = `badge ${{updateState.state === 'running' ? 'warn' : (updateState.state === 'failed' ? 'danger' : '')}}`;
       updateBadge.textContent = ((updateState.mode === 'check' ? 'check' : (updateState.state || 'idle')) || 'idle').toUpperCase();
       document.getElementById('updateMessage').textContent = updateState.message || 'No web update run yet.';
-      document.getElementById('updateMeta').textContent = `${{updateState.from_build || 'unknown'}} to ${{updateState.to_build || 'unknown'}} | ${{updateState.finished_at ? formatLocalTimestamp(updateState.finished_at) : 'not finished yet'}}`;
-      document.getElementById('updateConsole').textContent = (status.update_console_lines || []).length
-        ? (status.update_console_lines || []).join('\n')
-        : 'No update progress yet.';
+      const updateMetaParts = [];
+      if (updateState.from_build || updateState.to_build) {{
+        updateMetaParts.push(`${{updateState.from_build || 'unknown'}} -> ${{updateState.to_build || 'unknown'}}`);
+      }}
+      if (updateState.state === 'running') {{
+        updateMetaParts.push(`Started ${{updateState.started_at ? formatLocalTimestamp(updateState.started_at) : 'just now'}}`);
+      }} else if (updateState.finished_at) {{
+        updateMetaParts.push(`Finished ${{formatLocalTimestamp(updateState.finished_at)}}`);
+      }}
+      document.getElementById('updateMeta').textContent = updateMetaParts.join(' | ') || 'No update details yet.';
+      const updateConsoleLines = status.update_console_lines || [];
+      const updateConsole = document.getElementById('updateConsole');
+      if (updateState.state === 'running') {{
+        updateConsole.style.display = 'block';
+        updateConsole.textContent = updateConsoleLines.length ? updateConsoleLines.slice(-8).join('\n') : 'Update is running...';
+      }} else if (updateState.state === 'failed') {{
+        updateConsole.style.display = 'block';
+        updateConsole.textContent = updateConsoleLines.length ? updateConsoleLines.slice(-10).join('\n') : 'Update failed with no log lines.';
+      }} else {{
+        updateConsole.style.display = 'none';
+        updateConsole.textContent = '';
+      }}
       updateNowButton.style.display = updateState.update_available ? 'inline-block' : 'none';
       updateNowButton.disabled = updateState.state === 'running';
       const requiredTools = status.required_tools || {{}};
