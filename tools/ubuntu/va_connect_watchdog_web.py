@@ -1766,6 +1766,9 @@ def normalize_update_status(update_status: Dict[str, Any], build_info: Dict[str,
     started_at = parse_iso(str(status.get("started_at", "")))
     deployed_at = parse_iso(str(build_info.get("deployed_at", "")))
     now = datetime.utcnow().astimezone()
+    current_build = str(build_info.get("git_commit", "unknown") or "unknown")
+    from_build = str(status.get("from_build", "") or "")
+    to_build = str(status.get("to_build", "") or "")
 
     if started_at and deployed_at and deployed_at >= started_at:
         status["state"] = "ok"
@@ -1774,6 +1777,16 @@ def normalize_update_status(update_status: Dict[str, Any], build_info: Dict[str,
         status["message"] = "Update appears to have completed after the web service restarted."
         write_json(UPDATE_STATUS_PATH, status)
         return status
+
+    # If the unit is already on the target/current build, do not leave the UI stuck in "running".
+    if started_at and (now - started_at).total_seconds() > 20:
+        if current_build != "unknown" and current_build in {from_build, to_build}:
+            status["state"] = "ok"
+            status["finished_at"] = status.get("finished_at") or now_iso()
+            status["to_build"] = to_build or current_build
+            status["message"] = "Already on the current build."
+            write_json(UPDATE_STATUS_PATH, status)
+            return status
 
     if started_at and (now - started_at).total_seconds() > 300:
         status["state"] = "failed"
