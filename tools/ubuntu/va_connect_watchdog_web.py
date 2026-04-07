@@ -4654,6 +4654,10 @@ def render_page(status: Dict[str, Any]) -> str:
       return value === undefined || value === null ? alt : value;
     }}
 
+    function safeDomId(value) {{
+      return String(value || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+    }}
+
     function metricRangeLabel(hours) {{
       if (hours === 1) {{
         return 'PC Stats - Last Hour';
@@ -5248,6 +5252,7 @@ def render_page(status: Dict[str, Any]) -> str:
         incidentRowsHtml = incidentItems.map((item) => {{
           const incidentExport = item && item.export_status ? item.export_status : {{}};
           const incidentToken = String((item && item.incident_id) || '');
+          const incidentDomId = safeDomId(incidentToken);
           const archiveHref = buildAuthedUrl('/download/incident-archive', {{ id: incidentToken, export: incidentExport.request_id || incidentExport.finished_at || '' }});
           const logHref = buildAuthedUrl('/download/incident-log', {{ id: incidentToken, export: incidentExport.request_id || incidentExport.finished_at || '' }});
           const badgeClass = item && item.watchdog_requested_reboot ? '' : 'warn';
@@ -5278,9 +5283,10 @@ def render_page(status: Dict[str, Any]) -> str:
                 </div>
               </div>
               <div class="incident-actions">
-                <button class="secondary ${{incidentExport.state === 'running' ? 'status-running' : (incidentExport.state === 'failed' ? 'status-failed' : '')}}" onclick="runIncidentExport(${{JSON.stringify(incidentToken)}})" ${{incidentExport.state === 'running' ? 'disabled' : ''}}>${{exportButtonLabel}}</button>
-                <a class="link-btn" href="${{archiveHref}}" style="display:${{incidentExport.archive ? 'inline-block' : 'none'}}">Download pack</a>
-                <a class="link-btn" href="${{logHref}}" style="display:${{incidentExport.log_path ? 'inline-block' : 'none'}}">Download log</a>
+                <button id="incidentExportButton_${{incidentDomId}}" class="secondary ${{incidentExport.state === 'running' ? 'status-running' : (incidentExport.state === 'failed' ? 'status-failed' : '')}}" onclick="runIncidentExport(${{JSON.stringify(incidentToken)}})" ${{incidentExport.state === 'running' ? 'disabled' : ''}}>${{exportButtonLabel}}</button>
+                <a id="incidentArchiveLink_${{incidentDomId}}" class="link-btn" href="${{archiveHref}}" style="display:${{incidentExport.archive ? 'inline-block' : 'none'}}">Download pack</a>
+                <a id="incidentLogLink_${{incidentDomId}}" class="link-btn" href="${{logHref}}" style="display:${{incidentExport.log_path ? 'inline-block' : 'none'}}">Download log</a>
+                <div id="incidentExportHint_${{incidentDomId}}" class="hint">${{incidentExport.state === 'running' ? 'Generating incident pack...' : (incidentExport.archive ? 'Incident pack ready to download.' : 'Press generate to create a pack.')}}</div>
               </div>
               <details class="incident-more">
                 <summary>Show incident notes and export log</summary>
@@ -5777,6 +5783,17 @@ def render_page(status: Dict[str, Any]) -> str:
 
     async function runIncidentExport(incidentId) {{
       pinCurrentTabInUrl();
+      const incidentDomId = safeDomId(incidentId);
+      const button = document.getElementById(`incidentExportButton_${{incidentDomId}}`);
+      const hint = document.getElementById(`incidentExportHint_${{incidentDomId}}`);
+      if (button) {{
+        button.textContent = 'Generating incident pack...';
+        button.className = 'secondary status-running';
+        button.disabled = true;
+      }}
+      if (hint) {{
+        hint.textContent = 'Generating incident pack...';
+      }}
       const response = await fetch('/api/action' + authQuery, {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
@@ -5784,10 +5801,35 @@ def render_page(status: Dict[str, Any]) -> str:
       }});
       if (!response.ok) {{
         const payload = await response.json().catch(() => ({{ message: 'Incident export failed.' }}));
+        if (button) {{
+          button.textContent = 'Generate incident pack';
+          button.className = 'secondary status-failed';
+          button.disabled = false;
+        }}
+        if (hint) {{
+          hint.textContent = payload.message || 'Incident export failed.';
+        }}
         alert(payload.message || 'Incident export failed.');
         return;
       }}
-      await fetchStatus();
+      let ready = false;
+      for (let index = 0; index < 30; index += 1) {{
+        await fetchStatus();
+        const archiveLink = document.getElementById(`incidentArchiveLink_${{incidentDomId}}`);
+        if (archiveLink && archiveLink.style.display !== 'none') {{
+          ready = true;
+          break;
+        }}
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }}
+      if (button) {{
+        button.textContent = ready ? 'Pack ready' : 'Refresh incident pack';
+        button.className = 'secondary' + (ready ? ' status-ready' : '');
+        button.disabled = false;
+      }}
+      if (hint) {{
+        hint.textContent = ready ? 'Incident pack ready to download.' : 'Pack generation started. If not ready yet, press refresh incident pack.';
+      }}
     }}
 
     async function runMemtest() {{
