@@ -3438,6 +3438,11 @@ def render_page(status: Dict[str, Any]) -> str:
       gap: 6px;
       align-items: center;
     }}
+    .topbar-actions .button-row #updateMessage {{
+      flex: 1 1 220px;
+      min-width: 180px;
+      font-size: 0.88rem;
+    }}
     .topbar-actions .update-row {{
       margin-top: 0;
       min-width: 0;
@@ -3534,9 +3539,6 @@ def render_page(status: Dict[str, Any]) -> str:
           <div class="button-row">
             <button class="secondary" id="updateNowButton" onclick="runAction('update_watchdog')">Update now</button>
             <button class="secondary" onclick="hardRefreshPage()">Hard refresh page</button>
-          </div>
-          <div class="update-row">
-            <span class="badge {'warn' if status['update_status'].get('state') == 'running' else ('danger' if status['update_status'].get('state') == 'failed' else '')}" id="updateState">{html.escape(str(status["update_status"].get("state", "idle")).title())}</span>
             <span id="updateMessage">{html.escape(str(status["update_status"].get("message", "No web update run yet.")))}</span>
           </div>
           <p class="hint" id="updateMeta">{html.escape(str(status["update_status"].get("from_build", "unknown")))} to {html.escape(str(status["update_status"].get("to_build", "unknown")))} | {html.escape(str(status["update_status"].get("finished_at", "not finished yet")))}</p>
@@ -5077,13 +5079,8 @@ def render_page(status: Dict[str, Any]) -> str:
         ? (crashReview.kernel_lines_all || []).map((line) => `<li>${{line}}</li>`).join('')
         : '<li>No extra kernel-log lines extracted yet.</li>';
       const updateState = status.update_status || {{}};
-      const updateBadge = document.getElementById('updateState');
       const updateNowButton = document.getElementById('updateNowButton');
       const updateProgress = document.getElementById('updateProgress');
-      if (updateBadge) {{
-        updateBadge.className = `badge ${{updateState.state === 'running' ? 'warn' : (updateState.state === 'failed' ? 'danger' : '')}}`;
-        updateBadge.textContent = (updateState.state || 'idle').toUpperCase();
-      }}
       const targetBuild = updateState.to_build || updateState.from_build || 'unknown';
       const updateMessageEl = document.getElementById('updateMessage');
       if (updateState.state === 'running') {{
@@ -5092,15 +5089,15 @@ def render_page(status: Dict[str, Any]) -> str:
         }}
       }} else if (updateState.state === 'ok') {{
         if (updateMessageEl) {{
-          updateMessageEl.textContent = `Update to ${{targetBuild}} completed.`;
+          updateMessageEl.textContent = `Completed: ${{targetBuild}}`;
         }}
       }} else if (updateState.state === 'failed') {{
         if (updateMessageEl) {{
-          updateMessageEl.textContent = `Update to ${{targetBuild}} failed.`;
+          updateMessageEl.textContent = `Failed: ${{targetBuild}}`;
         }}
       }} else {{
         if (updateMessageEl) {{
-          updateMessageEl.textContent = `Current build ${{targetBuild}}.`;
+          updateMessageEl.textContent = `Current build: ${{targetBuild}}`;
         }}
       }}
       const updateMetaParts = [];
@@ -5130,7 +5127,19 @@ def render_page(status: Dict[str, Any]) -> str:
       }}
       if (updateNowButton) {{
         updateNowButton.style.display = 'inline-block';
-        updateNowButton.disabled = updateState.state === 'running';
+        if (updateState.state === 'running') {{
+          updateNowButton.textContent = 'Updating...';
+          updateNowButton.disabled = true;
+        }} else if (updateState.state === 'ok') {{
+          updateNowButton.textContent = 'Updated';
+          updateNowButton.disabled = false;
+        }} else if (updateState.state === 'failed') {{
+          updateNowButton.textContent = 'Retry update';
+          updateNowButton.disabled = false;
+        }} else {{
+          updateNowButton.textContent = 'Update now';
+          updateNowButton.disabled = false;
+        }}
       }}
       const requiredTools = status.required_tools || {{}};
       const missingImportant = requiredTools.missing_important || [];
