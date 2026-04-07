@@ -4583,23 +4583,36 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
 
     function buildAuthedUrl(path, extraParams = {{}}) {{
-      const url = new URL(path, window.location.origin);
-      const currentParams = new URLSearchParams(window.location.search || '');
-      currentParams.forEach((value, key) => {{
-        if (key !== '_refresh') {{
-          url.searchParams.set(key, value);
-        }}
-      }});
+      const map = {{}};
+      const rawSearch = (window.location.search || '').replace(/^\\?/, '');
+      if (rawSearch) {{
+        rawSearch.split('&').forEach((pair) => {{
+          if (!pair) {{
+            return;
+          }}
+          const eqIndex = pair.indexOf('=');
+          const rawKey = eqIndex >= 0 ? pair.slice(0, eqIndex) : pair;
+          const rawValue = eqIndex >= 0 ? pair.slice(eqIndex + 1) : '';
+          const key = decodeURIComponent(rawKey || '');
+          const value = decodeURIComponent(rawValue || '');
+          if (key && key !== '_refresh') {{
+            map[key] = value;
+          }}
+        }});
+      }}
       const params = extraParams || {{}};
       for (const key in params) {{
         if (Object.prototype.hasOwnProperty.call(params, key)) {{
           const value = params[key];
           if (value !== undefined && value !== null && value !== '') {{
-            url.searchParams.set(key, String(value));
+            map[key] = String(value);
           }}
         }}
       }}
-      return `${{url.pathname}}${{url.search}}`;
+      const query = Object.keys(map)
+        .map((key) => `${{encodeURIComponent(key)}}=${{encodeURIComponent(map[key])}}`)
+        .join('&');
+      return query ? `${{path}}?${{query}}` : path;
     }}
 
     function pinCurrentTabInUrl() {{
