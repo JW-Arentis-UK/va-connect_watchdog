@@ -4561,7 +4561,7 @@ def render_page(status: Dict[str, Any]) -> str:
     }})();
   </script>
   <script>
-    const initialStatus = {json.dumps(status).replace("</", chr(60) + chr(92) + chr(47))};
+    const initialStatus = null;
     const authQuery = window.location.search || '';
     let latestMetrics = [];
     let latestMetricEvents = [];
@@ -5465,8 +5465,23 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
 
     async function fetchStatus() {{
-      const response = await fetch('/api/status' + authQuery);
-      safeRender(await response.json());
+      try {{
+        const response = await fetch('/api/status' + authQuery, {{ cache: 'no-store' }});
+        if (!response.ok) {{
+          throw new Error(`status http ${{response.status}}`);
+        }}
+        safeRender(await response.json());
+      }} catch (error) {{
+        const message = error && error.message ? error.message : String(error || 'status fetch failed');
+        const incidentsList = document.getElementById('incidentsList');
+        if (incidentsList) {{
+          incidentsList.innerHTML = `<div class="timeline-empty">Status refresh failed: ${{message}}</div>`;
+        }}
+        const incidentsInvestigationList = document.getElementById('incidentsInvestigationList');
+        if (incidentsInvestigationList) {{
+          incidentsInvestigationList.innerHTML = `<div class="timeline-empty">Status refresh failed: ${{message}}</div>`;
+        }}
+      }}
     }}
 
     function setMetricRange(hours) {{
@@ -5479,13 +5494,28 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
 
     async function fetchMetrics() {{
-      const separator = authQuery ? '&' : '?';
-      const response = await fetch(`/api/metrics${{authQuery}}${{separator}}hours=${{metricsRangeHours}}`);
-      const payload = await response.json();
-      latestMetrics = payload.points || [];
-      latestMetricEvents = payload.events || [];
-      updateEventLegend();
-      drawMetrics(latestMetrics);
+      try {{
+        const separator = authQuery ? '&' : '?';
+        const response = await fetch(`/api/metrics${{authQuery}}${{separator}}hours=${{metricsRangeHours}}`, {{ cache: 'no-store' }});
+        if (!response.ok) {{
+          throw new Error(`metrics http ${{response.status}}`);
+        }}
+        const payload = await response.json();
+        latestMetrics = payload.points || [];
+        latestMetricEvents = payload.events || [];
+        updateEventLegend();
+        drawMetrics(latestMetrics);
+      }} catch (error) {{
+        latestMetrics = [];
+        latestMetricEvents = [];
+        updateEventLegend();
+        drawMetrics([]);
+        const hover = document.getElementById('metricsHover');
+        if (hover) {{
+          const message = error && error.message ? error.message : String(error || 'metrics fetch failed');
+          hover.textContent = `PC stats refresh failed: ${{message}}`;
+        }}
+      }}
     }}
 
     async function saveSettings() {{
@@ -5882,7 +5912,9 @@ def render_page(status: Dict[str, Any]) -> str:
       }}
     }}
 
-    safeRender(initialStatus);
+    if (initialStatus) {{
+      safeRender(initialStatus);
+    }}
     try {{
       const initialTab = new URLSearchParams(window.location.search || '').get('tab');
       if (initialTab) {{
@@ -5898,6 +5930,7 @@ def render_page(status: Dict[str, Any]) -> str:
         runHikProbe();
       }});
     }}
+    fetchStatus();
     fetchMetrics();
     attachChartHover();
     setInterval(fetchStatus, 15000);
