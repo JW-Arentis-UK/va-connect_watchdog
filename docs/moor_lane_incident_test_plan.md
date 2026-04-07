@@ -10,7 +10,26 @@ At the moment we often only know that the unit stopped functioning and later cam
 
 ## Work Order
 
-### 1. Improve Pre-Failure Evidence Capture
+### 1. Add Independent Truth Sources
+
+We need one or two evidence sources outside the main app and watchdog path so we can tell whether the whole box stopped, only the network path failed, or only the app stack stalled.
+
+Required outcomes:
+
+- Add an external heartbeat:
+  - unit reports or pings something off-box every 60 seconds
+  - this should be reviewable in incident packs and summaries
+- Add a very small local OS heartbeat:
+  - lightweight root timer or service
+  - updates a timestamp file every 30 to 60 seconds
+  - independent from the main watchdog and web UI
+- After recovery, compare heartbeat timestamps with app and watchdog evidence to distinguish:
+  - full OS freeze
+  - network-path outage
+  - app or service stall
+  - watchdog or web UI stall
+
+### 2. Improve Pre-Failure Evidence Capture
 
 Record and surface these timestamps in incident data:
 
@@ -24,8 +43,15 @@ Required outcomes:
 - Add a clear "last known healthy" line to each incident summary.
 - Include the latest successful app, LAN, WAN, and UI timestamps in each incident pack.
 - Automatically capture the last 5 to 10 minutes of relevant journal slices into each incident pack.
+- Add lightweight periodic `vsapp` runtime sampling:
+  - process present
+  - CPU
+  - memory
+  - thread count
+  - open file count if practical
+- Include the last `vsapp` runtime sample before an outage in the incident pack.
 
-### 2. Add Runtime NIC Link-Flap Detection
+### 3. Add Runtime NIC Link-Flap Detection
 
 Track `enp1s0` link down and up events during normal runtime.
 
@@ -35,8 +61,9 @@ Required outcomes:
 - Only flag link flaps as suspicious after the unit has been up long enough to be considered settled, for example 10 or more minutes after boot.
 - Show link-flap counts in incident data and the UI.
 - Include runtime link-flap evidence in incident packs.
+- Add an explicit boot-settling period to incident interpretation so expected post-boot wobble is not treated as the root cause.
 
-### 3. Improve Crash Persistence And Post-Mortem Clues
+### 4. Improve Crash Persistence And Post-Mortem Clues
 
 We need better evidence to distinguish kernel panic, hard hang, power loss, and manual recovery.
 
@@ -50,8 +77,9 @@ Required outcomes:
   - hard hang with no clean shutdown
   - power loss or repower suspicion
   - manual or relay recovery suspicion
+- Consider BIOS, platform firmware, and SSD firmware review if software-side evidence continues to end abruptly without a clear kernel or software cause.
 
-### 4. Check And Surface Storage Risk Properly
+### 5. Check And Surface Storage Risk Properly
 
 Root disk pressure is already a live risk and should be treated as such.
 
@@ -64,8 +92,14 @@ Required outcomes:
 - Improve UI and incident reporting for root disk pressure.
 - Review and surface a fuller SMART interpretation for `/dev/sdb`, not just a short summary.
 - If practical, include a clearer disk-health verdict in incidents and in the operator view.
+- Add explicit recording and storage error counters for:
+  - invalid record headers
+  - file repair attempts
+  - missing recording file on startup
+  - recording index repair attempts
+- Review GPT warnings on `/dev/sda` and decide whether they are harmless legacy layout noise or something that should be corrected.
 
-### 5. Fix Watchdog/Web Instability First
+### 6. Fix Watchdog/Web Instability First
 
 The watchdog web UI must not add noise during incident work.
 
@@ -80,7 +114,7 @@ Required outcomes:
 - Keep the UI reliable during incident review.
 - Treat web-side rendering or export regressions as high priority because they block evidence review.
 
-### 6. Validate The Network Path As An A/B Test
+### 7. Validate The Network Path As An A/B Test
 
 If operations allow, test cable, port, or RUT path changes for the encoder.
 
@@ -89,7 +123,7 @@ Purpose:
 - determine whether runtime `enp1s0` instability disappears on a cleaner physical path
 - if incidents continue with a clean physical path, increase suspicion on platform or system freeze rather than simple network path issues
 
-### 7. Controlled Platform Comparison Later
+### 8. Controlled Platform Comparison Later
 
 Only do this after evidence capture improvements are in place.
 
@@ -118,9 +152,12 @@ Avoid over-claiming kernel lockup, panic, or power fault unless the evidence sup
 
 Each unplanned outage should end up with:
 
+- one or two independent truth sources outside the main app path
 - a clear incident row in the UI
 - a last-known-healthy summary
 - packable evidence for the minutes before failure
+- heartbeat evidence that helps separate full unit freeze, network outage, and app stall
+- lightweight `vsapp` runtime state before the outage
 - runtime link-flap context separated from boot recovery noise
-- clearer storage and crash-persistence evidence
+- clearer storage, recording, and crash-persistence evidence
 - wording that is accurate enough for reporting across multiple units
