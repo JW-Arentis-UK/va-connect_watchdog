@@ -5053,17 +5053,28 @@ def render_page(status: Dict[str, Any]) -> str:
       const updateBadge = document.getElementById('updateState');
       const updateNowButton = document.getElementById('updateNowButton');
       const updateProgress = document.getElementById('updateProgress');
-      updateBadge.className = `badge ${{updateState.state === 'running' ? 'warn' : (updateState.state === 'failed' ? 'danger' : '')}}`;
-      updateBadge.textContent = (updateState.state || 'idle').toUpperCase();
+      if (updateBadge) {{
+        updateBadge.className = `badge ${{updateState.state === 'running' ? 'warn' : (updateState.state === 'failed' ? 'danger' : '')}}`;
+        updateBadge.textContent = (updateState.state || 'idle').toUpperCase();
+      }}
       const targetBuild = updateState.to_build || updateState.from_build || 'unknown';
+      const updateMessageEl = document.getElementById('updateMessage');
       if (updateState.state === 'running') {{
-        document.getElementById('updateMessage').textContent = `Updating to ${targetBuild}...`;
+        if (updateMessageEl) {{
+          updateMessageEl.textContent = `Updating to ${targetBuild}...`;
+        }}
       }} else if (updateState.state === 'ok') {{
-        document.getElementById('updateMessage').textContent = `Update to ${targetBuild} completed.`;
+        if (updateMessageEl) {{
+          updateMessageEl.textContent = `Update to ${targetBuild} completed.`;
+        }}
       }} else if (updateState.state === 'failed') {{
-        document.getElementById('updateMessage').textContent = `Update to ${targetBuild} failed.`;
+        if (updateMessageEl) {{
+          updateMessageEl.textContent = `Update to ${targetBuild} failed.`;
+        }}
       }} else {{
-        document.getElementById('updateMessage').textContent = `Current build ${targetBuild}.`;
+        if (updateMessageEl) {{
+          updateMessageEl.textContent = `Current build ${targetBuild}.`;
+        }}
       }}
       const updateMetaParts = [];
       if (updateState.state === 'running' && updateState.started_at) {{
@@ -5072,19 +5083,28 @@ def render_page(status: Dict[str, Any]) -> str:
       if (updateState.state !== 'running' && updateState.finished_at) {{
         updateMetaParts.push(`Finished ${formatLocalTimestamp(updateState.finished_at)}`);
       }}
-      document.getElementById('updateMeta').textContent = updateMetaParts.join(' | ');
+      const updateMetaEl = document.getElementById('updateMeta');
+      if (updateMetaEl) {{
+        updateMetaEl.textContent = updateMetaParts.join(' | ');
+      }}
       const updateConsole = document.getElementById('updateConsole');
       const updateConsoleLines = status.update_console_lines || [];
-      if (updateState.state === 'failed') {{
-        updateConsole.style.display = 'block';
-        updateConsole.textContent = updateConsoleLines.length ? updateConsoleLines.slice(-10).join('\n') : 'Update failed with no log lines.';
-      }} else {{
-        updateConsole.style.display = 'none';
-        updateConsole.textContent = '';
+      if (updateConsole) {{
+        if (updateState.state === 'failed') {{
+          updateConsole.style.display = 'block';
+          updateConsole.textContent = updateConsoleLines.length ? updateConsoleLines.slice(-10).join('\n') : 'Update failed with no log lines.';
+        }} else {{
+          updateConsole.style.display = 'none';
+          updateConsole.textContent = '';
+        }}
       }}
-      updateProgress.style.display = updateState.state === 'running' ? 'block' : 'none';
-      updateNowButton.style.display = 'inline-block';
-      updateNowButton.disabled = updateState.state === 'running';
+      if (updateProgress) {{
+        updateProgress.style.display = updateState.state === 'running' ? 'block' : 'none';
+      }}
+      if (updateNowButton) {{
+        updateNowButton.style.display = 'inline-block';
+        updateNowButton.disabled = updateState.state === 'running';
+      }}
       const requiredTools = status.required_tools || {{}};
       const missingImportant = requiredTools.missing_important || [];
       const missingRequired = requiredTools.missing_required || [];
