@@ -4665,6 +4665,17 @@ def render_page(status: Dict[str, Any]) -> str:
       return String(value || '').replace(/[^a-zA-Z0-9_-]/g, '_');
     }}
 
+    function findIncidentExportStatus(statusPayload, incidentId) {{
+      const incidents = Array.isArray(statusPayload && statusPayload.incidents) ? statusPayload.incidents : [];
+      const target = String(incidentId || '');
+      for (const item of incidents) {{
+        if (String((item && item.incident_id) || '') === target) {{
+          return (item && item.export_status) || {{}};
+        }}
+      }}
+      return {{}};
+    }}
+
     function metricRangeLabel(hours) {{
       if (hours === 1) {{
         return 'PC Stats - Last Hour';
@@ -5799,12 +5810,12 @@ def render_page(status: Dict[str, Any]) -> str:
         return;
       }}
       if (button) {{
-        button.textContent = 'Generating incident pack...';
+        button.textContent = 'Starting...';
         button.className = 'secondary status-running';
         button.disabled = true;
       }}
       if (hint) {{
-        hint.textContent = 'Generating incident pack...';
+        hint.textContent = 'Starting incident pack generation...';
       }}
       const response = await fetch('/api/action' + authQuery, {{
         method: 'POST',
@@ -5825,28 +5836,59 @@ def render_page(status: Dict[str, Any]) -> str:
         return;
       }}
       let ready = false;
-      for (let index = 0; index < 30; index += 1) {{
-        await fetchStatus();
-        const archiveLink = document.getElementById(`incidentArchiveLink_${{incidentDomId}}`);
-        if (archiveLink && archiveLink.style.display !== 'none') {{
-          ready = true;
-          break;
+      let archiveHref = '';
+      let finalMessage = '';
+      const startedAt = Date.now();
+      for (let index = 0; index < 60; index += 1) {{
+        try {{
+          const statusResponse = await fetch('/api/status' + authQuery, {{ cache: 'no-store' }});
+          const statusPayload = await statusResponse.json();
+          safeRender(statusPayload);
+          const exportStatus = findIncidentExportStatus(statusPayload, incidentId);
+          if (exportStatus && exportStatus.archive) {{
+            ready = true;
+            archiveHref = buildAuthedUrl('/download/incident-archive', {{
+              id: String(incidentId || ''),
+              export: exportStatus.request_id || exportStatus.finished_at || ''
+            }});
+            break;
+          }}
+          if (exportStatus && exportStatus.state === 'failed') {{
+            finalMessage = exportStatus.message || 'Incident pack failed.';
+            break;
+          }}
+        }} catch (_pollError) {{
+          // keep polling and show progress text
         }}
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        if (hint) {{
+          const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+          hint.textContent = `Generating incident pack... ${{elapsed}}s`;
+        }}
+        if (button) {{
+          button.textContent = 'Generating...';
+        }}
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }}
       if (button) {{
-        button.textContent = ready ? 'Download incident pack' : 'Refresh incident pack';
-        button.className = 'secondary' + (ready ? ' status-ready' : '');
+        if (ready) {{
+          button.textContent = 'Download starting...';
+          button.className = 'secondary status-ready';
+        }} else if (finalMessage) {{
+          button.textContent = 'Generate failed';
+          button.className = 'secondary status-failed';
+        }} else {{
+          button.textContent = 'Refresh incident pack';
+          button.className = 'secondary';
+        }}
         button.disabled = false;
       }}
       if (hint) {{
-        hint.textContent = ready ? 'Incident pack ready to download.' : 'Pack generation started. If not ready yet, press refresh incident pack.';
+        hint.textContent = ready
+          ? 'Incident pack ready. Download starting now...'
+          : (finalMessage || 'Still generating. Press refresh incident pack if it takes longer.');
       }}
       if (ready) {{
-        const archiveLink = document.getElementById(`incidentArchiveLink_${{incidentDomId}}`);
-        if (archiveLink && archiveLink.href) {{
-          window.location.href = archiveLink.href;
-        }}
+        window.location.href = archiveHref;
       }}
     }}
 
