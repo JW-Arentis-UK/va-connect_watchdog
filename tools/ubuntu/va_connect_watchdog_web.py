@@ -5302,7 +5302,7 @@ def render_page(status: Dict[str, Any]) -> str:
               </div>
               <div class="incident-actions">
                 <button id="incidentExportButton_${{incidentDomId}}" class="secondary ${{incidentExport.state === 'running' ? 'status-running' : (incidentExport.state === 'failed' ? 'status-failed' : '')}}" onclick="runIncidentExport(${{JSON.stringify(incidentToken)}})" ${{incidentExport.state === 'running' ? 'disabled' : ''}}>${{exportButtonLabel}}</button>
-                <a id="incidentArchiveLink_${{incidentDomId}}" class="link-btn" href="${{archiveHref}}" style="display:none;">Download pack</a>
+                <a id="incidentArchiveLink_${{incidentDomId}}" class="link-btn" href="${{archiveHref}}" style="display:${{incidentExport.archive ? 'inline-block' : 'none'}}">Download pack</a>
                 <a id="incidentLogLink_${{incidentDomId}}" class="link-btn" href="${{logHref}}" style="display:${{incidentExport.log_path ? 'inline-block' : 'none'}}">Download log</a>
                 <div id="incidentExportHint_${{incidentDomId}}" class="hint">${{incidentExport.state === 'running' ? 'Generating incident pack...' : (incidentExport.archive ? 'Incident pack ready to download.' : 'Press generate to create a pack.')}}</div>
               </div>
@@ -5806,7 +5806,7 @@ def render_page(status: Dict[str, Any]) -> str:
       const hint = document.getElementById(`incidentExportHint_${{incidentDomId}}`);
       const archiveLinkBefore = document.getElementById(`incidentArchiveLink_${{incidentDomId}}`);
       if (archiveLinkBefore && archiveLinkBefore.style.display !== 'none' && archiveLinkBefore.href) {{
-        window.location.href = archiveLinkBefore.href;
+        archiveLinkBefore.click();
         return;
       }}
       if (button) {{
@@ -5871,7 +5871,7 @@ def render_page(status: Dict[str, Any]) -> str:
       }}
       if (button) {{
         if (ready) {{
-          button.textContent = 'Download starting...';
+          button.textContent = 'Download pack';
           button.className = 'secondary status-ready';
         }} else if (finalMessage) {{
           button.textContent = 'Generate failed';
@@ -5884,11 +5884,18 @@ def render_page(status: Dict[str, Any]) -> str:
       }}
       if (hint) {{
         hint.textContent = ready
-          ? 'Incident pack ready. Download starting now...'
+          ? 'Incident pack ready. Use the button or download link.'
           : (finalMessage || 'Still generating. Press refresh incident pack if it takes longer.');
       }}
       if (ready) {{
-        window.location.href = archiveHref;
+        const archiveLink = document.getElementById(`incidentArchiveLink_${{incidentDomId}}`);
+        if (archiveLink) {{
+          archiveLink.href = archiveHref;
+          archiveLink.style.display = 'inline-block';
+        }}
+        if (button) {{
+          button.onclick = function () {{ window.location.href = archiveHref; }};
+        }}
       }}
     }}
 
