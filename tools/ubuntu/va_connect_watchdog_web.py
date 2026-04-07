@@ -4561,7 +4561,7 @@ def render_page(status: Dict[str, Any]) -> str:
     }})();
   </script>
   <script>
-    const initialStatus = {json.dumps(status)};
+    const initialStatus = JSON.parse({json.dumps(json.dumps(status).replace("</", "<\\/"))});
     const authQuery = window.location.search || '';
     let latestMetrics = [];
     let latestMetricEvents = [];
