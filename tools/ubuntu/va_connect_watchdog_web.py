@@ -3445,6 +3445,27 @@ def render_page(status: Dict[str, Any]) -> str:
       max-height: 84px;
       font-size: 0.7rem;
     }}
+    .update-progress {{
+      display: none;
+      flex: 1 1 100%;
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(44, 62, 77, 0.7);
+      border: 1px solid rgba(129, 154, 175, 0.22);
+      overflow: hidden;
+    }}
+    .update-progress-bar {{
+      width: 35%;
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #5a879f 0%, #7fc9ae 50%, #5a879f 100%);
+      background-size: 200% 100%;
+      animation: update-progress-slide 1.2s linear infinite;
+    }}
+    @keyframes update-progress-slide {{
+      0% {{ transform: translateX(-10%); background-position: 0% 50%; }}
+      100% {{ transform: translateX(190%); background-position: 100% 50%; }}
+    }}
     .inline-fields {{
       display: grid;
       grid-template-columns: repeat(2, minmax(120px, 1fr));
@@ -3497,7 +3518,6 @@ def render_page(status: Dict[str, Any]) -> str:
       <section class="topbar-actions">
         <div class="topbar-strip">
           <div class="button-row">
-            <button class="secondary" onclick="runAction('check_updates')">Check for updates</button>
             <button class="secondary" id="updateNowButton" onclick="runAction('update_watchdog')">Update now</button>
             <button class="secondary" onclick="hardRefreshPage()">Hard refresh page</button>
           </div>
@@ -3506,7 +3526,8 @@ def render_page(status: Dict[str, Any]) -> str:
             <span id="updateMessage">{html.escape(str(status["update_status"].get("message", "No web update run yet.")))}</span>
           </div>
           <p class="hint" id="updateMeta">{html.escape(str(status["update_status"].get("from_build", "unknown")))} to {html.escape(str(status["update_status"].get("to_build", "unknown")))} | {html.escape(str(status["update_status"].get("finished_at", "not finished yet")))}</p>
-          <div class="console-box" id="updateConsole">{html.escape(chr(10).join(status.get("update_console_lines", []) or ["No update progress yet."]))}</div>
+          <div class="update-progress" id="updateProgress"><div class="update-progress-bar"></div></div>
+          <div class="console-box" id="updateConsole" style="display:none;">{html.escape(chr(10).join(status.get("update_console_lines", []) or ["No update progress yet."]))}</div>
         </div>
       </section>
     </div>
@@ -5031,32 +5052,38 @@ def render_page(status: Dict[str, Any]) -> str:
       const updateState = status.update_status || {{}};
       const updateBadge = document.getElementById('updateState');
       const updateNowButton = document.getElementById('updateNowButton');
+      const updateProgress = document.getElementById('updateProgress');
       updateBadge.className = `badge ${{updateState.state === 'running' ? 'warn' : (updateState.state === 'failed' ? 'danger' : '')}}`;
-      updateBadge.textContent = ((updateState.mode === 'check' ? 'check' : (updateState.state || 'idle')) || 'idle').toUpperCase();
-      document.getElementById('updateMessage').textContent = updateState.message || 'No web update run yet.';
-      const updateMetaParts = [];
-      if (updateState.from_build || updateState.to_build) {{
-        updateMetaParts.push(`${{updateState.from_build || 'unknown'}} -> ${{updateState.to_build || 'unknown'}}`);
-      }}
+      updateBadge.textContent = (updateState.state || 'idle').toUpperCase();
+      const targetBuild = updateState.to_build || updateState.from_build || 'unknown';
       if (updateState.state === 'running') {{
-        updateMetaParts.push(`Started ${{updateState.started_at ? formatLocalTimestamp(updateState.started_at) : 'just now'}}`);
-      }} else if (updateState.finished_at) {{
-        updateMetaParts.push(`Finished ${{formatLocalTimestamp(updateState.finished_at)}}`);
-      }}
-      document.getElementById('updateMeta').textContent = updateMetaParts.join(' | ') || 'No update details yet.';
-      const updateConsoleLines = status.update_console_lines || [];
-      const updateConsole = document.getElementById('updateConsole');
-      if (updateState.state === 'running') {{
-        updateConsole.style.display = 'block';
-        updateConsole.textContent = updateConsoleLines.length ? updateConsoleLines.slice(-8).join('\n') : 'Update is running...';
+        document.getElementById('updateMessage').textContent = `Updating to ${targetBuild}...`;
+      }} else if (updateState.state === 'ok') {{
+        document.getElementById('updateMessage').textContent = `Update to ${targetBuild} completed.`;
       }} else if (updateState.state === 'failed') {{
+        document.getElementById('updateMessage').textContent = `Update to ${targetBuild} failed.`;
+      }} else {{
+        document.getElementById('updateMessage').textContent = `Current build ${targetBuild}.`;
+      }}
+      const updateMetaParts = [];
+      if (updateState.state === 'running' && updateState.started_at) {{
+        updateMetaParts.push(`Started ${formatLocalTimestamp(updateState.started_at)}`);
+      }}
+      if (updateState.state !== 'running' && updateState.finished_at) {{
+        updateMetaParts.push(`Finished ${formatLocalTimestamp(updateState.finished_at)}`);
+      }}
+      document.getElementById('updateMeta').textContent = updateMetaParts.join(' | ');
+      const updateConsole = document.getElementById('updateConsole');
+      const updateConsoleLines = status.update_console_lines || [];
+      if (updateState.state === 'failed') {{
         updateConsole.style.display = 'block';
         updateConsole.textContent = updateConsoleLines.length ? updateConsoleLines.slice(-10).join('\n') : 'Update failed with no log lines.';
       }} else {{
         updateConsole.style.display = 'none';
         updateConsole.textContent = '';
       }}
-      updateNowButton.style.display = updateState.update_available ? 'inline-block' : 'none';
+      updateProgress.style.display = updateState.state === 'running' ? 'block' : 'none';
+      updateNowButton.style.display = 'inline-block';
       updateNowButton.disabled = updateState.state === 'running';
       const requiredTools = status.required_tools || {{}};
       const missingImportant = requiredTools.missing_important || [];
