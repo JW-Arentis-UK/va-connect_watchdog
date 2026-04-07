@@ -5121,47 +5121,57 @@ def render_page(status: Dict[str, Any]) -> str:
       exportArchiveLink.style.display = exportState.archive ? 'inline-block' : 'none';
       exportReadmeLink.style.display = exportState.folder ? 'inline-block' : 'none';
       exportLogLink.style.display = exportState.log_path ? 'inline-block' : 'none';
-      const incidentRowsHtml = (status.incidents || []).map((item) => {{
-        const incidentExport = item.export_status || {{}};
-        const incidentToken = item.incident_id || '';
-        const archiveHref = buildAuthedUrl('/download/incident-archive', {{ id: incidentToken, export: incidentExport.request_id || incidentExport.finished_at || '' }});
-        const logHref = buildAuthedUrl('/download/incident-log', {{ id: incidentToken, export: incidentExport.request_id || incidentExport.finished_at || '' }});
-        const badgeClass = item.watchdog_requested_reboot ? '' : 'warn';
-        const exportButtonLabel = incidentExport.state === 'running'
-          ? 'Generating incident pack...'
-          : (incidentExport.archive ? 'Refresh incident pack' : 'Generate incident pack');
-        const exportConsole = (item.export_console_lines || []).length
-          ? (item.export_console_lines || []).join('\n')
-          : 'No incident pack run yet.';
-        return `
-          <div class="incident-row">
-            <div class="incident-main">
-              <div class="incident-head">
-                <div class="incident-title">${{item.kind_label || 'Incident'}}</div>
-                <span class="badge ${{badgeClass}}">${{(item.classification || 'incident').replace(/_/g, ' ')}}</span>
+      let incidentRowsHtml = '<div class="timeline-empty">No reboot incidents recorded yet.</div>';
+      try {{
+        const incidentItems = Array.isArray(status.incidents) ? status.incidents : [];
+        incidentRowsHtml = incidentItems.map((item) => {{
+          const incidentExport = item && item.export_status ? item.export_status : {{}};
+          const incidentToken = String((item && item.incident_id) || '');
+          const archiveHref = buildAuthedUrl('/download/incident-archive', {{ id: incidentToken, export: incidentExport.request_id || incidentExport.finished_at || '' }});
+          const logHref = buildAuthedUrl('/download/incident-log', {{ id: incidentToken, export: incidentExport.request_id || incidentExport.finished_at || '' }});
+          const badgeClass = item && item.watchdog_requested_reboot ? '' : 'warn';
+          const classificationLabel = String((item && item.classification) || 'incident').replace(/_/g, ' ');
+          const exportButtonLabel = incidentExport.state === 'running'
+            ? 'Generating incident pack...'
+            : (incidentExport.archive ? 'Refresh incident pack' : 'Generate incident pack');
+          const exportConsole = (item && Array.isArray(item.export_console_lines) && item.export_console_lines.length)
+            ? item.export_console_lines.join('\n')
+            : 'No incident pack run yet.';
+          const reason = String((item && item.suspected_reason) || 'unknown');
+          const kind = String((item && item.kind_label) || 'Incident');
+          const reportingText = String((item && item.reporting_text) || 'No incident wording available.');
+          return `
+            <div class="incident-row">
+              <div class="incident-main">
+                <div class="incident-head">
+                  <div class="incident-title">${{kind}}</div>
+                  <span class="badge ${{badgeClass}}">${{classificationLabel}}</span>
+                </div>
+                <div class="incident-meta">
+                  <div>Incident: <strong>${{formatLocalTimestamp((item && item.incident_time) || '')}}</strong></div>
+                  <div>Last healthy: <strong>${{formatLocalTimestamp((item && item.last_known_healthy_at) || '')}}</strong></div>
+                  <div>Detected: <strong>${{formatLocalTimestamp((item && item.reboot_detected_at) || '')}}</strong></div>
+                  <div>Watchdog reboot: <strong>${{item && item.watchdog_requested_reboot ? 'Yes' : 'No'}}</strong></div>
+                  <div>Reason: <strong>${{reason}}</strong></div>
+                  <div>Window: <strong>${{String((item && item.window_since) || 'unknown')}} to ${{String((item && item.window_until) || 'unknown')}}</strong></div>
+                </div>
               </div>
-              <div class="incident-meta">
-                <div>Incident: <strong>${{formatLocalTimestamp(item.incident_time || '')}}</strong></div>
-                <div>Last healthy: <strong>${{formatLocalTimestamp(item.last_known_healthy_at || '')}}</strong></div>
-                <div>Detected: <strong>${{formatLocalTimestamp(item.reboot_detected_at || '')}}</strong></div>
-                <div>Watchdog reboot: <strong>${{item.watchdog_requested_reboot ? 'Yes' : 'No'}}</strong></div>
-                <div>Reason: <strong>${{item.suspected_reason || 'unknown'}}</strong></div>
-                <div>Window: <strong>${{item.window_since || 'unknown'}} to ${{item.window_until || 'unknown'}}</strong></div>
+              <div class="incident-actions">
+                <button class="secondary ${{incidentExport.state === 'running' ? 'status-running' : (incidentExport.state === 'failed' ? 'status-failed' : '')}}" onclick="runIncidentExport(${{JSON.stringify(incidentToken)}})" ${{incidentExport.state === 'running' ? 'disabled' : ''}}>${{exportButtonLabel}}</button>
+                <a class="link-btn" href="${{archiveHref}}" style="display:${{incidentExport.archive ? 'inline-block' : 'none'}}">Download pack</a>
+                <a class="link-btn" href="${{logHref}}" style="display:${{incidentExport.log_path ? 'inline-block' : 'none'}}">Download log</a>
               </div>
+              <details class="incident-more">
+                <summary>Show incident notes and export log</summary>
+                <div class="incident-summary">${{reportingText}}</div>
+                <div class="incident-console">${{exportConsole}}</div>
+              </details>
             </div>
-            <div class="incident-actions">
-              <button class="secondary ${{incidentExport.state === 'running' ? 'status-running' : (incidentExport.state === 'failed' ? 'status-failed' : '')}}" onclick="runIncidentExport('${{incidentToken}}')" ${{incidentExport.state === 'running' ? 'disabled' : ''}}>${{exportButtonLabel}}</button>
-              <a class="link-btn" href="${{archiveHref}}" style="display:${{incidentExport.archive ? 'inline-block' : 'none'}}">Download pack</a>
-              <a class="link-btn" href="${{logHref}}" style="display:${{incidentExport.log_path ? 'inline-block' : 'none'}}">Download log</a>
-            </div>
-            <details class="incident-more">
-              <summary>Show incident notes and export log</summary>
-              <div class="incident-summary">${{item.reporting_text || 'No incident wording available.'}}</div>
-              <div class="incident-console">${{exportConsole}}</div>
-            </details>
-          </div>
-        `;
-      }}).join('') || '<div class="timeline-empty">No reboot incidents recorded yet.</div>';
+          `;
+        }}).join('') || '<div class="timeline-empty">No reboot incidents recorded yet.</div>';
+      }} catch (incidentRenderError) {{
+        incidentRowsHtml = `<div class="timeline-empty">Failed to render incidents: ${{incidentRenderError && incidentRenderError.message ? incidentRenderError.message : 'unknown error'}}</div>`;
+      }}
       const incidentsList = document.getElementById('incidentsList');
       if (incidentsList) {{
         incidentsList.innerHTML = incidentRowsHtml;
