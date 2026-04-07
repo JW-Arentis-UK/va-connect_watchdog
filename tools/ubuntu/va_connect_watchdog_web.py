@@ -93,15 +93,16 @@ def export_download_names(export_status: Dict[str, Any]) -> Dict[str, str]:
 
 
 def incident_export_names(incident: Dict[str, Any]) -> Dict[str, str]:
-    names = export_download_names(
-        {
-            "site_label": incident.get("site_label") or socket.gethostname(),
-            "since": incident.get("window_since", ""),
-            "until": incident.get("window_until", ""),
-        }
+    site_label = slugify_label(str(incident.get("site_label") or socket.gethostname()))
+    incident_at = export_time_token(
+        str(
+            incident.get("incident_time")
+            or incident.get("reboot_detected_at")
+            or incident.get("window_until", "")
+        )
     )
-    incident_token = slugify_label(str(incident.get("incident_id", "incident")))
-    base = f"{names['base']}_{incident_token}"
+    classification = slugify_label(str(incident.get("classification") or "incident"))
+    base = f"{site_label}_{incident_at}_{classification}"
     return {
         "base": base,
         "archive": f"{base}_incident-pack.tar.gz",
