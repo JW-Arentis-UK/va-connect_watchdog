@@ -153,22 +153,13 @@ enable_timer() {
 }
 
 print_next_steps() {
+  local build_commit
+  build_commit="$(grep -oE '"git_commit": *"[^"]+"' "$BUILD_INFO_TARGET" | head -n1 | cut -d'"' -f4 || true)"
   cat <<EOF
 Install complete.
-
-Next steps:
-1. Edit $ENV_TARGET with the real VA-Connect process match and start command.
-2. Edit $SITE_CONFIG_TARGET with the real site IPs, RTSP target, and commands.
-3. Check: systemctl status $SITE_SERVICE_NAME
-4. Check: systemctl status $WEB_SERVICE_NAME
-5. Check site watchdog logs: journalctl -u $SITE_SERVICE_NAME -n 50 --no-pager
-6. Open the web UI on http://<encoder-ip>/
-7. Note: the legacy $TIMER_NAME is disabled by this installer.
-8. Easy commands:
-   sudo bash $INSTALL_DIR/update_watchdog.sh
-   watchdog-update
-   watchdog-restart
-9. update_watchdog.sh now pulls from Git first when this folder is a clean git checkout.
+Build: ${build_commit:-unknown}
+Services: $SITE_SERVICE_NAME and $WEB_SERVICE_NAME are enabled.
+Web UI: http://<encoder-ip>/
 EOF
 }
 

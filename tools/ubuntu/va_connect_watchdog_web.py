@@ -5078,10 +5078,10 @@ def render_page(status: Dict[str, Any]) -> str:
       }}
       const updateMetaParts = [];
       if (updateState.state === 'running' && updateState.started_at) {{
-        updateMetaParts.push(`Started ${formatLocalTimestamp(updateState.started_at)}`);
+        updateMetaParts.push(`Started ${{formatLocalTimestamp(updateState.started_at)}}`);
       }}
       if (updateState.state !== 'running' && updateState.finished_at) {{
-        updateMetaParts.push(`Finished ${formatLocalTimestamp(updateState.finished_at)}`);
+        updateMetaParts.push(`Finished ${{formatLocalTimestamp(updateState.finished_at)}}`);
       }}
       const updateMetaEl = document.getElementById('updateMeta');
       if (updateMetaEl) {{
