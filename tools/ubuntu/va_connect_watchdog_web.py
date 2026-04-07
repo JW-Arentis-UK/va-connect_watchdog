@@ -5430,7 +5430,7 @@ def render_page(status: Dict[str, Any]) -> str:
 
     async function fetchStatus() {{
       const response = await fetch('/api/status' + authQuery);
-      render(await response.json());
+      safeRender(await response.json());
     }}
 
     function setMetricRange(hours) {{
@@ -5823,7 +5823,30 @@ def render_page(status: Dict[str, Any]) -> str:
       }});
     }}
 
-    render(initialStatus);
+    function safeRender(status) {{
+      try {{
+        render(status);
+      }} catch (renderError) {{
+        const message = renderError && renderError.message ? renderError.message : String(renderError || 'unknown render error');
+        const incidentsList = document.getElementById('incidentsList');
+        if (incidentsList) {{
+          incidentsList.innerHTML = `<div class="timeline-empty">Render error: ${{message}}</div>`;
+        }}
+        const incidentsInvestigationList = document.getElementById('incidentsInvestigationList');
+        if (incidentsInvestigationList) {{
+          incidentsInvestigationList.innerHTML = `<div class="timeline-empty">Render error: ${{message}}</div>`;
+        }}
+        const metricsHover = document.getElementById('metricsHover');
+        if (metricsHover) {{
+          metricsHover.textContent = `Render error: ${{message}}`;
+        }}
+        if (window && window.console && window.console.error) {{
+          window.console.error('watchdog render failed', renderError);
+        }}
+      }}
+    }}
+
+    safeRender(initialStatus);
     try {{
       const initialTab = new URLSearchParams(window.location.search || '').get('tab');
       if (initialTab) {{
