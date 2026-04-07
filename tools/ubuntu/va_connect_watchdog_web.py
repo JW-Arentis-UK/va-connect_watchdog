@@ -5314,7 +5314,7 @@ def render_page(status: Dict[str, Any]) -> str:
                 <div class="incident-reason"><strong>Reason:</strong> ${{reason}}</div>
               </div>
               <div class="incident-actions">
-                <button id="incidentExportButton_${{incidentDomId}}" class="secondary ${{incidentExport.state === 'running' ? 'status-running' : (incidentExport.state === 'failed' ? 'status-failed' : '')}}" onclick="runIncidentExport(${{JSON.stringify(incidentToken)}})" ${{incidentExport.state === 'running' ? 'disabled' : ''}}>${{exportButtonLabel}}</button>
+                <button id="incidentExportButton_${{incidentDomId}}" data-incident-id="${{incidentToken}}" class="secondary ${{incidentExport.state === 'running' ? 'status-running' : (incidentExport.state === 'failed' ? 'status-failed' : '')}}" onclick="runIncidentExport(this.dataset.incidentId)" ${{incidentExport.state === 'running' ? 'disabled' : ''}}>${{exportButtonLabel}}</button>
                 <a id="incidentArchiveLink_${{incidentDomId}}" class="link-btn" href="${{archiveHref}}" style="display:${{incidentExport.archive ? 'inline-block' : 'none'}}">Download pack</a>
                 <a id="incidentLogLink_${{incidentDomId}}" class="link-btn" href="${{logHref}}" style="display:${{incidentExport.log_path ? 'inline-block' : 'none'}}">Download log</a>
                 <div id="incidentExportHint_${{incidentDomId}}" class="hint">${{incidentExport.state === 'running' ? 'Generating incident pack...' : (incidentExport.archive ? 'Incident pack ready to download.' : 'Press generate to create a pack.')}}</div>
