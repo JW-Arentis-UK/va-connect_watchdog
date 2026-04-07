@@ -2883,17 +2883,17 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
     .incident-list {{
       display: grid;
-      gap: 8px;
-      margin-top: 8px;
+      gap: 6px;
+      margin-top: 6px;
     }}
     .incident-row {{
       border: 1px solid rgba(130, 153, 173, 0.15);
       border-radius: 12px;
-      padding: 9px 10px;
+      padding: 7px 9px;
       background: rgba(20, 33, 44, 0.88);
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
-      gap: 10px;
+      gap: 8px;
       align-items: start;
     }}
     .incident-main {{
@@ -2903,13 +2903,13 @@ def render_page(status: Dict[str, Any]) -> str:
       display: flex;
       flex-wrap: wrap;
       justify-content: space-between;
-      gap: 8px;
+      gap: 6px;
       align-items: center;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
     }}
     .incident-title {{
       font-weight: 700;
-      font-size: 0.92rem;
+      font-size: 0.88rem;
     }}
     .incident-summary {{
       color: #d8e4ee;
@@ -2918,17 +2918,22 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
     .incident-meta {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 6px 10px;
-      font-size: 0.76rem;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 4px 8px;
+      font-size: 0.74rem;
       color: #a9bdce;
+    }}
+    .incident-reason {{
+      margin-top: 4px;
+      font-size: 0.74rem;
+      color: #b9cada;
     }}
     .incident-actions {{
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 4px;
       align-items: center;
-      min-width: 185px;
+      min-width: 170px;
     }}
     .incident-actions .link-btn {{
       margin-top: 0;
@@ -2939,6 +2944,8 @@ def render_page(status: Dict[str, Any]) -> str:
     .incident-actions button {{
       width: 100%;
       margin: 0;
+      padding: 7px 10px;
+      font-size: 0.82rem;
     }}
     .incident-more {{
       margin-top: 8px;
@@ -5259,7 +5266,7 @@ def render_page(status: Dict[str, Any]) -> str:
           const classificationLabel = String((item && item.classification) || 'incident').replace(/_/g, ' ');
           const exportButtonLabel = incidentExport.state === 'running'
             ? 'Generating incident pack...'
-            : (incidentExport.archive ? 'Refresh incident pack' : 'Generate incident pack');
+            : (incidentExport.archive ? 'Download incident pack' : 'Generate + download pack');
           const exportConsole = (item && Array.isArray(item.export_console_lines) && item.export_console_lines.length)
             ? item.export_console_lines.join('\\n')
             : 'No incident pack run yet.';
@@ -5278,13 +5285,13 @@ def render_page(status: Dict[str, Any]) -> str:
                   <div>Last healthy: <strong>${{formatLocalTimestamp((item && item.last_known_healthy_at) || '')}}</strong></div>
                   <div>Detected: <strong>${{formatLocalTimestamp((item && item.reboot_detected_at) || '')}}</strong></div>
                   <div>Watchdog reboot: <strong>${{item && item.watchdog_requested_reboot ? 'Yes' : 'No'}}</strong></div>
-                  <div>Reason: <strong>${{reason}}</strong></div>
                   <div>Window: <strong>${{String((item && item.window_since) || 'unknown')}} to ${{String((item && item.window_until) || 'unknown')}}</strong></div>
                 </div>
+                <div class="incident-reason"><strong>Reason:</strong> ${{reason}}</div>
               </div>
               <div class="incident-actions">
                 <button id="incidentExportButton_${{incidentDomId}}" class="secondary ${{incidentExport.state === 'running' ? 'status-running' : (incidentExport.state === 'failed' ? 'status-failed' : '')}}" onclick="runIncidentExport(${{JSON.stringify(incidentToken)}})" ${{incidentExport.state === 'running' ? 'disabled' : ''}}>${{exportButtonLabel}}</button>
-                <a id="incidentArchiveLink_${{incidentDomId}}" class="link-btn" href="${{archiveHref}}" style="display:${{incidentExport.archive ? 'inline-block' : 'none'}}">Download pack</a>
+                <a id="incidentArchiveLink_${{incidentDomId}}" class="link-btn" href="${{archiveHref}}" style="display:none;">Download pack</a>
                 <a id="incidentLogLink_${{incidentDomId}}" class="link-btn" href="${{logHref}}" style="display:${{incidentExport.log_path ? 'inline-block' : 'none'}}">Download log</a>
                 <div id="incidentExportHint_${{incidentDomId}}" class="hint">${{incidentExport.state === 'running' ? 'Generating incident pack...' : (incidentExport.archive ? 'Incident pack ready to download.' : 'Press generate to create a pack.')}}</div>
               </div>
@@ -5786,6 +5793,11 @@ def render_page(status: Dict[str, Any]) -> str:
       const incidentDomId = safeDomId(incidentId);
       const button = document.getElementById(`incidentExportButton_${{incidentDomId}}`);
       const hint = document.getElementById(`incidentExportHint_${{incidentDomId}}`);
+      const archiveLinkBefore = document.getElementById(`incidentArchiveLink_${{incidentDomId}}`);
+      if (archiveLinkBefore && archiveLinkBefore.style.display !== 'none' && archiveLinkBefore.href) {{
+        window.location.href = archiveLinkBefore.href;
+        return;
+      }}
       if (button) {{
         button.textContent = 'Generating incident pack...';
         button.className = 'secondary status-running';
@@ -5823,12 +5835,18 @@ def render_page(status: Dict[str, Any]) -> str:
         await new Promise((resolve) => setTimeout(resolve, 1500));
       }}
       if (button) {{
-        button.textContent = ready ? 'Pack ready' : 'Refresh incident pack';
+        button.textContent = ready ? 'Download incident pack' : 'Refresh incident pack';
         button.className = 'secondary' + (ready ? ' status-ready' : '');
         button.disabled = false;
       }}
       if (hint) {{
         hint.textContent = ready ? 'Incident pack ready to download.' : 'Pack generation started. If not ready yet, press refresh incident pack.';
+      }}
+      if (ready) {{
+        const archiveLink = document.getElementById(`incidentArchiveLink_${{incidentDomId}}`);
+        if (archiveLink && archiveLink.href) {{
+          window.location.href = archiveLink.href;
+        }}
       }}
     }}
 
