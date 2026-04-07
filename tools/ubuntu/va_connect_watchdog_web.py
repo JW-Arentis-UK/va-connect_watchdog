@@ -2877,6 +2877,13 @@ def render_page(status: Dict[str, Any]) -> str:
       border-radius: 12px;
       padding: 9px 10px;
       background: rgba(20, 33, 44, 0.88);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+    }}
+    .incident-main {{
+      min-width: 0;
     }}
     .incident-head {{
       display: flex;
@@ -2897,20 +2904,36 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
     .incident-meta {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 6px 10px;
       font-size: 0.76rem;
       color: #a9bdce;
     }}
     .incident-actions {{
       display: flex;
-      flex-wrap: wrap;
+      flex-direction: column;
       gap: 6px;
-      margin-top: 8px;
       align-items: center;
+      min-width: 185px;
     }}
     .incident-actions .link-btn {{
       margin-top: 0;
+      width: 100%;
+      text-align: center;
+      box-sizing: border-box;
+    }}
+    .incident-actions button {{
+      width: 100%;
+      margin: 0;
+    }}
+    .incident-more {{
+      margin-top: 8px;
+      grid-column: 1 / -1;
+    }}
+    .incident-more summary {{
+      cursor: pointer;
+      color: #8ea5b9;
+      font-size: 0.8rem;
     }}
     .incident-console {{
       margin-top: 8px;
@@ -3699,6 +3722,13 @@ def render_page(status: Dict[str, Any]) -> str:
     <div class="grid" style="margin-top:16px;">
       <div class="compact-grid" id="investigationIntroPanels" style="grid-column: 1 / -1;"></div>
       <div class="bottom-grid" id="investigationActionPanels" style="grid-column: 1 / -1;"></div>
+      <section class="panel" style="grid-column: 1 / -1;">
+        <h2>Detected crashes</h2>
+        <p class="hint">Newest first. Use the buttons on the right to generate or download that specific incident pack.</p>
+        <div class="incident-list" id="incidentsInvestigationList">
+          <div class="timeline-empty">Loading incident history...</div>
+        </div>
+      </section>
       <section class="panel controls-panel" id="controlsPanel" style="grid-column: 1 / -1;">
         <h2>Controls</h2>
         <label>Monitoring enabled <input type="checkbox" id="monitoring_enabled" {'checked' if cfg['monitoring_enabled'] else ''}></label>
@@ -4205,7 +4235,13 @@ def render_page(status: Dict[str, Any]) -> str:
 
       function reloadSoon() {{
         window.setTimeout(function () {{
-          window.location.reload();
+          var url = new URL(window.location.href);
+          var activeBtn = document.querySelector('.tab-btn.active');
+          var activeTab = activeBtn ? activeBtn.getAttribute('data-tab') : '';
+          if (activeTab) {{
+            url.searchParams.set('tab', activeTab);
+          }}
+          window.location.replace(url.toString());
         }}, 900);
       }}
 
@@ -4218,6 +4254,13 @@ def render_page(status: Dict[str, Any]) -> str:
         }}
         for (i = 0; i < panels.length; i += 1) {{
           panels[i].classList[panels[i].getAttribute('data-tab-panel') === name ? 'add' : 'remove']('active');
+        }}
+        try {{
+          var url = new URL(window.location.href);
+          url.searchParams.set('tab', name);
+          window.history.replaceState(null, '', url.toString());
+        }} catch (_err) {{
+          // ignore URL rewrite issues in limited browsers
         }}
       }};
 
@@ -4459,6 +4502,14 @@ def render_page(status: Dict[str, Any]) -> str:
       if (document.getElementById('metricsChart')) {{
         window.setMetricRange(24);
       }}
+      try {{
+        var initialTab = new URLSearchParams(window.location.search || '').get('tab');
+        if (initialTab) {{
+          window.switchTab(initialTab);
+        }}
+      }} catch (_err) {{
+        // ignore tab parse issues
+      }}
     }})();
   </script>
   <script>
@@ -4475,6 +4526,13 @@ def render_page(status: Dict[str, Any]) -> str:
       document.querySelectorAll('.tab-panel').forEach((panel) => {{
         panel.classList.toggle('active', panel.dataset.tabPanel === name);
       }});
+      try {{
+        const url = new URL(window.location.href);
+        url.searchParams.set('tab', name);
+        window.history.replaceState(null, '', url.toString());
+      }} catch (_err) {{
+        // ignore URL rewrite issues
+      }}
     }}
 
     function hardRefreshPage() {{
@@ -4501,6 +4559,21 @@ def render_page(status: Dict[str, Any]) -> str:
         }}
       }}
       return `${{url.pathname}}${{url.search}}`;
+    }}
+
+    function pinCurrentTabInUrl() {{
+      try {{
+        const activeBtn = document.querySelector('.tab-btn.active');
+        const activeTab = activeBtn ? activeBtn.dataset.tab : '';
+        if (!activeTab) {{
+          return;
+        }}
+        const url = new URL(window.location.href);
+        url.searchParams.set('tab', activeTab);
+        window.history.replaceState(null, '', url.toString());
+      }} catch (_err) {{
+        // ignore URL rewrite issues
+      }}
     }}
 
     function badge(ok) {{
@@ -5048,7 +5121,7 @@ def render_page(status: Dict[str, Any]) -> str:
       exportArchiveLink.style.display = exportState.archive ? 'inline-block' : 'none';
       exportReadmeLink.style.display = exportState.folder ? 'inline-block' : 'none';
       exportLogLink.style.display = exportState.log_path ? 'inline-block' : 'none';
-      document.getElementById('incidentsList').innerHTML = (status.incidents || []).map((item) => {{
+      const incidentRowsHtml = (status.incidents || []).map((item) => {{
         const incidentExport = item.export_status || {{}};
         const incidentToken = item.incident_id || '';
         const archiveHref = buildAuthedUrl('/download/incident-archive', {{ id: incidentToken, export: incidentExport.request_id || incidentExport.finished_at || '' }});
@@ -5062,28 +5135,41 @@ def render_page(status: Dict[str, Any]) -> str:
           : 'No incident pack run yet.';
         return `
           <div class="incident-row">
-            <div class="incident-head">
-              <div class="incident-title">${{item.kind_label || 'Incident'}}</div>
-              <span class="badge ${{badgeClass}}">${{(item.classification || 'incident').replace(/_/g, ' ')}}</span>
-            </div>
-            <div class="incident-summary">${{item.reporting_text || 'No incident wording available.'}}</div>
-            <div class="incident-meta">
-              <div>Incident time: <strong>${{formatLocalTimestamp(item.incident_time || '')}}</strong></div>
-              <div>Last healthy: <strong>${{formatLocalTimestamp(item.last_known_healthy_at || '')}}</strong></div>
-              <div>Reboot detected: <strong>${{formatLocalTimestamp(item.reboot_detected_at || '')}}</strong></div>
-              <div>Reason: <strong>${{item.suspected_reason || 'unknown'}}</strong></div>
-              <div>Watchdog requested: <strong>${{item.watchdog_requested_reboot ? 'Yes' : 'No'}}</strong></div>
-              <div>Window: <strong>${{item.window_since || 'unknown'}} to ${{item.window_until || 'unknown'}}</strong></div>
+            <div class="incident-main">
+              <div class="incident-head">
+                <div class="incident-title">${{item.kind_label || 'Incident'}}</div>
+                <span class="badge ${{badgeClass}}">${{(item.classification || 'incident').replace(/_/g, ' ')}}</span>
+              </div>
+              <div class="incident-meta">
+                <div>Incident: <strong>${{formatLocalTimestamp(item.incident_time || '')}}</strong></div>
+                <div>Last healthy: <strong>${{formatLocalTimestamp(item.last_known_healthy_at || '')}}</strong></div>
+                <div>Detected: <strong>${{formatLocalTimestamp(item.reboot_detected_at || '')}}</strong></div>
+                <div>Watchdog reboot: <strong>${{item.watchdog_requested_reboot ? 'Yes' : 'No'}}</strong></div>
+                <div>Reason: <strong>${{item.suspected_reason || 'unknown'}}</strong></div>
+                <div>Window: <strong>${{item.window_since || 'unknown'}} to ${{item.window_until || 'unknown'}}</strong></div>
+              </div>
             </div>
             <div class="incident-actions">
               <button class="secondary ${{incidentExport.state === 'running' ? 'status-running' : (incidentExport.state === 'failed' ? 'status-failed' : '')}}" onclick="runIncidentExport('${{incidentToken}}')" ${{incidentExport.state === 'running' ? 'disabled' : ''}}>${{exportButtonLabel}}</button>
               <a class="link-btn" href="${{archiveHref}}" style="display:${{incidentExport.archive ? 'inline-block' : 'none'}}">Download pack</a>
               <a class="link-btn" href="${{logHref}}" style="display:${{incidentExport.log_path ? 'inline-block' : 'none'}}">Download log</a>
             </div>
-            <div class="incident-console">${{exportConsole}}</div>
+            <details class="incident-more">
+              <summary>Show incident notes and export log</summary>
+              <div class="incident-summary">${{item.reporting_text || 'No incident wording available.'}}</div>
+              <div class="incident-console">${{exportConsole}}</div>
+            </details>
           </div>
         `;
       }}).join('') || '<div class="timeline-empty">No reboot incidents recorded yet.</div>';
+      const incidentsList = document.getElementById('incidentsList');
+      if (incidentsList) {{
+        incidentsList.innerHTML = incidentRowsHtml;
+      }}
+      const incidentsInvestigationList = document.getElementById('incidentsInvestigationList');
+      if (incidentsInvestigationList) {{
+        incidentsInvestigationList.innerHTML = incidentRowsHtml;
+      }}
 
       const overviewGrid = document.querySelector('.overview-grid');
       if (overviewGrid) {{
@@ -5461,6 +5547,7 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
 
     async function runAction(action, extraPayload = {{}}) {{
+      pinCurrentTabInUrl();
       const requestPayload = Object.assign({{ action: action }}, extraPayload || {{}});
       const response = await fetch('/api/action' + authQuery, {{
         method: 'POST',
@@ -5489,6 +5576,7 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
 
     async function exportIncident() {{
+      pinCurrentTabInUrl();
       const since = document.getElementById('export_since').value;
       const until = document.getElementById('export_until').value;
       const response = await fetch('/api/export' + authQuery, {{
@@ -5508,6 +5596,7 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
 
     async function quickExportIncident() {{
+      pinCurrentTabInUrl();
       const response = await fetch('/api/action' + authQuery, {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
@@ -5526,6 +5615,7 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
 
     async function runIncidentExport(incidentId) {{
+      pinCurrentTabInUrl();
       const response = await fetch('/api/action' + authQuery, {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
@@ -5639,6 +5729,14 @@ def render_page(status: Dict[str, Any]) -> str:
     }}
 
     render(initialStatus);
+    try {{
+      const initialTab = new URLSearchParams(window.location.search || '').get('tab');
+      if (initialTab) {{
+        switchTab(initialTab);
+      }}
+    }} catch (_err) {{
+      // ignore tab parse issues
+    }}
     const hikProbeButton = document.getElementById('hikProbeButton');
     if (hikProbeButton) {{
       hikProbeButton.addEventListener('click', function(event) {{
