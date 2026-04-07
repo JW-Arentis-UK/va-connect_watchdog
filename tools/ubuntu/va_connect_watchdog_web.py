@@ -2793,27 +2793,41 @@ def render_page(status: Dict[str, Any]) -> str:
       gap: 10px;
       align-items: center;
       margin-bottom: 8px;
+      position: sticky;
+      top: 0;
+      z-index: 60;
+      padding: 8px 8px 6px;
+      border: 1px solid rgba(122, 150, 176, 0.2);
+      border-radius: 12px;
+      background: rgba(11, 18, 24, 0.96);
+      backdrop-filter: blur(10px);
     }}
     .tabs {{
       display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
+      flex-wrap: nowrap;
+      gap: 6px;
       flex: 1 1 420px;
       min-width: 0;
+      overflow-x: auto;
+      padding-bottom: 1px;
     }}
     .tab-btn {{
-      border: 1px solid rgba(133, 159, 180, 0.24);
-      border-radius: 999px;
-      padding: 7px 13px;
-      background: rgba(19, 32, 43, 0.9);
+      border: 1px solid rgba(133, 159, 180, 0.3);
+      border-bottom-color: rgba(83, 111, 133, 0.6);
+      border-radius: 10px 10px 0 0;
+      padding: 8px 14px 7px;
+      background: rgba(24, 37, 48, 0.95);
       color: #d9e5ef;
       font-weight: 700;
       cursor: pointer;
+      white-space: nowrap;
+      margin-bottom: -1px;
     }}
     .tab-btn.active {{
-      background: #3a6c98;
+      background: rgba(58, 108, 152, 0.98);
       color: #fff;
-      border-color: #4b7ca8;
+      border-color: #5d8bb3;
+      border-bottom-color: rgba(11, 18, 24, 0.96);
     }}
     .tab-panel {{
       display: none;
