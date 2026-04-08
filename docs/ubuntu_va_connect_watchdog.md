@@ -68,6 +68,22 @@ wget -O bootstrap_watchdog_from_github.sh https://raw.githubusercontent.com/JW-A
 bash ./bootstrap_watchdog_from_github.sh
 ```
 
+If this is a brand new gateway and you want a fuller preflight first, use:
+
+```bash
+cd ~/Desktop
+wget -O bootstrap_gateway_watchdog.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/master/tools/ubuntu/bootstrap_gateway_watchdog.sh
+bash ./bootstrap_gateway_watchdog.sh
+```
+
+That fuller bootstrap will:
+
+- inventory disks and mounted storage
+- fail early if root or install-path free space is too low
+- install `git`, `python3`, network tools, and hardware-diagnostics packages
+- warn if the expected VA-Connect launcher or `teamviewerd` baseline is missing
+- clone the repo and run the watchdog installer
+
 That will:
 
 - install `git`

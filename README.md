@@ -12,6 +12,7 @@ Lightweight Ubuntu watchdog tooling for a PC running VA-Connect.
 - `tools/ubuntu/update_watchdog.sh`
 - `tools/ubuntu/git_update_watchdog.sh`
 - `tools/ubuntu/bootstrap_watchdog_from_github.sh`
+- `tools/ubuntu/bootstrap_gateway_watchdog.sh`
 - `tools/ubuntu/install_watchdog.sh`
 - `tools/ubuntu/va-connect-watchdog.service`
 - `tools/ubuntu/va-connect-watchdog.timer`
@@ -70,6 +71,21 @@ cd ~/Desktop
 wget -O bootstrap_watchdog_from_github.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/master/tools/ubuntu/bootstrap_watchdog_from_github.sh
 bash ./bootstrap_watchdog_from_github.sh
 ```
+
+If you want a fuller first-install audit on a brand new gateway, use:
+
+```bash
+cd ~/Desktop
+wget -O bootstrap_gateway_watchdog.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/master/tools/ubuntu/bootstrap_gateway_watchdog.sh
+bash ./bootstrap_gateway_watchdog.sh
+```
+
+That script additionally:
+
+- checks mounted drives and free space before install
+- installs the watchdog runtime packages and diagnostic tools
+- checks the expected VA-Connect and TeamViewer baselines
+- clones the repo and runs the installer
 
 That defaults to the public GitHub repo and installs the watchdog into:
 
