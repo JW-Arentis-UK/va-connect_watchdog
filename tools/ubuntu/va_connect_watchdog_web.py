@@ -5722,7 +5722,7 @@ def render_page(status: Dict[str, Any]) -> str:
       if (auditDiskBadge) {{
         const rootDiskRisk = Number(auditMetrics.root_disk_percent || 0);
         auditDiskBadge.className = `badge ${{rootDiskRisk >= 95 ? 'danger' : ''}}`;
-        auditDiskBadge.textContent = `Root disk ${{auditMetrics.root_disk_percent ?? 'unknown'}}%`;
+        auditDiskBadge.textContent = `Root disk ${{fallback(auditMetrics.root_disk_percent, 'unknown')}}%`;
       }}
       const auditHardwareIdentity = document.getElementById('auditHardwareIdentity');
       if (auditHardwareIdentity) {{
@@ -5742,12 +5742,12 @@ def render_page(status: Dict[str, Any]) -> str:
         const thermalSummary = hardwareReview.thermal || {{}};
         const topSensors = Array.isArray(thermalSummary.top_sensors) ? thermalSummary.top_sensors : [];
         auditMemoryThermal.innerHTML = `
-          <li><strong>Memory used:</strong> ${{auditMetrics.mem_percent ?? 'unknown'}}%</li>
-          <li><strong>MemAvailable:</strong> ${{auditMetrics.mem_available_mb ?? 'unknown'}} MB</li>
-          <li><strong>Cached:</strong> ${{auditMetrics.mem_cached_mb ?? 'unknown'}} MB</li>
-          <li><strong>Temperature:</strong> ${{auditMetrics.temperature_c ?? 'unknown'}} C</li>
-          <li><strong>Temperature max:</strong> ${{thermalSummary.max_c ?? 'unknown'}} C</li>
-          <li><strong>Thermal zones:</strong> ${{thermalSummary.zone_count ?? (topSensors.length || 0)}}</li>
+          <li><strong>Memory used:</strong> ${{fallback(auditMetrics.mem_percent, 'unknown')}}%</li>
+          <li><strong>MemAvailable:</strong> ${{fallback(auditMetrics.mem_available_mb, 'unknown')}} MB</li>
+          <li><strong>Cached:</strong> ${{fallback(auditMetrics.mem_cached_mb, 'unknown')}} MB</li>
+          <li><strong>Temperature:</strong> ${{fallback(auditMetrics.temperature_c, 'unknown')}} C</li>
+          <li><strong>Temperature max:</strong> ${{fallback(thermalSummary.max_c, 'unknown')}} C</li>
+          <li><strong>Thermal zones:</strong> ${{fallback(thermalSummary.zone_count, topSensors.length || 0)}}</li>
           <li><strong>Top sensors:</strong> ${{topSensors.length ? topSensors.join(' | ') : 'No thermal sensors reported'}}</li>
         `;
       }}
