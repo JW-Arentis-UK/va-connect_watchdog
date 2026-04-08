@@ -4118,27 +4118,61 @@ def render_page(status: Dict[str, Any]) -> str:
         <div class="chart-toolbar">
           <div class="chart-toolbar-main">
             <h2>PC audit and fault-finding export</h2>
-            <div class="hint">Hardware identity, build, tools, storage, current stats, and watchdog evidence in one place.</div>
+            <div class="hint">Hardware identity, build, storage, thermal, watchdog evidence, and useful logs in one operator export.</div>
           </div>
           <div class="chart-toolbar-meta">
             <a class="link-btn" id="auditDownloadLink" href="/download/audit-report">Download audit export</a>
           </div>
         </div>
-        <div class="current-stats-grid" id="auditSpecCards">
-          <section class="stat-card"><div class="stat-label">Model</div><div class="stat-value" style="font-size:1rem;">{html.escape(str(status["hardware_identity"].get("model", "unknown")))}</div></section>
-          <section class="stat-card"><div class="stat-label">Serial</div><div class="stat-value" style="font-size:1rem;">{html.escape(str(status["hardware_identity"].get("serial", "unknown")))}</div></section>
-          <section class="stat-card"><div class="stat-label">BIOS</div><div class="stat-value" style="font-size:1rem;">{html.escape(str(status["hardware_identity"].get("bios_version", "unknown")))}</div></section>
-          <section class="stat-card"><div class="stat-label">Build</div><div class="stat-value" style="font-size:1rem;">{html.escape(str(status["build_info"].get("git_commit", "unknown")))}</div></section>
-          <section class="stat-card"><div class="stat-label">Root disk</div><div class="stat-value">{html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("root_disk_percent", "unknown")))}%</div></section>
-          <section class="stat-card"><div class="stat-label">Recording disk</div><div class="stat-value">{html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("recording_disk_percent", "unknown")))}%</div></section>
-          <section class="stat-card"><div class="stat-label">Temperature</div><div class="stat-value" style="font-size:1rem;">{html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("temperature_c", "unknown")))} C</div></section>
-          <section class="stat-card"><div class="stat-label">Tools missing</div><div class="stat-value">{len(status.get("required_tools", {}).get("missing_important", []))}</div></section>
+        <div class="mini-meta" style="margin-top:8px;">
+          <span class="badge" id="auditBuildBadge">Build {html.escape(str(status["build_info"].get("git_commit", "unknown")))}</span>
+          <span class="badge" id="auditToolsBadge">{len(status.get("required_tools", {}).get("missing_important", []))} tools missing</span>
+          <span class="badge" id="auditDiskBadge">Root disk {html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("root_disk_percent", "unknown")))}%</span>
+        </div>
+      </section>
+      <section class="panel" style="grid-column: 1 / -1;">
+        <h2>Audit summary</h2>
+        <p><strong>Last checked:</strong> <span id="auditCheckedAt">{html.escape(str(status["hardware_review"].get("checked_at", "unknown")))}</span></p>
+        <div class="hardware-grid">
+          <section class="item">
+            <strong>Hardware and BIOS</strong>
+            <ul class="review-list" id="auditHardwareIdentity">
+              <li>Loading hardware identity...</li>
+            </ul>
+          </section>
+          <section class="item">
+            <strong>Current memory and temperature</strong>
+            <ul class="review-list" id="auditMemoryThermal">
+              <li>Loading memory and thermal summary...</li>
+            </ul>
+          </section>
+        </div>
+        <ul class="review-list" id="auditFindings">
+          <li>Loading audit findings...</li>
+        </ul>
+        <div class="hardware-grid">
+          <section class="item">
+            <strong>Detected warning lines</strong>
+            <ul class="review-list" id="auditWarnings">
+              <li>Loading warning lines...</li>
+            </ul>
+          </section>
+          <section class="item">
+            <strong>Disk and crash-store overview</strong>
+            <div class="smart-table" id="auditSmart">
+              <div><strong>Storage</strong><br><code>Loading SMART summary...</code></div>
+            </div>
+            <p style="margin-top:10px;"><strong>pstore entries</strong></p>
+            <ul class="review-list" id="auditPstore">
+              <li>Loading pstore entries...</li>
+            </ul>
+          </section>
         </div>
       </section>
       <section class="panel">
-        <h2>Audit highlights</h2>
+        <h2>Operational highlights</h2>
         <ul class="audit-list" id="auditHighlights">
-          <li>Generating audit highlights...</li>
+          <li>Generating operational highlights...</li>
         </ul>
       </section>
       <section class="panel">
@@ -5532,30 +5566,88 @@ def render_page(status: Dict[str, Any]) -> str:
         auditDownloadLink.href = buildAuthedUrl('/download/audit-report', {{}});
       }}
       const auditMetrics = (status.state && status.state.last_metrics) || {{}};
-      const auditSpecCards = document.getElementById('auditSpecCards');
-      if (auditSpecCards) {{
-        const hardwareIdentity = status.hardware_identity || {{}};
-        const buildInfo = status.build_info || {{}};
-        const teamviewer = status.teamviewer || {{}};
-        const missingImportantTools = ((status.required_tools || {{}}).missing_important) || [];
-        auditSpecCards.innerHTML = `
-          <section class="stat-card"><div class="stat-label">Vendor</div><div class="stat-value" style="font-size:1rem;">${{hardwareIdentity.vendor || 'unknown'}}</div></section>
-          <section class="stat-card"><div class="stat-label">Model</div><div class="stat-value" style="font-size:1rem;">${{hardwareIdentity.model || 'unknown'}}</div></section>
-          <section class="stat-card"><div class="stat-label">Serial</div><div class="stat-value" style="font-size:1rem;">${{hardwareIdentity.serial || 'unknown'}}</div></section>
-          <section class="stat-card"><div class="stat-label">BIOS</div><div class="stat-value" style="font-size:1rem;">${{[hardwareIdentity.bios_vendor, hardwareIdentity.bios_version].filter(Boolean).join(' ') || 'unknown'}}</div></section>
-          <section class="stat-card"><div class="stat-label">Build</div><div class="stat-value" style="font-size:1rem;">${{buildInfo.git_commit || 'unknown'}}</div></section>
-          <section class="stat-card"><div class="stat-label">Deployed</div><div class="stat-value" style="font-size:1rem;">${{formatLocalTimestamp(buildInfo.deployed_at || '')}}</div></section>
-          <section class="stat-card"><div class="stat-label">Root disk</div><div class="stat-value">${{auditMetrics.root_disk_percent ?? 'unknown'}}%</div></section>
-          <section class="stat-card"><div class="stat-label">Recording disk</div><div class="stat-value">${{auditMetrics.recording_disk_percent ?? 'unknown'}}%</div></section>
-          <section class="stat-card"><div class="stat-label">MemAvailable</div><div class="stat-value" style="font-size:1rem;">${{auditMetrics.mem_available_mb ?? 'unknown'}} MB</div></section>
-          <section class="stat-card"><div class="stat-label">Temperature</div><div class="stat-value" style="font-size:1rem;">${{auditMetrics.temperature_c ?? 'unknown'}} C</div></section>
-          <section class="stat-card"><div class="stat-label">TeamViewer ID</div><div class="stat-value" style="font-size:1rem;">${{teamviewer.client_id || 'unknown'}}</div></section>
-          <section class="stat-card"><div class="stat-label">Tools missing</div><div class="stat-value">${{missingImportantTools.length}}</div></section>
+      const hardwareIdentity = status.hardware_identity || {{}};
+      const buildInfo = status.build_info || {{}};
+      const teamviewer = status.teamviewer || {{}};
+      const hardwareReview = status.hardware_review || {{}};
+      const missingImportantTools = ((status.required_tools || {{}}).missing_important) || [];
+      const auditCheckedAt = document.getElementById('auditCheckedAt');
+      if (auditCheckedAt) {{
+        auditCheckedAt.textContent = formatLocalTimestamp(hardwareReview.checked_at || '') || 'unknown';
+      }}
+      const auditBuildBadge = document.getElementById('auditBuildBadge');
+      if (auditBuildBadge) {{
+        auditBuildBadge.textContent = `Build ${{buildInfo.git_commit || 'unknown'}}`;
+      }}
+      const auditToolsBadge = document.getElementById('auditToolsBadge');
+      if (auditToolsBadge) {{
+        auditToolsBadge.className = `badge ${{missingImportantTools.length ? 'warn' : ''}}`;
+        auditToolsBadge.textContent = missingImportantTools.length ? `${{missingImportantTools.length}} tools missing` : 'Tools ready';
+      }}
+      const auditDiskBadge = document.getElementById('auditDiskBadge');
+      if (auditDiskBadge) {{
+        const rootDiskRisk = Number(auditMetrics.root_disk_percent || 0);
+        auditDiskBadge.className = `badge ${{rootDiskRisk >= 95 ? 'danger' : ''}}`;
+        auditDiskBadge.textContent = `Root disk ${{auditMetrics.root_disk_percent ?? 'unknown'}}%`;
+      }}
+      const auditHardwareIdentity = document.getElementById('auditHardwareIdentity');
+      if (auditHardwareIdentity) {{
+        auditHardwareIdentity.innerHTML = `
+          <li><strong>Vendor:</strong> ${{hardwareIdentity.vendor || 'unknown'}}</li>
+          <li><strong>Model:</strong> ${{hardwareIdentity.model || 'unknown'}}</li>
+          <li><strong>Serial:</strong> ${{hardwareIdentity.serial || 'unknown'}}</li>
+          <li><strong>Board:</strong> ${{hardwareIdentity.board_name || 'unknown'}}</li>
+          <li><strong>BIOS:</strong> ${{[hardwareIdentity.bios_vendor, hardwareIdentity.bios_version].filter(Boolean).join(' ') || 'unknown'}}</li>
+          <li><strong>BIOS date:</strong> ${{hardwareIdentity.bios_date || 'unknown'}}</li>
+          <li><strong>Build:</strong> ${{buildInfo.git_commit || 'unknown'}}</li>
+          <li><strong>Deployed:</strong> ${{formatLocalTimestamp(buildInfo.deployed_at || '') || 'unknown'}}</li>
         `;
+      }}
+      const auditMemoryThermal = document.getElementById('auditMemoryThermal');
+      if (auditMemoryThermal) {{
+        const thermalSummary = hardwareReview.thermal || {{}};
+        const topSensors = Array.isArray(thermalSummary.top_sensors) ? thermalSummary.top_sensors : [];
+        auditMemoryThermal.innerHTML = `
+          <li><strong>Memory used:</strong> ${{auditMetrics.mem_percent ?? 'unknown'}}%</li>
+          <li><strong>MemAvailable:</strong> ${{auditMetrics.mem_available_mb ?? 'unknown'}} MB</li>
+          <li><strong>Cached:</strong> ${{auditMetrics.mem_cached_mb ?? 'unknown'}} MB</li>
+          <li><strong>Temperature:</strong> ${{auditMetrics.temperature_c ?? 'unknown'}} C</li>
+          <li><strong>Temperature max:</strong> ${{thermalSummary.max_c ?? 'unknown'}} C</li>
+          <li><strong>Thermal zones:</strong> ${{thermalSummary.zone_count ?? topSensors.length || 0}}</li>
+          <li><strong>Top sensors:</strong> ${{topSensors.length ? topSensors.join(' | ') : 'No thermal sensors reported'}}</li>
+        `;
+      }}
+      const auditFindings = document.getElementById('auditFindings');
+      if (auditFindings) {{
+        const findingLines = (hardwareReview.findings || []).slice();
+        if (missingImportantTools.length) {{
+          findingLines.unshift(`Important tools missing: ${{missingImportantTools.join(', ')}}`);
+        }}
+        if (teamviewer.summary) {{
+          findingLines.push(`TeamViewer: ${{teamviewer.summary}}`);
+        }}
+        auditFindings.innerHTML = (findingLines.length ? findingLines : ['No hardware findings recorded.']).map((line) => `<li>${{line}}</li>`).join('');
+      }}
+      const auditWarnings = document.getElementById('auditWarnings');
+      if (auditWarnings) {{
+        auditWarnings.innerHTML = (hardwareReview.warnings || []).length
+          ? (hardwareReview.warnings || []).map((line) => `<li>${{line}}</li>`).join('')
+          : '<li>No warning lines captured.</li>';
+      }}
+      const auditSmart = document.getElementById('auditSmart');
+      if (auditSmart) {{
+        auditSmart.innerHTML = (hardwareReview.smart || []).length
+          ? (hardwareReview.smart || []).map((item) => `<div><strong>${{item.device || 'disk'}}</strong><br><code>${{item.summary || ''}}</code></div>`).join('')
+          : '<div><strong>Storage</strong><br><code>No SMART summary captured.</code></div>';
+      }}
+      const auditPstore = document.getElementById('auditPstore');
+      if (auditPstore) {{
+        auditPstore.innerHTML = (hardwareReview.pstore_entries || []).length
+          ? (hardwareReview.pstore_entries || []).map((line) => `<li>${{line}}</li>`).join('')
+          : '<li>No pstore entries present.</li>';
       }}
       const auditHighlights = document.getElementById('auditHighlights');
       if (auditHighlights) {{
-        const hardwareReview = status.hardware_review || {{}};
         const smartSummaries = (hardwareReview.smart || []).map((item) => item.summary).filter(Boolean).slice(0, 3);
         const pstoreCount = (hardwareReview.pstore_entries || []).length;
         const rootDiskRisk = Number(auditMetrics.root_disk_percent || 0);
