@@ -139,6 +139,7 @@ def audit_report_payload(status: Optional[Dict[str, Any]] = None) -> Dict[str, A
     return {
         "generated_at": now_iso(),
         "hostname": current.get("hostname"),
+        "display_name": current.get("display_name"),
         "build_info": current.get("build_info") or {},
         "hardware_identity": hardware,
         "state_summary": {
@@ -251,6 +252,7 @@ def parse_iso(value: str) -> Optional[datetime]:
 def load_config() -> Dict[str, Any]:
     config = read_json(CONFIG_PATH, {})
     defaults = {
+        "gateway_name": "",
         "monitoring_enabled": True,
         "app_restart_enabled": True,
         "restart_network_before_reboot": False,
@@ -2663,6 +2665,8 @@ def launch_required_tools_install() -> Dict[str, Any]:
 def status_payload() -> Dict[str, Any]:
     state = read_json(STATE_PATH, {})
     config = load_config()
+    gateway_name = str(config.get("gateway_name", "") or "").strip()
+    display_name = gateway_name or "Enter gateway name"
     checks = state.get("last_checks") or {}
     reboot_counts = effective_reboot_counts(state)
     diagnosis = "Healthy"
@@ -2743,6 +2747,7 @@ def status_payload() -> Dict[str, Any]:
     )
     return {
         "hostname": socket.gethostname(),
+        "display_name": display_name,
         "hardware_identity": hw_identity,
         "system_profile": system_profile,
         "config": config,
@@ -3798,7 +3803,7 @@ def render_page(status: Dict[str, Any]) -> str:
     <div class="topbar">
       <div class="topbar-main">
         <h1>VA-Connect Encoder Watchdog</h1>
-        <div class="sub">Control page for <strong>{html.escape(status["hostname"])}</strong> | Hardware ID <strong>{html.escape(str(status["hardware_identity"].get("serial", "unknown")))}</strong> | Build <strong id="topBuildCommit">{html.escape(str(status["build_info"].get("git_commit", "unknown")))}</strong></div>
+        <div class="sub">Control page for <strong id="topDisplayName">{html.escape(str(status.get("display_name", "Enter gateway name")))}</strong> | Hardware ID <strong>{html.escape(str(status["hardware_identity"].get("serial", "unknown")))}</strong> | Build <strong id="topBuildCommit">{html.escape(str(status["build_info"].get("git_commit", "unknown")))}</strong></div>
       </div>
     </div>
     <div class="navline">
@@ -4498,6 +4503,10 @@ def render_page(status: Dict[str, Any]) -> str:
         <h2>Config</h2>
         <div class="formgrid">
           <div class="field">
+            <label for="gateway_name">Gateway / crossing name</label>
+            <input id="gateway_name" type="text" placeholder="Enter gateway name" value="{html.escape(str(cfg.get("gateway_name", "")))}">
+          </div>
+          <div class="field">
             <label for="app_match">App match</label>
             <input id="app_match" type="text" value="{html.escape(str(cfg.get("app_match", "")))}">
           </div>
@@ -5106,10 +5115,15 @@ def render_page(status: Dict[str, Any]) -> str:
       if (topBuildCommit) {{
         topBuildCommit.textContent = (status.build_info && status.build_info.git_commit) || 'unknown';
       }}
+      const topDisplayName = document.getElementById('topDisplayName');
+      if (topDisplayName) {{
+        topDisplayName.textContent = status.display_name || 'Enter gateway name';
+      }}
       document.getElementById('monitoring_enabled').checked = !!status.config.monitoring_enabled;
       document.getElementById('app_restart_enabled').checked = !!status.config.app_restart_enabled;
       document.getElementById('restart_network_before_reboot').checked = !!status.config.restart_network_before_reboot;
       document.getElementById('reboot_enabled').checked = !!status.config.reboot_enabled;
+      document.getElementById('gateway_name').value = status.config.gateway_name || '';
       document.getElementById('app_match').value = status.config.app_match || '';
       document.getElementById('app_start_command').value = status.config.app_start_command || '';
       document.getElementById('base_reboot_timeout_seconds').value = status.config.base_reboot_timeout_seconds || 300;
@@ -6130,6 +6144,7 @@ def render_page(status: Dict[str, Any]) -> str:
         app_restart_enabled: document.getElementById('app_restart_enabled').checked,
         restart_network_before_reboot: document.getElementById('restart_network_before_reboot').checked,
         reboot_enabled: document.getElementById('reboot_enabled').checked,
+        gateway_name: document.getElementById('gateway_name').value.trim(),
         app_match: document.getElementById('app_match').value.trim(),
         app_start_command: document.getElementById('app_start_command').value.trim(),
         base_reboot_timeout_seconds: Number(document.getElementById('base_reboot_timeout_seconds').value || 300),
