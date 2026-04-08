@@ -134,35 +134,24 @@ def audit_report_payload(status: Optional[Dict[str, Any]] = None) -> Dict[str, A
     hardware = current.get("hardware_identity") or {}
     metrics = (current.get("state") or {}).get("last_metrics") or {}
     required_tools = current.get("required_tools") or {}
-    hardware_review = current.get("hardware_review") or {}
     system_profile = current.get("system_profile") or {}
     teamviewer = current.get("teamviewer") or {}
-    incidents = current.get("incidents") or []
     return {
         "generated_at": now_iso(),
         "hostname": current.get("hostname"),
         "build_info": current.get("build_info") or {},
         "hardware_identity": hardware,
-        "state": current.get("state") or {},
-        "diagnosis": current.get("diagnosis") or {},
-        "reboot_counts": current.get("reboot_counts") or {},
-        "fault_reporting": current.get("fault_reporting") or {},
-        "linux_stability": current.get("linux_stability") or {},
+        "state_summary": {
+            "monitoring_state": str((current.get("state") or {}).get("monitoring_state", "unknown")),
+            "last_check_at": str((current.get("state") or {}).get("last_check_at", "")),
+            "last_healthy_at": str((current.get("state") or {}).get("last_healthy_at", "")),
+        },
         "required_tools": required_tools,
         "system_profile": system_profile,
         "teamviewer": teamviewer,
-        "hardware_review": hardware_review,
-        "crash_review": current.get("crash_review") or {},
-        "reboot_leadup": current.get("reboot_leadup") or {},
-        "timeline": current.get("timeline") or [],
-        "recent_events": current.get("recent_events") or [],
-        "incidents": incidents,
-        "speedtest_history": current.get("speedtest_history") or [],
         "paths": current.get("paths") or {},
         "config_redacted": redacted_config(current.get("config") or {}),
         "latest_metrics": metrics,
-        "metrics_last_24h": recent_metrics(24),
-        "metric_events_last_24h": recent_metric_events(24),
         "audit_summary": {
             "site_label": current.get("hostname"),
             "model": hardware.get("model", "unknown"),
@@ -173,8 +162,6 @@ def audit_report_payload(status: Optional[Dict[str, Any]] = None) -> Dict[str, A
             "temperature_c": metrics.get("temperature_c", "unknown"),
             "required_tools_missing": required_tools.get("missing_important", []),
             "teamviewer_summary": teamviewer.get("summary", "unknown"),
-            "incident_count": len(incidents),
-            "smart_summaries": [str(item.get("summary", "")) for item in hardware_review.get("smart", [])],
             "kernel_release": system_profile.get("kernel_release", "unknown"),
             "default_interface": system_profile.get("default_interface", "unknown"),
         },
@@ -4695,6 +4682,20 @@ def render_page(status: Dict[str, Any]) -> str:
           }} catch (_storageErr) {{
             // ignore storage failures
           }}
+          var updateNowButton = document.getElementById('updateNowButton');
+          var updateMessage = document.getElementById('updateMessage');
+          var updateProgress = document.getElementById('updateProgress');
+          if (updateNowButton) {{
+            updateNowButton.textContent = 'Updating...';
+            updateNowButton.className = 'secondary status-running';
+            updateNowButton.disabled = true;
+          }}
+          if (updateMessage) {{
+            updateMessage.textContent = 'Starting update...';
+          }}
+          if (updateProgress) {{
+            updateProgress.style.display = 'block';
+          }}
         }}
         for (key in extraPayload) {{
           if (Object.prototype.hasOwnProperty.call(extraPayload, key)) {{
@@ -5698,166 +5699,176 @@ def render_page(status: Dict[str, Any]) -> str:
       if (auditDownloadLink) {{
         auditDownloadLink.href = buildAuthedUrl('/download/audit-report', {{}});
       }}
-      const auditMetrics = (status.state && status.state.last_metrics) || {{}};
-      const hardwareIdentity = status.hardware_identity || {{}};
-      const buildInfo = status.build_info || {{}};
-      const teamviewer = status.teamviewer || {{}};
-      const hardwareReview = status.hardware_review || {{}};
-      const systemProfile = status.system_profile || {{}};
-      const missingImportantTools = ((status.required_tools || {{}}).missing_important) || [];
-      const auditCheckedAt = document.getElementById('auditCheckedAt');
-      if (auditCheckedAt) {{
-        auditCheckedAt.textContent = formatLocalTimestamp(hardwareReview.checked_at || '') || 'unknown';
-      }}
-      const auditBuildBadge = document.getElementById('auditBuildBadge');
-      if (auditBuildBadge) {{
-        auditBuildBadge.textContent = `Build ${{buildInfo.git_commit || 'unknown'}}`;
-      }}
-      const auditToolsBadge = document.getElementById('auditToolsBadge');
-      if (auditToolsBadge) {{
-        auditToolsBadge.className = `badge ${{missingImportantTools.length ? 'warn' : ''}}`;
-        auditToolsBadge.textContent = missingImportantTools.length ? `${{missingImportantTools.length}} tools missing` : 'Tools ready';
-      }}
-      const auditDiskBadge = document.getElementById('auditDiskBadge');
-      if (auditDiskBadge) {{
-        const rootDiskRisk = Number(auditMetrics.root_disk_percent || 0);
-        auditDiskBadge.className = `badge ${{rootDiskRisk >= 95 ? 'danger' : ''}}`;
-        auditDiskBadge.textContent = `Root disk ${{fallback(auditMetrics.root_disk_percent, 'unknown')}}%`;
-      }}
-      const auditHardwareIdentity = document.getElementById('auditHardwareIdentity');
-      if (auditHardwareIdentity) {{
-        auditHardwareIdentity.innerHTML = `
-          <li><strong>Vendor:</strong> ${{hardwareIdentity.vendor || 'unknown'}}</li>
-          <li><strong>Model:</strong> ${{hardwareIdentity.model || 'unknown'}}</li>
-          <li><strong>Serial:</strong> ${{hardwareIdentity.serial || 'unknown'}}</li>
-          <li><strong>Board:</strong> ${{hardwareIdentity.board_name || 'unknown'}}</li>
-          <li><strong>BIOS:</strong> ${{[hardwareIdentity.bios_vendor, hardwareIdentity.bios_version].filter(Boolean).join(' ') || 'unknown'}}</li>
-          <li><strong>BIOS date:</strong> ${{hardwareIdentity.bios_date || 'unknown'}}</li>
-          <li><strong>Build:</strong> ${{buildInfo.git_commit || 'unknown'}}</li>
-          <li><strong>Deployed:</strong> ${{formatLocalTimestamp(buildInfo.deployed_at || '') || 'unknown'}}</li>
-        `;
-      }}
-      const auditMemoryThermal = document.getElementById('auditMemoryThermal');
-      if (auditMemoryThermal) {{
-        const thermalSummary = hardwareReview.thermal || {{}};
-        const topSensors = Array.isArray(thermalSummary.top_sensors) ? thermalSummary.top_sensors : [];
-        auditMemoryThermal.innerHTML = `
-          <li><strong>Memory used:</strong> ${{fallback(auditMetrics.mem_percent, 'unknown')}}%</li>
-          <li><strong>MemAvailable:</strong> ${{fallback(auditMetrics.mem_available_mb, 'unknown')}} MB</li>
-          <li><strong>Cached:</strong> ${{fallback(auditMetrics.mem_cached_mb, 'unknown')}} MB</li>
-          <li><strong>Temperature:</strong> ${{fallback(auditMetrics.temperature_c, 'unknown')}} C</li>
-          <li><strong>Temperature max:</strong> ${{fallback(thermalSummary.max_c, 'unknown')}} C</li>
-          <li><strong>Thermal zones:</strong> ${{fallback(thermalSummary.zone_count, topSensors.length || 0)}}</li>
-          <li><strong>Top sensors:</strong> ${{topSensors.length ? topSensors.join(' | ') : 'No thermal sensors reported'}}</li>
-        `;
-      }}
-      const auditFindings = document.getElementById('auditFindings');
-      if (auditFindings) {{
-        const findingLines = (hardwareReview.findings || []).slice();
-        if (missingImportantTools.length) {{
-          findingLines.unshift(`Important tools missing: ${{missingImportantTools.join(', ')}}`);
+      try {{
+        const auditMetrics = (status.state && status.state.last_metrics) || {{}};
+        const hardwareIdentity = status.hardware_identity || {{}};
+        const buildInfo = status.build_info || {{}};
+        const teamviewer = status.teamviewer || {{}};
+        const hardwareReview = status.hardware_review || {{}};
+        const systemProfile = status.system_profile || {{}};
+        const missingImportantTools = ((status.required_tools || {{}}).missing_important) || [];
+        const auditCheckedAt = document.getElementById('auditCheckedAt');
+        if (auditCheckedAt) {{
+          auditCheckedAt.textContent = formatLocalTimestamp(hardwareReview.checked_at || '') || 'unknown';
         }}
-        if (teamviewer.summary) {{
-          findingLines.push(`TeamViewer: ${{teamviewer.summary}}`);
+        const auditBuildBadge = document.getElementById('auditBuildBadge');
+        if (auditBuildBadge) {{
+          auditBuildBadge.textContent = `Build ${{buildInfo.git_commit || 'unknown'}}`;
         }}
-        auditFindings.innerHTML = (findingLines.length ? findingLines : ['No hardware findings recorded.']).map((line) => `<li>${{line}}</li>`).join('');
-      }}
-      const auditWarnings = document.getElementById('auditWarnings');
-      if (auditWarnings) {{
-        auditWarnings.innerHTML = (hardwareReview.warnings || []).length
-          ? (hardwareReview.warnings || []).map((line) => `<li>${{line}}</li>`).join('')
-          : '<li>No warning lines captured.</li>';
-      }}
-      const auditSmart = document.getElementById('auditSmart');
-      if (auditSmart) {{
-        auditSmart.innerHTML = (hardwareReview.smart || []).length
-          ? (hardwareReview.smart || []).map((item) => `<div><strong>${{item.device || 'disk'}}</strong><br><code>${{item.summary || ''}}</code></div>`).join('')
-          : '<div><strong>Storage</strong><br><code>No SMART summary captured.</code></div>';
-      }}
-      const auditPstore = document.getElementById('auditPstore');
-      if (auditPstore) {{
-        auditPstore.innerHTML = (hardwareReview.pstore_entries || []).length
-          ? (hardwareReview.pstore_entries || []).map((line) => `<li>${{line}}</li>`).join('')
-          : '<li>No pstore entries present.</li>';
-      }}
-      const auditKernelNic = document.getElementById('auditKernelNic');
-      if (auditKernelNic) {{
-        const nicDetails = [
-          `<li><strong>OS:</strong> ${{systemProfile.os_name || 'unknown'}}</li>`,
-          `<li><strong>Kernel release:</strong> ${{systemProfile.kernel_release || 'unknown'}}</li>`,
-          `<li><strong>Kernel full:</strong> ${{systemProfile.kernel_full || 'unknown'}}</li>`,
-          `<li><strong>Default interface:</strong> ${{systemProfile.default_interface || 'unknown'}}</li>`,
-          `<li><strong>Driver:</strong> ${{systemProfile.driver || 'unknown'}}</li>`,
-          `<li><strong>Driver version:</strong> ${{systemProfile.driver_version || 'unknown'}}</li>`,
-          `<li><strong>Firmware:</strong> ${{systemProfile.firmware_version || 'unknown'}}</li>`,
-          `<li><strong>Bus info:</strong> ${{systemProfile.bus_info || 'unknown'}}</li>`,
-          `<li><strong>PCI:</strong> ${{systemProfile.nic_lspci || 'NIC PCI information not available.'}}</li>`,
-          `<li><strong>EEE:</strong> ${{systemProfile.eee || 'EEE details not available.'}}</li>`,
-        ];
-        if (systemProfile.igc_hint) {{
-          nicDetails.push(`<li><strong>Intel I225 / igc note:</strong> ${{systemProfile.igc_hint}}</li>`);
+        const auditToolsBadge = document.getElementById('auditToolsBadge');
+        if (auditToolsBadge) {{
+          auditToolsBadge.className = `badge ${{missingImportantTools.length ? 'warn' : ''}}`;
+          auditToolsBadge.textContent = missingImportantTools.length ? `${{missingImportantTools.length}} tools missing` : 'Tools ready';
         }}
-        auditKernelNic.innerHTML = nicDetails.join('');
-      }}
-      const auditDriveInventory = document.getElementById('auditDriveInventory');
-      if (auditDriveInventory) {{
-        const drives = Array.isArray(systemProfile.drives) ? systemProfile.drives : [];
-        auditDriveInventory.innerHTML = drives.length
-          ? drives.map((drive) => {{
-              const children = Array.isArray(drive.children) ? drive.children : [];
-              const mountSummary = children
-                .map((child) => `${{child.name || 'part'}}:${{child.mountpoint || 'unmounted'}}`)
-                .join(' | ');
-              return `<li><strong>${{drive.kname || drive.name || 'disk'}}</strong> | ${{drive.model || 'unknown model'}} | ${{drive.size || 'unknown size'}} | ${{drive.transport || 'unknown transport'}}${{mountSummary ? ` | ${{mountSummary}}` : ''}}</li>`;
-            }}).join('')
-          : '<li>No drive inventory available.</li>';
-      }}
-      const auditHighlights = document.getElementById('auditHighlights');
-      if (auditHighlights) {{
-        const smartSummaries = (hardwareReview.smart || []).map((item) => item.summary).filter(Boolean).slice(0, 3);
-        const pstoreCount = (hardwareReview.pstore_entries || []).length;
-        const rootDiskRisk = Number(auditMetrics.root_disk_percent || 0);
-        const incidentCount = Array.isArray(status.incidents) ? status.incidents.length : 0;
-        const missingTools = ((status.required_tools || {{}}).missing_important) || [];
-        const highlightLines = [
-          `Last healthy: ${{formatLocalTimestamp((status.state || {{}}).last_healthy_at || '')}}`,
-          `Last UI / watchdog check: ${{formatLocalTimestamp((status.state || {{}}).last_check_at || '')}}`,
-          `Root disk pressure: ${{isNaN(rootDiskRisk) ? 'unknown' : `${{rootDiskRisk}}% used`}}${{rootDiskRisk >= 95 ? ' - live risk' : ''}}`,
-          `Required tools: ${{missingTools.length ? `missing ${{missingTools.join(', ')}}` : 'all key tools ready'}}`,
-          `pstore entries captured: ${{pstoreCount}}`,
-          `Unplanned repowers recorded: ${{incidentCount}}`,
-          `Kernel / NIC: ${{systemProfile.kernel_release || 'unknown'}} on ${{systemProfile.default_interface || 'unknown'}} using ${{systemProfile.driver || 'unknown'}}`,
-        ].concat(smartSummaries.map((line) => `SMART: ${{line}}`));
-        if (systemProfile.igc_hint) {{
-          highlightLines.push(systemProfile.igc_hint);
+        const auditDiskBadge = document.getElementById('auditDiskBadge');
+        if (auditDiskBadge) {{
+          const rootDiskRisk = Number(auditMetrics.root_disk_percent || 0);
+          auditDiskBadge.className = `badge ${{rootDiskRisk >= 95 ? 'danger' : ''}}`;
+          auditDiskBadge.textContent = `Root disk ${{fallback(auditMetrics.root_disk_percent, 'unknown')}}%`;
         }}
-        auditHighlights.innerHTML = highlightLines.map((line) => `<li>${{line}}</li>`).join('');
-      }}
-      const auditPathsList = document.getElementById('auditPathsList');
-      if (auditPathsList) {{
-        const importantPaths = status.paths || {{}};
-        const pathEntries = [
-          ['Config', importantPaths.config],
-          ['State', importantPaths.state],
-          ['Events', importantPaths.events],
-          ['Metrics', importantPaths.metrics],
-          ['Incidents', importantPaths.incidents],
-          ['Build info', importantPaths.build_info],
-          ['Update log', importantPaths.update_log],
-          ['Export log', importantPaths.export_log],
-          ['Incident export status', importantPaths.incident_export_status],
-        ].filter((entry) => entry[1]);
-        auditPathsList.innerHTML = pathEntries.map((entry) => `<li><strong>${{entry[0]}}</strong><code>${{entry[1]}}</code></li>`).join('');
-      }}
-      const auditNotes = document.getElementById('auditNotes');
-      if (auditNotes) {{
-        const notes = [];
-        notes.push(`Current diagnosis: ${{(status.diagnosis || {{}}).title || 'unknown'}}`);
-        notes.push(`Latest sample: ${{formatLocalTimestamp((auditMetrics || {{}}).ts || '')}}`);
-        notes.push(`Last reboot reason: ${{(status.state || {{}}).last_reboot_reason || 'none'}}`);
-        notes.push(`Top suspect: ${{((status.fault_reporting || {{}}).top_suspect || {{}}).label || 'none'}}`);
-        notes.push(`Quick actions: ${{((status.fault_reporting || {{}}).quick_actions || []).slice(0, 3).join(' | ') || 'none'}}`);
-        auditNotes.innerHTML = notes.map((line) => `<li>${{line}}</li>`).join('');
+        const auditHardwareIdentity = document.getElementById('auditHardwareIdentity');
+        if (auditHardwareIdentity) {{
+          auditHardwareIdentity.innerHTML = [
+            `<li><strong>Vendor:</strong> ${{hardwareIdentity.vendor || 'unknown'}}</li>`,
+            `<li><strong>Model:</strong> ${{hardwareIdentity.model || 'unknown'}}</li>`,
+            `<li><strong>Serial:</strong> ${{hardwareIdentity.serial || 'unknown'}}</li>`,
+            `<li><strong>Board:</strong> ${{hardwareIdentity.board_name || 'unknown'}}</li>`,
+            `<li><strong>BIOS:</strong> ${{[hardwareIdentity.bios_vendor, hardwareIdentity.bios_version].filter(Boolean).join(' ') || 'unknown'}}</li>`,
+            `<li><strong>BIOS date:</strong> ${{hardwareIdentity.bios_date || 'unknown'}}</li>`,
+            `<li><strong>Build:</strong> ${{buildInfo.git_commit || 'unknown'}}</li>`,
+            `<li><strong>Deployed:</strong> ${{formatLocalTimestamp(buildInfo.deployed_at || '') || 'unknown'}}</li>`
+          ].join('');
+        }}
+        const auditMemoryThermal = document.getElementById('auditMemoryThermal');
+        if (auditMemoryThermal) {{
+          const thermalSummary = hardwareReview.thermal || {{}};
+          const topSensors = Array.isArray(thermalSummary.top_sensors) ? thermalSummary.top_sensors : [];
+          auditMemoryThermal.innerHTML = [
+            `<li><strong>Memory used:</strong> ${{fallback(auditMetrics.mem_percent, 'unknown')}}%</li>`,
+            `<li><strong>MemAvailable:</strong> ${{fallback(auditMetrics.mem_available_mb, 'unknown')}} MB</li>`,
+            `<li><strong>Cached:</strong> ${{fallback(auditMetrics.mem_cached_mb, 'unknown')}} MB</li>`,
+            `<li><strong>Temperature:</strong> ${{fallback(auditMetrics.temperature_c, 'unknown')}} C</li>`,
+            `<li><strong>Temperature max:</strong> ${{fallback(thermalSummary.max_c, 'unknown')}} C</li>`,
+            `<li><strong>Thermal zones:</strong> ${{fallback(thermalSummary.zone_count, topSensors.length || 0)}}</li>`,
+            `<li><strong>Top sensors:</strong> ${{topSensors.length ? topSensors.join(' | ') : 'No thermal sensors reported'}}</li>`
+          ].join('');
+        }}
+        const auditFindings = document.getElementById('auditFindings');
+        if (auditFindings) {{
+          const findingLines = [];
+          if (missingImportantTools.length) {{
+            findingLines.push(`Important tools missing: ${{missingImportantTools.join(', ')}}`);
+          }}
+          if (teamviewer.summary) {{
+            findingLines.push(`TeamViewer: ${{teamviewer.summary}}`);
+          }}
+          if (systemProfile.igc_hint) {{
+            findingLines.push(systemProfile.igc_hint);
+          }}
+          auditFindings.innerHTML = (findingLines.length ? findingLines : ['No extra audit notes recorded.']).map(function (line) {{ return `<li>${{line}}</li>`; }}).join('');
+        }}
+        const auditWarnings = document.getElementById('auditWarnings');
+        if (auditWarnings) {{
+          auditWarnings.innerHTML = (hardwareReview.warnings || []).length
+            ? (hardwareReview.warnings || []).map(function (line) {{ return `<li>${{line}}</li>`; }}).join('')
+            : '<li>No warning lines captured.</li>';
+        }}
+        const auditSmart = document.getElementById('auditSmart');
+        if (auditSmart) {{
+          auditSmart.innerHTML = (hardwareReview.smart || []).length
+            ? (hardwareReview.smart || []).map(function (item) {{ return `<div><strong>${{item.device || 'disk'}}</strong><br><code>${{item.summary || ''}}</code></div>`; }}).join('')
+            : '<div><strong>Storage</strong><br><code>No SMART summary captured.</code></div>';
+        }}
+        const auditPstore = document.getElementById('auditPstore');
+        if (auditPstore) {{
+          auditPstore.innerHTML = (hardwareReview.pstore_entries || []).length
+            ? (hardwareReview.pstore_entries || []).map(function (line) {{ return `<li>${{line}}</li>`; }}).join('')
+            : '<li>No pstore entries present.</li>';
+        }}
+        const auditKernelNic = document.getElementById('auditKernelNic');
+        if (auditKernelNic) {{
+          const nicDetails = [
+            `<li><strong>OS:</strong> ${{systemProfile.os_name || 'unknown'}}</li>`,
+            `<li><strong>Kernel release:</strong> ${{systemProfile.kernel_release || 'unknown'}}</li>`,
+            `<li><strong>Kernel full:</strong> ${{systemProfile.kernel_full || 'unknown'}}</li>`,
+            `<li><strong>Default interface:</strong> ${{systemProfile.default_interface || 'unknown'}}</li>`,
+            `<li><strong>Driver:</strong> ${{systemProfile.driver || 'unknown'}}</li>`,
+            `<li><strong>Driver version:</strong> ${{systemProfile.driver_version || 'unknown'}}</li>`,
+            `<li><strong>Firmware:</strong> ${{systemProfile.firmware_version || 'unknown'}}</li>`,
+            `<li><strong>Bus info:</strong> ${{systemProfile.bus_info || 'unknown'}}</li>`,
+            `<li><strong>PCI:</strong> ${{systemProfile.nic_lspci || 'NIC PCI information not available.'}}</li>`,
+            `<li><strong>EEE:</strong> ${{systemProfile.eee || 'EEE details not available.'}}</li>`
+          ];
+          if (systemProfile.igc_hint) {{
+            nicDetails.push(`<li><strong>Intel I225 / igc note:</strong> ${{systemProfile.igc_hint}}</li>`);
+          }}
+          auditKernelNic.innerHTML = nicDetails.join('');
+        }}
+        const auditDriveInventory = document.getElementById('auditDriveInventory');
+        if (auditDriveInventory) {{
+          const drives = Array.isArray(systemProfile.drives) ? systemProfile.drives : [];
+          auditDriveInventory.innerHTML = drives.length
+            ? drives.map(function (drive) {{
+                const children = Array.isArray(drive.children) ? drive.children : [];
+                const mountSummary = children.map(function (child) {{
+                  return `${{child.name || 'part'}}:${{child.mountpoint || 'unmounted'}}`;
+                }}).join(' | ');
+                let line = `<strong>${{drive.kname || drive.name || 'disk'}}</strong> | ${{drive.model || 'unknown model'}} | ${{drive.size || 'unknown size'}} | ${{drive.transport || 'unknown transport'}}`;
+                if (mountSummary) {{
+                  line += ` | ${{mountSummary}}`;
+                }}
+                return `<li>${{line}}</li>`;
+              }}).join('')
+            : '<li>No drive inventory available.</li>';
+        }}
+        const auditHighlights = document.getElementById('auditHighlights');
+        if (auditHighlights) {{
+          const rootDiskRisk = Number(auditMetrics.root_disk_percent || 0);
+          const missingTools = ((status.required_tools || {{}}).missing_important) || [];
+          const highlightLines = [
+            `Kernel / NIC: ${{systemProfile.kernel_release || 'unknown'}} on ${{systemProfile.default_interface || 'unknown'}} using ${{systemProfile.driver || 'unknown'}}`,
+            `Root disk pressure: ${{isNaN(rootDiskRisk) ? 'unknown' : `${{rootDiskRisk}}% used`}}${{rootDiskRisk >= 95 ? ' - live risk' : ''}}`,
+            `Required tools: ${{missingTools.length ? `missing ${{missingTools.join(', ')}}` : 'all key tools ready'}}`,
+            `TeamViewer: ${{teamviewer.summary || 'unknown'}}`,
+            `Latest metrics sample: ${{formatLocalTimestamp((auditMetrics || {{}}).ts || '')}}`,
+          ];
+          if (systemProfile.igc_hint) {{
+            highlightLines.push(systemProfile.igc_hint);
+          }}
+          auditHighlights.innerHTML = highlightLines.map(function (line) {{ return `<li>${{line}}</li>`; }}).join('');
+        }}
+        const auditPathsList = document.getElementById('auditPathsList');
+        if (auditPathsList) {{
+          const importantPaths = status.paths || {{}};
+          const pathEntries = [
+            ['Config', importantPaths.config],
+            ['State', importantPaths.state],
+            ['Metrics', importantPaths.metrics],
+            ['Build info', importantPaths.build_info],
+            ['Tools install status', importantPaths.tools_install_status],
+            ['Speed test status', importantPaths.speedtest_status],
+          ].filter(function (entry) {{ return entry[1]; }});
+          auditPathsList.innerHTML = pathEntries.map(function (entry) {{
+            return `<li><strong>${{entry[0]}}</strong><code>${{entry[1]}}</code></li>`;
+          }}).join('');
+        }}
+        const auditNotes = document.getElementById('auditNotes');
+        if (auditNotes) {{
+          const notes = [];
+          notes.push(`Monitoring state: ${{(status.state || {{}}).monitoring_state || 'unknown'}}`);
+          notes.push(`Last check: ${{formatLocalTimestamp((status.state || {{}}).last_check_at || '')}}`);
+          notes.push(`Last healthy: ${{formatLocalTimestamp((status.state || {{}}).last_healthy_at || '')}}`);
+          notes.push(`Current build: ${{buildInfo.git_commit || 'unknown'}}`);
+          auditNotes.innerHTML = notes.map(function (line) {{ return `<li>${{line}}</li>`; }}).join('');
+        }}
+      }} catch (auditRenderError) {{
+        const auditError = auditRenderError && auditRenderError.message ? auditRenderError.message : 'Audit render failed';
+        ['auditHardwareIdentity', 'auditMemoryThermal', 'auditFindings', 'auditWarnings', 'auditPstore', 'auditKernelNic', 'auditDriveInventory', 'auditHighlights', 'auditPathsList', 'auditNotes'].forEach(function (id) {{
+          const el = document.getElementById(id);
+          if (el) {{
+            el.innerHTML = `<li>Audit render failed: ${{auditError}}</li>`;
+          }}
+        }});
       }}
 
       const overviewGrid = document.querySelector('.overview-grid');
