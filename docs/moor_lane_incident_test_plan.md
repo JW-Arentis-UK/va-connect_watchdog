@@ -10,7 +10,50 @@ At the moment we often only know that the unit stopped functioning and later cam
 
 ## Work Order
 
-### 1. Add Independent Truth Sources
+### 1. Run A Kernel-Matched Moor Lane A/B Test Before BIOS Changes
+
+Current compare:
+
+- Failing Moor Lane is on `6.8.0-49-generic`
+- Stable Chestnut Grove is on `6.8.0-48-generic`
+- Same hardware family: Neousys POC-200 Series
+- Same SSD model
+- Same watchdog build
+- Same Intel I210 NIC family using `igb`
+- Same image and expected workload
+
+Required outcomes:
+
+- Keep BIOS unchanged for now.
+- Put Moor Lane onto the same kernel as the stable unit: `6.8.0-48-generic`.
+- Monitor whether the abrupt "unit became non-functional until relay reboot" incidents stop or reduce.
+- Treat this as the cleanest current A/B difference before making deeper platform changes.
+
+Why this is the priority test:
+
+- It is a cleaner and lower-risk comparison than changing BIOS first.
+- If Moor Lane stabilises on `6.8.0-48-generic`, the kernel becomes a much stronger suspect.
+- If the incidents continue unchanged, suspicion shifts back toward platform, NIC power-management behaviour, or workload-side causes.
+
+### 2. Review Intel I210 / igb Power Settings Before BIOS Changes
+
+The units use Intel I210 interfaces on the `igb` driver, so power-saving behaviour needs to be reviewed and surfaced before BIOS is touched.
+
+Required outcomes:
+
+- Check whether Energy Efficient Ethernet is enabled and disable it if possible.
+- Check whether Wake-on-LAN is enabled and disable it unless explicitly needed.
+- Check PCIe ASPM or aggressive power saving behaviour if exposed by BIOS or OS.
+- Check NIC offload or power-management settings for anything unusually aggressive.
+- Capture and surface the current NIC power-related settings in the investigation page if practical.
+- Keep this evidence in incident packs so the current NIC state is reviewable without shell access.
+
+Reason for this test order:
+
+- Abrupt stalls on embedded boxes can be affected by NIC or PCIe power-management behaviour.
+- Post-boot link wobble may still be normal recovery noise, but runtime stalls should have the NIC power state ruled out cleanly.
+
+### 3. Add Independent Truth Sources
 
 We need one or two evidence sources outside the main app and watchdog path so we can tell whether the whole box stopped, only the network path failed, or only the app stack stalled.
 
@@ -29,7 +72,7 @@ Required outcomes:
   - app or service stall
   - watchdog or web UI stall
 
-### 2. Improve Pre-Failure Evidence Capture
+### 4. Improve Pre-Failure Evidence Capture
 
 Record and surface these timestamps in incident data:
 
@@ -51,7 +94,7 @@ Required outcomes:
   - open file count if practical
 - Include the last `vsapp` runtime sample before an outage in the incident pack.
 
-### 3. Add Runtime NIC Link-Flap Detection
+### 5. Add Runtime NIC Link-Flap Detection
 
 Track `enp1s0` link down and up events during normal runtime.
 
@@ -63,7 +106,7 @@ Required outcomes:
 - Include runtime link-flap evidence in incident packs.
 - Add an explicit boot-settling period to incident interpretation so expected post-boot wobble is not treated as the root cause.
 
-### 4. Improve Crash Persistence And Post-Mortem Clues
+### 6. Improve Crash Persistence And Post-Mortem Clues
 
 We need better evidence to distinguish kernel panic, hard hang, power loss, and manual recovery.
 
@@ -113,8 +156,9 @@ Required outcomes:
 
 - Keep the UI reliable during incident review.
 - Treat web-side rendering or export regressions as high priority because they block evidence review.
+- Ask Neousys whether `POC2A006.Build190403` is the latest recommended BIOS for this exact POC-200 revision and whether there are any known Ubuntu 22.04, Intel I210, or power-management stability issues.
 
-### 7. Validate The Network Path As An A/B Test
+### 8. Validate The Network Path As An A/B Test
 
 If operations allow, test cable, port, or RUT path changes for the encoder.
 
@@ -123,7 +167,7 @@ Purpose:
 - determine whether runtime `enp1s0` instability disappears on a cleaner physical path
 - if incidents continue with a clean physical path, increase suspicion on platform or system freeze rather than simple network path issues
 
-### 8. Controlled Platform Comparison Later
+### 9. Controlled Platform Comparison Later
 
 Only do this after evidence capture improvements are in place.
 
@@ -131,6 +175,14 @@ Purpose:
 
 - compare behaviour against a more conservative kernel or platform baseline
 - ensure any result can be compared cleanly with stronger evidence capture already in place
+- keep BIOS changes later than the kernel and NIC power-setting checks unless vendor guidance says otherwise
+
+## Current Priority Order
+
+1. Test Moor Lane on `6.8.0-48-generic`.
+2. Review or disable aggressive Intel I210 / `igb` power-saving settings.
+3. Keep pushing down shared OS and recording disk pressure.
+4. Only then consider BIOS changes if the evidence still points there.
 
 ## Interpretation Guidance
 
