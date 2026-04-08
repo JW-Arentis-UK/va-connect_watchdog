@@ -816,6 +816,28 @@ def latest_previous_boot_snapshot() -> Optional[Path]:
     return candidates[0] if candidates else None
 
 
+def snapshot_shows_manual_reboot(snapshot_path_text: str) -> bool:
+    snapshot_path = Path(str(snapshot_path_text or "").strip())
+    if not snapshot_path.exists() or not snapshot_path.is_dir():
+        return False
+    journal_path = snapshot_path / "journal_previous_boot.txt"
+    if not journal_path.exists():
+        return False
+    journal_text = journal_path.read_text(encoding="utf-8", errors="ignore").lower()
+    manual_markers = (
+        "command=/usr/sbin/reboot",
+        "command=/sbin/reboot",
+        "command=/usr/bin/systemctl reboot",
+        "command=/bin/systemctl reboot",
+        "command=/usr/sbin/shutdown -r",
+        "command=/sbin/shutdown -r",
+        "system is rebooting",
+        "starting reboot",
+        "reached target reboot",
+    )
+    return any(marker in journal_text for marker in manual_markers)
+
+
 def extract_notable_lines(path: Path, limit: int = 8) -> List[str]:
     if not path.exists():
         return []
@@ -1836,7 +1858,21 @@ def incidents_payload(limit: int = 12) -> List[Dict[str, Any]]:
             changed = True
         watchdog_requested = bool(incident.get("watchdog_requested_reboot"))
         classification = str(incident.get("classification", "") or ("watchdog_reboot" if watchdog_requested else "manual_relay_recovery_suspected"))
-        kind_label = "Watchdog reboot" if watchdog_requested else ("Manual/relay recovery suspected" if classification == "manual_relay_recovery_suspected" else "Unexpected reboot")
+        snapshot_path = str(incident.get("snapshot_path", "") or "")
+        if classification == "manual_relay_recovery_suspected" and snapshot_shows_manual_reboot(snapshot_path):
+            classification = "manual_shell_reboot"
+            if not incident.get("suspected_reason"):
+                incident["suspected_reason"] = "Previous-boot journal shows a shell or system reboot request rather than a watchdog-triggered reboot."
+            if not incident.get("reporting_text"):
+                incident["reporting_text"] = "A manual reboot command was issued outside the watchdog and the unit restarted cleanly."
+        if watchdog_requested or classification == "watchdog_reboot":
+            kind_label = "Watchdog reboot"
+        elif classification == "manual_shell_reboot":
+            kind_label = "Manual reboot detected"
+        elif classification == "manual_relay_recovery_suspected":
+            kind_label = "Manual/relay recovery suspected"
+        else:
+            kind_label = "Unexpected reboot"
         checks = dict(incident.get("last_checks") or {})
         rows.append(
             {
@@ -1853,7 +1889,7 @@ def incidents_payload(limit: int = 12) -> List[Dict[str, Any]]:
                 "window_until": str(incident.get("window_until", "")),
                 "previous_boot_id": str(incident.get("previous_boot_id", "")),
                 "current_boot_id": str(incident.get("current_boot_id", "")),
-                "snapshot_path": str(incident.get("snapshot_path", "")),
+                "snapshot_path": snapshot_path,
                 "last_sampled_pc_stats": dict(incident.get("last_sampled_pc_stats") or {}),
                 "last_successful_watchdog_check_at": str(incident.get("last_successful_watchdog_check_at", "")),
                 "last_wan_ok_at": str(incident.get("last_wan_ok_at", "")),

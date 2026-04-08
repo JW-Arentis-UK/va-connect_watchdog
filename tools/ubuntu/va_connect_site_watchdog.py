@@ -374,6 +374,37 @@ def capture_previous_boot_snapshot(snapshot_dir: Path, max_journal_lines: int) -
     return target_dir if wrote_any else None
 
 
+def classify_non_watchdog_reboot(snapshot_path: Optional[Path]) -> Dict[str, str]:
+    manual_markers = (
+        "command=/usr/sbin/reboot",
+        "command=/sbin/reboot",
+        "command=/usr/bin/systemctl reboot",
+        "command=/bin/systemctl reboot",
+        "command=/usr/sbin/shutdown -r",
+        "command=/sbin/shutdown -r",
+        "system is rebooting",
+        "starting reboot",
+        "reached target reboot",
+    )
+    if snapshot_path is not None:
+        journal_path = snapshot_path / "journal_previous_boot.txt"
+        if journal_path.exists():
+            journal_text = journal_path.read_text(encoding="utf-8", errors="ignore").lower()
+            if any(marker in journal_text for marker in manual_markers):
+                return {
+                    "classification": "manual_shell_reboot",
+                    "title": "Manual reboot detected",
+                    "reporting_text": "A manual reboot command was issued outside the watchdog and the unit restarted cleanly.",
+                    "suspected_reason": "Previous-boot journal shows a shell or system reboot request rather than a watchdog-triggered reboot.",
+                }
+    return {
+        "classification": "manual_relay_recovery_suspected",
+        "title": "Unexpected reboot",
+        "reporting_text": "Unit became non-functional and required an unplanned hard reboot or repower to recover.",
+        "suspected_reason": "Watchdog did not request reboot. Manual reboot, GSM relay, power-cycle, or crash recovery is more likely.",
+    }
+
+
 class SiteWatchdog:
     def __init__(self, config: Dict[str, object]):
         self.config = config
@@ -479,6 +510,16 @@ class SiteWatchdog:
         window_until = local_export_time(reboot_dt + timedelta(minutes=5))
         incident_id = f"{reboot_dt.astimezone().strftime('%Y%m%d_%H%M%S')}_{current_boot_id[:8]}"
         last_checks = dict(self.state.get("last_checks") or {})
+        classification_meta = (
+            {
+                "classification": "watchdog_reboot",
+                "title": "Watchdog reboot",
+                "reporting_text": "Watchdog requested a reboot after the unit stayed non-functional.",
+                "suspected_reason": "Watchdog itself requested the reboot.",
+            }
+            if reboot_was_requested
+            else classify_non_watchdog_reboot(snapshot_path)
+        )
         incident = {
             "incident_id": incident_id,
             "ts": reboot_detected_at,
@@ -490,18 +531,10 @@ class SiteWatchdog:
             "previous_boot_id": previous_boot_id,
             "current_boot_id": current_boot_id,
             "watchdog_requested_reboot": reboot_was_requested,
-            "classification": "watchdog_reboot" if reboot_was_requested else "manual_relay_recovery_suspected",
-            "title": "Watchdog reboot" if reboot_was_requested else "Unexpected reboot",
-            "reporting_text": (
-                "Watchdog requested a reboot after the unit stayed non-functional."
-                if reboot_was_requested
-                else "Unit became non-functional and required an unplanned hard reboot or repower to recover."
-            ),
-            "suspected_reason": (
-                "Watchdog itself requested the reboot."
-                if reboot_was_requested
-                else "Watchdog did not request reboot. Manual reboot, GSM relay, power-cycle, or crash recovery is more likely."
-            ),
+            "classification": classification_meta["classification"],
+            "title": classification_meta["title"],
+            "reporting_text": classification_meta["reporting_text"],
+            "suspected_reason": classification_meta["suspected_reason"],
             "last_wan_ok_at": str(self.state.get("last_wan_ok_at") or ""),
             "last_lan_ok_at": str(self.state.get("last_lan_ok_at") or ""),
             "last_app_ok_at": str(self.state.get("last_app_ok_at") or ""),
