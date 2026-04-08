@@ -2885,6 +2885,7 @@ def render_page(status: Dict[str, Any]) -> str:
     .tabs {{
       display: flex;
       flex-wrap: nowrap;
+      align-items: flex-start;
       gap: 6px;
       flex: 1 1 420px;
       min-width: 0;
@@ -2901,6 +2902,9 @@ def render_page(status: Dict[str, Any]) -> str:
       font-weight: 700;
       cursor: pointer;
       white-space: nowrap;
+      flex: 0 0 auto;
+      margin-top: 0;
+      margin-right: 0;
       margin-bottom: -1px;
     }}
     .tab-btn.active {{
@@ -3678,6 +3682,27 @@ def render_page(status: Dict[str, Any]) -> str:
         min-width: 0;
       }}
     }}
+    @media (max-width: 900px) {{
+      .navline {{
+        display: block;
+      }}
+      .tabs {{
+        width: 100%;
+        margin-bottom: 8px;
+      }}
+      .topbar-actions {{
+        width: 100%;
+        margin-left: 0;
+      }}
+      .topbar-strip,
+      .topbar-actions .button-row {{
+        justify-content: flex-start;
+      }}
+      .topbar-actions .button-row #updateMessage,
+      .topbar-actions .hint {{
+        text-align: left;
+      }}
+    }}
   </style>
 </head>
 <body>
@@ -3941,24 +3966,8 @@ def render_page(status: Dict[str, Any]) -> str:
         <button class="secondary" onclick="runAction('run_checks')">Run checks now</button>
         <button class="secondary" onclick="runAction('snapshot')">Capture snapshot</button>
         <button class="warnbtn" onclick="runAction('restart_network')">Restart network</button>
-        <div class="mini-form">
-          <div class="field">
-            <label for="export_since">Export since</label>
-            <input id="export_since" type="datetime-local">
-          </div>
-          <div class="field">
-            <label for="export_until">Export until</label>
-            <input id="export_until" type="datetime-local">
-          </div>
-        </div>
         <button class="secondary" id="quickExportButton" onclick="quickExportIncident()">Quick incident export</button>
         <p class="hint" id="quickExportMeta">{html.escape(str(status.get("quick_export", {}).get("message", "Quick export will appear when a reboot/startup point is available.")))}</p>
-        <button
-          class="secondary {'status-running' if status['export_status'].get('state') == 'running' else ('status-failed' if status['export_status'].get('state') == 'failed' else ('status-ready' if status['export_status'].get('state') == 'ok' else ''))}"
-          id="exportButton"
-          onclick="exportIncident()"
-          {'disabled' if status['export_status'].get('state') == 'running' else ''}
-        >{html.escape(str(status["export_status"].get("button_label", "Export incident pack")))}</button>
         <p class="hint" id="exportMeta">{html.escape(str(status["export_status"].get("message", "No incident export run yet.")))}</p>
         <div class="console-box" id="exportConsole">{html.escape(chr(10).join(status.get("export_console_lines", []) or ["No export progress yet."]))}</div>
         <div class="link-row">
@@ -4597,21 +4606,6 @@ def render_page(status: Dict[str, Any]) -> str:
         window.runAction('reset_teamviewer_password', {{ password: input ? input.value : '' }});
       }};
 
-      window.exportIncident = function () {{
-        var since = document.getElementById('export_since');
-        var until = document.getElementById('export_until');
-        postJson('/api/export', {{
-          since: since && since.value ? since.value.replace('T', ' ') : '',
-          until: until && until.value ? until.value.replace('T', ' ') : ''
-        }}, function (status, body) {{
-          if (status >= 200 && status < 300) {{
-            reloadSoon();
-            return;
-          }}
-          alert((body && body.message) || 'Export failed.');
-        }});
-      }};
-
       window.quickExportIncident = function () {{
         postJson('/api/action', {{ action: 'quick_export' }}, function (status, body) {{
           if (status >= 200 && status < 300) {{
@@ -5026,21 +5020,6 @@ def render_page(status: Dict[str, Any]) -> str:
         document.getElementById('hik_channel').value = status.config.hik_channel || 1;
         document.getElementById('hik_people_count_result_path').value = status.config.hik_people_count_result_path || '/ISAPI/Intelligent/channels/{{channel}}/framesPeopleCounting/result';
         document.getElementById('hik_people_count_capabilities_path').value = status.config.hik_people_count_capabilities_path || '/ISAPI/Intelligent/channels/{{channel}}/framesPeopleCounting/capabilities';
-      }}
-      if (!document.getElementById('export_since').value) {{
-        const quickWindow = status.quick_export || {{}};
-        if (quickWindow.since && quickWindow.until) {{
-          document.getElementById('export_since').value = coerceDateTimeInputValue(quickWindow.since);
-          document.getElementById('export_until').value = coerceDateTimeInputValue(quickWindow.until);
-        }} else {{
-          const startup = status.state.last_startup_at || '';
-          if (startup) {{
-            const startupDate = new Date(startup);
-            const sinceDate = new Date(startupDate.getTime() - (30 * 60000));
-            document.getElementById('export_since').value = formatLocalDateTimeInput(sinceDate.toISOString());
-            document.getElementById('export_until').value = formatLocalDateTimeInput(startupDate.toISOString());
-          }}
-        }}
       }}
       document.getElementById('internet_hosts').value = (status.config.internet_hosts || []).join('\\n');
       document.getElementById('systemd_services').value = (status.config.systemd_services || []).join('\\n');
@@ -5485,27 +5464,9 @@ def render_page(status: Dict[str, Any]) -> str:
       toolsInstallLinks.style.display = toolsInstallState.log_path && showInstallRow ? 'flex' : 'none';
       document.getElementById('toolsInstallLogLink').style.display = toolsInstallState.log_path && showInstallRow ? 'inline-block' : 'none';
       const exportState = status.export_status || {{}};
-      const exportButton = document.getElementById('exportButton');
       const quickExport = status.quick_export || {{}};
       const quickExportButton = document.getElementById('quickExportButton');
       const exportDownloadName = exportState.download_archive_name || 'incident pack';
-      if (exportState.state === 'running') {{
-        exportButton.textContent = `Exporting ${{exportDownloadName}}`;
-        exportButton.className = 'secondary status-running';
-        exportButton.disabled = true;
-      }} else if (exportState.state === 'failed') {{
-        exportButton.textContent = 'Export failed, try again';
-        exportButton.className = 'secondary status-failed';
-        exportButton.disabled = false;
-      }} else if (exportState.state === 'ok') {{
-        exportButton.textContent = `Export ready: ${{exportDownloadName}}`;
-        exportButton.className = 'secondary status-ready';
-        exportButton.disabled = false;
-      }} else {{
-        exportButton.textContent = 'Export incident pack';
-        exportButton.className = 'secondary';
-        exportButton.disabled = false;
-      }}
       const exportMetaParts = [];
       if (exportState.message) {{
         exportMetaParts.push(exportState.message);
@@ -5524,9 +5485,11 @@ def render_page(status: Dict[str, Any]) -> str:
       }}
       document.getElementById('exportMeta').textContent = exportMetaParts.join(' | ') || 'No incident export run yet.';
       document.getElementById('quickExportMeta').textContent = quickExport.message || 'Quick export will appear when a reboot/startup point is available.';
-      quickExportButton.style.display = quickExport.available ? 'inline-block' : 'none';
-      quickExportButton.disabled = exportState.state === 'running';
-      quickExportButton.textContent = exportState.state === 'running' ? 'Quick export running...' : 'Quick incident export';
+      if (quickExportButton) {{
+        quickExportButton.style.display = quickExport.available ? 'inline-block' : 'none';
+        quickExportButton.disabled = exportState.state === 'running';
+        quickExportButton.textContent = exportState.state === 'running' ? `Quick export running: ${{exportDownloadName}}` : 'Quick incident export';
+      }}
       document.getElementById('exportConsole').textContent = (status.export_console_lines || []).length
         ? (status.export_console_lines || []).join('\\n')
         : 'No export progress yet.';
@@ -5668,7 +5631,7 @@ def render_page(status: Dict[str, Any]) -> str:
           <li><strong>Cached:</strong> ${{auditMetrics.mem_cached_mb ?? 'unknown'}} MB</li>
           <li><strong>Temperature:</strong> ${{auditMetrics.temperature_c ?? 'unknown'}} C</li>
           <li><strong>Temperature max:</strong> ${{thermalSummary.max_c ?? 'unknown'}} C</li>
-          <li><strong>Thermal zones:</strong> ${{thermalSummary.zone_count ?? topSensors.length || 0}}</li>
+          <li><strong>Thermal zones:</strong> ${{thermalSummary.zone_count ?? (topSensors.length || 0)}}</li>
           <li><strong>Top sensors:</strong> ${{topSensors.length ? topSensors.join(' | ') : 'No thermal sensors reported'}}</li>
         `;
       }}
@@ -6177,26 +6140,6 @@ def render_page(status: Dict[str, Any]) -> str:
     async function setTeamviewerPassword() {{
       const password = document.getElementById('teamviewerManualPassword').value.trim();
       await runAction('reset_teamviewer_password', {{ password }});
-    }}
-
-    async function exportIncident() {{
-      pinCurrentTabInUrl();
-      const since = document.getElementById('export_since').value;
-      const until = document.getElementById('export_until').value;
-      const response = await fetch('/api/export' + authQuery, {{
-        method: 'POST',
-        headers: {{ 'Content-Type': 'application/json' }},
-        body: JSON.stringify({{
-          since: since ? since.replace('T', ' ') : '',
-          until: until ? until.replace('T', ' ') : ''
-        }})
-      }});
-      if (!response.ok) {{
-        const payload = await response.json().catch(() => ({{ message: 'Export failed.' }}));
-        alert(payload.message || 'Export failed.');
-        return;
-      }}
-      await fetchStatus();
     }}
 
     async function quickExportIncident() {{
