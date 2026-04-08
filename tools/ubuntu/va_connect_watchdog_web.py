@@ -3566,16 +3566,18 @@ def render_page(status: Dict[str, Any]) -> str:
     .topbar-actions {{
       border: 1px solid rgba(129, 154, 175, 0.16);
       border-radius: 14px;
-      padding: 6px 8px;
+      padding: 5px 7px;
       background: rgba(14, 23, 31, 0.92);
-      flex: 1 1 560px;
-      min-width: 340px;
+      flex: 0 1 560px;
+      min-width: 280px;
+      margin-left: auto;
     }}
     .topbar-strip {{
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
+      gap: 6px;
       align-items: center;
+      justify-content: flex-end;
     }}
     .topbar-actions .button-row {{
       margin-top: 0;
@@ -3583,32 +3585,46 @@ def render_page(status: Dict[str, Any]) -> str:
       flex-wrap: wrap;
       gap: 6px;
       align-items: center;
+      justify-content: flex-end;
+      width: 100%;
     }}
     .topbar-actions .button-row #updateMessage {{
-      flex: 1 1 220px;
-      min-width: 180px;
-      font-size: 0.88rem;
-    }}
-    .topbar-actions .update-row {{
-      margin-top: 0;
-      min-width: 0;
-      flex: 1 1 180px;
+      flex: 0 1 210px;
+      min-width: 140px;
+      font-size: 0.8rem;
+      text-align: right;
     }}
     .topbar-actions .hint {{
       margin: 0;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      flex: 1 1 180px;
+      flex: 1 1 140px;
       min-width: 0;
       text-align: right;
-      font-size: 0.72rem;
+      font-size: 0.68rem;
     }}
     .topbar-actions .console-box {{
       flex: 1 1 100%;
       margin-top: 0;
       max-height: 84px;
       font-size: 0.7rem;
+    }}
+    .topbar-actions button {{
+      margin-top: 0;
+      margin-right: 0;
+      padding: 7px 10px;
+      font-size: 0.8rem;
+    }}
+    .topbar-actions button.status-running {{
+      background: #8a6521;
+      box-shadow: 0 0 0 1px rgba(255, 210, 138, 0.15) inset;
+    }}
+    .topbar-actions button.status-ready {{
+      background: #3f6954;
+    }}
+    .topbar-actions button.status-failed {{
+      background: #7a3434;
     }}
     .update-progress {{
       display: none;
@@ -4549,6 +4565,13 @@ def render_page(status: Dict[str, Any]) -> str:
         var payload = {{ action: action }};
         var key;
         extraPayload = extraPayload || {{}};
+        if (action === 'update_watchdog') {{
+          try {{
+            window.sessionStorage.setItem('watchdogAutoHardRefreshPending', '1');
+          }} catch (_storageErr) {{
+            // ignore storage failures
+          }}
+        }}
         for (key in extraPayload) {{
           if (Object.prototype.hasOwnProperty.call(extraPayload, key)) {{
             payload[key] = extraPayload[key];
@@ -5326,6 +5349,12 @@ def render_page(status: Dict[str, Any]) -> str:
       const updateProgress = document.getElementById('updateProgress');
       const targetBuild = updateState.to_build || updateState.from_build || 'unknown';
       const updateMessageEl = document.getElementById('updateMessage');
+      let autoHardRefreshPending = false;
+      try {{
+        autoHardRefreshPending = window.sessionStorage.getItem('watchdogAutoHardRefreshPending') === '1';
+      }} catch (_storageErr) {{
+        autoHardRefreshPending = false;
+      }}
       if (updateState.state === 'running') {{
         if (updateMessageEl) {{
           updateMessageEl.textContent = `Updating to ${{targetBuild}}...`;
@@ -5372,16 +5401,42 @@ def render_page(status: Dict[str, Any]) -> str:
         updateNowButton.style.display = 'inline-block';
         if (updateState.state === 'running') {{
           updateNowButton.textContent = 'Updating...';
+          updateNowButton.className = 'secondary status-running';
           updateNowButton.disabled = true;
         }} else if (updateState.state === 'ok') {{
           updateNowButton.textContent = 'Updated';
+          updateNowButton.className = 'secondary status-ready';
           updateNowButton.disabled = false;
         }} else if (updateState.state === 'failed') {{
           updateNowButton.textContent = 'Retry update';
+          updateNowButton.className = 'secondary status-failed';
           updateNowButton.disabled = false;
         }} else {{
           updateNowButton.textContent = 'Update now';
+          updateNowButton.className = 'secondary';
           updateNowButton.disabled = false;
+        }}
+      }}
+      if (updateState.state === 'running') {{
+        try {{
+          window.sessionStorage.setItem('watchdogAutoHardRefreshPending', '1');
+        }} catch (_storageErr) {{
+          // ignore storage failures
+        }}
+      }} else if (updateState.state === 'ok' && autoHardRefreshPending) {{
+        try {{
+          window.sessionStorage.removeItem('watchdogAutoHardRefreshPending');
+        }} catch (_storageErr) {{
+          // ignore storage failures
+        }}
+        window.setTimeout(function () {{
+          hardRefreshPage();
+        }}, 700);
+      }} else if (updateState.state === 'failed') {{
+        try {{
+          window.sessionStorage.removeItem('watchdogAutoHardRefreshPending');
+        }} catch (_storageErr) {{
+          // ignore storage failures
         }}
       }}
       const requiredTools = status.required_tools || {{}};
