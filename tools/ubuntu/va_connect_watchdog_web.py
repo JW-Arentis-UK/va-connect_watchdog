@@ -135,6 +135,7 @@ def audit_report_payload(status: Optional[Dict[str, Any]] = None) -> Dict[str, A
     metrics = (current.get("state") or {}).get("last_metrics") or {}
     required_tools = current.get("required_tools") or {}
     hardware_review = current.get("hardware_review") or {}
+    system_profile = current.get("system_profile") or {}
     teamviewer = current.get("teamviewer") or {}
     incidents = current.get("incidents") or []
     return {
@@ -148,6 +149,7 @@ def audit_report_payload(status: Optional[Dict[str, Any]] = None) -> Dict[str, A
         "fault_reporting": current.get("fault_reporting") or {},
         "linux_stability": current.get("linux_stability") or {},
         "required_tools": required_tools,
+        "system_profile": system_profile,
         "teamviewer": teamviewer,
         "hardware_review": hardware_review,
         "crash_review": current.get("crash_review") or {},
@@ -173,6 +175,8 @@ def audit_report_payload(status: Optional[Dict[str, Any]] = None) -> Dict[str, A
             "teamviewer_summary": teamviewer.get("summary", "unknown"),
             "incident_count": len(incidents),
             "smart_summaries": [str(item.get("summary", "")) for item in hardware_review.get("smart", [])],
+            "kernel_release": system_profile.get("kernel_release", "unknown"),
+            "default_interface": system_profile.get("default_interface", "unknown"),
         },
     }
 
@@ -308,6 +312,101 @@ def run_shell(command: str, timeout: int = 15) -> Dict[str, Any]:
         return {"ok": False, "return_code": 124, "output": f"Timed out after {timeout}s."}
     except Exception as exc:
         return {"ok": False, "return_code": 1, "output": f"{type(exc).__name__}: {exc}"}
+
+
+def system_profile_payload() -> Dict[str, Any]:
+    os_release: Dict[str, str] = {}
+    try:
+        for line in Path("/etc/os-release").read_text(encoding="utf-8", errors="ignore").splitlines():
+            if "=" not in line or line.startswith("#"):
+                continue
+            key, value = line.split("=", 1)
+            os_release[key.strip()] = value.strip().strip('"')
+    except Exception:
+        os_release = {}
+
+    default_iface = ""
+    route_result = run_shell("ip route show default", timeout=10)
+    if route_result["output"]:
+        match = re.search(r"\bdev\s+(\S+)", route_result["output"])
+        if match:
+            default_iface = match.group(1)
+
+    kernel_release = run_shell("uname -r", timeout=10)["output"]
+    kernel_full = run_shell("uname -a", timeout=10)["output"]
+
+    iface_driver: Dict[str, str] = {}
+    eee_output = ""
+    if default_iface and command_exists("ethtool"):
+        driver_result = run_shell(f"ethtool -i {shlex.quote(default_iface)}", timeout=10)
+        for line in driver_result["output"].splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            iface_driver[key.strip().lower().replace("-", "_")] = value.strip()
+        eee_output = run_shell(f"ethtool --show-eee {shlex.quote(default_iface)}", timeout=10)["output"]
+
+    nic_lspci = ""
+    if iface_driver.get("bus_info") and command_exists("lspci"):
+        nic_lspci = run_shell(f"lspci -s {shlex.quote(iface_driver['bus_info'])} -nn", timeout=10)["output"]
+    elif command_exists("lspci"):
+        nic_lspci = run_shell("lspci -nnk | grep -A3 -i 'Ethernet controller' | head -n 12", timeout=10)["output"]
+
+    drives: List[Dict[str, Any]] = []
+    if command_exists("lsblk"):
+        lsblk_result = run_shell("lsblk -J -o NAME,KNAME,MODEL,SIZE,TYPE,FSTYPE,MOUNTPOINT,ROTA,TRAN,SERIAL,VENDOR", timeout=15)
+        if lsblk_result["output"]:
+            try:
+                lsblk_payload = json.loads(lsblk_result["output"])
+                for item in lsblk_payload.get("blockdevices", []) or []:
+                    if str(item.get("type", "")).lower() != "disk":
+                        continue
+                    drives.append(
+                        {
+                            "name": item.get("name", ""),
+                            "kname": item.get("kname", ""),
+                            "model": item.get("model", ""),
+                            "size": item.get("size", ""),
+                            "transport": item.get("tran", ""),
+                            "vendor": item.get("vendor", ""),
+                            "serial": item.get("serial", ""),
+                            "rotational": item.get("rota", ""),
+                            "children": item.get("children", []),
+                        }
+                    )
+            except Exception:
+                drives = []
+
+    igc_hint = ""
+    nic_text = " ".join(
+        part for part in [nic_lspci, iface_driver.get("driver", ""), iface_driver.get("bus_info", "")]
+        if part
+    ).lower()
+    if "igc" in nic_text or "i225" in nic_text:
+        igc_hint = (
+            "Intel I225 / igc detected. Treat PCIe ASPM, EEE, and link-state instability as live suspects, "
+            "but do not change mitigations until the audit evidence is reviewed."
+        )
+
+    return {
+        "os_name": os_release.get("PRETTY_NAME", os_release.get("NAME", "unknown")),
+        "kernel_release": kernel_release or "unknown",
+        "kernel_full": kernel_full or "unknown",
+        "default_interface": default_iface or "unknown",
+        "driver": iface_driver.get("driver", ""),
+        "driver_version": iface_driver.get("version", ""),
+        "firmware_version": iface_driver.get("firmware_version", ""),
+        "bus_info": iface_driver.get("bus_info", ""),
+        "supports_statistics": iface_driver.get("supports_statistics", ""),
+        "supports_test": iface_driver.get("supports_test", ""),
+        "supports_eeprom_access": iface_driver.get("supports_eeprom_access", ""),
+        "supports_register_dump": iface_driver.get("supports_register_dump", ""),
+        "supports_priv_flags": iface_driver.get("supports_priv_flags", ""),
+        "eee": eee_output or "EEE details not available.",
+        "nic_lspci": nic_lspci or "NIC PCI information not available.",
+        "drives": drives,
+        "igc_hint": igc_hint,
+    }
 
 
 def mem_available_mb() -> int:
@@ -2642,6 +2741,7 @@ def status_payload() -> Dict[str, Any]:
         incidents = []
     hik_status = read_json(HIK_STATUS_PATH, {"state": "idle", "enabled": bool(config.get("hik_enabled"))})
     hw_identity = hardware_identity()
+    system_profile = system_profile_payload()
     teamviewer = teamviewer_status_payload(config)
     clue_counters = clue_counter_payload(hardware_payload, crash_payload)
     linux_stability = linux_stability_payload(state, hardware_payload, crash_payload)
@@ -2657,6 +2757,7 @@ def status_payload() -> Dict[str, Any]:
     return {
         "hostname": socket.gethostname(),
         "hardware_identity": hw_identity,
+        "system_profile": system_profile,
         "config": config,
         "state": state,
         "build_info": build_info,
@@ -4193,6 +4294,20 @@ def render_page(status: Dict[str, Any]) -> str:
             </ul>
           </section>
         </div>
+        <div class="hardware-grid" style="margin-top:10px;">
+          <section class="item">
+            <strong>Kernel and NIC details</strong>
+            <ul class="review-list" id="auditKernelNic">
+              <li>Loading kernel and NIC details...</li>
+            </ul>
+          </section>
+          <section class="item">
+            <strong>Drive inventory</strong>
+            <ul class="review-list" id="auditDriveInventory">
+              <li>Loading drive inventory...</li>
+            </ul>
+          </section>
+        </div>
       </section>
       <section class="panel">
         <h2>Operational highlights</h2>
@@ -5588,6 +5703,7 @@ def render_page(status: Dict[str, Any]) -> str:
       const buildInfo = status.build_info || {{}};
       const teamviewer = status.teamviewer || {{}};
       const hardwareReview = status.hardware_review || {{}};
+      const systemProfile = status.system_profile || {{}};
       const missingImportantTools = ((status.required_tools || {{}}).missing_important) || [];
       const auditCheckedAt = document.getElementById('auditCheckedAt');
       if (auditCheckedAt) {{
@@ -5664,6 +5780,38 @@ def render_page(status: Dict[str, Any]) -> str:
           ? (hardwareReview.pstore_entries || []).map((line) => `<li>${{line}}</li>`).join('')
           : '<li>No pstore entries present.</li>';
       }}
+      const auditKernelNic = document.getElementById('auditKernelNic');
+      if (auditKernelNic) {{
+        const nicDetails = [
+          `<li><strong>OS:</strong> ${{systemProfile.os_name || 'unknown'}}</li>`,
+          `<li><strong>Kernel release:</strong> ${{systemProfile.kernel_release || 'unknown'}}</li>`,
+          `<li><strong>Kernel full:</strong> ${{systemProfile.kernel_full || 'unknown'}}</li>`,
+          `<li><strong>Default interface:</strong> ${{systemProfile.default_interface || 'unknown'}}</li>`,
+          `<li><strong>Driver:</strong> ${{systemProfile.driver || 'unknown'}}</li>`,
+          `<li><strong>Driver version:</strong> ${{systemProfile.driver_version || 'unknown'}}</li>`,
+          `<li><strong>Firmware:</strong> ${{systemProfile.firmware_version || 'unknown'}}</li>`,
+          `<li><strong>Bus info:</strong> ${{systemProfile.bus_info || 'unknown'}}</li>`,
+          `<li><strong>PCI:</strong> ${{systemProfile.nic_lspci || 'NIC PCI information not available.'}}</li>`,
+          `<li><strong>EEE:</strong> ${{systemProfile.eee || 'EEE details not available.'}}</li>`,
+        ];
+        if (systemProfile.igc_hint) {{
+          nicDetails.push(`<li><strong>Intel I225 / igc note:</strong> ${{systemProfile.igc_hint}}</li>`);
+        }}
+        auditKernelNic.innerHTML = nicDetails.join('');
+      }}
+      const auditDriveInventory = document.getElementById('auditDriveInventory');
+      if (auditDriveInventory) {{
+        const drives = Array.isArray(systemProfile.drives) ? systemProfile.drives : [];
+        auditDriveInventory.innerHTML = drives.length
+          ? drives.map((drive) => {{
+              const children = Array.isArray(drive.children) ? drive.children : [];
+              const mountSummary = children
+                .map((child) => `${{child.name || 'part'}}:${{child.mountpoint || 'unmounted'}}`)
+                .join(' | ');
+              return `<li><strong>${{drive.kname || drive.name || 'disk'}}</strong> | ${{drive.model || 'unknown model'}} | ${{drive.size || 'unknown size'}} | ${{drive.transport || 'unknown transport'}}${{mountSummary ? ` | ${{mountSummary}}` : ''}}</li>`;
+            }}).join('')
+          : '<li>No drive inventory available.</li>';
+      }}
       const auditHighlights = document.getElementById('auditHighlights');
       if (auditHighlights) {{
         const smartSummaries = (hardwareReview.smart || []).map((item) => item.summary).filter(Boolean).slice(0, 3);
@@ -5678,7 +5826,11 @@ def render_page(status: Dict[str, Any]) -> str:
           `Required tools: ${{missingTools.length ? `missing ${{missingTools.join(', ')}}` : 'all key tools ready'}}`,
           `pstore entries captured: ${{pstoreCount}}`,
           `Unplanned repowers recorded: ${{incidentCount}}`,
+          `Kernel / NIC: ${{systemProfile.kernel_release || 'unknown'}} on ${{systemProfile.default_interface || 'unknown'}} using ${{systemProfile.driver || 'unknown'}}`,
         ].concat(smartSummaries.map((line) => `SMART: ${{line}}`));
+        if (systemProfile.igc_hint) {{
+          highlightLines.push(systemProfile.igc_hint);
+        }}
         auditHighlights.innerHTML = highlightLines.map((line) => `<li>${{line}}</li>`).join('');
       }}
       const auditPathsList = document.getElementById('auditPathsList');
