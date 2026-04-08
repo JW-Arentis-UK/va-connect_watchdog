@@ -111,6 +111,72 @@ def incident_export_names(incident: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
+def redacted_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    redacted: Dict[str, Any] = {}
+    for key, value in (config or {}).items():
+        key_lower = str(key).lower()
+        if any(token in key_lower for token in ("password", "secret", "token")):
+            redacted[key] = "<redacted>" if value not in (None, "", False) else ""
+        else:
+            redacted[key] = value
+    return redacted
+
+
+def audit_download_name(status: Dict[str, Any]) -> str:
+    site_label = slugify_label(str(status.get("hostname") or socket.gethostname()))
+    build_label = slugify_label(str((status.get("build_info") or {}).get("git_commit") or "unknown"))
+    stamp = export_time_token(now_iso())
+    return f"{site_label}_{stamp}_{build_label}_audit-report.json"
+
+
+def audit_report_payload(status: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    current = status or status_payload()
+    hardware = current.get("hardware_identity") or {}
+    metrics = (current.get("state") or {}).get("last_metrics") or {}
+    required_tools = current.get("required_tools") or {}
+    hardware_review = current.get("hardware_review") or {}
+    teamviewer = current.get("teamviewer") or {}
+    incidents = current.get("incidents") or []
+    return {
+        "generated_at": now_iso(),
+        "hostname": current.get("hostname"),
+        "build_info": current.get("build_info") or {},
+        "hardware_identity": hardware,
+        "state": current.get("state") or {},
+        "diagnosis": current.get("diagnosis") or {},
+        "reboot_counts": current.get("reboot_counts") or {},
+        "fault_reporting": current.get("fault_reporting") or {},
+        "linux_stability": current.get("linux_stability") or {},
+        "required_tools": required_tools,
+        "teamviewer": teamviewer,
+        "hardware_review": hardware_review,
+        "crash_review": current.get("crash_review") or {},
+        "reboot_leadup": current.get("reboot_leadup") or {},
+        "timeline": current.get("timeline") or [],
+        "recent_events": current.get("recent_events") or [],
+        "incidents": incidents,
+        "speedtest_history": current.get("speedtest_history") or [],
+        "paths": current.get("paths") or {},
+        "config_redacted": redacted_config(current.get("config") or {}),
+        "latest_metrics": metrics,
+        "metrics_last_24h": recent_metrics(24),
+        "metric_events_last_24h": recent_metric_events(24),
+        "audit_summary": {
+            "site_label": current.get("hostname"),
+            "model": hardware.get("model", "unknown"),
+            "serial": hardware.get("serial", "unknown"),
+            "bios": " ".join(str(part) for part in [hardware.get("bios_vendor"), hardware.get("bios_version")] if part),
+            "root_disk_percent": metrics.get("root_disk_percent", "unknown"),
+            "recording_disk_percent": metrics.get("recording_disk_percent", "unknown"),
+            "temperature_c": metrics.get("temperature_c", "unknown"),
+            "required_tools_missing": required_tools.get("missing_important", []),
+            "teamviewer_summary": teamviewer.get("summary", "unknown"),
+            "incident_count": len(incidents),
+            "smart_summaries": [str(item.get("summary", "")) for item in hardware_review.get("smart", [])],
+        },
+    }
+
+
 def read_incident_export_statuses() -> Dict[str, Dict[str, Any]]:
     raw = read_json(INCIDENT_EXPORTS_PATH, {})
     return raw if isinstance(raw, dict) else {}
@@ -2900,6 +2966,11 @@ def render_page(status: Dict[str, Any]) -> str:
       gap: 6px;
       margin-top: 6px;
     }}
+    .incident-list-scroll {{
+      max-height: 360px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }}
     .incident-row {{
       border: 1px solid rgba(130, 153, 173, 0.15);
       border-radius: 12px;
@@ -2937,6 +3008,21 @@ def render_page(status: Dict[str, Any]) -> str:
       font-size: 0.74rem;
       color: #a9bdce;
     }}
+    .incident-meta-chip {{
+      border-radius: 10px;
+      padding: 4px 7px;
+      background: rgba(16, 26, 35, 0.78);
+      border: 1px solid rgba(130, 153, 173, 0.12);
+    }}
+    .incident-meta-chip strong {{
+      display: inline-block;
+      margin-left: 3px;
+    }}
+    .incident-meta-incident strong {{ color: #ffd666; }}
+    .incident-meta-healthy strong {{ color: #9be0b1; }}
+    .incident-meta-detected strong {{ color: #8ec7ff; }}
+    .incident-meta-watchdog strong {{ color: #ffcf9b; }}
+    .incident-meta-window strong {{ color: #dbe7f4; }}
     .incident-reason {{
       margin-top: 4px;
       font-size: 0.74rem;
@@ -2983,6 +3069,45 @@ def render_page(status: Dict[str, Any]) -> str:
       border-radius: 10px;
       padding: 8px;
       color: #b6c7d6;
+    }}
+    .incident-note-line {{
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-top: 6px;
+      font-size: 0.74rem;
+      color: #a9bdce;
+    }}
+    .audit-grid {{
+      display: grid;
+      gap: 14px;
+      grid-template-columns: 1.25fr 1fr;
+    }}
+    .audit-list {{
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 8px;
+    }}
+    .audit-list li {{
+      border: 1px solid rgba(130, 153, 173, 0.12);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: rgba(18, 29, 39, 0.76);
+      color: #cfe0ee;
+    }}
+    .audit-paths {{
+      max-height: 280px;
+      overflow: auto;
+    }}
+    .audit-paths code {{
+      display: block;
+      margin-top: 3px;
+      font-size: 0.76rem;
+      color: #9fb8cf;
+      word-break: break-all;
     }}
     .stat-card {{
       border: 1px solid rgba(130, 153, 173, 0.15);
@@ -3525,7 +3650,8 @@ def render_page(status: Dict[str, Any]) -> str:
       .ops-grid,
       .bottom-grid,
       .compact-grid,
-      .hardware-grid {{
+      .hardware-grid,
+      .audit-grid {{
         grid-template-columns: 1fr;
       }}
       .navline {{
@@ -3550,6 +3676,7 @@ def render_page(status: Dict[str, Any]) -> str:
       <div class="tabs">
         <button type="button" class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
         <button type="button" class="tab-btn" data-tab="investigation" onclick="switchTab('investigation')">Investigation</button>
+        <button type="button" class="tab-btn" data-tab="audit" onclick="switchTab('audit')">Audit</button>
         <button type="button" class="tab-btn" data-tab="remote" onclick="switchTab('remote')">TeamViewer</button>
         <button type="button" class="tab-btn" data-tab="dev" onclick="switchTab('dev')">Dev</button>
         <button type="button" class="tab-btn" data-tab="help" onclick="switchTab('help')">Help</button>
@@ -3623,8 +3750,8 @@ def render_page(status: Dict[str, Any]) -> str:
     </section>
 
     <section class="panel" style="margin-top:10px;" id="incidentsPanel">
-      <h2>Unplanned repowers</h2>
-      <p class="hint">Each row captures the outage context and lets you generate or download a pack for that specific reboot event.</p>
+      <h2>Last unplanned repower</h2>
+      <p class="hint">Overview shows the latest outage only. Open Investigation for the full incident history.</p>
       <div class="incident-list" id="incidentsList">
         <div class="timeline-empty">Loading incident history...</div>
       </div>
@@ -3782,8 +3909,8 @@ def render_page(status: Dict[str, Any]) -> str:
       <div class="bottom-grid" id="investigationActionPanels" style="grid-column: 1 / -1;"></div>
       <section class="panel" style="grid-column: 1 / -1;">
         <h2>Detected crashes</h2>
-        <p class="hint">Newest first. Use the buttons on the right to generate or download that specific incident pack.</p>
-        <div class="incident-list" id="incidentsInvestigationList">
+        <p class="hint">Newest first. The latest three incidents stay visible before the list scrolls. Use the buttons on the right to generate or download that specific incident pack.</p>
+        <div class="incident-list incident-list-scroll" id="incidentsInvestigationList">
           <div class="timeline-empty">Loading incident history...</div>
         </div>
       </section>
@@ -3981,6 +4108,52 @@ def render_page(status: Dict[str, Any]) -> str:
             </ul>
           </section>
         </div>
+      </section>
+    </div>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="audit">
+    <div class="audit-grid" style="margin-top:16px;">
+      <section class="panel" style="grid-column: 1 / -1;">
+        <div class="chart-toolbar">
+          <div class="chart-toolbar-main">
+            <h2>PC audit and fault-finding export</h2>
+            <div class="hint">Hardware identity, build, tools, storage, current stats, and watchdog evidence in one place.</div>
+          </div>
+          <div class="chart-toolbar-meta">
+            <a class="link-btn" id="auditDownloadLink" href="/download/audit-report">Download audit export</a>
+          </div>
+        </div>
+        <div class="current-stats-grid" id="auditSpecCards">
+          <section class="stat-card"><div class="stat-label">Model</div><div class="stat-value" style="font-size:1rem;">{html.escape(str(status["hardware_identity"].get("model", "unknown")))}</div></section>
+          <section class="stat-card"><div class="stat-label">Serial</div><div class="stat-value" style="font-size:1rem;">{html.escape(str(status["hardware_identity"].get("serial", "unknown")))}</div></section>
+          <section class="stat-card"><div class="stat-label">BIOS</div><div class="stat-value" style="font-size:1rem;">{html.escape(str(status["hardware_identity"].get("bios_version", "unknown")))}</div></section>
+          <section class="stat-card"><div class="stat-label">Build</div><div class="stat-value" style="font-size:1rem;">{html.escape(str(status["build_info"].get("git_commit", "unknown")))}</div></section>
+          <section class="stat-card"><div class="stat-label">Root disk</div><div class="stat-value">{html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("root_disk_percent", "unknown")))}%</div></section>
+          <section class="stat-card"><div class="stat-label">Recording disk</div><div class="stat-value">{html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("recording_disk_percent", "unknown")))}%</div></section>
+          <section class="stat-card"><div class="stat-label">Temperature</div><div class="stat-value" style="font-size:1rem;">{html.escape(str((status.get("state", {}).get("last_metrics") or {}).get("temperature_c", "unknown")))} C</div></section>
+          <section class="stat-card"><div class="stat-label">Tools missing</div><div class="stat-value">{len(status.get("required_tools", {}).get("missing_important", []))}</div></section>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>Audit highlights</h2>
+        <ul class="audit-list" id="auditHighlights">
+          <li>Generating audit highlights...</li>
+        </ul>
+      </section>
+      <section class="panel">
+        <h2>Important paths</h2>
+        <div class="audit-paths">
+          <ul class="audit-list" id="auditPathsList">
+            <li>Generating path summary...</li>
+          </ul>
+        </div>
+      </section>
+      <section class="panel" style="grid-column: 1 / -1;">
+        <h2>Audit notes</h2>
+        <ul class="summary-list" id="auditNotes">
+          <li>Latest sample and watchdog evidence will appear here after page load.</li>
+        </ul>
       </section>
     </div>
     </section>
@@ -5278,10 +5451,11 @@ def render_page(status: Dict[str, Any]) -> str:
       exportArchiveLink.style.display = exportState.archive ? 'inline-block' : 'none';
       exportReadmeLink.style.display = exportState.folder ? 'inline-block' : 'none';
       exportLogLink.style.display = exportState.log_path ? 'inline-block' : 'none';
-      let incidentRowsHtml = '<div class="timeline-empty">No reboot incidents recorded yet.</div>';
-      try {{
-        const incidentItems = Array.isArray(status.incidents) ? status.incidents : [];
-        incidentRowsHtml = incidentItems.map((item) => {{
+      const renderIncidentRows = function (incidentItems) {{
+        if (!incidentItems.length) {{
+          return '<div class="timeline-empty">No reboot incidents recorded yet.</div>';
+        }}
+        return incidentItems.map((item) => {{
           const incidentExport = item && item.export_status ? item.export_status : {{}};
           const incidentToken = String((item && item.incident_id) || '');
           const incidentDomId = safeDomId(incidentToken);
@@ -5298,6 +5472,7 @@ def render_page(status: Dict[str, Any]) -> str:
           const reason = String((item && item.suspected_reason) || 'unknown');
           const kind = String((item && item.kind_label) || 'Incident');
           const reportingText = String((item && item.reporting_text) || 'No incident wording available.');
+          const windowLabel = `${{formatLocalTimestamp((item && item.window_since) || '')}} to ${{formatLocalTimestamp((item && item.window_until) || '')}}`;
           return `
             <div class="incident-row">
               <div class="incident-main">
@@ -5306,13 +5481,17 @@ def render_page(status: Dict[str, Any]) -> str:
                   <span class="badge ${{badgeClass}}">${{classificationLabel}}</span>
                 </div>
                 <div class="incident-meta">
-                  <div>Incident: <strong>${{formatLocalTimestamp((item && item.incident_time) || '')}}</strong></div>
-                  <div>Last healthy: <strong>${{formatLocalTimestamp((item && item.last_known_healthy_at) || '')}}</strong></div>
-                  <div>Detected: <strong>${{formatLocalTimestamp((item && item.reboot_detected_at) || '')}}</strong></div>
-                  <div>Watchdog reboot: <strong>${{item && item.watchdog_requested_reboot ? 'Yes' : 'No'}}</strong></div>
-                  <div>Window: <strong>${{String((item && item.window_since) || 'unknown')}} to ${{String((item && item.window_until) || 'unknown')}}</strong></div>
+                  <div class="incident-meta-chip incident-meta-incident">Incident<strong>${{formatLocalTimestamp((item && item.incident_time) || '')}}</strong></div>
+                  <div class="incident-meta-chip incident-meta-healthy">Last healthy<strong>${{formatLocalTimestamp((item && item.last_known_healthy_at) || '')}}</strong></div>
+                  <div class="incident-meta-chip incident-meta-detected">Detected<strong>${{formatLocalTimestamp((item && item.reboot_detected_at) || '')}}</strong></div>
+                  <div class="incident-meta-chip incident-meta-watchdog">Watchdog reboot<strong>${{item && item.watchdog_requested_reboot ? 'Yes' : 'No'}}</strong></div>
+                  <div class="incident-meta-chip incident-meta-window">Window<strong>${{windowLabel}}</strong></div>
                 </div>
                 <div class="incident-reason"><strong>Reason:</strong> ${{reason}}</div>
+                <div class="incident-note-line">
+                  <span class="badge ${{badgeClass}}">${{classificationLabel}}</span>
+                  <span>${{reportingText}}</span>
+                </div>
               </div>
               <div class="incident-actions">
                 <button id="incidentExportButton_${{incidentDomId}}" data-incident-id="${{incidentToken}}" class="secondary ${{incidentExport.state === 'running' ? 'status-running' : (incidentExport.state === 'failed' ? 'status-failed' : '')}}" onclick="runIncidentExport(this.dataset.incidentId)" ${{incidentExport.state === 'running' ? 'disabled' : ''}}>${{exportButtonLabel}}</button>
@@ -5322,22 +5501,101 @@ def render_page(status: Dict[str, Any]) -> str:
               </div>
               <details class="incident-more">
                 <summary>Show incident notes and export log</summary>
-                <div class="incident-summary">${{reportingText}}</div>
                 <div class="incident-console">${{exportConsole}}</div>
               </details>
             </div>
           `;
-        }}).join('') || '<div class="timeline-empty">No reboot incidents recorded yet.</div>';
+        }}).join('');
+      }};
+      let overviewIncidentRowsHtml = '<div class="timeline-empty">No reboot incidents recorded yet.</div>';
+      let investigationIncidentRowsHtml = '<div class="timeline-empty">No reboot incidents recorded yet.</div>';
+      try {{
+        const incidentItems = Array.isArray(status.incidents) ? status.incidents : [];
+        overviewIncidentRowsHtml = renderIncidentRows(incidentItems.slice(0, 1));
+        investigationIncidentRowsHtml = renderIncidentRows(incidentItems);
       }} catch (incidentRenderError) {{
-        incidentRowsHtml = `<div class="timeline-empty">Failed to render incidents: ${{incidentRenderError && incidentRenderError.message ? incidentRenderError.message : 'unknown error'}}</div>`;
+        const incidentErrorHtml = `<div class="timeline-empty">Failed to render incidents: ${{incidentRenderError && incidentRenderError.message ? incidentRenderError.message : 'unknown error'}}</div>`;
+        overviewIncidentRowsHtml = incidentErrorHtml;
+        investigationIncidentRowsHtml = incidentErrorHtml;
       }}
       const incidentsList = document.getElementById('incidentsList');
       if (incidentsList) {{
-        incidentsList.innerHTML = incidentRowsHtml;
+        incidentsList.innerHTML = overviewIncidentRowsHtml;
       }}
       const incidentsInvestigationList = document.getElementById('incidentsInvestigationList');
       if (incidentsInvestigationList) {{
-        incidentsInvestigationList.innerHTML = incidentRowsHtml;
+        incidentsInvestigationList.innerHTML = investigationIncidentRowsHtml;
+      }}
+
+      const auditDownloadLink = document.getElementById('auditDownloadLink');
+      if (auditDownloadLink) {{
+        auditDownloadLink.href = buildAuthedUrl('/download/audit-report', {{}});
+      }}
+      const auditMetrics = (status.state && status.state.last_metrics) || {{}};
+      const auditSpecCards = document.getElementById('auditSpecCards');
+      if (auditSpecCards) {{
+        const hardwareIdentity = status.hardware_identity || {{}};
+        const buildInfo = status.build_info || {{}};
+        const teamviewer = status.teamviewer || {{}};
+        const missingImportantTools = ((status.required_tools || {{}}).missing_important) || [];
+        auditSpecCards.innerHTML = `
+          <section class="stat-card"><div class="stat-label">Vendor</div><div class="stat-value" style="font-size:1rem;">${{hardwareIdentity.vendor || 'unknown'}}</div></section>
+          <section class="stat-card"><div class="stat-label">Model</div><div class="stat-value" style="font-size:1rem;">${{hardwareIdentity.model || 'unknown'}}</div></section>
+          <section class="stat-card"><div class="stat-label">Serial</div><div class="stat-value" style="font-size:1rem;">${{hardwareIdentity.serial || 'unknown'}}</div></section>
+          <section class="stat-card"><div class="stat-label">BIOS</div><div class="stat-value" style="font-size:1rem;">${{[hardwareIdentity.bios_vendor, hardwareIdentity.bios_version].filter(Boolean).join(' ') || 'unknown'}}</div></section>
+          <section class="stat-card"><div class="stat-label">Build</div><div class="stat-value" style="font-size:1rem;">${{buildInfo.git_commit || 'unknown'}}</div></section>
+          <section class="stat-card"><div class="stat-label">Deployed</div><div class="stat-value" style="font-size:1rem;">${{formatLocalTimestamp(buildInfo.deployed_at || '')}}</div></section>
+          <section class="stat-card"><div class="stat-label">Root disk</div><div class="stat-value">${{auditMetrics.root_disk_percent ?? 'unknown'}}%</div></section>
+          <section class="stat-card"><div class="stat-label">Recording disk</div><div class="stat-value">${{auditMetrics.recording_disk_percent ?? 'unknown'}}%</div></section>
+          <section class="stat-card"><div class="stat-label">MemAvailable</div><div class="stat-value" style="font-size:1rem;">${{auditMetrics.mem_available_mb ?? 'unknown'}} MB</div></section>
+          <section class="stat-card"><div class="stat-label">Temperature</div><div class="stat-value" style="font-size:1rem;">${{auditMetrics.temperature_c ?? 'unknown'}} C</div></section>
+          <section class="stat-card"><div class="stat-label">TeamViewer ID</div><div class="stat-value" style="font-size:1rem;">${{teamviewer.client_id || 'unknown'}}</div></section>
+          <section class="stat-card"><div class="stat-label">Tools missing</div><div class="stat-value">${{missingImportantTools.length}}</div></section>
+        `;
+      }}
+      const auditHighlights = document.getElementById('auditHighlights');
+      if (auditHighlights) {{
+        const hardwareReview = status.hardware_review || {{}};
+        const smartSummaries = (hardwareReview.smart || []).map((item) => item.summary).filter(Boolean).slice(0, 3);
+        const pstoreCount = (hardwareReview.pstore_entries || []).length;
+        const rootDiskRisk = Number(auditMetrics.root_disk_percent || 0);
+        const incidentCount = Array.isArray(status.incidents) ? status.incidents.length : 0;
+        const missingTools = ((status.required_tools || {{}}).missing_important) || [];
+        const highlightLines = [
+          `Last healthy: ${{formatLocalTimestamp((status.state || {{}}).last_healthy_at || '')}}`,
+          `Last UI / watchdog check: ${{formatLocalTimestamp((status.state || {{}}).last_check_at || '')}}`,
+          `Root disk pressure: ${{isNaN(rootDiskRisk) ? 'unknown' : `${{rootDiskRisk}}% used`}}${{rootDiskRisk >= 95 ? ' - live risk' : ''}}`,
+          `Required tools: ${{missingTools.length ? `missing ${{missingTools.join(', ')}}` : 'all key tools ready'}}`,
+          `pstore entries captured: ${{pstoreCount}}`,
+          `Unplanned repowers recorded: ${{incidentCount}}`,
+        ].concat(smartSummaries.map((line) => `SMART: ${{line}}`));
+        auditHighlights.innerHTML = highlightLines.map((line) => `<li>${{line}}</li>`).join('');
+      }}
+      const auditPathsList = document.getElementById('auditPathsList');
+      if (auditPathsList) {{
+        const importantPaths = status.paths || {{}};
+        const pathEntries = [
+          ['Config', importantPaths.config],
+          ['State', importantPaths.state],
+          ['Events', importantPaths.events],
+          ['Metrics', importantPaths.metrics],
+          ['Incidents', importantPaths.incidents],
+          ['Build info', importantPaths.build_info],
+          ['Update log', importantPaths.update_log],
+          ['Export log', importantPaths.export_log],
+          ['Incident export status', importantPaths.incident_export_status],
+        ].filter((entry) => entry[1]);
+        auditPathsList.innerHTML = pathEntries.map((entry) => `<li><strong>${{entry[0]}}</strong><code>${{entry[1]}}</code></li>`).join('');
+      }}
+      const auditNotes = document.getElementById('auditNotes');
+      if (auditNotes) {{
+        const notes = [];
+        notes.push(`Current diagnosis: ${{(status.diagnosis || {{}}).title || 'unknown'}}`);
+        notes.push(`Latest sample: ${{formatLocalTimestamp((auditMetrics || {{}}).ts || '')}}`);
+        notes.push(`Last reboot reason: ${{(status.state || {{}}).last_reboot_reason || 'none'}}`);
+        notes.push(`Top suspect: ${{((status.fault_reporting || {{}}).top_suspect || {{}}).label || 'none'}}`);
+        notes.push(`Quick actions: ${{((status.fault_reporting || {{}}).quick_actions || []).slice(0, 3).join(' | ') || 'none'}}`);
+        auditNotes.innerHTML = notes.map((line) => `<li>${{line}}</li>`).join('');
       }}
 
       const overviewGrid = document.querySelector('.overview-grid');
@@ -6128,6 +6386,19 @@ class Handler(BaseHTTPRequestHandler):
             incident_id = parse_qs(parsed.query).get("id", [""])[0]
             incident = incident_by_id(incident_id) or {"incident_id": incident_id}
             self._send_file(safe_incident_export_file(incident_id, "log"), download_name=incident_export_names(incident)["log"])
+            return
+        if parsed.path == "/download/audit-report":
+            payload = audit_report_payload()
+            body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Disposition", f'attachment; filename="{audit_download_name(payload)}"')
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+            self.end_headers()
+            self.wfile.write(body)
             return
         if parsed.path == "/download/memtest-log":
             self._send_file(safe_memtest_file("log"), download_name="watchdog-memtest.log")
