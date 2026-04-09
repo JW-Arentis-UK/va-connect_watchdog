@@ -963,7 +963,7 @@ def previous_boot_lines_near(anchor_time: Optional[datetime], kernel: bool = Fal
         return {"lines": [], "mode": "none"}
     local_anchor = anchor_time.astimezone()
     cutoff = local_anchor.strftime("%Y-%m-%d %H:%M:%S")
-    since = (local_anchor - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+    since = (local_anchor - timedelta(minutes=60)).strftime("%Y-%m-%d %H:%M:%S")
     until = (local_anchor + timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
     kernel_flag = "-k " if kernel else ""
 
@@ -999,7 +999,7 @@ def service_lines_near(anchor_time: Optional[datetime], limit: int = 10) -> Dict
         return {"lines": [], "mode": "none"}
     local_anchor = anchor_time.astimezone()
     cutoff = local_anchor.strftime("%Y-%m-%d %H:%M:%S")
-    since = (local_anchor - timedelta(minutes=20)).strftime("%Y-%m-%d %H:%M:%S")
+    since = (local_anchor - timedelta(minutes=60)).strftime("%Y-%m-%d %H:%M:%S")
     units = (
         "-u esg.service -u bridge.service -u sysops.service "
         "-u NetworkManager.service -u systemd-networkd.service -u systemd-resolved.service "
@@ -1031,7 +1031,7 @@ def service_lines_near(anchor_time: Optional[datetime], limit: int = 10) -> Dict
 def watchdog_event_lines_near(anchor_time: Optional[datetime], limit: int = 10) -> List[str]:
     if anchor_time is None or not EVENTS_PATH.exists():
         return []
-    window_start = anchor_time - timedelta(minutes=15)
+    window_start = anchor_time - timedelta(minutes=60)
     lines: List[str] = []
     for item in all_events():
         ts = parse_iso(str(item.get("ts", "")))
