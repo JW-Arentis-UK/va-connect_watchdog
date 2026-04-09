@@ -908,6 +908,17 @@ def extract_all_notable_lines(path: Path, limit: int = 40) -> List[str]:
     return all_lines[:limit]
 
 
+def extract_tail_lines(path: Path, limit: int = 12) -> List[str]:
+    if not path.exists():
+        return []
+    lines: List[str] = []
+    for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw_line.strip()
+        if line:
+            lines.append(line[:240])
+    return lines[-limit:]
+
+
 def summarize_crash_findings(system_lines: List[str], kernel_lines: List[str]) -> List[str]:
     findings: List[str] = []
     combined = [*kernel_lines, *system_lines]
@@ -1915,13 +1926,17 @@ def crash_review_payload() -> Dict[str, Any]:
             "detail": "A previous-boot review snapshot will appear here after the next detected reboot.",
             "snapshot_path": "",
             "system_lines": [],
+            "system_tail_lines": [],
             "kernel_lines": [],
+            "kernel_tail_lines": [],
         }
 
     system_lines = extract_notable_lines(snapshot / "journal_previous_boot.txt")
     kernel_lines = extract_notable_lines(snapshot / "journal_kernel_previous_boot.txt")
     system_lines_all = extract_all_notable_lines(snapshot / "journal_previous_boot.txt", limit=40)
     kernel_lines_all = extract_all_notable_lines(snapshot / "journal_kernel_previous_boot.txt", limit=40)
+    system_tail_lines = extract_tail_lines(snapshot / "journal_previous_boot.txt", limit=12)
+    kernel_tail_lines = extract_tail_lines(snapshot / "journal_kernel_previous_boot.txt", limit=12)
     detail = "Review the highlighted lines below first."
     if not system_lines and not kernel_lines:
         detail = "No obvious error lines were extracted automatically. Open the snapshot files for the full previous-boot logs."
@@ -1934,8 +1949,10 @@ def crash_review_payload() -> Dict[str, Any]:
         "findings": summarize_crash_findings(system_lines, kernel_lines),
         "system_lines": system_lines,
         "system_lines_all": system_lines_all,
+        "system_tail_lines": system_tail_lines,
         "kernel_lines": kernel_lines,
         "kernel_lines_all": kernel_lines_all,
+        "kernel_tail_lines": kernel_tail_lines,
     }
 
 
@@ -4202,9 +4219,10 @@ def render_page(status: Dict[str, Any]) -> str:
             <ul class="review-list" id="crashReviewSystem">
               {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("system_lines", []))}
             </ul>
+            <p class="hint">Last lines before reboot</p>
             <div class="review-scroll">
               <ul class="review-list" id="crashReviewSystemAll">
-                {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("system_lines_all", []))}
+                {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("system_tail_lines", []))}
               </ul>
             </div>
           </section>
@@ -4213,9 +4231,10 @@ def render_page(status: Dict[str, Any]) -> str:
             <ul class="review-list" id="crashReviewKernel">
               {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("kernel_lines", []))}
             </ul>
+            <p class="hint">Last lines before reboot</p>
             <div class="review-scroll">
               <ul class="review-list" id="crashReviewKernelAll">
-                {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("kernel_lines_all", []))}
+                {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("kernel_tail_lines", []))}
               </ul>
             </div>
           </section>
@@ -5480,15 +5499,15 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('crashReviewSystem').innerHTML = (crashReview.system_lines || []).length
         ? (crashReview.system_lines || []).map((line) => `<li>${{line}}</li>`).join('')
         : '<li>No notable system-log lines extracted yet.</li>';
-      document.getElementById('crashReviewSystemAll').innerHTML = (crashReview.system_lines_all || []).length
-        ? (crashReview.system_lines_all || []).map((line) => `<li>${{line}}</li>`).join('')
-        : '<li>No extra system-log lines extracted yet.</li>';
+      document.getElementById('crashReviewSystemAll').innerHTML = (crashReview.system_tail_lines || []).length
+        ? (crashReview.system_tail_lines || []).map((line) => `<li>${{line}}</li>`).join('')
+        : '<li>No final system-log lines available before reboot.</li>';
       document.getElementById('crashReviewKernel').innerHTML = (crashReview.kernel_lines || []).length
         ? (crashReview.kernel_lines || []).map((line) => `<li>${{line}}</li>`).join('')
         : '<li>No notable kernel-log lines extracted yet.</li>';
-      document.getElementById('crashReviewKernelAll').innerHTML = (crashReview.kernel_lines_all || []).length
-        ? (crashReview.kernel_lines_all || []).map((line) => `<li>${{line}}</li>`).join('')
-        : '<li>No extra kernel-log lines extracted yet.</li>';
+      document.getElementById('crashReviewKernelAll').innerHTML = (crashReview.kernel_tail_lines || []).length
+        ? (crashReview.kernel_tail_lines || []).map((line) => `<li>${{line}}</li>`).join('')
+        : '<li>No final kernel-log lines available before reboot.</li>';
       const updateState = status.update_status || {{}};
       const updateNowButton = document.getElementById('updateNowButton');
       const updateProgress = document.getElementById('updateProgress');
