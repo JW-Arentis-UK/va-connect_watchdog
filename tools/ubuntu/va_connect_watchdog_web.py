@@ -919,6 +919,42 @@ def extract_tail_lines(path: Path, limit: int = 20) -> List[str]:
     return lines[-limit:]
 
 
+def latest_incident() -> Optional[Dict[str, Any]]:
+    incidents = all_incidents()
+    return incidents[0] if incidents else None
+
+
+def parse_journal_line_time(line: str, reference: datetime) -> Optional[datetime]:
+    match = re.match(r"^([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+", line)
+    if not match:
+        return None
+    try:
+        partial = datetime.strptime(match.group(1), "%b %d %H:%M:%S")
+    except ValueError:
+        return None
+    local_reference = reference.astimezone()
+    candidate = partial.replace(year=local_reference.year, tzinfo=local_reference.tzinfo)
+    if candidate > (local_reference + timedelta(days=2)):
+        candidate = candidate.replace(year=candidate.year - 1)
+    return candidate
+
+
+def extract_lines_before(path: Path, cutoff: Optional[datetime], limit: int = 20) -> List[str]:
+    if cutoff is None or not path.exists():
+        return extract_tail_lines(path, limit=limit)
+    selected: List[str] = []
+    for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line_time = parse_journal_line_time(line, cutoff)
+        if line_time is None or line_time <= cutoff.astimezone():
+            selected.append(line[:240])
+    if not selected:
+        return extract_tail_lines(path, limit=limit)
+    return selected[-limit:]
+
+
 def summarize_crash_findings(system_lines: List[str], kernel_lines: List[str]) -> List[str]:
     findings: List[str] = []
     combined = [*kernel_lines, *system_lines]
@@ -1935,9 +1971,21 @@ def crash_review_payload() -> Dict[str, Any]:
     kernel_lines = extract_notable_lines(snapshot / "journal_kernel_previous_boot.txt")
     system_lines_all = extract_all_notable_lines(snapshot / "journal_previous_boot.txt", limit=40)
     kernel_lines_all = extract_all_notable_lines(snapshot / "journal_kernel_previous_boot.txt", limit=40)
-    system_tail_lines = extract_tail_lines(snapshot / "journal_previous_boot.txt", limit=20)
-    kernel_tail_lines = extract_tail_lines(snapshot / "journal_kernel_previous_boot.txt", limit=20)
+    incident = latest_incident() or {}
+    anchor_time = parse_iso(
+        str(
+            incident.get("last_known_healthy_at")
+            or incident.get("incident_time")
+            or incident.get("window_since")
+            or incident.get("reboot_detected_at")
+            or ""
+        )
+    )
+    system_tail_lines = extract_lines_before(snapshot / "journal_previous_boot.txt", anchor_time, limit=20)
+    kernel_tail_lines = extract_lines_before(snapshot / "journal_kernel_previous_boot.txt", anchor_time, limit=20)
     detail = "Review the highlighted lines below first."
+    if anchor_time is not None:
+        detail = f"Review the highlighted lines below first. Pre-crash logs are anchored to {anchor_time.astimezone().strftime('%d/%m/%Y, %H:%M:%S')}."
     if not system_lines and not kernel_lines:
         detail = "No obvious error lines were extracted automatically. Open the snapshot files for the full previous-boot logs."
 
