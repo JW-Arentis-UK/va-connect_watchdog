@@ -994,6 +994,23 @@ def previous_boot_lines_near(anchor_time: Optional[datetime], kernel: bool = Fal
     return {"lines": tail_lines[-limit:], "mode": "tail" if tail_lines else "none"}
 
 
+def service_lines_near(anchor_time: Optional[datetime], limit: int = 10) -> Dict[str, Any]:
+    if anchor_time is None:
+        return {"lines": [], "mode": "none"}
+    local_anchor = anchor_time.astimezone()
+    since = (local_anchor - timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
+    until = local_anchor.strftime("%Y-%m-%d %H:%M:%S")
+    result = run_shell(
+        "journalctl "
+        "-u esg.service -u bridge.service -u sysops.service "
+        f"--since {shlex.quote(since)} --until {shlex.quote(until)} "
+        f"-n {int(limit)} --no-pager || true",
+        timeout=20,
+    )
+    lines = [line.strip()[:240] for line in str(result.get("output", "")).splitlines() if line.strip()]
+    return {"lines": lines[-limit:], "mode": "service" if lines else "none"}
+
+
 def summarize_crash_findings(system_lines: List[str], kernel_lines: List[str]) -> List[str]:
     findings: List[str] = []
     combined = [*kernel_lines, *system_lines]
@@ -2022,13 +2039,21 @@ def crash_review_payload() -> Dict[str, Any]:
     )
     system_near = previous_boot_lines_near(anchor_time, kernel=False, limit=20)
     kernel_near = previous_boot_lines_near(anchor_time, kernel=True, limit=20)
-    system_tail_lines = list(system_near.get("lines") or []) or extract_tail_lines(snapshot / "journal_previous_boot.txt", limit=20)
+    service_near = service_lines_near(anchor_time, limit=10)
+    system_tail_lines = list(system_near.get("lines") or [])
+    if not system_tail_lines and service_near.get("lines"):
+        system_tail_lines = list(service_near.get("lines") or [])
+        system_near["mode"] = "service"
+    if not system_tail_lines:
+        system_tail_lines = extract_tail_lines(snapshot / "journal_previous_boot.txt", limit=20)
     kernel_tail_lines = list(kernel_near.get("lines") or []) or extract_tail_lines(snapshot / "journal_kernel_previous_boot.txt", limit=20)
     detail = "Review the highlighted lines below first."
     if anchor_time is not None:
         detail = f"Review the highlighted lines below first. Pre-crash logs are anchored to {anchor_time.astimezone().strftime('%d/%m/%Y, %H:%M:%S')}."
         if system_near.get("mode") == "gap" or kernel_near.get("mode") == "gap":
             detail += " A large journal gap was detected, so the pre-crash panes show the last 10 lines before logging went quiet."
+        elif system_near.get("mode") == "service":
+            detail += " No Linux journal lines were found near that point, so the pre-crash system pane is showing the latest app/service journal lines instead."
         elif system_near.get("mode") == "window" or kernel_near.get("mode") == "window":
             detail += " No journal lines existed strictly before that point, so the nearest lines within a 10-minute window are shown instead."
         elif system_near.get("mode") == "tail" or kernel_near.get("mode") == "tail":
