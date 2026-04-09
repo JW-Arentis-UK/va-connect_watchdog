@@ -908,7 +908,7 @@ def extract_all_notable_lines(path: Path, limit: int = 40) -> List[str]:
     return all_lines[:limit]
 
 
-def extract_tail_lines(path: Path, limit: int = 12) -> List[str]:
+def extract_tail_lines(path: Path, limit: int = 20) -> List[str]:
     if not path.exists():
         return []
     lines: List[str] = []
@@ -1935,8 +1935,8 @@ def crash_review_payload() -> Dict[str, Any]:
     kernel_lines = extract_notable_lines(snapshot / "journal_kernel_previous_boot.txt")
     system_lines_all = extract_all_notable_lines(snapshot / "journal_previous_boot.txt", limit=40)
     kernel_lines_all = extract_all_notable_lines(snapshot / "journal_kernel_previous_boot.txt", limit=40)
-    system_tail_lines = extract_tail_lines(snapshot / "journal_previous_boot.txt", limit=12)
-    kernel_tail_lines = extract_tail_lines(snapshot / "journal_kernel_previous_boot.txt", limit=12)
+    system_tail_lines = extract_tail_lines(snapshot / "journal_previous_boot.txt", limit=20)
+    kernel_tail_lines = extract_tail_lines(snapshot / "journal_kernel_previous_boot.txt", limit=20)
     detail = "Review the highlighted lines below first."
     if not system_lines and not kernel_lines:
         detail = "No obvious error lines were extracted automatically. Open the snapshot files for the full previous-boot logs."
@@ -3433,6 +3433,37 @@ def render_page(status: Dict[str, Any]) -> str:
       background: rgba(18, 29, 39, 0.9);
       padding: 8px 10px;
     }}
+    .review-scroll.compact {{
+      max-height: 15rem;
+    }}
+    .crash-review-grid {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 16px;
+      align-items: start;
+    }}
+    .crash-review-column {{
+      display: grid;
+      gap: 14px;
+    }}
+    .crash-review-box {{
+      border: 1px solid rgba(129, 154, 175, 0.18);
+      border-radius: 14px;
+      background: rgba(28, 41, 53, 0.62);
+      padding: 12px 14px;
+    }}
+    .crash-review-box strong {{
+      display: block;
+    }}
+    .crash-review-box .hint {{
+      margin-top: 6px;
+      margin-bottom: 0;
+    }}
+    @media (max-width: 980px) {{
+      .crash-review-grid {{
+        grid-template-columns: 1fr;
+      }}
+    }}
     .timeline {{
       display: grid;
       gap: 8px;
@@ -4213,31 +4244,45 @@ def render_page(status: Dict[str, Any]) -> str:
         <ul class="review-list" id="crashReviewFindings">
           {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("findings", []))}
         </ul>
-        <div class="grid">
-          <section class="item">
-            <strong>Previous boot system log highlights</strong>
-            <ul class="review-list" id="crashReviewSystem">
-              {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("system_lines", []))}
-            </ul>
-            <p class="hint">Last lines before reboot</p>
-            <div class="review-scroll">
-              <ul class="review-list" id="crashReviewSystemAll">
-                {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("system_tail_lines", []))}
-              </ul>
-            </div>
-          </section>
-          <section class="item">
-            <strong>Previous boot kernel log highlights</strong>
-            <ul class="review-list" id="crashReviewKernel">
-              {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("kernel_lines", []))}
-            </ul>
-            <p class="hint">Last lines before reboot</p>
-            <div class="review-scroll">
-              <ul class="review-list" id="crashReviewKernelAll">
-                {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("kernel_tail_lines", []))}
-              </ul>
-            </div>
-          </section>
+        <div class="crash-review-grid">
+          <div class="crash-review-column">
+            <section class="crash-review-box">
+              <strong>Pre-crash system log</strong>
+              <p class="hint">Last 20 lines before reboot. Scroll for the full tail.</p>
+              <div class="review-scroll compact">
+                <ul class="review-list" id="crashReviewSystemAll">
+                  {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("system_tail_lines", []))}
+                </ul>
+              </div>
+            </section>
+            <section class="crash-review-box">
+              <strong>Pre-crash kernel log</strong>
+              <p class="hint">Last 20 kernel lines before reboot. Scroll for the full tail.</p>
+              <div class="review-scroll compact">
+                <ul class="review-list" id="crashReviewKernelAll">
+                  {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("kernel_tail_lines", []))}
+                </ul>
+              </div>
+            </section>
+          </div>
+          <div class="crash-review-column">
+            <section class="crash-review-box">
+              <strong>Previous boot system log highlights</strong>
+              <div class="review-scroll compact">
+                <ul class="review-list" id="crashReviewSystem">
+                  {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("system_lines", []))}
+                </ul>
+              </div>
+            </section>
+            <section class="crash-review-box">
+              <strong>Previous boot kernel log highlights</strong>
+              <div class="review-scroll compact">
+                <ul class="review-list" id="crashReviewKernel">
+                  {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("kernel_lines", []))}
+                </ul>
+              </div>
+            </section>
+          </div>
         </div>
       </section>
       <section class="panel" style="grid-column: 1 / -1;">
