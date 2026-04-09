@@ -6424,6 +6424,31 @@ def render_page(status: Dict[str, Any]) -> str:
 
     async function runAction(action, extraPayload = {{}}) {{
       pinCurrentTabInUrl();
+      if (action === 'update_watchdog') {{
+        try {{
+          window.sessionStorage.setItem('watchdogAutoHardRefreshPending', '1');
+        }} catch (_storageErr) {{
+          // ignore storage failures
+        }}
+        const updateNowButton = document.getElementById('updateNowButton');
+        const updateMessage = document.getElementById('updateMessage');
+        const updateMeta = document.getElementById('updateMeta');
+        const updateProgress = document.getElementById('updateProgress');
+        if (updateNowButton) {{
+          updateNowButton.textContent = 'Updating...';
+          updateNowButton.className = 'secondary status-running';
+          updateNowButton.disabled = true;
+        }}
+        if (updateMessage) {{
+          updateMessage.textContent = 'Starting update...';
+        }}
+        if (updateMeta) {{
+          updateMeta.textContent = '';
+        }}
+        if (updateProgress) {{
+          updateProgress.style.display = 'block';
+        }}
+      }}
       const requestPayload = Object.assign({{ action: action }}, extraPayload || {{}});
       const response = await fetch('/api/action' + authQuery, {{
         method: 'POST',
@@ -6442,6 +6467,28 @@ def render_page(status: Dict[str, Any]) -> str:
       if (action === 'reset_teamviewer_password' || action === 'start_teamviewer' || action === 'restart_teamviewer') {{
         const detail = payload.password ? `New password: ${{payload.password}}` : (payload.message || 'TeamViewer action complete.');
         document.getElementById('teamviewerResetResult').textContent = detail;
+      }}
+      if (action === 'update_watchdog' && payload && payload.status) {{
+        const updateNowButton = document.getElementById('updateNowButton');
+        const updateMessage = document.getElementById('updateMessage');
+        const updateMeta = document.getElementById('updateMeta');
+        const updateProgress = document.getElementById('updateProgress');
+        const startedAt = payload.status.started_at ? formatLocalTimestamp(payload.status.started_at) : '';
+        const targetBuild = payload.status.to_build || payload.status.from_build || 'unknown';
+        if (updateNowButton) {{
+          updateNowButton.textContent = payload.status.state === 'running' ? 'Updating...' : 'Update now';
+          updateNowButton.className = payload.status.state === 'running' ? 'secondary status-running' : 'secondary';
+          updateNowButton.disabled = payload.status.state === 'running';
+        }}
+        if (updateMessage) {{
+          updateMessage.textContent = payload.status.state === 'running' ? `Updating to ${{targetBuild}}...` : (payload.message || 'Update requested.');
+        }}
+        if (updateMeta) {{
+          updateMeta.textContent = startedAt ? `Started ${{startedAt}}` : '';
+        }}
+        if (updateProgress) {{
+          updateProgress.style.display = payload.status.state === 'running' ? 'block' : 'none';
+        }}
       }}
       await fetchStatus();
     }}
