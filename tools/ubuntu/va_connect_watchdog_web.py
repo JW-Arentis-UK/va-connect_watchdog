@@ -925,17 +925,37 @@ def latest_incident() -> Optional[Dict[str, Any]]:
     return incidents[0] if incidents else None
 
 
-def previous_boot_lines_before(anchor_time: Optional[datetime], kernel: bool = False, limit: int = 20) -> List[str]:
+def previous_boot_lines_near(anchor_time: Optional[datetime], kernel: bool = False, limit: int = 20) -> Dict[str, Any]:
     if anchor_time is None:
-        return []
-    cutoff = anchor_time.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        return {"lines": [], "mode": "none"}
+    local_anchor = anchor_time.astimezone()
+    cutoff = local_anchor.strftime("%Y-%m-%d %H:%M:%S")
+    since = (local_anchor - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+    until = (local_anchor + timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
     kernel_flag = "-k " if kernel else ""
-    result = run_shell(
+
+    before_result = run_shell(
         f"journalctl {kernel_flag}-b -1 --until {shlex.quote(cutoff)} -n {int(limit)} --no-pager || true",
         timeout=20,
     )
-    lines = [line.strip()[:240] for line in str(result.get("output", "")).splitlines() if line.strip()]
-    return lines[-limit:]
+    before_lines = [line.strip()[:240] for line in str(before_result.get("output", "")).splitlines() if line.strip()]
+    if before_lines:
+        return {"lines": before_lines[-limit:], "mode": "before"}
+
+    window_result = run_shell(
+        f"journalctl {kernel_flag}-b -1 --since {shlex.quote(since)} --until {shlex.quote(until)} -n {int(limit)} --no-pager || true",
+        timeout=20,
+    )
+    window_lines = [line.strip()[:240] for line in str(window_result.get("output", "")).splitlines() if line.strip()]
+    if window_lines:
+        return {"lines": window_lines[-limit:], "mode": "window"}
+
+    tail_result = run_shell(
+        f"journalctl {kernel_flag}-b -1 -n {int(limit)} --no-pager || true",
+        timeout=20,
+    )
+    tail_lines = [line.strip()[:240] for line in str(tail_result.get("output", "")).splitlines() if line.strip()]
+    return {"lines": tail_lines[-limit:], "mode": "tail" if tail_lines else "none"}
 
 
 def summarize_crash_findings(system_lines: List[str], kernel_lines: List[str]) -> List[str]:
@@ -1964,11 +1984,17 @@ def crash_review_payload() -> Dict[str, Any]:
             or ""
         )
     )
-    system_tail_lines = previous_boot_lines_before(anchor_time, kernel=False, limit=20) or extract_tail_lines(snapshot / "journal_previous_boot.txt", limit=20)
-    kernel_tail_lines = previous_boot_lines_before(anchor_time, kernel=True, limit=20) or extract_tail_lines(snapshot / "journal_kernel_previous_boot.txt", limit=20)
+    system_near = previous_boot_lines_near(anchor_time, kernel=False, limit=20)
+    kernel_near = previous_boot_lines_near(anchor_time, kernel=True, limit=20)
+    system_tail_lines = list(system_near.get("lines") or []) or extract_tail_lines(snapshot / "journal_previous_boot.txt", limit=20)
+    kernel_tail_lines = list(kernel_near.get("lines") or []) or extract_tail_lines(snapshot / "journal_kernel_previous_boot.txt", limit=20)
     detail = "Review the highlighted lines below first."
     if anchor_time is not None:
-        detail = f"Review the highlighted lines below first. Pre-crash logs show the last 20 previous-boot lines before {anchor_time.astimezone().strftime('%d/%m/%Y, %H:%M:%S')}."
+        detail = f"Review the highlighted lines below first. Pre-crash logs are anchored to {anchor_time.astimezone().strftime('%d/%m/%Y, %H:%M:%S')}."
+        if system_near.get("mode") == "window" or kernel_near.get("mode") == "window":
+            detail += " No journal lines existed strictly before that point, so the nearest lines within a 10-minute window are shown instead."
+        elif system_near.get("mode") == "tail" or kernel_near.get("mode") == "tail":
+            detail += " No nearby journal lines were found, so the latest previous-boot lines are shown instead."
     if not system_lines and not kernel_lines:
         detail = "No obvious error lines were extracted automatically. Open the snapshot files for the full previous-boot logs."
 
