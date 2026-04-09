@@ -998,17 +998,52 @@ def service_lines_near(anchor_time: Optional[datetime], limit: int = 10) -> Dict
     if anchor_time is None:
         return {"lines": [], "mode": "none"}
     local_anchor = anchor_time.astimezone()
-    since = (local_anchor - timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
-    until = local_anchor.strftime("%Y-%m-%d %H:%M:%S")
+    cutoff = local_anchor.strftime("%Y-%m-%d %H:%M:%S")
+    since = (local_anchor - timedelta(minutes=20)).strftime("%Y-%m-%d %H:%M:%S")
+    units = (
+        "-u esg.service -u bridge.service -u sysops.service "
+        "-u NetworkManager.service -u systemd-networkd.service -u systemd-resolved.service "
+        "-u ModemManager.service"
+    )
     result = run_shell(
         "journalctl "
-        "-u esg.service -u bridge.service -u sysops.service "
-        f"--since {shlex.quote(since)} --until {shlex.quote(until)} "
+        "-b -1 "
+        f"{units} "
+        f"--since {shlex.quote(since)} --until {shlex.quote(cutoff)} "
         f"-n {int(limit)} --no-pager || true",
         timeout=20,
     )
     lines = [line.strip()[:240] for line in str(result.get("output", "")).splitlines() if line.strip()]
-    return {"lines": lines[-limit:], "mode": "service" if lines else "none"}
+    if lines:
+        return {"lines": lines[-limit:], "mode": "service"}
+
+    tail_result = run_shell(
+        "journalctl "
+        "-b -1 "
+        f"{units} "
+        f"-n {int(limit)} --no-pager || true",
+        timeout=20,
+    )
+    tail_lines = [line.strip()[:240] for line in str(tail_result.get("output", "")).splitlines() if line.strip()]
+    return {"lines": tail_lines[-limit:], "mode": "service-tail" if tail_lines else "none"}
+
+
+def watchdog_event_lines_near(anchor_time: Optional[datetime], limit: int = 10) -> List[str]:
+    if anchor_time is None or not EVENTS_PATH.exists():
+        return []
+    window_start = anchor_time - timedelta(minutes=15)
+    lines: List[str] = []
+    for item in all_events():
+        ts = parse_iso(str(item.get("ts", "")))
+        if ts is None or ts > anchor_time or ts < window_start:
+            continue
+        title = str(item.get("event", "event")).replace("_", " ")
+        detail = str(item.get("detail") or item.get("reason") or item.get("status") or "").strip()
+        line = f"{ts.astimezone().strftime('%d/%m/%Y, %H:%M:%S')} | {title}"
+        if detail:
+            line += f" | {detail}"
+        lines.append(line[:240])
+    return lines[-limit:]
 
 
 def summarize_crash_findings(system_lines: List[str], kernel_lines: List[str]) -> List[str]:
@@ -2040,6 +2075,7 @@ def crash_review_payload() -> Dict[str, Any]:
     system_near = previous_boot_lines_near(anchor_time, kernel=False, limit=20)
     kernel_near = previous_boot_lines_near(anchor_time, kernel=True, limit=20)
     service_near = service_lines_near(anchor_time, limit=10)
+    watchdog_event_lines = watchdog_event_lines_near(anchor_time, limit=10)
     system_tail_lines = list(system_near.get("lines") or [])
     if not system_tail_lines and service_near.get("lines"):
         system_tail_lines = list(service_near.get("lines") or [])
@@ -2053,7 +2089,9 @@ def crash_review_payload() -> Dict[str, Any]:
         if system_near.get("mode") == "gap" or kernel_near.get("mode") == "gap":
             detail += " A large journal gap was detected, so the pre-crash panes show the last 10 lines before logging went quiet."
         elif system_near.get("mode") == "service":
-            detail += " No Linux journal lines were found near that point, so the pre-crash system pane is showing the latest app/service journal lines instead."
+            detail += " No Linux journal lines were found near that point, so the pre-crash system pane is showing previous-boot app/service and network journal lines instead."
+        elif service_near.get("mode") == "service-tail":
+            detail += " No service or network lines were found close to the incident, so the service pane is showing the latest previous-boot service/network lines instead."
         elif system_near.get("mode") == "window" or kernel_near.get("mode") == "window":
             detail += " No journal lines existed strictly before that point, so the nearest lines within a 10-minute window are shown instead."
         elif system_near.get("mode") == "tail" or kernel_near.get("mode") == "tail":
@@ -2070,6 +2108,8 @@ def crash_review_payload() -> Dict[str, Any]:
         "system_lines": system_lines,
         "system_lines_all": system_lines_all,
         "system_tail_lines": system_tail_lines,
+        "service_tail_lines": list(service_near.get("lines") or []),
+        "watchdog_event_lines": watchdog_event_lines,
         "kernel_lines": kernel_lines,
         "kernel_lines_all": kernel_lines_all,
         "kernel_tail_lines": kernel_tail_lines,
@@ -4384,6 +4424,24 @@ def render_page(status: Dict[str, Any]) -> str:
                 </ul>
               </div>
             </section>
+            <section class="crash-review-box">
+              <strong>Pre-crash service/network log</strong>
+              <p class="hint">Recent `esg`, `bridge`, `sysops`, and network-service journal lines before the incident time.</p>
+              <div class="review-scroll compact">
+                <ul class="review-list" id="crashReviewServiceAll">
+                  {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("service_tail_lines", []))}
+                </ul>
+              </div>
+            </section>
+            <section class="crash-review-box">
+              <strong>Watchdog/events before incident</strong>
+              <p class="hint">Recent watchdog event log entries leading into the incident.</p>
+              <div class="review-scroll compact">
+                <ul class="review-list" id="crashReviewEventsAll">
+                  {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("watchdog_event_lines", []))}
+                </ul>
+              </div>
+            </section>
           </div>
           <div class="crash-review-column">
             <section class="crash-review-box">
@@ -5673,6 +5731,12 @@ def render_page(status: Dict[str, Any]) -> str:
       document.getElementById('crashReviewKernelAll').innerHTML = (crashReview.kernel_tail_lines || []).length
         ? (crashReview.kernel_tail_lines || []).map((line) => `<li>${{line}}</li>`).join('')
         : '<li>No final kernel-log lines available before reboot.</li>';
+      document.getElementById('crashReviewServiceAll').innerHTML = (crashReview.service_tail_lines || []).length
+        ? (crashReview.service_tail_lines || []).map((line) => `<li>${{line}}</li>`).join('')
+        : '<li>No recent service journal lines found before the incident.</li>';
+      document.getElementById('crashReviewEventsAll').innerHTML = (crashReview.watchdog_event_lines || []).length
+        ? (crashReview.watchdog_event_lines || []).map((line) => `<li>${{line}}</li>`).join('')
+        : '<li>No watchdog/event entries found before the incident.</li>';
       const updateState = status.update_status || {{}};
       const updateNowButton = document.getElementById('updateNowButton');
       const updateProgress = document.getElementById('updateProgress');
