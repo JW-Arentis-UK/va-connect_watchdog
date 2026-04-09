@@ -374,6 +374,30 @@ def capture_previous_boot_snapshot(snapshot_dir: Path, max_journal_lines: int) -
     return target_dir if wrote_any else None
 
 
+def cleanup_snapshot_dir(snapshot_dir: Path, retention_days: int) -> int:
+    if retention_days <= 0 or not snapshot_dir.exists():
+        return 0
+    cutoff = time.time() - (retention_days * 86400)
+    removed = 0
+    for path in list(snapshot_dir.iterdir()):
+        try:
+            if path.stat().st_mtime >= cutoff:
+                continue
+            if path.is_dir():
+                for child in sorted(path.rglob("*"), reverse=True):
+                    if child.is_file() or child.is_symlink():
+                        child.unlink(missing_ok=True)
+                    elif child.is_dir():
+                        child.rmdir()
+                path.rmdir()
+            else:
+                path.unlink(missing_ok=True)
+            removed += 1
+        except Exception:
+            continue
+    return removed
+
+
 def classify_non_watchdog_reboot(snapshot_path: Optional[Path]) -> Dict[str, str]:
     manual_markers = (
         "command=/usr/sbin/reboot",
@@ -590,6 +614,7 @@ class SiteWatchdog:
 
         self.state["boot_id"] = current_boot_id
         self.refresh_hardware_health(force=True)
+        self.cleanup_old_snapshots(force=True)
         write_json(self.state_path, self.state)
 
     def refresh_hardware_health(self, force: bool = False) -> None:
@@ -610,6 +635,17 @@ class SiteWatchdog:
                 pstore_entries=hardware.get("pstore_entries", []),
             )
         self.state["last_hardware_signature"] = new_signature
+
+    def cleanup_old_snapshots(self, force: bool = False) -> None:
+        now_epoch = time.time()
+        last_cleanup = float(self.state.get("last_snapshot_cleanup_at") or 0)
+        if not force and (now_epoch - last_cleanup) < 12 * 3600:
+            return
+        retention_days = int(self.config.get("snapshot_retention_days", 30) or 30)
+        removed = cleanup_snapshot_dir(self.snapshot_dir, retention_days)
+        self.state["last_snapshot_cleanup_at"] = now_epoch
+        if removed:
+            self.log_event("snapshot_cleanup", removed_count=removed, retention_days=retention_days)
 
     def pop_manual_marker(self, name: str) -> bool:
         path = self.manual_dir / name
@@ -724,6 +760,7 @@ class SiteWatchdog:
         checks = self.perform_checks()
         self.collect_metrics()
         self.refresh_hardware_health()
+        self.cleanup_old_snapshots()
         self.state["monitoring_state"] = "active"
         self.state["last_checks"] = checks
         self.state["last_check_at"] = iso_now()
@@ -883,6 +920,7 @@ def load_config() -> Dict[str, object]:
         "manual_dir": "/var/lib/va-connect-site-watchdog",
         "snapshot_dir": "/var/log/va-connect-site-watchdog/snapshots",
         "snapshot_cooldown_seconds": 900,
+        "snapshot_retention_days": 30,
         "journal_lines": 120,
     }
 

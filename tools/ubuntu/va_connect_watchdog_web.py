@@ -492,6 +492,7 @@ def sanitize_patch(data: Dict[str, Any]) -> Dict[str, Any]:
     ]
     float_keys = ["reboot_backoff_multiplier"]
     str_keys = [
+        "gateway_name",
         "app_match",
         "app_start_command",
         "web_bind",
@@ -924,35 +925,17 @@ def latest_incident() -> Optional[Dict[str, Any]]:
     return incidents[0] if incidents else None
 
 
-def parse_journal_line_time(line: str, reference: datetime) -> Optional[datetime]:
-    match = re.match(r"^([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+", line)
-    if not match:
-        return None
-    try:
-        partial = datetime.strptime(match.group(1), "%b %d %H:%M:%S")
-    except ValueError:
-        return None
-    local_reference = reference.astimezone()
-    candidate = partial.replace(year=local_reference.year, tzinfo=local_reference.tzinfo)
-    if candidate > (local_reference + timedelta(days=2)):
-        candidate = candidate.replace(year=candidate.year - 1)
-    return candidate
-
-
-def extract_lines_before(path: Path, cutoff: Optional[datetime], limit: int = 20) -> List[str]:
-    if cutoff is None or not path.exists():
-        return extract_tail_lines(path, limit=limit)
-    selected: List[str] = []
-    for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        line_time = parse_journal_line_time(line, cutoff)
-        if line_time is None or line_time <= cutoff.astimezone():
-            selected.append(line[:240])
-    if not selected:
-        return extract_tail_lines(path, limit=limit)
-    return selected[-limit:]
+def previous_boot_lines_before(anchor_time: Optional[datetime], kernel: bool = False, limit: int = 20) -> List[str]:
+    if anchor_time is None:
+        return []
+    cutoff = anchor_time.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    kernel_flag = "-k " if kernel else ""
+    result = run_shell(
+        f"journalctl {kernel_flag}-b -1 --until {shlex.quote(cutoff)} -n {int(limit)} --no-pager || true",
+        timeout=20,
+    )
+    lines = [line.strip()[:240] for line in str(result.get("output", "")).splitlines() if line.strip()]
+    return lines[-limit:]
 
 
 def summarize_crash_findings(system_lines: List[str], kernel_lines: List[str]) -> List[str]:
@@ -1981,11 +1964,11 @@ def crash_review_payload() -> Dict[str, Any]:
             or ""
         )
     )
-    system_tail_lines = extract_lines_before(snapshot / "journal_previous_boot.txt", anchor_time, limit=20)
-    kernel_tail_lines = extract_lines_before(snapshot / "journal_kernel_previous_boot.txt", anchor_time, limit=20)
+    system_tail_lines = previous_boot_lines_before(anchor_time, kernel=False, limit=20) or extract_tail_lines(snapshot / "journal_previous_boot.txt", limit=20)
+    kernel_tail_lines = previous_boot_lines_before(anchor_time, kernel=True, limit=20) or extract_tail_lines(snapshot / "journal_kernel_previous_boot.txt", limit=20)
     detail = "Review the highlighted lines below first."
     if anchor_time is not None:
-        detail = f"Review the highlighted lines below first. Pre-crash logs are anchored to {anchor_time.astimezone().strftime('%d/%m/%Y, %H:%M:%S')}."
+        detail = f"Review the highlighted lines below first. Pre-crash logs show the last 20 previous-boot lines before {anchor_time.astimezone().strftime('%d/%m/%Y, %H:%M:%S')}."
     if not system_lines and not kernel_lines:
         detail = "No obvious error lines were extracted automatically. Open the snapshot files for the full previous-boot logs."
 
@@ -4296,7 +4279,7 @@ def render_page(status: Dict[str, Any]) -> str:
           <div class="crash-review-column">
             <section class="crash-review-box">
               <strong>Pre-crash system log</strong>
-              <p class="hint">Last 20 lines before reboot. Scroll for the full tail.</p>
+              <p class="hint">Last 20 lines before the incident time. Scroll for the full tail.</p>
               <div class="review-scroll compact">
                 <ul class="review-list" id="crashReviewSystemAll">
                   {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("system_tail_lines", []))}
@@ -4305,7 +4288,7 @@ def render_page(status: Dict[str, Any]) -> str:
             </section>
             <section class="crash-review-box">
               <strong>Pre-crash kernel log</strong>
-              <p class="hint">Last 20 kernel lines before reboot. Scroll for the full tail.</p>
+              <p class="hint">Last 20 kernel lines before the incident time. Scroll for the full tail.</p>
               <div class="review-scroll compact">
                 <ul class="review-list" id="crashReviewKernelAll">
                   {"".join(f"<li>{html.escape(line)}</li>" for line in status["crash_review"].get("kernel_tail_lines", []))}
@@ -4652,7 +4635,7 @@ def render_page(status: Dict[str, Any]) -> str:
         <div class="formgrid">
           <div class="field">
             <label for="gateway_name">Gateway / crossing name</label>
-            <input id="gateway_name" type="text" placeholder="Enter gateway name" value="{html.escape(str(cfg.get("gateway_name", "")))}">
+<input id="gateway_name" type="text" placeholder="Enter gateway name" autocomplete="off" autocapitalize="off" spellcheck="false" value="{html.escape(str(cfg.get("gateway_name", "")))}">
           </div>
           <div class="field">
             <label for="app_match">App match</label>
