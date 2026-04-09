@@ -925,6 +925,39 @@ def latest_incident() -> Optional[Dict[str, Any]]:
     return incidents[0] if incidents else None
 
 
+def parse_journal_timestamp(line: str, reference: datetime) -> Optional[datetime]:
+    match = re.match(r"^([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+", str(line or ""))
+    if not match:
+        return None
+    try:
+        parsed = datetime.strptime(match.group(1), "%b %d %H:%M:%S")
+    except ValueError:
+        return None
+    local_reference = reference.astimezone()
+    candidate = parsed.replace(year=local_reference.year, tzinfo=local_reference.tzinfo)
+    if candidate > (local_reference + timedelta(days=2)):
+        candidate = candidate.replace(year=candidate.year - 1)
+    return candidate
+
+
+def last_lines_before_big_gap(lines: List[str], reference: datetime, visible_limit: int = 10, gap_seconds: int = 300) -> List[str]:
+    stamped: List[Dict[str, Any]] = []
+    for line in lines:
+        ts = parse_journal_timestamp(line, reference)
+        stamped.append({"line": line, "ts": ts})
+    gap_index: Optional[int] = None
+    for index in range(1, len(stamped)):
+        prev_ts = stamped[index - 1]["ts"]
+        curr_ts = stamped[index]["ts"]
+        if prev_ts is None or curr_ts is None:
+            continue
+        if (curr_ts - prev_ts).total_seconds() >= gap_seconds:
+            gap_index = index
+    if gap_index is None:
+        return lines[-visible_limit:]
+    return [str(item["line"]) for item in stamped[max(0, gap_index - visible_limit):gap_index]]
+
+
 def previous_boot_lines_near(anchor_time: Optional[datetime], kernel: bool = False, limit: int = 20) -> Dict[str, Any]:
     if anchor_time is None:
         return {"lines": [], "mode": "none"}
@@ -940,6 +973,9 @@ def previous_boot_lines_near(anchor_time: Optional[datetime], kernel: bool = Fal
     )
     before_lines = [line.strip()[:240] for line in str(before_result.get("output", "")).splitlines() if line.strip()]
     if before_lines:
+        gap_lines = last_lines_before_big_gap(before_lines, local_anchor, visible_limit=min(10, limit), gap_seconds=300)
+        if gap_lines and gap_lines != before_lines[-min(10, limit):]:
+            return {"lines": gap_lines, "mode": "gap"}
         return {"lines": before_lines[-limit:], "mode": "before"}
 
     window_result = run_shell(
@@ -1991,7 +2027,9 @@ def crash_review_payload() -> Dict[str, Any]:
     detail = "Review the highlighted lines below first."
     if anchor_time is not None:
         detail = f"Review the highlighted lines below first. Pre-crash logs are anchored to {anchor_time.astimezone().strftime('%d/%m/%Y, %H:%M:%S')}."
-        if system_near.get("mode") == "window" or kernel_near.get("mode") == "window":
+        if system_near.get("mode") == "gap" or kernel_near.get("mode") == "gap":
+            detail += " A large journal gap was detected, so the pre-crash panes show the last 10 lines before logging went quiet."
+        elif system_near.get("mode") == "window" or kernel_near.get("mode") == "window":
             detail += " No journal lines existed strictly before that point, so the nearest lines within a 10-minute window are shown instead."
         elif system_near.get("mode") == "tail" or kernel_near.get("mode") == "tail":
             detail += " No nearby journal lines were found, so the latest previous-boot lines are shown instead."
