@@ -4,13 +4,14 @@ Minimal deployment steps for a Linux gateway.
 
 ## Fresh gateway bootstrap
 
-For a brand-new gateway, run the bootstrap script from the repository:
+For a brand-new gateway, fetch and run the root bootstrap script:
 
 ```bash
-sudo bash tools/ubuntu/bootstrap_v2_gateway_from_github.sh
+curl -fsSL https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/master/bootstrap_v2_gateway.sh -o /tmp/bootstrap_v2_gateway.sh
+sudo bash /tmp/bootstrap_v2_gateway.sh
 ```
 
-If the repository is not already on the box, clone it first or copy that script over by SSH, then run it.
+That one script will clone the repository from GitHub and finish the install.
 
 That script will:
 
@@ -29,11 +30,10 @@ Copy the repository to:
 /opt/va-connect-watchdog
 ```
 
-Example:
+If you already cloned the repo manually, you can also run the same script from the repo root:
 
 ```bash
-sudo mkdir -p /opt/va-connect-watchdog
-sudo cp -R . /opt/va-connect-watchdog
+sudo bash bootstrap_v2_gateway.sh
 ```
 
 ## 2. Create the data directory
@@ -108,6 +108,7 @@ journalctl -u site_watchdog -f
 Start the API on the gateway with:
 
 ```bash
+cd /opt/va-connect-watchdog
 source .venv/bin/activate
 uvicorn tools.ubuntu.web.app:app --host 0.0.0.0 --port 80
 ```
