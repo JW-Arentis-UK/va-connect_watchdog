@@ -15,7 +15,6 @@ BRANCH="${2:-$DEFAULT_BRANCH}"
 TARGET_DIR="${3:-$DEFAULT_TARGET_DIR}"
 DATA_DIR="${DATA_DIR:-$DEFAULT_DATA_DIR}"
 INSTALL_USER="${SUDO_USER:-$(id -un)}"
-INSTALL_GROUP="$(id -gn "${SUDO_USER:-$(id -un)}")"
 
 say() {
   printf '\n==> %s\n' "$1"
@@ -33,7 +32,7 @@ prepare_git_safe_directory() {
 }
 
 chown_install_user() {
-  chown -R "$INSTALL_USER:$INSTALL_GROUP" "$1"
+  chown -R "$INSTALL_USER" "$1"
 }
 
 install_prereqs() {
@@ -118,7 +117,6 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$INSTALL_USER
-Group=$INSTALL_GROUP
 WorkingDirectory=$TARGET_DIR
 Environment=PYTHONUNBUFFERED=1
 Environment=VA_CONNECT_V2_DATA_DIR=$DATA_DIR
@@ -141,7 +139,6 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$INSTALL_USER
-Group=$INSTALL_GROUP
 WorkingDirectory=$TARGET_DIR
 Environment=PYTHONUNBUFFERED=1
 Environment=VA_CONNECT_V2_DATA_DIR=$DATA_DIR
