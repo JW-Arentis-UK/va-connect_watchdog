@@ -116,7 +116,7 @@ Manual API test:
   uvicorn tools.ubuntu.web.app:app --host 0.0.0.0 --port 8787
 
 Browser:
-  http://<gateway-ip>:80
+  http://<gateway-ip>:8787
 EOF
 }
 

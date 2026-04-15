@@ -7,7 +7,7 @@ import os
 import socket
 from typing import Any
 
-from .paths import default_data_dir
+from .paths import default_data_dir, repo_root
 
 
 @dataclass(frozen=True)
@@ -33,8 +33,18 @@ def _load_config_file(path: Path) -> dict[str, Any]:
 
 
 def load_config() -> V2Config:
-    config_path = Path(str(os.environ.get("VA_CONNECT_V2_CONFIG", "")).strip() or (default_data_dir() / "config.json"))
-    raw = _load_config_file(config_path)
+    env_config = str(os.environ.get("VA_CONNECT_V2_CONFIG", "")).strip()
+    candidate_paths = []
+    if env_config:
+        candidate_paths.append(Path(env_config))
+    candidate_paths.append(repo_root() / "config.json")
+    candidate_paths.append(default_data_dir() / "config.json")
+
+    raw: dict[str, Any] = {}
+    for candidate in candidate_paths:
+        raw = _load_config_file(candidate)
+        if raw:
+            break
 
     device_id = str(os.environ.get("VA_CONNECT_V2_DEVICE_ID", raw.get("device_id", socket.gethostname()))).strip() or socket.gethostname()
     data_dir = Path(str(os.environ.get("VA_CONNECT_V2_DATA_DIR", raw.get("data_dir", default_data_dir()))))
