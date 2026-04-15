@@ -21,6 +21,7 @@ That script will:
 - create `.venv`
 - install Python dependencies
 - install and start `site_watchdog.service`
+- install and start `va-connect-watchdog-web.service`
 
 ## 1. Copy the project
 
@@ -91,16 +92,20 @@ sudo systemctl enable site_watchdog.service
 sudo systemctl start site_watchdog.service
 ```
 
+The bootstrap also installs `va-connect-watchdog-web.service` and starts it automatically.
+
 Check status:
 
 ```bash
 systemctl status site_watchdog
+systemctl status va-connect-watchdog-web
 ```
 
 Follow logs:
 
 ```bash
 journalctl -u site_watchdog -f
+journalctl -u va-connect-watchdog-web -f
 ```
 
 ## 6. Run the API manually

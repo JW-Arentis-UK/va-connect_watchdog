@@ -7,6 +7,7 @@ DEFAULT_BRANCH="master"
 DEFAULT_TARGET_DIR="/opt/va-connect-watchdog"
 DEFAULT_DATA_DIR="/var/lib/va-connect-v2"
 SERVICE_NAME="site_watchdog.service"
+WEB_SERVICE_NAME="va-connect-watchdog-web.service"
 SYSTEMD_DIR="/etc/systemd/system"
 
 REPO_URL="${1:-$DEFAULT_REPO_URL}"
@@ -130,9 +131,35 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+
+  cat > "$SYSTEMD_DIR/$WEB_SERVICE_NAME" <<EOF
+[Unit]
+Description=VA-Connect v2 watchdog web UI
+After=network-online.target $SERVICE_NAME
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$INSTALL_USER
+Group=$INSTALL_GROUP
+WorkingDirectory=$TARGET_DIR
+Environment=PYTHONUNBUFFERED=1
+Environment=VA_CONNECT_V2_DATA_DIR=$DATA_DIR
+Environment=VA_CONNECT_V2_CONFIG=$TARGET_DIR/config.json
+EnvironmentFile=-$TARGET_DIR/site_watchdog.env
+ExecStart=$TARGET_DIR/.venv/bin/uvicorn tools.ubuntu.web.app:app --host 0.0.0.0 --port 8787
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
   systemctl daemon-reload
   systemctl enable "$SERVICE_NAME"
+  systemctl enable "$WEB_SERVICE_NAME"
   systemctl restart "$SERVICE_NAME"
+  systemctl restart "$WEB_SERVICE_NAME"
 }
 
 print_next_steps() {
@@ -145,7 +172,9 @@ Repository:
 
 Service:
   systemctl status site_watchdog
+  systemctl status va-connect-watchdog-web
   journalctl -u site_watchdog -f
+  journalctl -u va-connect-watchdog-web -f
 
 Manual API test:
   cd $TARGET_DIR
