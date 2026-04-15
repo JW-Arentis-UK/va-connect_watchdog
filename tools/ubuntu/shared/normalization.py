@@ -201,6 +201,29 @@ def normalize_state(value: Any, *, device_id: str | None = None, boot_id: str | 
     return model.model_dump()
 
 
+def normalize_metric_sample(value: Any) -> dict[str, Any]:
+    raw = _dict(value)
+
+    def as_float(item: Any) -> float | None:
+        try:
+            if item in (None, ""):
+                return None
+            return float(item)
+        except Exception:
+            return None
+
+    return {
+        "timestamp": normalize_timestamp(raw.get("timestamp")),
+        "cpu_percent": as_float(raw.get("cpu_percent")),
+        "memory_percent": as_float(raw.get("memory_percent")),
+        "disk_percent": as_float(raw.get("disk_percent")),
+        "temperature_c": as_float(raw.get("temperature_c")),
+        "load_1": as_float(raw.get("load_1")),
+        "load_5": as_float(raw.get("load_5")),
+        "load_15": as_float(raw.get("load_15")),
+    }
+
+
 def build_incident_id(device_id: str, timestamp: str | None = None) -> str:
     stamp = timestamp or iso_utc()
     dt = parse_iso(stamp) or utc_now()

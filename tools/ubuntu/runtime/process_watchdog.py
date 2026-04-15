@@ -35,10 +35,13 @@ def build_process_check(match: str) -> dict[str, Any]:
 
 
 def run_once(config: V2Config) -> dict[str, Any]:
-    logger = setup_logging(config.log_level, log_file_path(config))
-    logger.info("process watchdog: checking match=%s", config.app_match)
+    from ..shared.time import load_boot_id
+
+    logger = setup_logging(config.log_level, log_file_path(config), component="process_watchdog")
+    boot_id = load_boot_id()
+    logger.info(f"check start | boot_id={boot_id} | match={config.app_match}")
     check = build_process_check(config.app_match)
-    logger.info("process watchdog: result ok=%s detail=%s", check["ok"], check["detail"])
+    logger.info(f"check result ok={check['ok']} | boot_id={boot_id}")
     return check
 
 

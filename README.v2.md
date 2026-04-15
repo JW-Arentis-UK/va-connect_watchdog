@@ -210,8 +210,26 @@ python -m tools.ubuntu.runtime.site_watchdog
 ### FastAPI app
 
 ```bash
-uvicorn tools.ubuntu.web.app:app --host 127.0.0.1 --port 8000
+uvicorn tools.ubuntu.web.app:app --reload --port 8000
 ```
+
+### Local test URLs
+
+- http://127.0.0.1:8000/health
+- http://127.0.0.1:8000/gateways
+- http://127.0.0.1:8000/debug/last-incident
+
+### Windows quick start
+
+From the project root, run:
+
+```bat
+run_v2.bat
+```
+
+That opens one window for the API and one window for the watchdog, and keeps both open so you can watch the logs.
+
+If `.venv` exists, the batch file activates it in each window. If `requirements.txt` appears later, the batch file will try to install it before launching.
 
 ### Optional data directory override
 

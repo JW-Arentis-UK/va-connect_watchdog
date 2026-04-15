@@ -1,0 +1,29 @@
+{
+  "checks": {
+    "app": {
+      "detail": "process missing for match 'va-connect'",
+      "last_checked": "2026-04-15T12:38:25Z",
+      "ok": false
+    },
+    "boot": {
+      "detail": "boot_id=unknown",
+      "last_checked": "2026-04-15T12:38:25Z",
+      "ok": true
+    },
+    "wan": {
+      "detail": "WAN unreachable for 1.1.1.1",
+      "last_checked": "2026-04-15T12:38:25Z",
+      "ok": false
+    }
+  },
+  "device_id": "JW_DELL_Office",
+  "health": {
+    "fault_active": true,
+    "last_healthy_at": null,
+    "last_incident_id": null,
+    "last_incident_type": "unknown",
+    "notes": "App process is not running."
+  },
+  "last_seen": "2026-04-15T12:38:25Z",
+  "overall_status": "faulted"
+}

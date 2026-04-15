@@ -10,9 +10,10 @@ from .normalization import (
     normalize_device_status,
     normalize_event,
     normalize_incident,
+    normalize_metric_sample,
     normalize_state,
 )
-from .paths import device_status_path, events_path, incidents_path, log_file_path, logs_dir, state_path
+from .paths import device_status_path, events_path, incidents_path, log_file_path, logs_dir, metrics_path, state_path
 
 
 def ensure_layout(config: V2Config) -> None:
@@ -112,6 +113,11 @@ def list_incidents(config: V2Config) -> list[dict[str, Any]]:
     return sorted(incidents, key=lambda item: item.get("timestamp", ""), reverse=True)
 
 
+def latest_incident(config: V2Config) -> dict[str, Any] | None:
+    incidents = list_incidents(config)
+    return incidents[0] if incidents else None
+
+
 def save_incident(config: V2Config, incident: Any) -> dict[str, Any]:
     normalized = normalize_incident(incident)
     append_jsonl(incidents_path(config), normalized)
@@ -130,6 +136,21 @@ def latest_open_incident(config: V2Config) -> dict[str, Any] | None:
         if incident.get("status") != "resolved":
             return incident
     return None
+
+
+def latest_event(config: V2Config) -> dict[str, Any] | None:
+    events = load_events(config)
+    return events[-1] if events else None
+
+
+def load_metrics(config: V2Config) -> list[dict[str, Any]]:
+    return [normalize_metric_sample(item) for item in read_jsonl(metrics_path(config))]
+
+
+def append_metric(config: V2Config, metric: Any) -> dict[str, Any]:
+    normalized = normalize_metric_sample(metric)
+    append_jsonl(metrics_path(config), normalized)
+    return normalized
 
 
 def log_path(config: V2Config) -> Path:

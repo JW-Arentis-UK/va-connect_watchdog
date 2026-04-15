@@ -4,15 +4,15 @@ import logging
 from pathlib import Path
 
 
-def setup_logging(level: str = "INFO", log_file: Path | None = None) -> logging.Logger:
+def setup_logging(level: str = "INFO", log_file: Path | None = None, component: str = "va_connect_v2") -> logging.LoggerAdapter:
     logger = logging.getLogger("va_connect_v2")
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
     logger.propagate = False
 
     if logger.handlers:
-        return logger
+        return logging.LoggerAdapter(logger, {"component": component})
 
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(component)s %(message)s")
 
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
@@ -24,4 +24,4 @@ def setup_logging(level: str = "INFO", log_file: Path | None = None) -> logging.
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
-    return logger
+    return logging.LoggerAdapter(logger, {"component": component})

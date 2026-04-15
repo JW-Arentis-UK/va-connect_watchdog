@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VA-Connect v2 Dashboard</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main class="page">
+    <section class="page-header">
+      <div>
+        <div class="eyebrow">Crash Investigation</div>
+        <h1 id="device-id">Loading...</h1>
+      </div>
+      <div class="header-meta">
+        <span id="overall-status" class="status status-unknown">unknown</span>
+        <div id="last-seen" class="muted">last seen: -</div>
+      </div>
+    </section>
+
+    <section class="panel top-panel">
+      <div class="section-title">Live System State</div>
+      <div id="live-state" class="metric-grid">
+        <div class="metric-card">Loading...</div>
+      </div>
+    </section>
+
+    <section class="main-grid">
+      <section class="panel">
+        <div class="section-title">Last Incident</div>
+        <div id="incident" class="incident">
+          <div class="muted">Loading...</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-title">Pre-Crash Snapshot</div>
+        <div class="snapshot-note">Values captured just before the incident.</div>
+        <div id="snapshot-state" class="metric-grid">
+          <div class="muted">Loading...</div>
+        </div>
+      </section>
+    </section>
+
+    <section class="bottom-grid">
+      <section class="panel">
+        <div class="section-title">System Activity (Last 24h)</div>
+        <div class="legend">CPU, memory, disk, temperature</div>
+        <div id="activity-graph" class="activity-graph">
+          <div class="muted">Loading...</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-title">Event Timeline</div>
+        <div id="timeline" class="timeline-list">
+          <div class="muted">Loading...</div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

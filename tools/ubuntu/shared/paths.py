@@ -41,5 +41,9 @@ def device_status_path(config: object | None = None) -> Path:
     return data_dir(config) / "device_status.json"
 
 
+def metrics_path(config: object | None = None) -> Path:
+    return data_dir(config) / "metrics.jsonl"
+
+
 def log_file_path(config: object | None = None) -> Path:
     return logs_dir(config) / "v2.log"

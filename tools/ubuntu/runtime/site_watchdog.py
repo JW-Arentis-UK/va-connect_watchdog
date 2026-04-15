@@ -18,6 +18,7 @@ from ..shared.normalization import (
 from ..shared.paths import log_file_path
 from ..shared.storage import (
     append_event,
+    append_metric,
     get_incident,
     latest_open_incident,
     load_state,
@@ -25,8 +26,16 @@ from ..shared.storage import (
     save_incident,
     save_state,
 )
+from ..shared.system import collect_system_sample
 from ..shared.time import iso_utc, load_boot_id
 from .process_watchdog import build_process_check
+
+
+def format_log(message: str, boot_id: str, incident_id: str | None = None) -> str:
+    parts = [message, f"boot_id={boot_id}"]
+    if incident_id:
+        parts.append(f"incident_id={incident_id}")
+    return " | ".join(parts)
 
 
 def ping_host(host: str, timeout_seconds: int) -> dict[str, Any]:
@@ -149,7 +158,12 @@ def classify_failure(checks: dict[str, dict[str, Any]]) -> tuple[str, IncidentTy
     )
 
 
-def build_device_status(config: V2Config, checks: dict[str, dict[str, Any]], state: dict[str, Any]) -> dict[str, Any]:
+def build_device_status(
+    config: V2Config,
+    checks: dict[str, dict[str, Any]],
+    state: dict[str, Any],
+    observed_at: str,
+) -> dict[str, Any]:
     app_ok = bool(checks["app"]["ok"])
     wan_ok = bool(checks["wan"]["ok"])
     overall_status = "healthy"
@@ -183,11 +197,12 @@ def build_device_status(config: V2Config, checks: dict[str, dict[str, Any]], sta
         "last_healthy_at": state.get("last_healthy_at"),
         "notes": notes,
     }
+    last_seen = observed_at if overall_status != "faulted" else str(state.get("last_healthy_at") or observed_at)
     return normalize_device_status(
         {
             "device_id": config.device_id,
             "overall_status": overall_status,
-            "last_seen": iso_utc(),
+            "last_seen": last_seen,
             "checks": checks,
             "health": health,
         }
@@ -248,35 +263,42 @@ class SiteWatchdog:
     config: V2Config
 
     def __post_init__(self) -> None:
-        self.logger = setup_logging(self.config.log_level, log_file_path(self.config))
-        self.logger.info("site watchdog initialized for device_id=%s", self.config.device_id)
+        self.logger = setup_logging(self.config.log_level, log_file_path(self.config), component="site_watchdog")
+        self.logger.info(format_log(f"initialized device_id={self.config.device_id}", load_boot_id()))
 
     def run_once(self) -> dict[str, Any]:
-        self.logger.info("site watchdog: starting check cycle")
-        state = load_state(self.config)
         boot_id = load_boot_id()
+        self.logger.info(format_log("check cycle start", boot_id))
+        state = load_state(self.config)
+        system_sample = collect_system_sample()
+        append_metric(self.config, system_sample)
         checks = build_basic_checks(self.config)
-        status = build_device_status(self.config, checks, state)
-        open_incident = latest_open_incident(self.config)
-        now = iso_utc()
-
+        observed_at = iso_utc()
         self.logger.info(
-            "site watchdog: status=%s app_ok=%s wan_ok=%s",
-            status["overall_status"],
-            checks["app"]["ok"],
-            checks["wan"]["ok"],
+            format_log(f"app check ok={checks['app']['ok']} detail={checks['app']['detail']}", boot_id)
         )
+        self.logger.info(
+            format_log(f"wan check ok={checks['wan']['ok']} detail={checks['wan']['detail']}", boot_id)
+        )
+        status = build_device_status(self.config, checks, state, observed_at)
+        open_incident = latest_open_incident(self.config)
+        now = observed_at
+
+        self.logger.info(format_log(f"status={status['overall_status']}", boot_id))
 
         if status["overall_status"] == "healthy":
             if open_incident:
-                self.logger.info("site watchdog: resolving incident_id=%s", open_incident["incident_id"])
+                self.logger.info(
+                    format_log("incident resolved", boot_id, str(open_incident["incident_id"]))
+                )
                 resolved = resolve_incident_record(open_incident, boot_id)
+                resolved_message = "app recovered" if checks["app"]["ok"] else "wan recovered"
                 append_event(
                     self.config,
                     build_event(
                         component="site_watchdog",
                         level="info",
-                        message="incident resolved",
+                        message=resolved_message,
                         incident_id=resolved["incident_id"],
                         boot_id=boot_id,
                         context={"overall_status": "healthy"},
@@ -287,17 +309,18 @@ class SiteWatchdog:
                 state["last_healthy_at"] = now
                 state["last_error"] = None
             else:
-                self.logger.info("site watchdog: no incident open")
+                self.logger.info(format_log("no incident open", boot_id))
         else:
             if open_incident is None:
-                self.logger.warning("site watchdog: creating incident")
                 incident = create_incident_from_checks(self.config, checks, boot_id)
+                self.logger.warning(format_log(f"incident created type={incident['type']}", boot_id, incident["incident_id"]))
+                failure_message = "app process missing" if not checks["app"]["ok"] else "wan check failed"
                 append_event(
                     self.config,
                     build_event(
                         component="site_watchdog",
                         level="warning" if incident["severity"] != "critical" else "error",
-                        message="check failed",
+                        message=failure_message,
                         incident_id=incident["incident_id"],
                         boot_id=boot_id,
                         context={
@@ -310,13 +333,16 @@ class SiteWatchdog:
                 state["open_incident_id"] = incident["incident_id"]
                 state["last_error"] = incident["cause"]
             else:
-                self.logger.warning("site watchdog: incident still open incident_id=%s", open_incident["incident_id"])
+                self.logger.warning(
+                    format_log("incident still open", boot_id, str(open_incident["incident_id"]))
+                )
+                failure_message = "app process missing" if not checks["app"]["ok"] else "wan check failed"
                 append_event(
                     self.config,
                     build_event(
                         component="site_watchdog",
                         level="warning",
-                        message="check still failing",
+                        message=failure_message,
                         incident_id=open_incident["incident_id"],
                         boot_id=boot_id,
                         context={
@@ -326,24 +352,24 @@ class SiteWatchdog:
                     ),
                 )
 
-        status = build_device_status(self.config, checks, state)
+        status = build_device_status(self.config, checks, state, observed_at)
         state["device_id"] = self.config.device_id
         state["boot_id"] = boot_id
         state["last_check_at"] = now
         state["last_status"] = status["overall_status"]
         save_device_status(self.config, status)
         save_state(self.config, state)
-        self.logger.info("site watchdog: check cycle complete")
+        self.logger.info(format_log("check cycle complete", boot_id))
         return status
 
     def run_forever(self) -> None:
-        self.logger.info("site watchdog: entering loop interval=%ss", self.config.check_interval_seconds)
+        self.logger.info(format_log(f"loop interval={self.config.check_interval_seconds}s", load_boot_id()))
         while True:
             start = time.monotonic()
             try:
                 self.run_once()
             except Exception as exc:  # pragma: no cover - defensive runtime guard
-                self.logger.exception("site watchdog: run failed: %s", exc)
+                self.logger.exception(format_log(f"run failed: {exc}", load_boot_id()))
             elapsed = time.monotonic() - start
             sleep_for = max(1, self.config.check_interval_seconds - int(elapsed))
             time.sleep(sleep_for)

@@ -1,0 +1,18 @@
+[Unit]
+Description=VA-Connect v2 site watchdog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/va-connect-watchdog
+Environment=PYTHONUNBUFFERED=1
+Environment=VA_CONNECT_V2_DATA_DIR=/var/lib/va-connect-v2
+Environment=VA_CONNECT_V2_CONFIG=/opt/va-connect-watchdog/config.json
+EnvironmentFile=-/opt/va-connect-watchdog/site_watchdog.env
+ExecStart=/opt/va-connect-watchdog/.venv/bin/python -m tools.ubuntu.runtime.site_watchdog
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
