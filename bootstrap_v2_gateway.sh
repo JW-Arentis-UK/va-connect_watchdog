@@ -15,7 +15,7 @@ BRANCH="${2:-$DEFAULT_BRANCH}"
 TARGET_DIR="${3:-$DEFAULT_TARGET_DIR}"
 DATA_DIR="${DATA_DIR:-$DEFAULT_DATA_DIR}"
 INSTALL_USER="${SUDO_USER:-$(id -un)}"
-INSTALL_GROUP="$INSTALL_USER"
+INSTALL_GROUP="$(id -gn "${SUDO_USER:-$(id -un)}")"
 
 say() {
   printf '\n==> %s\n' "$1"
