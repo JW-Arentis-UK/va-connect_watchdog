@@ -215,14 +215,14 @@ python -m tools.ubuntu.runtime.site_watchdog
 ### FastAPI app
 
 ```bash
-uvicorn tools.ubuntu.web.app:app --reload --port 8000
+uvicorn tools.ubuntu.web.app:app --reload --port 8787
 ```
 
 ### Local test URLs
 
-- http://127.0.0.1:8000/health
-- http://127.0.0.1:8000/gateways
-- http://127.0.0.1:8000/debug/last-incident
+- http://127.0.0.1:8787/health
+- http://127.0.0.1:8787/gateways
+- http://127.0.0.1:8787/debug/last-incident
 
 ### Windows quick start
 

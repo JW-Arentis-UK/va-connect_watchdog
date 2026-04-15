@@ -134,7 +134,7 @@ Example config file:
   "check_interval_seconds": 30,
   "ping_timeout_seconds": 3,
   "web_host": "127.0.0.1",
-  "web_port": 8000,
+  "web_port": 8787,
   "log_level": "INFO"
 }
 ```

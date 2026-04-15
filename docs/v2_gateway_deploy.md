@@ -72,7 +72,7 @@ The watchdog reads environment variables and an optional config file:
 - `VA_CONNECT_V2_CONFIG=/opt/va-connect-watchdog/config.json`
 - `VA_CONNECT_V2_DEVICE_ID=...`
 - `VA_CONNECT_V2_WEB_HOST=0.0.0.0`
-- `VA_CONNECT_V2_WEB_PORT=80`
+- `VA_CONNECT_V2_WEB_PORT=8787`
 
 The systemd unit already supports an optional env file:
 
@@ -110,10 +110,10 @@ Start the API on the gateway with:
 ```bash
 cd /opt/va-connect-watchdog
 source .venv/bin/activate
-uvicorn tools.ubuntu.web.app:app --host 0.0.0.0 --port 80
+uvicorn tools.ubuntu.web.app:app --host 0.0.0.0 --port 8787
 ```
 
-If the port is already in use or you do not have permission to bind to port 80, stop the other service or run with elevated privileges.
+If the port is already in use or you do not have permission to bind to port 8787, stop the other service or run with elevated privileges.
 
 ## 7. Test commands
 
@@ -142,13 +142,13 @@ test -w /var/lib/va-connect-v2 && echo writable
 Open the UI from another machine on the same network:
 
 ```text
-http://<gateway-ip>:80
+http://<gateway-ip>:8787
 ```
 
 ## 9. Common issues
 
 - If the service does not start, check `systemctl status site_watchdog` and `journalctl -u site_watchdog -f`.
-- If the API does not bind to port 80, another service may already be using it.
+- If the API does not bind to port 8787, another service may already be using it.
 - If state files are not written, confirm `/var/lib/va-connect-v2` exists and is writable.
 - If config changes do not apply, confirm `VA_CONNECT_V2_CONFIG` points to the right file and restart the service.
 

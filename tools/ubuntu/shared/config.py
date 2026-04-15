@@ -44,7 +44,7 @@ def load_config() -> V2Config:
     check_interval_seconds = int(os.environ.get("VA_CONNECT_V2_CHECK_INTERVAL_SECONDS", raw.get("check_interval_seconds", 30)))
     ping_timeout_seconds = int(os.environ.get("VA_CONNECT_V2_PING_TIMEOUT_SECONDS", raw.get("ping_timeout_seconds", 3)))
     web_host = str(os.environ.get("VA_CONNECT_V2_WEB_HOST", raw.get("web_host", "127.0.0.1"))).strip() or "127.0.0.1"
-    web_port = int(os.environ.get("VA_CONNECT_V2_WEB_PORT", raw.get("web_port", 8000)))
+    web_port = int(os.environ.get("VA_CONNECT_V2_WEB_PORT", raw.get("web_port", 8787)))
     log_level = str(os.environ.get("VA_CONNECT_V2_LOG_LEVEL", raw.get("log_level", "INFO"))).strip().upper() or "INFO"
 
     return V2Config(
