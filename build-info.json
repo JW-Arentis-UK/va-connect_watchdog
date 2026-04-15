@@ -1,7 +1,7 @@
 {
-  "build_number": "local-dev",
-  "commit_sha": "unknown",
-  "built_at": "",
+  "build_number": "1",
+  "commit_sha": "c6b255387e3cd91b775c54ba21aa0e1ded4622e0",
+  "built_at": "2026-04-15T12:47:25Z",
   "source_branch": "master",
   "source_repo": "JW-Arentis-UK/va-connect_watchdog"
 }
