@@ -9,6 +9,7 @@ from ..shared.storage import (
     latest_event,
     latest_incident,
     list_incidents,
+    load_build_info,
     load_device_status,
     load_events,
     load_metrics,
@@ -86,6 +87,7 @@ def health_payload(config: V2Config) -> dict[str, Any]:
     return {
         "ok": True,
         "device_id": config.device_id,
+        "build_info": load_build_info(),
         "storage": {
             "data_dir": str(config.data_dir),
             "events": len(load_events(config)),
@@ -101,6 +103,7 @@ def gateways_payload(config: V2Config) -> dict[str, Any]:
     device_status = load_device_status(config)
     incidents = list_incidents(config)
     return {
+        "build_info": load_build_info(),
         "gateways": [
             {
                 "device_status": device_status,
@@ -137,6 +140,7 @@ def debug_last_incident_payload(config: V2Config) -> dict[str, Any]:
         "incident": incident,
         "event": latest_event(config),
         "device_status": load_device_status(config),
+        "build_info": load_build_info(),
         "system_state": system_state,
         "pre_crash_snapshot": pre_crash_snapshot,
         "system_activity_24h": activity,

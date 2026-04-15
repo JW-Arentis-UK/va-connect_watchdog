@@ -19,6 +19,7 @@ from ..shared.paths import log_file_path
 from ..shared.storage import (
     append_event,
     append_metric,
+    load_build_info,
     get_incident,
     latest_open_incident,
     load_state,
@@ -264,7 +265,13 @@ class SiteWatchdog:
 
     def __post_init__(self) -> None:
         self.logger = setup_logging(self.config.log_level, log_file_path(self.config), component="site_watchdog")
-        self.logger.info(format_log(f"initialized device_id={self.config.device_id}", load_boot_id()))
+        build_info = load_build_info()
+        self.logger.info(
+            format_log(
+                f"initialized device_id={self.config.device_id} build={build_info.get('build_number', 'local-dev')}",
+                load_boot_id(),
+            )
+        )
 
     def run_once(self) -> dict[str, Any]:
         boot_id = load_boot_id()

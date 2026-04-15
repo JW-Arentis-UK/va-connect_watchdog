@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from ..shared.config import load_config
 from ..shared.logging import setup_logging
 from ..shared.paths import log_file_path
-from ..shared.storage import ensure_layout
+from ..shared.storage import ensure_layout, load_build_info
 from ..shared.time import load_boot_id
 from .routes import router
 
@@ -18,7 +18,10 @@ def create_app() -> FastAPI:
     config = load_config()
     ensure_layout(config)
     logger = setup_logging(config.log_level, log_file_path(config), component="web")
-    logger.info(f"initialized device_id={config.device_id} | boot_id={load_boot_id()}")
+    build_info = load_build_info()
+    logger.info(
+        f"initialized device_id={config.device_id} build={build_info.get('build_number', 'local-dev')} | boot_id={load_boot_id()}"
+    )
 
     app = FastAPI(title="VA-Connect V2", version="2.0.0")
     app.add_middleware(
@@ -30,6 +33,7 @@ def create_app() -> FastAPI:
     )
     app.state.config = config
     app.state.logger = logger
+    app.state.build_info = build_info
     app.include_router(router)
 
     static_dir = Path(__file__).resolve().parent / "static"

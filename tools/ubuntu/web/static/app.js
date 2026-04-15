@@ -127,6 +127,15 @@ function renderSummary(deviceStatus) {
   }
 }
 
+function renderBuildInfo(buildInfo) {
+  const value = buildInfo || {};
+  const buildNumber = value.build_number || "local-dev";
+  const commitSha = value.commit_sha || "unknown";
+  const builtAt = value.built_at || "";
+  const branch = value.source_branch || "master";
+  setText("build-info", `build: ${buildNumber} • ${commitSha}${builtAt ? ` • ${builtAt}` : ""} • ${branch}`);
+}
+
 function renderIncident(incident, keyEvents) {
   const container = document.getElementById("incident");
   if (!container) {
@@ -241,6 +250,7 @@ async function loadDashboard() {
 
   const deviceStatus = data?.device_status || {};
   renderSummary(deviceStatus);
+  renderBuildInfo(data?.build_info || {});
   renderMetricGrid("live-state", data?.system_state || null);
   renderIncident(data?.incident || null, data?.key_events || []);
   renderMetricGrid("snapshot-state", data?.pre_crash_snapshot || null);
@@ -251,6 +261,7 @@ async function loadDashboard() {
 loadDashboard().catch((error) => {
   setText("device-id", "Unable to load dashboard");
   setText("last-seen", String(error.message || error));
+  setText("build-info", "build: unavailable");
 
   const ids = ["live-state", "snapshot-state", "incident", "activity-graph", "timeline"];
   for (const id of ids) {

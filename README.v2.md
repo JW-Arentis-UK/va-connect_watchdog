@@ -14,6 +14,7 @@ It keeps only the core pieces needed to monitor a device, record incidents, and 
 - one FastAPI app with:
   - `GET /health`
   - `GET /gateways`
+- one read-only build metadata file stamped by GitHub Actions
 
 ## What it does not include
 
@@ -80,6 +81,8 @@ The default data directory is `.v2-data/` in the repository root.
 
 The main files are:
 
+- `build-info.json`
+  - read-only build metadata stamped by GitHub Actions
 - `.v2-data/state.json`
 - `.v2-data/device_status.json`
 - `.v2-data/events.jsonl`
@@ -87,6 +90,8 @@ The main files are:
 - `.v2-data/logs/v2.log`
 
 For a real Ubuntu deployment, set `VA_CONNECT_V2_DATA_DIR` to a system path such as `/var/lib/va-connect-v2`.
+
+The dashboard and API also read `build-info.json` from the repo root. The gateway never writes it; GitHub Actions updates it before the gateway pulls the repo.
 
 ## How the core works
 

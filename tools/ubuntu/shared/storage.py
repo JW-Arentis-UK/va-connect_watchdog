@@ -13,7 +13,7 @@ from .normalization import (
     normalize_metric_sample,
     normalize_state,
 )
-from .paths import device_status_path, events_path, incidents_path, log_file_path, logs_dir, metrics_path, state_path
+from .paths import build_info_path, device_status_path, events_path, incidents_path, log_file_path, logs_dir, metrics_path, state_path
 
 
 def ensure_layout(config: V2Config) -> None:
@@ -151,6 +151,19 @@ def append_metric(config: V2Config, metric: Any) -> dict[str, Any]:
     normalized = normalize_metric_sample(metric)
     append_jsonl(metrics_path(config), normalized)
     return normalized
+
+
+def load_build_info() -> dict[str, Any]:
+    return read_json(
+        build_info_path(),
+        {
+            "build_number": "local-dev",
+            "commit_sha": "unknown",
+            "built_at": "",
+            "source_branch": "master",
+            "source_repo": "JW-Arentis-UK/va-connect_watchdog",
+        },
+    )
 
 
 def log_path(config: V2Config) -> Path:

@@ -4,11 +4,15 @@ from pathlib import Path
 import os
 
 
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
 def default_data_dir() -> Path:
     override = str(os.environ.get("VA_CONNECT_V2_DATA_DIR", "")).strip()
     if override:
         return Path(override)
-    return Path(__file__).resolve().parents[3] / ".v2-data"
+    return repo_root() / ".v2-data"
 
 
 def data_dir(config: object | None = None) -> Path:
@@ -47,3 +51,7 @@ def metrics_path(config: object | None = None) -> Path:
 
 def log_file_path(config: object | None = None) -> Path:
     return logs_dir(config) / "v2.log"
+
+
+def build_info_path() -> Path:
+    return repo_root() / "build-info.json"
