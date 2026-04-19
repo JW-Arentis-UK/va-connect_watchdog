@@ -36,10 +36,8 @@ That script will:
 
 - install prerequisites
 - clone or update the repo in `/opt/va-connect-watchdog`
-- create `/var/lib/va-connect-v2`
-- create `.venv`
-- install Python dependencies
-- install and start `site_watchdog.service`
+- create `/var/lib/va-connect-site-watchdog`
+- create `/opt/va-connect-watchdog/site-watchdog.json`
 - install and start `va-connect-watchdog-web.service` using the legacy web server
 
 ## 1. Copy the project
@@ -61,18 +59,16 @@ sudo bash bootstrap_v2_gateway.sh
 The watchdog writes local state, incidents, events, and logs to:
 
 ```bash
-/var/lib/va-connect-v2
+/var/lib/va-connect-site-watchdog
 ```
 
 Create it and make sure it is writable:
 
 ```bash
-sudo mkdir -p /var/lib/va-connect-v2
-sudo chown -R root:root /var/lib/va-connect-v2
-sudo chmod -R 755 /var/lib/va-connect-v2
+sudo mkdir -p /var/lib/va-connect-site-watchdog
+sudo chown -R root:root /var/lib/va-connect-site-watchdog
+sudo chmod -R 755 /var/lib/va-connect-site-watchdog
 ```
-
-If you run the service as a non-root user, change ownership to that user instead.
 
 ## 3. Set permissions
 
@@ -88,80 +84,38 @@ If you use a virtual environment or local config file, make sure those files are
 
 The watchdog reads environment variables and an optional config file:
 
-- `VA_CONNECT_V2_DATA_DIR=/var/lib/va-connect-v2`
-- `VA_CONNECT_V2_CONFIG=/opt/va-connect-watchdog/config.json`
-- `VA_CONNECT_V2_DEVICE_ID=...`
-- `VA_CONNECT_V2_WEB_HOST=0.0.0.0`
-- `VA_CONNECT_V2_WEB_PORT=8787`
+- `SITE_WATCHDOG_CONFIG=/opt/va-connect-watchdog/site-watchdog.json`
 
-The systemd unit already supports an optional env file:
-
-```bash
-/opt/va-connect-watchdog/site_watchdog.env
-```
-
-## 5. Start the watchdog service
-
-Install the unit file:
-
-```bash
-sudo cp /opt/va-connect-watchdog/tools/ubuntu/deploy/site_watchdog.service /etc/systemd/system/site_watchdog.service
-sudo systemctl daemon-reload
-sudo systemctl enable site_watchdog.service
-sudo systemctl start site_watchdog.service
-```
-
-The bootstrap also installs `va-connect-watchdog-web.service` and starts it automatically on port `8787`.
+The bootstrap installs `va-connect-watchdog-web.service` and starts it automatically on port `8787`.
 
 Check status:
 
 ```bash
-systemctl status site_watchdog
 systemctl status va-connect-watchdog-web
 ```
 
 Follow logs:
 
 ```bash
-journalctl -u site_watchdog -f
 journalctl -u va-connect-watchdog-web -f
 ```
 
-## 6. Run the FastAPI app manually
+## 5. Test commands
 
-Start the API on the gateway with:
-
-```bash
-cd /opt/va-connect-watchdog
-source .venv/bin/activate
-uvicorn tools.ubuntu.web.app:app --host 0.0.0.0 --port 8787
-```
-
-If the port is already in use or you do not have permission to bind to port 8787, stop the other service or run with elevated privileges.
-
-## 7. Test commands
-
-Check the watchdog logs:
+Check the local page and endpoints:
 
 ```bash
-journalctl -u site_watchdog -f
-```
-
-Check the local endpoints:
-
-```bash
-curl http://127.0.0.1/health
-curl http://127.0.0.1/gateways
-curl http://127.0.0.1/debug/last-incident
+curl http://127.0.0.1:8787/
+curl http://127.0.0.1:8787/api/status
 ```
 
 Check that the data directory is writable:
 
 ```bash
-test -w /var/lib/va-connect-v2 && echo writable
+test -w /var/lib/va-connect-site-watchdog && echo writable
 ```
 
-## 8. Browser access
+## 6. Browser access
 
 Open the UI from another machine on the same network:
 
@@ -169,11 +123,11 @@ Open the UI from another machine on the same network:
 http://<gateway-ip>:8787
 ```
 
-## 9. Common issues
+## 7. Common issues
 
-- If the service does not start, check `systemctl status site_watchdog` and `journalctl -u site_watchdog -f`.
-- If the API does not bind to port 8787, another service may already be using it.
-- If state files are not written, confirm `/var/lib/va-connect-v2` exists and is writable.
-- If config changes do not apply, confirm `VA_CONNECT_V2_CONFIG` points to the right file and restart the service.
+- If the service does not start, check `systemctl status va-connect-watchdog-web` and `journalctl -u va-connect-watchdog-web -f`.
+- If the web UI does not bind to port 8787, another service may already be using it.
+- If state files are not written, confirm `/var/lib/va-connect-site-watchdog` exists and is writable.
+- If config changes do not apply, confirm `SITE_WATCHDOG_CONFIG` points to the right file and restart the service.
 
-That is the full gateway deployment path for v2.
+That is the stripped-down gateway deployment path for the working web base.
