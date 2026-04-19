@@ -3014,6 +3014,37 @@ def status_payload() -> Dict[str, Any]:
     }
 
 
+def base_status_payload() -> Dict[str, Any]:
+    status = status_payload()
+    hardware = status.get("hardware_identity") or {}
+    state = status.get("state") or {}
+    build_info = status.get("build_info") or {}
+    diagnosis = status.get("diagnosis") or {}
+    events = status.get("recent_events") or []
+    return {
+        "device_id": str(hardware.get("serial", "unknown")),
+        "display_name": str(status.get("display_name", "unknown")),
+        "build": str(build_info.get("git_commit", "unknown")),
+        "fault_active": bool(state.get("fault_active")),
+        "last_check_at": str(state.get("last_check_at", "")),
+        "last_healthy_at": str(state.get("last_healthy_at", "")),
+        "monitoring_state": str(state.get("monitoring_state", "unknown")),
+        "diagnosis": {
+            "title": str(diagnosis.get("title", "unknown")),
+            "detail": str(diagnosis.get("detail", "")),
+        },
+        "web_service": service_status_payload("va-connect-watchdog-web.service"),
+        "recent_events": [
+            {
+                "ts": str(item.get("ts", "")),
+                "summary": str(item.get("summary", "")),
+                "kind": str(item.get("kind", "")),
+            }
+            for item in events[:10]
+        ],
+    }
+
+
 def launch_update() -> Dict[str, Any]:
     current = read_json(UPDATE_STATUS_PATH, {})
     if current.get("state") == "running":
@@ -7007,6 +7038,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/download/tools-install-log":
             self._send_file(safe_tools_install_file("log"), download_name="watchdog-tools-install.log")
+            return
+        if parsed.path in {"/api/base-status", "/status.json"}:
+            self._send_json(base_status_payload())
             return
         if parsed.path in {"/", "/index.html"}:
             body = render_page(status_payload()).encode("utf-8")

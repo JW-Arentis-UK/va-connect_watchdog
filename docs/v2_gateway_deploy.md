@@ -106,6 +106,7 @@ Check the local page and endpoints:
 
 ```bash
 curl http://127.0.0.1:8787/
+curl http://127.0.0.1:8787/api/base-status
 curl http://127.0.0.1:8787/api/status
 ```
 
