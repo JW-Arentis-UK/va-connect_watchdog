@@ -40,7 +40,7 @@ That script will:
 - create `.venv`
 - install Python dependencies
 - install and start `site_watchdog.service`
-- install and start `va-connect-watchdog-web.service`
+- install and start `va-connect-watchdog-web.service` using the legacy web server
 
 ## 1. Copy the project
 
@@ -111,7 +111,7 @@ sudo systemctl enable site_watchdog.service
 sudo systemctl start site_watchdog.service
 ```
 
-The bootstrap also installs `va-connect-watchdog-web.service` and starts it automatically.
+The bootstrap also installs `va-connect-watchdog-web.service` and starts it automatically on port `8787`.
 
 Check status:
 
@@ -127,7 +127,7 @@ journalctl -u site_watchdog -f
 journalctl -u va-connect-watchdog-web -f
 ```
 
-## 6. Run the API manually
+## 6. Run the FastAPI app manually
 
 Start the API on the gateway with:
 
@@ -147,7 +147,7 @@ Check the watchdog logs:
 journalctl -u site_watchdog -f
 ```
 
-Check the API:
+Check the local endpoints:
 
 ```bash
 curl http://127.0.0.1/health

@@ -92,24 +92,41 @@ prepare_data_dir() {
 prepare_config() {
   say "Preparing config"
   local config_path="$TARGET_DIR/config.json"
-  if [[ -f "$config_path" ]]; then
-    echo "Keeping existing $config_path"
-    return
-  fi
+  python3 - "$config_path" "$DATA_DIR" <<'PY'
+import json
+import pathlib
+import socket
+import sys
 
-  cat > "$config_path" <<EOF
-{
-  "device_id": "$(hostname -s)",
-  "data_dir": "$DATA_DIR",
-  "app_match": "va-connect",
-  "wan_hosts": "1.1.1.1",
-  "check_interval_seconds": 30,
-  "ping_timeout_seconds": 3,
-  "web_host": "0.0.0.0",
-  "web_port": 8787,
-  "log_level": "INFO"
+path = pathlib.Path(sys.argv[1])
+data_dir = sys.argv[2]
+current = {}
+if path.exists():
+    try:
+        current = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        current = {}
+
+defaults = {
+    "device_id": socket.gethostname().split(".")[0],
+    "data_dir": data_dir,
+    "app_match": "va-connect",
+    "wan_hosts": "1.1.1.1",
+    "check_interval_seconds": 30,
+    "ping_timeout_seconds": 3,
+    "web_host": "0.0.0.0",
+    "web_port": 8787,
+    "web_bind": "0.0.0.0",
+    "log_level": "INFO",
 }
-EOF
+
+defaults.update(current if isinstance(current, dict) else {})
+defaults["data_dir"] = data_dir
+defaults["web_host"] = "0.0.0.0"
+defaults["web_port"] = 8787
+defaults["web_bind"] = "0.0.0.0"
+path.write_text(json.dumps(defaults, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
   chown_install_user "$config_path"
 }
 
@@ -132,14 +149,11 @@ install_python_env() {
 install_systemd_unit() {
   say "Installing systemd unit"
   local python_exec
-  local uvicorn_exec
 
   if [[ -x "$TARGET_DIR/.venv/bin/python" ]]; then
     python_exec="$TARGET_DIR/.venv/bin/python"
-    uvicorn_exec="$TARGET_DIR/.venv/bin/uvicorn"
   else
     python_exec="/usr/bin/python3"
-    uvicorn_exec="/usr/bin/python3 -m uvicorn"
   fi
 
   cat > "$SYSTEMD_DIR/$SERVICE_NAME" <<EOF
@@ -150,7 +164,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=$WEB_SERVICE_USER
+User=$INSTALL_USER
 WorkingDirectory=$TARGET_DIR
 Environment=PYTHONUNBUFFERED=1
 Environment=VA_CONNECT_V2_DATA_DIR=$DATA_DIR
@@ -172,13 +186,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=$INSTALL_USER
+User=$WEB_SERVICE_USER
+Group=root
 WorkingDirectory=$TARGET_DIR
 Environment=PYTHONUNBUFFERED=1
 Environment=VA_CONNECT_V2_DATA_DIR=$DATA_DIR
-Environment=VA_CONNECT_V2_CONFIG=$TARGET_DIR/config.json
-EnvironmentFile=-$TARGET_DIR/site_watchdog.env
-ExecStart=$uvicorn_exec tools.ubuntu.web.app:app --host 0.0.0.0 --port 8787
+Environment=SITE_WATCHDOG_CONFIG=$TARGET_DIR/config.json
+ExecStart=/usr/bin/python3 $TARGET_DIR/tools/ubuntu/va_connect_watchdog_web.py
 Restart=always
 RestartSec=5
 
@@ -217,6 +231,9 @@ Manual API test:
 
 Browser:
   http://<gateway-ip>:8787
+
+Legacy web UI:
+  /usr/bin/python3 $TARGET_DIR/tools/ubuntu/va_connect_watchdog_web.py
 EOF
 }
 
