@@ -2,12 +2,31 @@
 
 Minimal deployment steps for a Linux gateway.
 
+If the gateway still has the old v1 install, remove it first:
+
+```bash
+sudo bash tools/ubuntu/uninstall_v1_watchdog.sh
+```
+
 ## Fresh gateway bootstrap
 
 For a brand-new gateway, fetch and run the root bootstrap script:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/master/bootstrap_v2_gateway.sh -o /tmp/bootstrap_v2_gateway.sh
+sudo bash /tmp/bootstrap_v2_gateway.sh
+```
+
+If `curl` is not installed, use Python instead:
+
+```bash
+python3 - <<'PY'
+from urllib.request import urlretrieve
+urlretrieve(
+    "https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/master/bootstrap_v2_gateway.sh",
+    "/tmp/bootstrap_v2_gateway.sh",
+)
+PY
 sudo bash /tmp/bootstrap_v2_gateway.sh
 ```
 
