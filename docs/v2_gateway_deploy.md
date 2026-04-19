@@ -8,6 +8,12 @@ If the gateway still has the old v1 install, remove it first:
 sudo bash tools/ubuntu/uninstall_v1_watchdog.sh
 ```
 
+To remove the v2 install later, use:
+
+```bash
+sudo bash tools/ubuntu/uninstall_v2_gateway.sh
+```
+
 ## Fresh gateway bootstrap
 
 For a brand-new gateway, fetch and run the root bootstrap script:
