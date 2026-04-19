@@ -10,6 +10,7 @@ SERVICE_NAME="site_watchdog.service"
 WEB_SERVICE_NAME="va-connect-watchdog-web.service"
 SYSTEMD_DIR="/etc/systemd/system"
 USE_VENV=1
+PIP_USER_RUNNER=""
 
 REPO_URL="${1:-$DEFAULT_REPO_URL}"
 BRANCH="${2:-$DEFAULT_BRANCH}"
@@ -58,6 +59,8 @@ install_prereqs() {
     say "python3-venv is unavailable; will use system Python packages"
     USE_VENV=0
   fi
+
+  PIP_USER_RUNNER="sudo -u $INSTALL_USER"
 }
 
 sync_repo() {
@@ -119,9 +122,9 @@ install_python_env() {
   fi
 
   rm -rf "$TARGET_DIR/.venv"
-  say "Installing Python packages into system Python"
-  python3 -m pip install --upgrade pip setuptools wheel --break-system-packages
-  python3 -m pip install fastapi uvicorn psutil --break-system-packages
+  say "Installing Python packages for the install user"
+  $PIP_USER_RUNNER python3 -m pip install --user --upgrade pip setuptools wheel
+  $PIP_USER_RUNNER python3 -m pip install --user fastapi uvicorn psutil
 }
 
 install_systemd_unit() {
