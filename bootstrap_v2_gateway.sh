@@ -11,6 +11,7 @@ WEB_SERVICE_NAME="va-connect-watchdog-web.service"
 SYSTEMD_DIR="/etc/systemd/system"
 USE_VENV=1
 PIP_USER_RUNNER=""
+WEB_SERVICE_USER="${SUDO_USER:-$(id -un)}"
 
 REPO_URL="${1:-$DEFAULT_REPO_URL}"
 BRANCH="${2:-$DEFAULT_BRANCH}"
@@ -118,6 +119,7 @@ install_python_env() {
     "$TARGET_DIR/.venv/bin/pip" install --upgrade pip setuptools wheel
     "$TARGET_DIR/.venv/bin/pip" install fastapi uvicorn psutil
     chown_install_user "$TARGET_DIR/.venv"
+    WEB_SERVICE_USER="root"
     return
   fi
 
@@ -148,7 +150,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=$INSTALL_USER
+User=$WEB_SERVICE_USER
 WorkingDirectory=$TARGET_DIR
 Environment=PYTHONUNBUFFERED=1
 Environment=VA_CONNECT_V2_DATA_DIR=$DATA_DIR
