@@ -9,6 +9,7 @@ DEFAULT_DATA_DIR="/var/lib/va-connect-v2"
 SERVICE_NAME="site_watchdog.service"
 WEB_SERVICE_NAME="va-connect-watchdog-web.service"
 SYSTEMD_DIR="/etc/systemd/system"
+USE_VENV=1
 
 REPO_URL="${1:-$DEFAULT_REPO_URL}"
 BRANCH="${2:-$DEFAULT_BRANCH}"
@@ -38,12 +39,17 @@ chown_install_user() {
 install_prereqs() {
   say "Installing prerequisites"
   apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get -y --fix-broken install || true
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
     git \
     python3 \
-    python3-venv \
     python3-pip \
     ca-certificates
+
+  if ! DEBIAN_FRONTEND=noninteractive apt-get install -y python3-venv; then
+    say "python3-venv is unavailable; will use system Python packages"
+    USE_VENV=0
+  fi
 }
 
 sync_repo() {
@@ -100,14 +106,32 @@ EOF
 
 install_python_env() {
   say "Creating Python environment"
-  python3 -m venv "$TARGET_DIR/.venv"
-  "$TARGET_DIR/.venv/bin/pip" install --upgrade pip setuptools wheel
-  "$TARGET_DIR/.venv/bin/pip" install fastapi uvicorn psutil
-  chown_install_user "$TARGET_DIR/.venv"
+  if [[ "$USE_VENV" -eq 1 ]] && python3 -m venv "$TARGET_DIR/.venv"; then
+    "$TARGET_DIR/.venv/bin/pip" install --upgrade pip setuptools wheel
+    "$TARGET_DIR/.venv/bin/pip" install fastapi uvicorn psutil
+    chown_install_user "$TARGET_DIR/.venv"
+    return
+  fi
+
+  rm -rf "$TARGET_DIR/.venv"
+  say "Installing Python packages into system Python"
+  python3 -m pip install --upgrade pip setuptools wheel --break-system-packages
+  python3 -m pip install fastapi uvicorn psutil --break-system-packages
 }
 
 install_systemd_unit() {
   say "Installing systemd unit"
+  local python_exec
+  local uvicorn_exec
+
+  if [[ -x "$TARGET_DIR/.venv/bin/python" ]]; then
+    python_exec="$TARGET_DIR/.venv/bin/python"
+    uvicorn_exec="$TARGET_DIR/.venv/bin/uvicorn"
+  else
+    python_exec="/usr/bin/python3"
+    uvicorn_exec="/usr/bin/python3 -m uvicorn"
+  fi
+
   cat > "$SYSTEMD_DIR/$SERVICE_NAME" <<EOF
 [Unit]
 Description=VA-Connect v2 site watchdog
@@ -122,7 +146,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=VA_CONNECT_V2_DATA_DIR=$DATA_DIR
 Environment=VA_CONNECT_V2_CONFIG=$TARGET_DIR/config.json
 EnvironmentFile=-$TARGET_DIR/site_watchdog.env
-ExecStart=$TARGET_DIR/.venv/bin/python -m tools.ubuntu.runtime.site_watchdog
+ExecStart=$python_exec -m tools.ubuntu.runtime.site_watchdog
 Restart=always
 RestartSec=5
 
@@ -144,7 +168,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=VA_CONNECT_V2_DATA_DIR=$DATA_DIR
 Environment=VA_CONNECT_V2_CONFIG=$TARGET_DIR/config.json
 EnvironmentFile=-$TARGET_DIR/site_watchdog.env
-ExecStart=$TARGET_DIR/.venv/bin/uvicorn tools.ubuntu.web.app:app --host 0.0.0.0 --port 8787
+ExecStart=$uvicorn_exec tools.ubuntu.web.app:app --host 0.0.0.0 --port 8787
 Restart=always
 RestartSec=5
 
@@ -175,8 +199,11 @@ Service:
 
 Manual API test:
   cd $TARGET_DIR
-  source .venv/bin/activate
-  uvicorn tools.ubuntu.web.app:app --host 0.0.0.0 --port 8787
+  if [ -x .venv/bin/uvicorn ]; then
+    .venv/bin/uvicorn tools.ubuntu.web.app:app --host 0.0.0.0 --port 8787
+  else
+    python3 -m uvicorn tools.ubuntu.web.app:app --host 0.0.0.0 --port 8787
+  fi
 
 Browser:
   http://<gateway-ip>:8787
