@@ -36,6 +36,14 @@ chown_install_user() {
   chown -R "$INSTALL_USER" "$1"
 }
 
+backup_existing_target_dir() {
+  if [[ -e "$TARGET_DIR" ]] && [[ ! -d "$TARGET_DIR/.git" ]]; then
+    local backup_dir="${TARGET_DIR}.backup.$(date +%Y%m%d%H%M%S)"
+    say "Backing up existing directory to $backup_dir"
+    mv "$TARGET_DIR" "$backup_dir"
+  fi
+}
+
 install_prereqs() {
   say "Installing prerequisites"
   apt-get update
@@ -63,10 +71,7 @@ sync_repo() {
     return
   fi
 
-  if [[ -e "$TARGET_DIR" ]] && [[ ! -d "$TARGET_DIR/.git" ]]; then
-    echo "Target directory exists but is not a git checkout: $TARGET_DIR"
-    exit 1
-  fi
+  backup_existing_target_dir
 
   mkdir -p "$(dirname "$TARGET_DIR")"
   git clone --branch "$BRANCH" "$REPO_URL" "$TARGET_DIR"
