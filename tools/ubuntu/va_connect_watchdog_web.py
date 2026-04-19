@@ -3015,25 +3015,27 @@ def status_payload() -> Dict[str, Any]:
 
 
 def base_status_payload() -> Dict[str, Any]:
-    status = status_payload()
-    hardware = status.get("hardware_identity") or {}
-    state = status.get("state") or {}
-    build_info = status.get("build_info") or {}
-    diagnosis = status.get("diagnosis") or {}
-    events = status.get("recent_events") or []
+    state = read_json(STATE_PATH, {})
+    config = load_config()
+    build_info = read_json(BUILD_INFO_PATH, {})
+    events = recent_events()
+    web_service = service_status_payload("va-connect-watchdog-web.service")
+    device_id = str(config.get("device_id") or socket.gethostname()).strip()
+    if not device_id:
+        device_id = socket.gethostname()
     return {
-        "device_id": str(hardware.get("serial", "unknown")),
-        "display_name": str(status.get("display_name", "unknown")),
+        "device_id": device_id,
+        "display_name": str(config.get("gateway_name") or device_id),
         "build": str(build_info.get("git_commit", "unknown")),
         "fault_active": bool(state.get("fault_active")),
         "last_check_at": str(state.get("last_check_at", "")),
         "last_healthy_at": str(state.get("last_healthy_at", "")),
         "monitoring_state": str(state.get("monitoring_state", "unknown")),
         "diagnosis": {
-            "title": str(diagnosis.get("title", "unknown")),
-            "detail": str(diagnosis.get("detail", "")),
+            "title": "Web base ready" if web_service.get("ok") else "Web base starting",
+            "detail": "The legacy web UI is up and serving a minimal summary." if web_service.get("ok") else "The legacy web UI is not fully healthy yet.",
         },
-        "web_service": service_status_payload("va-connect-watchdog-web.service"),
+        "web_service": web_service,
         "recent_events": [
             {
                 "ts": str(item.get("ts", "")),
@@ -3043,6 +3045,63 @@ def base_status_payload() -> Dict[str, Any]:
             for item in events[:10]
         ],
     }
+
+
+def render_base_page() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VA-Connect Gateway</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #0f1419; color: #e8eef5; }
+    .wrap { max-width: 900px; margin: 0 auto; padding: 24px; }
+    .card { background: #17212b; border: 1px solid #2a3947; border-radius: 12px; padding: 18px; margin-top: 16px; }
+    .title { font-size: 28px; font-weight: 700; }
+    .muted { color: #9fb0bf; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 12px; }
+    .item { background: #0f1720; border: 1px solid #2a3947; border-radius: 10px; padding: 12px; }
+    .label { color: #9fb0bf; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+    .value { margin-top: 6px; font-size: 18px; font-weight: 600; }
+    .ok { color: #5ee06d; }
+    .bad { color: #ff6b6b; }
+    a { color: #7cc7ff; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="title">VA-Connect Gateway</div>
+    <div class="muted">Minimal web base on port 8787</div>
+    <div class="card">
+      <div id="summary" class="muted">Loading status...</div>
+    </div>
+    <div class="card">
+      <div class="label">API</div>
+      <div><a href="/api/base-status">/api/base-status</a></div>
+    </div>
+  </div>
+  <script>
+    fetch('/api/base-status', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data) => {
+        const webOk = data.web_service && data.web_service.ok;
+        document.getElementById('summary').innerHTML = `
+          <div class="grid">
+            <div class="item"><div class="label">Device</div><div class="value">${data.device_id || 'unknown'}</div></div>
+            <div class="item"><div class="label">Status</div><div class="value ${webOk ? 'ok' : 'bad'}">${webOk ? 'running' : 'not ready'}</div></div>
+            <div class="item"><div class="label">Last check</div><div class="value">${data.last_check_at || '-'}</div></div>
+            <div class="item"><div class="label">Last healthy</div><div class="value">${data.last_healthy_at || '-'}</div></div>
+          </div>
+          <div style="margin-top:12px;">${data.diagnosis && data.diagnosis.detail ? data.diagnosis.detail : ''}</div>
+        `;
+      })
+      .catch((err) => {
+        document.getElementById('summary').innerHTML = '<span class="bad">Status load failed: ' + String(err) + '</span>';
+      });
+  </script>
+</body>
+</html>"""
 
 
 def launch_update() -> Dict[str, Any]:
@@ -7043,7 +7102,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(base_status_payload())
             return
         if parsed.path in {"/", "/index.html"}:
-            body = render_page(status_payload()).encode("utf-8")
+            body = render_base_page().encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
