@@ -3015,22 +3015,44 @@ def status_payload() -> Dict[str, Any]:
 
 
 def base_status_payload() -> Dict[str, Any]:
-    state = read_json(STATE_PATH, {})
-    config = load_config()
-    build_info = read_json(BUILD_INFO_PATH, {})
-    events = recent_events()
-    web_service = service_status_payload("va-connect-watchdog-web.service")
-    device_id = str(config.get("device_id") or socket.gethostname()).strip()
+    try:
+        state = read_json(STATE_PATH, {})
+    except Exception:
+        state = {}
+    try:
+        config = load_config()
+    except Exception:
+        config = {}
+    try:
+        build_info = read_json(BUILD_INFO_PATH, {})
+    except Exception:
+        build_info = {}
+    try:
+        events = recent_events()
+    except Exception:
+        events = []
+    try:
+        web_service = service_status_payload("va-connect-watchdog-web.service")
+    except Exception:
+        web_service = {
+            "service": "va-connect-watchdog-web.service",
+            "installed": False,
+            "active": False,
+            "enabled": False,
+            "ok": False,
+            "detail": "service status unavailable",
+        }
+    device_id = str((config or {}).get("device_id") or socket.gethostname()).strip()
     if not device_id:
         device_id = socket.gethostname()
     return {
         "device_id": device_id,
-        "display_name": str(config.get("gateway_name") or device_id),
-        "build": str(build_info.get("git_commit", "unknown")),
-        "fault_active": bool(state.get("fault_active")),
-        "last_check_at": str(state.get("last_check_at", "")),
-        "last_healthy_at": str(state.get("last_healthy_at", "")),
-        "monitoring_state": str(state.get("monitoring_state", "unknown")),
+        "display_name": str((config or {}).get("gateway_name") or device_id),
+        "build": str((build_info or {}).get("git_commit", "unknown")),
+        "fault_active": bool((state or {}).get("fault_active")),
+        "last_check_at": str((state or {}).get("last_check_at", "")),
+        "last_healthy_at": str((state or {}).get("last_healthy_at", "")),
+        "monitoring_state": str((state or {}).get("monitoring_state", "unknown")),
         "diagnosis": {
             "title": "Web base ready" if web_service.get("ok") else "Web base starting",
             "detail": "The legacy web UI is up and serving a minimal summary." if web_service.get("ok") else "The legacy web UI is not fully healthy yet.",
@@ -3048,25 +3070,37 @@ def base_status_payload() -> Dict[str, Any]:
 
 
 def render_base_page() -> str:
-    return """<!doctype html>
+    status = base_status_payload()
+    web_service = status.get("web_service") or {}
+    status_class = "ok" if web_service.get("ok") else "bad"
+    status_text = "running" if web_service.get("ok") else "not ready"
+    recent_events = status.get("recent_events") or []
+    events_html = "".join(
+        f"<li><span class=\"muted\">{html.escape(str(item.get('ts', '')))}</span> {html.escape(str(item.get('summary', '')))}</li>"
+        for item in recent_events
+    ) or '<li class="muted">No recent events yet.</li>'
+    diagnosis = html.escape(str((status.get("diagnosis") or {}).get("detail") or ""))
+    return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>VA-Connect Gateway</title>
   <style>
-    body { margin: 0; font-family: Arial, sans-serif; background: #0f1419; color: #e8eef5; }
-    .wrap { max-width: 900px; margin: 0 auto; padding: 24px; }
-    .card { background: #17212b; border: 1px solid #2a3947; border-radius: 12px; padding: 18px; margin-top: 16px; }
-    .title { font-size: 28px; font-weight: 700; }
-    .muted { color: #9fb0bf; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 12px; }
-    .item { background: #0f1720; border: 1px solid #2a3947; border-radius: 10px; padding: 12px; }
-    .label { color: #9fb0bf; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
-    .value { margin-top: 6px; font-size: 18px; font-weight: 600; }
-    .ok { color: #5ee06d; }
-    .bad { color: #ff6b6b; }
-    a { color: #7cc7ff; }
+    body {{ margin: 0; font-family: Arial, sans-serif; background: #0f1419; color: #e8eef5; }}
+    .wrap {{ max-width: 900px; margin: 0 auto; padding: 24px; }}
+    .card {{ background: #17212b; border: 1px solid #2a3947; border-radius: 12px; padding: 18px; margin-top: 16px; }}
+    .title {{ font-size: 28px; font-weight: 700; }}
+    .muted {{ color: #9fb0bf; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 12px; }}
+    .item {{ background: #0f1720; border: 1px solid #2a3947; border-radius: 10px; padding: 12px; }}
+    .label {{ color: #9fb0bf; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }}
+    .value {{ margin-top: 6px; font-size: 18px; font-weight: 600; }}
+    .ok {{ color: #5ee06d; }}
+    .bad {{ color: #ff6b6b; }}
+    ul {{ margin: 10px 0 0; padding-left: 18px; }}
+    li {{ margin: 0 0 6px; }}
+    a {{ color: #7cc7ff; }}
   </style>
 </head>
 <body>
@@ -3074,32 +3108,23 @@ def render_base_page() -> str:
     <div class="title">VA-Connect Gateway</div>
     <div class="muted">Minimal web base on port 8787</div>
     <div class="card">
-      <div id="summary" class="muted">Loading status...</div>
+      <div class="grid">
+        <div class="item"><div class="label">Device</div><div class="value">{html.escape(str(status.get("device_id") or "unknown"))}</div></div>
+        <div class="item"><div class="label">Status</div><div class="value {status_class}">{status_text}</div></div>
+        <div class="item"><div class="label">Last check</div><div class="value">{html.escape(str(status.get("last_check_at") or "-"))}</div></div>
+        <div class="item"><div class="label">Last healthy</div><div class="value">{html.escape(str(status.get("last_healthy_at") or "-"))}</div></div>
+      </div>
+      <div style="margin-top:12px;">{diagnosis}</div>
     </div>
     <div class="card">
       <div class="label">API</div>
       <div><a href="/api/base-status">/api/base-status</a></div>
     </div>
+    <div class="card">
+      <div class="label">Recent events</div>
+      <ul>{events_html}</ul>
+    </div>
   </div>
-  <script>
-    fetch('/api/base-status', { cache: 'no-store' })
-      .then((r) => r.json())
-      .then((data) => {
-        const webOk = data.web_service && data.web_service.ok;
-        document.getElementById('summary').innerHTML = `
-          <div class="grid">
-            <div class="item"><div class="label">Device</div><div class="value">${data.device_id || 'unknown'}</div></div>
-            <div class="item"><div class="label">Status</div><div class="value ${webOk ? 'ok' : 'bad'}">${webOk ? 'running' : 'not ready'}</div></div>
-            <div class="item"><div class="label">Last check</div><div class="value">${data.last_check_at || '-'}</div></div>
-            <div class="item"><div class="label">Last healthy</div><div class="value">${data.last_healthy_at || '-'}</div></div>
-          </div>
-          <div style="margin-top:12px;">${data.diagnosis && data.diagnosis.detail ? data.diagnosis.detail : ''}</div>
-        `;
-      })
-      .catch((err) => {
-        document.getElementById('summary').innerHTML = '<span class="bad">Status load failed: ' + String(err) + '</span>';
-      });
-  </script>
 </body>
 </html>"""
 
