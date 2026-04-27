@@ -3116,11 +3116,14 @@ def last_incident_snapshot_payload() -> Dict[str, Any]:
         return {
             "available": False,
             "incident_id": "",
+            "boot_id": "",
             "timestamp": "",
             "type": "",
             "severity": "",
             "status": "",
             "cause": "",
+            "evidence_count": 0,
+            "action_count": 0,
             "key_events": [],
             "title": "No incident recorded yet",
             "detail": "The gateway has not stored an incident yet.",
@@ -3146,11 +3149,14 @@ def last_incident_snapshot_payload() -> Dict[str, Any]:
     return {
         "available": True,
         "incident_id": str(incident.get("incident_id", "")),
+        "boot_id": str(incident.get("boot_id") or ""),
         "timestamp": str(incident.get("timestamp") or incident.get("incident_time") or incident.get("reboot_detected_at") or ""),
         "type": str(incident.get("type") or incident.get("classification") or "unknown"),
         "severity": severity,
         "status": status,
         "cause": str(incident.get("cause") or incident.get("reporting_text") or incident.get("suspected_reason") or ""),
+        "evidence_count": len(incident.get("evidence") or []),
+        "action_count": len(incident.get("actions_taken") or []),
         "key_events": key_events,
         "title": f"Last incident: {str(incident.get('type') or incident.get('classification') or 'unknown')}",
         "detail": str(incident.get("cause") or incident.get("reporting_text") or incident.get("suspected_reason") or "No cause recorded yet."),
@@ -3165,6 +3171,8 @@ def pre_crash_timeline_payload() -> Dict[str, Any]:
             "incident_id": "",
             "title": "Pre-crash timeline",
             "detail": "No incident recorded yet.",
+            "window": "",
+            "event_count": 0,
             "events": [],
         }
 
@@ -3206,6 +3214,8 @@ def pre_crash_timeline_payload() -> Dict[str, Any]:
         "incident_id": incident_id,
         "title": "Pre-crash timeline",
         "detail": "Last events before the latest incident.",
+        "window": f"Up to 40 events before {incident_id or 'the latest incident'}",
+        "event_count": len(timeline_events),
         "events": timeline_events,
     }
 
@@ -3245,6 +3255,11 @@ def render_base_page(status: Dict[str, Any]) -> str:
         for item in timeline_events
     ) or '<li class="muted">No pre-crash timeline yet.</li>'
     diagnosis = html.escape(str((status.get("diagnosis") or {}).get("detail") or ""))
+    incident_boot_id = html.escape(str(last_incident.get("boot_id") or "-"))
+    incident_evidence_count = html.escape(str(last_incident.get("evidence_count") or 0))
+    incident_action_count = html.escape(str(last_incident.get("action_count") or 0))
+    timeline_window = html.escape(str(pre_crash_timeline.get("window") or ""))
+    timeline_event_count = html.escape(str(pre_crash_timeline.get("event_count") or 0))
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -3320,6 +3335,12 @@ def render_base_page(status: Dict[str, Any]) -> str:
         <div class="item"><div class="label">Severity</div><div class="value">{html.escape(str(last_incident.get("severity") or "-"))}</div></div>
         <div class="item"><div class="label">Status</div><div class="value">{html.escape(str(last_incident.get("status") or "-"))}</div></div>
       </div>
+      <div class="grid" style="margin-top:12px;">
+        <div class="item"><div class="label">Boot</div><div class="value">{incident_boot_id}</div></div>
+        <div class="item"><div class="label">Evidence</div><div class="value">{incident_evidence_count}</div></div>
+        <div class="item"><div class="label">Actions</div><div class="value">{incident_action_count}</div></div>
+        <div class="item"><div class="label">Resolved</div><div class="value">{html.escape(str(last_incident.get("resolved_at") or "-"))}</div></div>
+      </div>
       <div style="margin-top:12px;"><span class="label">Timestamp</span><div>{html.escape(str(last_incident.get("timestamp") or "-"))}</div></div>
       <div style="margin-top:12px;"><span class="label">Cause</span><div>{html.escape(str(last_incident.get("cause") or "No cause recorded yet."))}</div></div>
       <div style="margin-top:12px;"><span class="label">Key events</span><ul>{incident_events_html}</ul></div>
@@ -3327,6 +3348,7 @@ def render_base_page(status: Dict[str, Any]) -> str:
     <div class="card">
       <div class="label">Pre-crash timeline</div>
       <div class="muted">{html.escape(str(pre_crash_timeline.get("detail") or "No incident recorded yet."))}</div>
+      <div class="muted" style="margin-top:6px;">{timeline_window} | {timeline_event_count} events</div>
       <ul>{timeline_html}</ul>
     </div>
     <div class="muted" style="margin-top:16px; padding:0 4px 12px;">Build: {html.escape(build_number)}</div>
