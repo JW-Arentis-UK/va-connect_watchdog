@@ -3099,6 +3099,7 @@ def status_snapshot_payload() -> Dict[str, Any]:
             for item in events[:10]
         ],
         "last_incident": last_incident_snapshot_payload(),
+        "pre_crash_timeline": pre_crash_timeline_payload(),
     }
 
 
@@ -3149,6 +3150,59 @@ def last_incident_snapshot_payload() -> Dict[str, Any]:
     }
 
 
+def pre_crash_timeline_payload() -> Dict[str, Any]:
+    incident = latest_incident() or {}
+    if not incident:
+        return {
+            "available": False,
+            "incident_id": "",
+            "title": "Pre-crash timeline",
+            "detail": "No incident recorded yet.",
+            "events": [],
+        }
+
+    anchor = parse_iso(
+        str(
+            incident.get("timestamp")
+            or incident.get("incident_time")
+            or incident.get("reboot_detected_at")
+            or ""
+        )
+    )
+    if anchor is None:
+        anchor = parse_iso(str(incident.get("last_known_healthy_at") or "")) or parse_iso(now_iso())
+
+    incident_id = str(incident.get("incident_id") or "").strip()
+    candidate_events = []
+    for event in all_events():
+        event_ts = parse_iso(str(event.get("ts", "")))
+        if event_ts is None or (anchor is not None and event_ts > anchor):
+            continue
+        candidate_events.append((event_ts, event))
+    candidate_events.sort(key=lambda item: item[0] or datetime.min.replace(tzinfo=timezone.utc))
+    selected = [item[1] for item in candidate_events[-40:]]
+    timeline_events: List[Dict[str, str]] = []
+    for event in selected:
+        summary = summarize_event(event)
+        level = str(event.get("level") or summary.get("severity") or "info").strip().lower()
+        message = str(event.get("message") or summary.get("title") or summary.get("detail") or "Event recorded").strip()
+        timeline_events.append(
+            {
+                "timestamp": str(event.get("ts") or summary.get("ts") or ""),
+                "level": level,
+                "message": message,
+            }
+        )
+
+    return {
+        "available": True,
+        "incident_id": incident_id,
+        "title": "Pre-crash timeline",
+        "detail": "Last events before the latest incident.",
+        "events": timeline_events,
+    }
+
+
 def base_status_payload() -> Dict[str, Any]:
     return status_snapshot_payload()
 
@@ -3162,6 +3216,7 @@ def render_base_page(status: Dict[str, Any]) -> str:
     }.get(overall_status, "bad")
     recent_events = status.get("recent_events") or []
     last_incident = status.get("last_incident") or {}
+    pre_crash_timeline = status.get("pre_crash_timeline") or {}
     events_html = "".join(
         f"<li><span class=\"muted\">{html.escape(str(item.get('ts', '')))}</span> {html.escape(str(item.get('summary', '')))}</li>"
         for item in recent_events
@@ -3172,6 +3227,13 @@ def render_base_page(status: Dict[str, Any]) -> str:
         for item in incident_events
         if str(item).strip()
     ) or '<li class="muted">No key events recorded yet.</li>'
+    timeline_events = pre_crash_timeline.get("events") or []
+    timeline_html = "".join(
+        f"<li><span class=\"muted\">{html.escape(str(item.get('timestamp', '')))}</span> "
+        f"<span class=\"{html.escape({'info': 'ok', 'warn': 'warn', 'warning': 'warn', 'error': 'bad', 'danger': 'bad'}.get(str(item.get('level', 'info')).lower(), 'muted'))}\">{html.escape(str(item.get('level', 'info')).upper())}</span> "
+        f"{html.escape(str(item.get('message', '')))}</li>"
+        for item in timeline_events
+    ) or '<li class="muted">No pre-crash timeline yet.</li>'
     diagnosis = html.escape(str((status.get("diagnosis") or {}).get("detail") or ""))
     return f"""<!doctype html>
 <html lang="en">
@@ -3236,8 +3298,13 @@ def render_base_page(status: Dict[str, Any]) -> str:
       <div style="margin-top:12px;"><span class="label">Cause</span><div>{html.escape(str(last_incident.get("cause") or "No cause recorded yet."))}</div></div>
       <div style="margin-top:12px;"><span class="label">Key events</span><ul>{incident_events_html}</ul></div>
     </div>
+    <div class="card">
+      <div class="label">Pre-crash timeline</div>
+      <div class="muted">{html.escape(str(pre_crash_timeline.get("detail") or "No incident recorded yet."))}</div>
+      <ul>{timeline_html}</ul>
+    </div>
   </div>
-  <script>
+<script>
     function hardRefreshPage() {{
       const url = new URL(window.location.href);
       url.searchParams.set('_refresh', String(Date.now()));
