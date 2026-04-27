@@ -45,12 +45,28 @@ backup_existing_target_dir() {
 
 install_prereqs() {
   say "Installing prerequisites"
+  local missing_packages=()
+
+  if ! command -v git >/dev/null 2>&1; then
+    missing_packages+=(git)
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    missing_packages+=(python3)
+  fi
+  if ! dpkg -s ca-certificates >/dev/null 2>&1; then
+    missing_packages+=(ca-certificates)
+  fi
+  if ! dpkg -s python3-venv >/dev/null 2>&1; then
+    missing_packages+=(python3-venv)
+  fi
+
+  if [[ "${#missing_packages[@]}" -eq 0 ]]; then
+    echo "Prerequisites already installed."
+    return
+  fi
+
   apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get -y --fix-broken install || true
-  DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    git \
-    python3 \
-    ca-certificates
+  DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_packages[@]}"
 }
 
 sync_repo() {
