@@ -59,13 +59,6 @@ def write_json(path: Path, payload) -> None:
 
 
 def current_build_number() -> str:
-    try:
-        build_info = read_json(BUILD_INFO_PATH, {})
-    except Exception:
-        build_info = {}
-    existing = str((build_info or {}).get("git_commit", "")).strip()
-    if existing:
-        return existing
     for repo_root in (REPO_ROOT, Path("/opt/va-connect-watchdog")):
         try:
             if not (repo_root / ".git").exists():
@@ -81,6 +74,13 @@ def current_build_number() -> str:
                 return commit
         except Exception:
             continue
+    try:
+        build_info = read_json(BUILD_INFO_PATH, {})
+    except Exception:
+        build_info = {}
+    existing = str((build_info or {}).get("git_commit", "")).strip()
+    if existing:
+        return existing
     return "unknown"
 
 
@@ -3426,9 +3426,19 @@ def launch_update() -> Dict[str, Any]:
         "        payload['message'] = 'Update failed while checking GitHub. Check web-update.log.'\n"
         "    elif payload['to_build'] and payload['from_build'] and payload['to_build'] != payload['from_build']:\n"
         "        pull = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'pull', '--ff-only', 'origin', 'master'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+        "        write_build = subprocess.run(\n"
+        "            ['python3', '-c', (\n"
+        "                'import json, pathlib, subprocess; '\n"
+        "                'repo = pathlib.Path(\"/opt/va-connect-watchdog\"); '\n"
+        "                'commit = subprocess.run([\"git\", \"-C\", str(repo), \"rev-parse\", \"--short\", \"HEAD\"], capture_output=True, text=True).stdout.strip() or \"unknown\"; '\n"
+        "                'branch = subprocess.run([\"git\", \"-C\", str(repo), \"rev-parse\", \"--abbrev-ref\", \"HEAD\"], capture_output=True, text=True).stdout.strip() or \"unknown\"; '\n"
+        "                'status = \"clean\" if subprocess.run([\"git\", \"-C\", str(repo), \"diff\", \"--quiet\", \"--ignore-submodules\", \"HEAD\"]).returncode == 0 else \"dirty\"; '\n"
+        "                'payload = {\"deployed_at\": __import__(\"datetime\").datetime.utcnow().replace(microsecond=0).isoformat() + \"+00:00\", \"git_branch\": branch, \"git_commit\": commit, \"git_status\": status, \"source_repo_dir\": str(repo)}; '\n"
+        "                'repo.joinpath(\"build-info.json\").write_text(json.dumps(payload, indent=2, sort_keys=True) + \"\\\\n\", encoding=\"utf-8\")'\n"
+        "            )], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
         "        restart = subprocess.run(['systemctl', 'restart', 'va-connect-watchdog-web'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
-        "        payload['state'] = 'ok' if pull.returncode == 0 and restart.returncode == 0 else 'failed'\n"
-        "        payload['return_code'] = 0 if pull.returncode == 0 and restart.returncode == 0 else 1\n"
+        "        payload['state'] = 'ok' if pull.returncode == 0 and write_build.returncode == 0 and restart.returncode == 0 else 'failed'\n"
+        "        payload['return_code'] = 0 if pull.returncode == 0 and write_build.returncode == 0 and restart.returncode == 0 else 1\n"
         "        payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
         "        payload['message'] = 'Update completed successfully.' if payload['state'] == 'ok' else 'Update failed. Check web-update.log.'\n"
         "    else:\n"

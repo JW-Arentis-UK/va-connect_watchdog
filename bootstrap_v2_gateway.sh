@@ -71,6 +71,36 @@ sync_repo() {
   chown_install_user "$TARGET_DIR"
 }
 
+write_build_info() {
+  say "Writing build metadata"
+  local git_commit="unknown"
+  local git_branch="unknown"
+  local git_status="unknown"
+  local deployed_at
+  deployed_at="$(date -Is)"
+
+  if [[ -d "$TARGET_DIR/.git" ]]; then
+    git_commit="$(git -C "$TARGET_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    git_branch="$(git -C "$TARGET_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+    if git -C "$TARGET_DIR" diff --quiet --ignore-submodules HEAD >/dev/null 2>&1; then
+      git_status="clean"
+    else
+      git_status="dirty"
+    fi
+  fi
+
+  cat > "$TARGET_DIR/build-info.json" <<EOF
+{
+  "deployed_at": "$deployed_at",
+  "git_branch": "$git_branch",
+  "git_commit": "$git_commit",
+  "git_status": "$git_status",
+  "source_repo_dir": "$TARGET_DIR"
+}
+EOF
+  chown_install_user "$TARGET_DIR/build-info.json"
+}
+
 prepare_data_dir() {
   say "Preparing data directory"
   mkdir -p "$DATA_DIR"
@@ -175,6 +205,7 @@ main() {
   require_root
   install_prereqs
   sync_repo
+  write_build_info
   prepare_data_dir
   prepare_config
   install_systemd_unit
