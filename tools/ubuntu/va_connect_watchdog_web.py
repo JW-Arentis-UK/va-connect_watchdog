@@ -3248,6 +3248,9 @@ def render_base_page(status: Dict[str, Any]) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>VA-Connect Gateway</title>
   <style>
     body {{ margin: 0; font-family: Arial, sans-serif; background: #0f1419; color: #e8eef5; }}
@@ -3327,11 +3330,40 @@ def render_base_page(status: Dict[str, Any]) -> str:
     <div class="muted" style="margin-top:16px; padding:0 4px 12px;">Build: {html.escape(build_number)}</div>
     <div class="muted" style="padding:0 4px 12px;">Latest: {html.escape(latest_build)}</div>
   </div>
-<script>
+  <script>
+    let buildWatchInFlight = false;
+
     function hardRefreshPage() {{
       const url = new URL(window.location.href);
       url.searchParams.set('_refresh', String(Date.now()));
       window.location.href = url.toString();
+    }}
+
+    async function watchForNewBuild() {{
+      if (buildWatchInFlight) {{
+        return;
+      }}
+      buildWatchInFlight = true;
+      try {{
+        const currentBuildEl = document.getElementById('currentBuildValue');
+        const currentBuild = currentBuildEl ? currentBuildEl.textContent.trim() : '';
+        const response = await fetch('/api/base-status?_=' + Date.now(), {{ cache: 'no-store' }});
+        const data = await response.json();
+        const nextBuild = (data && (data.build_number || data.build)) || '';
+        const updateAvailable = Boolean(data && data.update_available);
+        const updateStatus = document.getElementById('updateStatus');
+        if (updateStatus && updateAvailable) {{
+          updateStatus.textContent = `Update available: ${{nextBuild || 'new build'}}. Refreshing page...`;
+        }}
+        if (nextBuild && nextBuild !== currentBuild) {{
+          hardRefreshPage();
+          return;
+        }}
+      }} catch (_error) {{
+        // ignore transient refresh check failures
+      }} finally {{
+        buildWatchInFlight = false;
+      }}
     }}
 
     async function updateFromGithub() {{
@@ -3397,6 +3429,11 @@ def render_base_page(status: Dict[str, Any]) -> str:
         }}
       }}, 5000);
     }}
+
+    document.addEventListener('DOMContentLoaded', () => {{
+      watchForNewBuild();
+      setInterval(watchForNewBuild, 15000);
+    }});
   </script>
 </body>
 </html>"""
