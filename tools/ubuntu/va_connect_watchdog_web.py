@@ -3201,6 +3201,11 @@ def render_base_page(status: Dict[str, Any]) -> str:
   <div class="wrap">
     <div class="title">VA-Connect Gateway</div>
     <div class="muted">Minimal web base on port 80</div>
+    <div style="margin-top:10px;">
+      <button onclick="hardRefreshPage()" style="background:#2a3947;color:#e8eef5;border:1px solid #3b4f60;border-radius:8px;padding:8px 12px;cursor:pointer;">
+        Hard refresh page
+      </button>
+    </div>
     <div class="card">
       <div class="grid">
         <div class="item"><div class="label">Device</div><div class="value">{html.escape(str(status.get("device_id") or "unknown"))}</div></div>
@@ -3232,6 +3237,13 @@ def render_base_page(status: Dict[str, Any]) -> str:
       <div style="margin-top:12px;"><span class="label">Key events</span><ul>{incident_events_html}</ul></div>
     </div>
   </div>
+  <script>
+    function hardRefreshPage() {{
+      const url = new URL(window.location.href);
+      url.searchParams.set('_refresh', String(Date.now()));
+      window.location.href = url.toString();
+    }}
+  </script>
 </body>
 </html>"""
 
