@@ -3106,7 +3106,7 @@ def render_base_page() -> str:
 <body>
   <div class="wrap">
     <div class="title">VA-Connect Gateway</div>
-    <div class="muted">Minimal web base on port 8787</div>
+    <div class="muted">Minimal web base on port 80</div>
     <div class="card">
       <div class="grid">
         <div class="item"><div class="label">Device</div><div class="value">{html.escape(str(status.get("device_id") or "unknown"))}</div></div>

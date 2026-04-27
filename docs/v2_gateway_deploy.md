@@ -98,7 +98,7 @@ The watchdog reads environment variables and an optional config file:
 
 - `SITE_WATCHDOG_CONFIG=/opt/va-connect-watchdog/site-watchdog.json`
 
-The bootstrap installs `va-connect-watchdog-web.service` and starts it automatically on port `8787`.
+The bootstrap installs `va-connect-watchdog-web.service` and starts it automatically on port `80`.
 
 Check status:
 
@@ -117,9 +117,9 @@ journalctl -u va-connect-watchdog-web -f
 Check the local page and endpoints:
 
 ```bash
-curl http://127.0.0.1:8787/
-curl http://127.0.0.1:8787/api/base-status
-curl http://127.0.0.1:8787/api/status
+curl http://127.0.0.1/
+curl http://127.0.0.1/api/base-status
+curl http://127.0.0.1/api/status
 ```
 
 Check that the data directory is writable:
@@ -133,13 +133,13 @@ test -w /var/lib/va-connect-site-watchdog && echo writable
 Open the UI from another machine on the same network:
 
 ```text
-http://<gateway-ip>:8787
+http://<gateway-ip>/
 ```
 
 ## 7. Common issues
 
 - If the service does not start, check `systemctl status va-connect-watchdog-web` and `journalctl -u va-connect-watchdog-web -f`.
-- If the web UI does not bind to port 8787, another service may already be using it.
+- If the web UI does not bind to port 80, another service may already be using it.
 - If state files are not written, confirm `/var/lib/va-connect-site-watchdog` exists and is writable.
 - If config changes do not apply, confirm `SITE_WATCHDOG_CONFIG` points to the right file and restart the service.
 

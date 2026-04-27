@@ -102,14 +102,14 @@ defaults = {
     "device_id": socket.gethostname().split(".")[0],
     "data_dir": data_dir,
     "web_bind": "0.0.0.0",
-    "web_port": 8787,
+    "web_port": 80,
     "web_token": "",
 }
 
 defaults.update(current if isinstance(current, dict) else {})
 defaults["data_dir"] = data_dir
 defaults["web_bind"] = "0.0.0.0"
-defaults["web_port"] = 8787
+defaults["web_port"] = 80
 defaults["web_token"] = ""
 path.write_text(json.dumps(defaults, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
@@ -167,7 +167,7 @@ Service:
   journalctl -u va-connect-watchdog-web -f
 
 Browser:
-  http://<gateway-ip>:8787
+  http://<gateway-ip>/
 EOF
 }
 
