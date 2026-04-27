@@ -3014,7 +3014,7 @@ def status_payload() -> Dict[str, Any]:
     }
 
 
-def base_status_payload() -> Dict[str, Any]:
+def status_snapshot_payload() -> Dict[str, Any]:
     try:
         state = read_json(STATE_PATH, {})
     except Exception:
@@ -3045,10 +3045,17 @@ def base_status_payload() -> Dict[str, Any]:
     device_id = str((config or {}).get("device_id") or socket.gethostname()).strip()
     if not device_id:
         device_id = socket.gethostname()
+    if not web_service.get("ok"):
+        overall_status = "starting"
+    elif state.get("fault_active"):
+        overall_status = "degraded"
+    else:
+        overall_status = "healthy"
     return {
         "device_id": device_id,
         "display_name": str((config or {}).get("gateway_name") or device_id),
         "build": str((build_info or {}).get("git_commit", "unknown")),
+        "overall_status": overall_status,
         "fault_active": bool((state or {}).get("fault_active")),
         "last_check_at": str((state or {}).get("last_check_at", "")),
         "last_healthy_at": str((state or {}).get("last_healthy_at", "")),
@@ -3069,11 +3076,17 @@ def base_status_payload() -> Dict[str, Any]:
     }
 
 
-def render_base_page() -> str:
-    status = base_status_payload()
-    web_service = status.get("web_service") or {}
-    status_class = "ok" if web_service.get("ok") else "bad"
-    status_text = "running" if web_service.get("ok") else "not ready"
+def base_status_payload() -> Dict[str, Any]:
+    return status_snapshot_payload()
+
+
+def render_base_page(status: Dict[str, Any]) -> str:
+    overall_status = str(status.get("overall_status") or "unknown")
+    status_class = {
+        "healthy": "ok",
+        "degraded": "warn",
+        "starting": "bad",
+    }.get(overall_status, "bad")
     recent_events = status.get("recent_events") or []
     events_html = "".join(
         f"<li><span class=\"muted\">{html.escape(str(item.get('ts', '')))}</span> {html.escape(str(item.get('summary', '')))}</li>"
@@ -3097,6 +3110,7 @@ def render_base_page() -> str:
     .label {{ color: #9fb0bf; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }}
     .value {{ margin-top: 6px; font-size: 18px; font-weight: 600; }}
     .ok {{ color: #5ee06d; }}
+    .warn {{ color: #ffb84d; }}
     .bad {{ color: #ff6b6b; }}
     ul {{ margin: 10px 0 0; padding-left: 18px; }}
     li {{ margin: 0 0 6px; }}
@@ -3110,7 +3124,7 @@ def render_base_page() -> str:
     <div class="card">
       <div class="grid">
         <div class="item"><div class="label">Device</div><div class="value">{html.escape(str(status.get("device_id") or "unknown"))}</div></div>
-        <div class="item"><div class="label">Status</div><div class="value {status_class}">{status_text}</div></div>
+        <div class="item"><div class="label">Status</div><div class="value {status_class}">{html.escape(overall_status)}</div></div>
         <div class="item"><div class="label">Last check</div><div class="value">{html.escape(str(status.get("last_check_at") or "-"))}</div></div>
         <div class="item"><div class="label">Last healthy</div><div class="value">{html.escape(str(status.get("last_healthy_at") or "-"))}</div></div>
       </div>
@@ -7124,10 +7138,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_file(safe_tools_install_file("log"), download_name="watchdog-tools-install.log")
             return
         if parsed.path in {"/api/base-status", "/status.json"}:
-            self._send_json(base_status_payload())
+            self._send_json(status_snapshot_payload())
             return
         if parsed.path in {"/", "/index.html"}:
-            body = render_base_page().encode("utf-8")
+            body = render_base_page(status_snapshot_payload()).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
