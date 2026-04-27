@@ -69,9 +69,6 @@ install_prereqs() {
   if ! dpkg -s ca-certificates >/dev/null 2>&1; then
     missing_packages+=(ca-certificates)
   fi
-  if ! dpkg -s python3-venv >/dev/null 2>&1; then
-    missing_packages+=(python3-venv)
-  fi
 
   if [[ "${#missing_packages[@]}" -eq 0 ]]; then
     echo "Prerequisites already installed."
