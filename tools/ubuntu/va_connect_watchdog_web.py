@@ -2218,22 +2218,14 @@ def launch_update_check() -> Dict[str, Any]:
         "import json, subprocess\n"
         "from datetime import datetime\n"
         "from pathlib import Path\n"
+        "repo_dir = Path('/opt/va-connect-watchdog')\n"
         "status_path = Path('/var/lib/va-connect-site-watchdog/web-update-status.json')\n"
         "log_path = Path('/var/log/va-connect-site-watchdog/web-update.log')\n"
-        "build_info_path = Path('/opt/va-connect-watchdog/build-info.json')\n"
-        "repo_hint = ''\n"
-        "if build_info_path.exists():\n"
-        "    try:\n"
-        "        repo_hint = str(json.loads(build_info_path.read_text(encoding='utf-8')).get('source_repo_dir', '') or '')\n"
-        "    except Exception:\n"
-        "        repo_hint = ''\n"
-        "repo_dir_file = Path('/opt/va-connect-watchdog/repo-dir.txt')\n"
-        "repo_dir = repo_hint.strip() or (repo_dir_file.read_text(encoding='utf-8').strip() if repo_dir_file.exists() else '/home/vsuser/Desktop/va-connect-watchdog')\n"
         "with log_path.open('ab') as log:\n"
         "    log.write((f'\\n===== Web update check started {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
-        "    fetch = subprocess.run(['git', '-C', repo_dir, 'fetch', 'origin'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
-        "    local = subprocess.run(['git', '-C', repo_dir, 'rev-parse', 'HEAD'], capture_output=True, text=True)\n"
-        "    remote = subprocess.run(['git', '-C', repo_dir, 'rev-parse', 'origin/master'], capture_output=True, text=True)\n"
+        "    fetch = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'fetch', 'origin', 'master'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+        "    local = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True)\n"
+        "    remote = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'origin/master'], capture_output=True, text=True)\n"
         "payload = json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
         "payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
         "payload['return_code'] = 0 if fetch.returncode == 0 and local.returncode == 0 and remote.returncode == 0 else 1\n"
@@ -3209,6 +3201,7 @@ def base_status_payload() -> Dict[str, Any]:
 
 def render_base_page(status: Dict[str, Any]) -> str:
     overall_status = str(status.get("overall_status") or "unknown")
+    build_number = str(status.get("build_number") or status.get("build") or "unknown")
     status_class = {
         "healthy": "ok",
         "degraded": "warn",
@@ -3272,11 +3265,23 @@ def render_base_page(status: Dict[str, Any]) -> str:
       <div class="grid">
         <div class="item"><div class="label">Device</div><div class="value">{html.escape(str(status.get("device_id") or "unknown"))}</div></div>
         <div class="item"><div class="label">Status</div><div class="value {status_class}">{html.escape(overall_status)}</div></div>
-        <div class="item"><div class="label">Build</div><div class="value">{html.escape(str(status.get("build_number") or status.get("build") or "unknown"))}</div></div>
+        <div class="item"><div class="label">Build</div><div class="value" id="currentBuildValue">{html.escape(build_number)}</div></div>
         <div class="item"><div class="label">Last check</div><div class="value">{html.escape(str(status.get("last_check_at") or "-"))}</div></div>
         <div class="item"><div class="label">Last healthy</div><div class="value">{html.escape(str(status.get("last_healthy_at") or "-"))}</div></div>
       </div>
       <div style="margin-top:12px;">{diagnosis}</div>
+    </div>
+    <div class="card">
+      <div class="label">Actions</div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;">
+        <button onclick="hardRefreshPage()" style="background:#2a3947;color:#e8eef5;border:1px solid #3b4f60;border-radius:8px;padding:8px 12px;cursor:pointer;">
+          Hard refresh page
+        </button>
+        <button id="updateButton" onclick="updateFromGithub()" style="background:#2f5d3c;color:#e8eef5;border:1px solid #4b7d5a;border-radius:8px;padding:8px 12px;cursor:pointer;">
+          Update from GitHub
+        </button>
+      </div>
+      <div id="updateStatus" class="muted" style="margin-top:10px;">Ready to update.</div>
     </div>
     <div class="card">
       <div class="label">API</div>
@@ -3303,12 +3308,77 @@ def render_base_page(status: Dict[str, Any]) -> str:
       <div class="muted">{html.escape(str(pre_crash_timeline.get("detail") or "No incident recorded yet."))}</div>
       <ul>{timeline_html}</ul>
     </div>
+    <div class="muted" style="margin-top:16px; padding:0 4px 12px;">Build: {html.escape(build_number)}</div>
   </div>
 <script>
     function hardRefreshPage() {{
       const url = new URL(window.location.href);
       url.searchParams.set('_refresh', String(Date.now()));
       window.location.href = url.toString();
+    }}
+
+    async function updateFromGithub() {{
+      const statusEl = document.getElementById('updateStatus');
+      const button = document.getElementById('updateButton');
+      const currentBuildEl = document.getElementById('currentBuildValue');
+      const currentBuild = currentBuildEl ? currentBuildEl.textContent.trim() : '';
+      if (button) {{
+        button.disabled = true;
+        button.textContent = 'Updating...';
+      }}
+      if (statusEl) {{
+        statusEl.textContent = 'Starting update from GitHub...';
+      }}
+      try {{
+        const response = await fetch('/api/action', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ action: 'update_watchdog' }})
+        }});
+        const data = await response.json().catch(() => ({{}}));
+        if (statusEl) {{
+          statusEl.textContent = data.message || 'Update requested.';
+        }}
+        if (response.ok && data.status && data.status.state === 'running') {{
+          waitForBuildChange(currentBuild);
+        }} else {{
+          if (button) {{
+            button.disabled = false;
+            button.textContent = 'Update from GitHub';
+          }}
+        }}
+      }} catch (error) {{
+        if (statusEl) {{
+          statusEl.textContent = 'Update failed: ' + String(error);
+        }}
+        if (button) {{
+          button.disabled = false;
+          button.textContent = 'Update from GitHub';
+        }}
+      }}
+    }}
+
+    function waitForBuildChange(previousBuild) {{
+      let attempts = 0;
+      const timer = setInterval(async () => {{
+        attempts += 1;
+        try {{
+          const response = await fetch('/api/base-status?_=' + Date.now(), {{ cache: 'no-store' }});
+          const data = await response.json();
+          const nextBuild = (data && (data.build_number || data.build)) || '';
+          if (nextBuild && nextBuild !== previousBuild) {{
+            clearInterval(timer);
+            hardRefreshPage();
+            return;
+          }}
+        }} catch (_err) {{
+          // keep waiting
+        }}
+        if (attempts >= 24) {{
+          clearInterval(timer);
+          hardRefreshPage();
+        }}
+      }}, 5000);
     }}
   </script>
 </body>
@@ -3338,21 +3408,35 @@ def launch_update() -> Dict[str, Any]:
         "import json, subprocess\n"
         "from datetime import datetime\n"
         "from pathlib import Path\n"
+        "repo_dir = Path('/opt/va-connect-watchdog')\n"
         "status_path = Path('/var/lib/va-connect-site-watchdog/web-update-status.json')\n"
         "log_path = Path('/var/log/va-connect-site-watchdog/web-update.log')\n"
-        "cmd = ['bash', '/usr/local/bin/watchdog-update']\n"
         "with log_path.open('ab') as log:\n"
         "    log.write((f'\\n===== Web update started {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
-        "    result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)\n"
-        "payload = json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
-        "build_info_path = Path('/opt/va-connect-watchdog/build-info.json')\n"
-        "build_info = json.loads(build_info_path.read_text(encoding='utf-8')) if build_info_path.exists() else {}\n"
-        "payload['state'] = 'ok' if result.returncode == 0 else 'failed'\n"
-        "payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
-        "payload['return_code'] = result.returncode\n"
-        "payload['to_build'] = str(build_info.get('git_commit', 'unknown'))\n"
-        "payload['message'] = 'Update completed successfully.' if result.returncode == 0 else 'Update failed. Check web-update.log.'\n"
-        "status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "    fetch = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'fetch', 'origin', 'master'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+        "    local = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True)\n"
+        "    remote = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'origin/master'], capture_output=True, text=True)\n"
+        "    payload = json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
+        "    payload['from_build'] = local.stdout.strip() or payload.get('from_build', 'unknown')\n"
+        "    payload['to_build'] = remote.stdout.strip() or payload.get('to_build', 'unknown')\n"
+        "    if fetch.returncode != 0 or local.returncode != 0 or remote.returncode != 0:\n"
+        "        payload['state'] = 'failed'\n"
+        "        payload['return_code'] = 1\n"
+        "        payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "        payload['message'] = 'Update failed while checking GitHub. Check web-update.log.'\n"
+        "    elif payload['to_build'] and payload['from_build'] and payload['to_build'] != payload['from_build']:\n"
+        "        pull = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'pull', '--ff-only', 'origin', 'master'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+        "        restart = subprocess.run(['systemctl', 'restart', 'va-connect-watchdog-web'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+        "        payload['state'] = 'ok' if pull.returncode == 0 and restart.returncode == 0 else 'failed'\n"
+        "        payload['return_code'] = 0 if pull.returncode == 0 and restart.returncode == 0 else 1\n"
+        "        payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "        payload['message'] = 'Update completed successfully.' if payload['state'] == 'ok' else 'Update failed. Check web-update.log.'\n"
+        "    else:\n"
+        "        payload['state'] = 'ok'\n"
+        "        payload['return_code'] = 0\n"
+        "        payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "        payload['message'] = 'Already up to date.'\n"
+        "    status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
         "PY"
     )
     subprocess.Popen(
