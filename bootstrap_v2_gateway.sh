@@ -35,6 +35,17 @@ chown_install_user() {
   chown -R "$INSTALL_USER" "$1"
 }
 
+repair_known_apt_blockers() {
+  # Chrome Remote Desktop can leave dpkg in a half-configured state on Ubuntu
+  # hosts where adduser rejects the package's _crd_network account name.
+  if dpkg -s chrome-remote-desktop >/dev/null 2>&1; then
+    if ! getent passwd _crd_network >/dev/null 2>&1; then
+      say "Repairing Chrome Remote Desktop system account"
+      adduser --system --group --force-badname --no-create-home --home /nonexistent _crd_network >/dev/null
+    fi
+  fi
+}
+
 backup_existing_target_dir() {
   if [[ -e "$TARGET_DIR" ]] && [[ ! -d "$TARGET_DIR/.git" ]]; then
     local backup_dir="${TARGET_DIR}.backup.$(date +%Y%m%d%H%M%S)"
@@ -46,6 +57,8 @@ backup_existing_target_dir() {
 install_prereqs() {
   say "Installing prerequisites"
   local missing_packages=()
+
+  repair_known_apt_blockers
 
   if ! command -v git >/dev/null 2>&1; then
     missing_packages+=(git)
