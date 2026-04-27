@@ -3073,6 +3073,54 @@ def status_snapshot_payload() -> Dict[str, Any]:
             }
             for item in events[:10]
         ],
+        "last_incident": last_incident_snapshot_payload(),
+    }
+
+
+def last_incident_snapshot_payload() -> Dict[str, Any]:
+    incident = latest_incident() or {}
+    if not incident:
+        return {
+            "available": False,
+            "incident_id": "",
+            "timestamp": "",
+            "type": "",
+            "severity": "",
+            "status": "",
+            "cause": "",
+            "key_events": [],
+            "title": "No incident recorded yet",
+            "detail": "The gateway has not stored an incident yet.",
+        }
+
+    status = str(incident.get("status") or ("resolved" if incident.get("resolved_at") else "open")).strip() or "unknown"
+    severity = str(incident.get("severity") or ("critical" if status == "open" else "warning")).strip() or "unknown"
+    key_events: List[str] = []
+    for item in (incident.get("actions_taken") or [])[:3]:
+        text = str(item).strip()
+        if text:
+            key_events.append(text)
+    if not key_events:
+        for item in (incident.get("evidence") or [])[:3]:
+            text = str(item.get("message") or item.get("source") or "").strip()
+            if text:
+                key_events.append(text)
+    if not key_events:
+        for item in recent_events(5)[:3]:
+            text = str(item.get("summary") or item.get("message") or "").strip()
+            if text:
+                key_events.append(text)
+    return {
+        "available": True,
+        "incident_id": str(incident.get("incident_id", "")),
+        "timestamp": str(incident.get("timestamp") or incident.get("incident_time") or incident.get("reboot_detected_at") or ""),
+        "type": str(incident.get("type") or incident.get("classification") or "unknown"),
+        "severity": severity,
+        "status": status,
+        "cause": str(incident.get("cause") or incident.get("reporting_text") or incident.get("suspected_reason") or ""),
+        "key_events": key_events,
+        "title": f"Last incident: {str(incident.get('type') or incident.get('classification') or 'unknown')}",
+        "detail": str(incident.get("cause") or incident.get("reporting_text") or incident.get("suspected_reason") or "No cause recorded yet."),
     }
 
 
@@ -3088,10 +3136,17 @@ def render_base_page(status: Dict[str, Any]) -> str:
         "starting": "bad",
     }.get(overall_status, "bad")
     recent_events = status.get("recent_events") or []
+    last_incident = status.get("last_incident") or {}
     events_html = "".join(
         f"<li><span class=\"muted\">{html.escape(str(item.get('ts', '')))}</span> {html.escape(str(item.get('summary', '')))}</li>"
         for item in recent_events
     ) or '<li class="muted">No recent events yet.</li>'
+    incident_events = last_incident.get("key_events") or []
+    incident_events_html = "".join(
+        f"<li>{html.escape(str(item))}</li>"
+        for item in incident_events
+        if str(item).strip()
+    ) or '<li class="muted">No key events recorded yet.</li>'
     diagnosis = html.escape(str((status.get("diagnosis") or {}).get("detail") or ""))
     return f"""<!doctype html>
 <html lang="en">
@@ -3137,6 +3192,18 @@ def render_base_page(status: Dict[str, Any]) -> str:
     <div class="card">
       <div class="label">Recent events</div>
       <ul>{events_html}</ul>
+    </div>
+    <div class="card">
+      <div class="label">Last incident</div>
+      <div class="grid">
+        <div class="item"><div class="label">Incident</div><div class="value">{html.escape(str(last_incident.get("incident_id") or "none"))}</div></div>
+        <div class="item"><div class="label">Type</div><div class="value">{html.escape(str(last_incident.get("type") or "-"))}</div></div>
+        <div class="item"><div class="label">Severity</div><div class="value">{html.escape(str(last_incident.get("severity") or "-"))}</div></div>
+        <div class="item"><div class="label">Status</div><div class="value">{html.escape(str(last_incident.get("status") or "-"))}</div></div>
+      </div>
+      <div style="margin-top:12px;"><span class="label">Timestamp</span><div>{html.escape(str(last_incident.get("timestamp") or "-"))}</div></div>
+      <div style="margin-top:12px;"><span class="label">Cause</span><div>{html.escape(str(last_incident.get("cause") or "No cause recorded yet."))}</div></div>
+      <div style="margin-top:12px;"><span class="label">Key events</span><ul>{incident_events_html}</ul></div>
     </div>
   </div>
 </body>
