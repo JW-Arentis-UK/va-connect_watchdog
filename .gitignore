@@ -1,6 +1,7 @@
 # Linux runtime noise
 *.log
 *.pid
+build-info.json
 
 # Local env overrides
 tools/ubuntu/va-connect.env

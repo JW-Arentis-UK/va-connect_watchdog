@@ -57,6 +57,7 @@ sync_repo() {
   say "Cloning or updating repository"
   prepare_git_safe_directory
   if [[ -d "$TARGET_DIR/.git" ]]; then
+    rm -f "$TARGET_DIR/build-info.json"
     git -C "$TARGET_DIR" fetch origin "$BRANCH"
     git -C "$TARGET_DIR" checkout "$BRANCH"
     git -C "$TARGET_DIR" pull --ff-only origin "$BRANCH"
