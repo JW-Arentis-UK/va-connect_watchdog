@@ -3067,11 +3067,24 @@ def status_snapshot_payload() -> Dict[str, Any]:
     else:
         overall_status = "healthy"
     build_number = current_build_number()
+    latest_build = build_number
+    update_available = False
+    try:
+        build_info = read_json(BUILD_INFO_PATH, {})
+    except Exception:
+        build_info = {}
+    if isinstance(build_info, dict) and build_info.get("git_commit"):
+        current = str(build_info.get("git_commit") or "").strip()
+        if current and current != build_number:
+            latest_build = build_number
+            update_available = True
     return {
         "device_id": device_id,
         "display_name": str((config or {}).get("gateway_name") or device_id),
         "build": build_number,
         "build_number": build_number,
+        "latest_build": latest_build,
+        "update_available": update_available,
         "overall_status": overall_status,
         "fault_active": bool((state or {}).get("fault_active")),
         "last_check_at": str((state or {}).get("last_check_at", "")),
@@ -3202,6 +3215,8 @@ def base_status_payload() -> Dict[str, Any]:
 def render_base_page(status: Dict[str, Any]) -> str:
     overall_status = str(status.get("overall_status") or "unknown")
     build_number = str(status.get("build_number") or status.get("build") or "unknown")
+    latest_build = str(status.get("latest_build") or build_number)
+    update_available = bool(status.get("update_available"))
     status_class = {
         "healthy": "ok",
         "degraded": "warn",
@@ -3266,6 +3281,7 @@ def render_base_page(status: Dict[str, Any]) -> str:
         <div class="item"><div class="label">Device</div><div class="value">{html.escape(str(status.get("device_id") or "unknown"))}</div></div>
         <div class="item"><div class="label">Status</div><div class="value {status_class}">{html.escape(overall_status)}</div></div>
         <div class="item"><div class="label">Build</div><div class="value" id="currentBuildValue">{html.escape(build_number)}</div></div>
+        <div class="item"><div class="label">Update</div><div class="value {('warn' if update_available else 'ok')}">{'available' if update_available else 'current'}</div></div>
         <div class="item"><div class="label">Last check</div><div class="value">{html.escape(str(status.get("last_check_at") or "-"))}</div></div>
         <div class="item"><div class="label">Last healthy</div><div class="value">{html.escape(str(status.get("last_healthy_at") or "-"))}</div></div>
       </div>
@@ -3309,6 +3325,7 @@ def render_base_page(status: Dict[str, Any]) -> str:
       <ul>{timeline_html}</ul>
     </div>
     <div class="muted" style="margin-top:16px; padding:0 4px 12px;">Build: {html.escape(build_number)}</div>
+    <div class="muted" style="padding:0 4px 12px;">Latest: {html.escape(latest_build)}</div>
   </div>
 <script>
     function hardRefreshPage() {{
