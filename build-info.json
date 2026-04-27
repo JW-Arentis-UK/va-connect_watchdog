@@ -1,7 +1,7 @@
 {
-  "build_number": "24",
-  "commit_sha": "f30d983a221d4811a50df8ed26ddde49b8ad8cf2",
-  "built_at": "2026-04-27T13:21:41Z",
+  "build_number": "25",
+  "commit_sha": "4cb9b91a2416c99951c47012c09a680dd6934858",
+  "built_at": "2026-04-27T13:30:42Z",
   "source_branch": "master",
   "source_repo": "JW-Arentis-UK/va-connect_watchdog"
 }
