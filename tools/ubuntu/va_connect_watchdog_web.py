@@ -3295,6 +3295,10 @@ def render_base_page(status: Dict[str, Any]) -> str:
     .ok {{ color: #5ee06d; }}
     .warn {{ color: #ffb84d; }}
     .bad {{ color: #ff6b6b; }}
+    .summary-banner {{ border-left-width: 4px; }}
+    .summary-banner.ok {{ border-left-color: #5ee06d; }}
+    .summary-banner.warn {{ border-left-color: #ffb84d; }}
+    .summary-banner.bad {{ border-left-color: #ff6b6b; }}
     ul {{ margin: 8px 0 0; padding-left: 16px; }}
     li {{ margin: 0 0 4px; }}
     .section-note {{ margin-top: 6px; font-size: 12px; color: #9fb0bf; }}
@@ -3310,7 +3314,7 @@ def render_base_page(status: Dict[str, Any]) -> str:
         Hard refresh page
       </button>
     </div>
-    <div class="card" style="margin-top:10px; padding:10px 12px;">
+    <div class="card summary-banner {status_class}" style="margin-top:10px; padding:10px 12px;">
       <div class="label">Current summary</div>
       <div style="margin-top:4px; font-size:14px;">{current_summary}</div>
     </div>
