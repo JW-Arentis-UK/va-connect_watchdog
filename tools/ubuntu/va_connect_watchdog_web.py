@@ -3270,20 +3270,21 @@ def render_base_page(status: Dict[str, Any]) -> str:
   <meta http-equiv="Expires" content="0">
   <title>VA-Connect Gateway</title>
   <style>
-    body {{ margin: 0; font-family: Arial, sans-serif; background: #0f1419; color: #e8eef5; }}
-    .wrap {{ max-width: 900px; margin: 0 auto; padding: 24px; }}
-    .card {{ background: #17212b; border: 1px solid #2a3947; border-radius: 12px; padding: 18px; margin-top: 16px; }}
-    .title {{ font-size: 28px; font-weight: 700; }}
+    body {{ margin: 0; font-family: Arial, sans-serif; font-size: 13px; line-height: 1.25; background: #0f1419; color: #e8eef5; }}
+    .wrap {{ max-width: 900px; margin: 0 auto; padding: 16px; }}
+    .card {{ background: #17212b; border: 1px solid #2a3947; border-radius: 10px; padding: 12px; margin-top: 12px; }}
+    .title {{ font-size: 24px; font-weight: 700; line-height: 1.05; }}
     .muted {{ color: #9fb0bf; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 12px; }}
-    .item {{ background: #0f1720; border: 1px solid #2a3947; border-radius: 10px; padding: 12px; }}
-    .label {{ color: #9fb0bf; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }}
-    .value {{ margin-top: 6px; font-size: 18px; font-weight: 600; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin-top: 10px; }}
+    .item {{ background: #0f1720; border: 1px solid #2a3947; border-radius: 8px; padding: 8px 10px; }}
+    .label {{ color: #9fb0bf; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }}
+    .value {{ margin-top: 4px; font-size: 15px; font-weight: 600; }}
     .ok {{ color: #5ee06d; }}
     .warn {{ color: #ffb84d; }}
     .bad {{ color: #ff6b6b; }}
-    ul {{ margin: 10px 0 0; padding-left: 18px; }}
-    li {{ margin: 0 0 6px; }}
+    ul {{ margin: 8px 0 0; padding-left: 16px; }}
+    li {{ margin: 0 0 4px; }}
+    .section-note {{ margin-top: 6px; font-size: 12px; color: #9fb0bf; }}
     a {{ color: #7cc7ff; }}
   </style>
 </head>
@@ -3292,7 +3293,7 @@ def render_base_page(status: Dict[str, Any]) -> str:
     <div class="title">VA-Connect Gateway</div>
     <div class="muted">Minimal web base on port 80</div>
     <div style="margin-top:10px;">
-      <button onclick="hardRefreshPage()" style="background:#2a3947;color:#e8eef5;border:1px solid #3b4f60;border-radius:8px;padding:8px 12px;cursor:pointer;">
+      <button onclick="hardRefreshPage()" style="background:#2a3947;color:#e8eef5;border:1px solid #3b4f60;border-radius:8px;padding:6px 10px;cursor:pointer;">
         Hard refresh page
       </button>
     </div>
@@ -3310,10 +3311,10 @@ def render_base_page(status: Dict[str, Any]) -> str:
     <div class="card">
       <div class="label">Actions</div>
       <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;">
-        <button onclick="hardRefreshPage()" style="background:#2a3947;color:#e8eef5;border:1px solid #3b4f60;border-radius:8px;padding:8px 12px;cursor:pointer;">
+        <button onclick="hardRefreshPage()" style="background:#2a3947;color:#e8eef5;border:1px solid #3b4f60;border-radius:8px;padding:6px 10px;cursor:pointer;">
           Hard refresh page
         </button>
-        <button id="updateButton" onclick="updateFromGithub()" style="background:#2f5d3c;color:#e8eef5;border:1px solid #4b7d5a;border-radius:8px;padding:8px 12px;cursor:pointer;">
+        <button id="updateButton" onclick="updateFromGithub()" style="background:#2f5d3c;color:#e8eef5;border:1px solid #4b7d5a;border-radius:8px;padding:6px 10px;cursor:pointer;">
           Update from GitHub
         </button>
       </div>
@@ -3344,6 +3345,7 @@ def render_base_page(status: Dict[str, Any]) -> str:
       <div style="margin-top:12px;"><span class="label">Timestamp</span><div>{html.escape(str(last_incident.get("timestamp") or "-"))}</div></div>
       <div style="margin-top:12px;"><span class="label">Cause</span><div>{html.escape(str(last_incident.get("cause") or "No cause recorded yet."))}</div></div>
       <div style="margin-top:12px;"><span class="label">Key events</span><ul>{incident_events_html}</ul></div>
+      <div class="section-note">Incident card shows the current crash anchor, boot context, and short evidence trail.</div>
     </div>
     <div class="card">
       <div class="label">Pre-crash timeline</div>
