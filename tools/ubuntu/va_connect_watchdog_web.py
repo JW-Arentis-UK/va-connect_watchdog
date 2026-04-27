@@ -3260,6 +3260,19 @@ def render_base_page(status: Dict[str, Any]) -> str:
     incident_action_count = html.escape(str(last_incident.get("action_count") or 0))
     timeline_window = html.escape(str(pre_crash_timeline.get("window") or ""))
     timeline_event_count = html.escape(str(pre_crash_timeline.get("event_count") or 0))
+    if last_incident.get("available"):
+        current_summary = (
+            f"{overall_status.title()} system. "
+            f"Last incident: {html.escape(str(last_incident.get('type') or 'unknown'))} "
+            f"({html.escape(str(last_incident.get('severity') or '-'))}). "
+            f"Cause: {html.escape(str(last_incident.get('cause') or 'not recorded yet.'))}"
+        )
+    else:
+        current_summary = (
+            f"{overall_status.title()} system. "
+            "No incident recorded yet. "
+            f"Last healthy: {html.escape(str(status.get('last_healthy_at') or '-'))}"
+        )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -3296,6 +3309,10 @@ def render_base_page(status: Dict[str, Any]) -> str:
       <button onclick="hardRefreshPage()" style="background:#2a3947;color:#e8eef5;border:1px solid #3b4f60;border-radius:8px;padding:6px 10px;cursor:pointer;">
         Hard refresh page
       </button>
+    </div>
+    <div class="card" style="margin-top:10px; padding:10px 12px;">
+      <div class="label">Current summary</div>
+      <div style="margin-top:4px; font-size:14px;">{current_summary}</div>
     </div>
     <div class="card">
       <div class="grid">
