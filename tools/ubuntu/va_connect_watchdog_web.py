@@ -22,6 +22,7 @@ import xml.etree.ElementTree as ET
 
 
 CONFIG_PATH = Path(os.environ.get("SITE_WATCHDOG_CONFIG", "/opt/va-connect-watchdog/site-watchdog.json"))
+REPO_ROOT = Path(__file__).resolve().parents[2]
 STATE_PATH = Path("/var/lib/va-connect-site-watchdog/state.json")
 EVENTS_PATH = Path("/var/log/va-connect-site-watchdog/events.jsonl")
 METRICS_PATH = Path("/var/log/va-connect-site-watchdog/metrics.jsonl")
@@ -55,6 +56,32 @@ def read_json(path: Path, default):
 def write_json(path: Path, payload) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def current_build_number() -> str:
+    try:
+        build_info = read_json(BUILD_INFO_PATH, {})
+    except Exception:
+        build_info = {}
+    existing = str((build_info or {}).get("git_commit", "")).strip()
+    if existing:
+        return existing
+    for repo_root in (REPO_ROOT, Path("/opt/va-connect-watchdog")):
+        try:
+            if not (repo_root / ".git").exists():
+                continue
+            result = subprocess.run(
+                ["git", "-C", str(repo_root), "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            commit = result.stdout.strip()
+            if result.returncode == 0 and commit:
+                return commit
+        except Exception:
+            continue
+    return "unknown"
 
 
 def now_iso() -> str:
@@ -3024,10 +3051,6 @@ def status_snapshot_payload() -> Dict[str, Any]:
     except Exception:
         config = {}
     try:
-        build_info = read_json(BUILD_INFO_PATH, {})
-    except Exception:
-        build_info = {}
-    try:
         events = recent_events()
     except Exception:
         events = []
@@ -3051,10 +3074,12 @@ def status_snapshot_payload() -> Dict[str, Any]:
         overall_status = "degraded"
     else:
         overall_status = "healthy"
+    build_number = current_build_number()
     return {
         "device_id": device_id,
         "display_name": str((config or {}).get("gateway_name") or device_id),
-        "build": str((build_info or {}).get("git_commit", "unknown")),
+        "build": build_number,
+        "build_number": build_number,
         "overall_status": overall_status,
         "fault_active": bool((state or {}).get("fault_active")),
         "last_check_at": str((state or {}).get("last_check_at", "")),
@@ -3180,6 +3205,7 @@ def render_base_page(status: Dict[str, Any]) -> str:
       <div class="grid">
         <div class="item"><div class="label">Device</div><div class="value">{html.escape(str(status.get("device_id") or "unknown"))}</div></div>
         <div class="item"><div class="label">Status</div><div class="value {status_class}">{html.escape(overall_status)}</div></div>
+        <div class="item"><div class="label">Build</div><div class="value">{html.escape(str(status.get("build_number") or status.get("build") or "unknown"))}</div></div>
         <div class="item"><div class="label">Last check</div><div class="value">{html.escape(str(status.get("last_check_at") or "-"))}</div></div>
         <div class="item"><div class="label">Last healthy</div><div class="value">{html.escape(str(status.get("last_healthy_at") or "-"))}</div></div>
       </div>
