@@ -14,6 +14,12 @@ To remove the v2 install later, use:
 sudo bash tools/ubuntu/uninstall_v2_gateway.sh
 ```
 
+To install the v2 web base again, use:
+
+```bash
+sudo bash tools/ubuntu/install_v2_gateway.sh
+```
+
 ## Fresh gateway bootstrap
 
 For a brand-new gateway, fetch and run the root bootstrap script:
