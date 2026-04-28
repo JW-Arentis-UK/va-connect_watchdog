@@ -2145,6 +2145,9 @@ def crash_review_payload() -> Dict[str, Any]:
 
 def normalize_update_status(update_status: Dict[str, Any], build_info: Dict[str, Any]) -> Dict[str, Any]:
     status = dict(update_status or {})
+    status.setdefault("phase", "idle")
+    status.setdefault("detail", "")
+    status.setdefault("last_error", "")
     if status.get("state") != "running":
         return status
 
@@ -2154,7 +2157,10 @@ def normalize_update_status(update_status: Dict[str, Any], build_info: Dict[str,
         if started_at and (now - started_at).total_seconds() > 120:
             status["state"] = "failed"
             status["finished_at"] = status.get("finished_at") or now_iso()
-            status["message"] = "Update check ran too long. Check web-update.log."
+            status["phase"] = "failed"
+            status["detail"] = "Update check ran too long. Check web-update.log."
+            status["last_error"] = status["detail"]
+            status["message"] = status["detail"]
             write_json(UPDATE_STATUS_PATH, status)
         return status
 
@@ -2167,9 +2173,12 @@ def normalize_update_status(update_status: Dict[str, Any], build_info: Dict[str,
 
     if started_at and deployed_at and deployed_at >= started_at:
         status["state"] = "ok"
+        status["phase"] = "completed"
         status["finished_at"] = status.get("finished_at") or build_info.get("deployed_at", "")
         status["to_build"] = status.get("to_build") or build_info.get("git_commit", "unknown")
-        status["message"] = "Update appears to have completed after the web service restarted."
+        status["detail"] = "Update appears to have completed after the web service restarted."
+        status["message"] = status["detail"]
+        status["last_error"] = ""
         write_json(UPDATE_STATUS_PATH, status)
         return status
 
@@ -2177,16 +2186,22 @@ def normalize_update_status(update_status: Dict[str, Any], build_info: Dict[str,
     if started_at and (now - started_at).total_seconds() > 20:
         if current_build != "unknown" and current_build in {from_build, to_build}:
             status["state"] = "ok"
+            status["phase"] = "completed"
             status["finished_at"] = status.get("finished_at") or now_iso()
             status["to_build"] = to_build or current_build
-            status["message"] = "Already on the current build."
+            status["detail"] = "Already on the current build."
+            status["message"] = status["detail"]
+            status["last_error"] = ""
             write_json(UPDATE_STATUS_PATH, status)
             return status
 
     if started_at and (now - started_at).total_seconds() > 300:
         status["state"] = "failed"
+        status["phase"] = "failed"
         status["finished_at"] = status.get("finished_at") or now_iso()
-        status["message"] = "Web update stayed in running state too long. Check web-update.log."
+        status["detail"] = "Web update stayed in running state too long. Check web-update.log."
+        status["last_error"] = status["detail"]
+        status["message"] = status["detail"]
         write_json(UPDATE_STATUS_PATH, status)
         return status
 
@@ -2202,9 +2217,12 @@ def launch_update_check() -> Dict[str, Any]:
     payload = {
         "state": "running",
         "mode": "check",
+        "phase": "fetching",
         "started_at": now_iso(),
         "finished_at": "",
         "message": "Checking GitHub for updates.",
+        "detail": "Fetching remote GitHub state.",
+        "last_error": "",
         "log_path": str(UPDATE_LOG_PATH),
         "from_build": str(build_info.get("git_commit", "unknown")),
         "to_build": "",
@@ -2215,28 +2233,56 @@ def launch_update_check() -> Dict[str, Any]:
 
     command = (
         "python3 - <<'PY'\n"
-        "import json, subprocess\n"
+        "import json, subprocess, traceback\n"
         "from datetime import datetime\n"
         "from pathlib import Path\n"
         "repo_dir = Path('/opt/va-connect-watchdog')\n"
         "status_path = Path('/var/lib/va-connect-site-watchdog/web-update-status.json')\n"
         "log_path = Path('/var/log/va-connect-site-watchdog/web-update.log')\n"
         "build_info_path = repo_dir / 'build-info.json'\n"
+        "def load_status():\n"
+        "    return json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
+        "def save_status(payload):\n"
+        "    status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "def stage(payload, phase, message, detail='', last_error=''):\n"
+        "    payload['phase'] = phase\n"
+        "    payload['message'] = message\n"
+        "    payload['detail'] = detail or message\n"
+        "    payload['last_error'] = last_error\n"
+        "    save_status(payload)\n"
         "with log_path.open('ab') as log:\n"
         "    log.write((f'\\n===== Web update check started {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
+        "    payload = load_status()\n"
+        "    stage(payload, 'fetching', 'Checking GitHub for updates.', 'Fetching remote GitHub state.')\n"
         "    build_info_path.unlink(missing_ok=True)\n"
-        "    fetch = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'fetch', 'origin', 'master'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
-        "    local = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True)\n"
-        "    remote = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'origin/master'], capture_output=True, text=True)\n"
-        "payload = json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
-        "payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
-        "payload['return_code'] = 0 if fetch.returncode == 0 and local.returncode == 0 and remote.returncode == 0 else 1\n"
-        "payload['from_build'] = local.stdout.strip() or payload.get('from_build', 'unknown')\n"
-        "payload['to_build'] = remote.stdout.strip() or payload.get('to_build', 'unknown')\n"
-        "payload['update_available'] = bool(payload['to_build'] and payload['from_build'] and payload['to_build'] != payload['from_build'])\n"
-        "payload['state'] = 'ok' if payload['return_code'] == 0 else 'failed'\n"
-        "payload['message'] = ('Update available.' if payload['update_available'] else 'Already up to date.') if payload['state'] == 'ok' else 'Update check failed. Check web-update.log.'\n"
-        "status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "    fetch = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'fetch', '--prune', 'origin', 'master'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+        "    if fetch.returncode != 0:\n"
+        "        stage(payload, 'failed', 'Update check failed while fetching GitHub.', 'Git fetch failed.', 'See web-update.log for git fetch output.')\n"
+        "        payload['state'] = 'failed'\n"
+        "        payload['return_code'] = 1\n"
+        "        payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "    else:\n"
+        "        stage(payload, 'comparing', 'Comparing local and remote builds.', 'Reading current and remote build numbers.')\n"
+        "        local = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True)\n"
+        "        remote = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'origin/master'], capture_output=True, text=True)\n"
+        "        payload['from_build'] = local.stdout.strip() or payload.get('from_build', 'unknown')\n"
+        "        payload['to_build'] = remote.stdout.strip() or payload.get('to_build', 'unknown')\n"
+        "        if local.returncode != 0 or remote.returncode != 0:\n"
+        "            stage(payload, 'failed', 'Update check failed while reading build numbers.', 'Git rev-parse failed.', 'See web-update.log for git rev-parse output.')\n"
+        "            payload['state'] = 'failed'\n"
+        "            payload['return_code'] = 1\n"
+        "            payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "        else:\n"
+        "            payload['update_available'] = bool(payload['to_build'] and payload['from_build'] and payload['to_build'] != payload['from_build'])\n"
+        "            payload['return_code'] = 0\n"
+        "            payload['state'] = 'ok'\n"
+        "            payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "            if payload['update_available']:\n"
+        "                stage(payload, 'completed', 'Update available.', f\"{payload['from_build']} -> {payload['to_build']}\")\n"
+        "            else:\n"
+        "                stage(payload, 'completed', 'Already up to date.', f\"Current build: {payload['from_build']}\")\n"
+        "            payload['message'] = payload['message']\n"
+        "    save_status(payload)\n"
         "PY"
     )
     subprocess.Popen(
@@ -2991,7 +3037,7 @@ def status_payload() -> Dict[str, Any]:
         "export_status": export_status,
         "quick_export": quick_export,
         "incidents": incidents,
-        "update_console_lines": latest_log_block(UPDATE_LOG_PATH, "===== Web update started ", 10),
+        "update_console_lines": latest_log_block(UPDATE_LOG_PATH, "===== Web update started ", 15),
         "export_console_lines": export_log_excerpt(export_status, 10),
         "memtest_status": memtest_status,
         "memtest_info": memtest_info,
@@ -3517,9 +3563,13 @@ def launch_update() -> Dict[str, Any]:
     build_info = read_json(BUILD_INFO_PATH, {})
     payload = {
         "state": "running",
+        "mode": "update",
+        "phase": "fetching",
         "started_at": now_iso(),
         "finished_at": "",
         "message": "Git update requested from web UI.",
+        "detail": "Fetching remote GitHub state.",
+        "last_error": "",
         "log_path": str(UPDATE_LOG_PATH),
         "from_build": str(build_info.get("git_commit", "unknown")),
         "to_build": "",
@@ -3529,50 +3579,89 @@ def launch_update() -> Dict[str, Any]:
 
     command = (
         "python3 - <<'PY'\n"
-        "import json, subprocess\n"
+        "import json, subprocess, traceback\n"
         "from datetime import datetime\n"
         "from pathlib import Path\n"
         "repo_dir = Path('/opt/va-connect-watchdog')\n"
         "status_path = Path('/var/lib/va-connect-site-watchdog/web-update-status.json')\n"
         "log_path = Path('/var/log/va-connect-site-watchdog/web-update.log')\n"
         "build_info_path = repo_dir / 'build-info.json'\n"
+        "def load_status():\n"
+        "    return json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
+        "def save_status(payload):\n"
+        "    status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "def stage(payload, phase, message, detail='', last_error=''):\n"
+        "    payload['phase'] = phase\n"
+        "    payload['message'] = message\n"
+        "    payload['detail'] = detail or message\n"
+        "    payload['last_error'] = last_error\n"
+        "    save_status(payload)\n"
         "with log_path.open('ab') as log:\n"
         "    log.write((f'\\n===== Web update started {datetime.utcnow().replace(microsecond=0).isoformat()}+00:00 =====\\n').encode())\n"
+        "    payload = load_status()\n"
+        "    stage(payload, 'fetching', 'Starting update from GitHub.', 'Fetching remote GitHub state.')\n"
         "    build_info_path.unlink(missing_ok=True)\n"
-        "    fetch = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'fetch', 'origin', 'master'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
-        "    local = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True)\n"
-        "    remote = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'origin/master'], capture_output=True, text=True)\n"
-        "    payload = json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
-        "    payload['from_build'] = local.stdout.strip() or payload.get('from_build', 'unknown')\n"
-        "    payload['to_build'] = remote.stdout.strip() or payload.get('to_build', 'unknown')\n"
-        "    if fetch.returncode != 0 or local.returncode != 0 or remote.returncode != 0:\n"
+        "    fetch = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'fetch', '--prune', 'origin', 'master'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+        "    if fetch.returncode != 0:\n"
+        "        stage(payload, 'failed', 'Update failed while fetching GitHub.', 'Git fetch failed.', 'See web-update.log for git fetch output.')\n"
         "        payload['state'] = 'failed'\n"
         "        payload['return_code'] = 1\n"
         "        payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
-        "        payload['message'] = 'Update failed while checking GitHub. Check web-update.log.'\n"
-        "    elif payload['to_build'] and payload['from_build'] and payload['to_build'] != payload['from_build']:\n"
-        "        pull = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'pull', '--ff-only', 'origin', 'master'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
-        "        write_build = subprocess.run(\n"
-        "            ['python3', '-c', (\n"
-        "                'import json, pathlib, subprocess; '\n"
-        "                'repo = pathlib.Path(\"/opt/va-connect-watchdog\"); '\n"
-        "                'commit = subprocess.run([\"git\", \"-C\", str(repo), \"rev-parse\", \"--short\", \"HEAD\"], capture_output=True, text=True).stdout.strip() or \"unknown\"; '\n"
-        "                'branch = subprocess.run([\"git\", \"-C\", str(repo), \"rev-parse\", \"--abbrev-ref\", \"HEAD\"], capture_output=True, text=True).stdout.strip() or \"unknown\"; '\n"
-        "                'status = \"clean\" if subprocess.run([\"git\", \"-C\", str(repo), \"diff\", \"--quiet\", \"--ignore-submodules\", \"HEAD\"]).returncode == 0 else \"dirty\"; '\n"
-        "                'payload = {\"deployed_at\": __import__(\"datetime\").datetime.utcnow().replace(microsecond=0).isoformat() + \"+00:00\", \"git_branch\": branch, \"git_commit\": commit, \"git_status\": status, \"source_repo_dir\": str(repo)}; '\n"
-        "                'repo.joinpath(\"build-info.json\").write_text(json.dumps(payload, indent=2, sort_keys=True) + \"\\\\n\", encoding=\"utf-8\")'\n"
-        "            )], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
-        "        restart = subprocess.run(['systemctl', 'restart', 'va-connect-watchdog-web'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
-        "        payload['state'] = 'ok' if pull.returncode == 0 and write_build.returncode == 0 and restart.returncode == 0 else 'failed'\n"
-        "        payload['return_code'] = 0 if pull.returncode == 0 and write_build.returncode == 0 and restart.returncode == 0 else 1\n"
-        "        payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
-        "        payload['message'] = 'Update completed successfully.' if payload['state'] == 'ok' else 'Update failed. Check web-update.log.'\n"
         "    else:\n"
-        "        payload['state'] = 'ok'\n"
-        "        payload['return_code'] = 0\n"
-        "        payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
-        "        payload['message'] = 'Already up to date.'\n"
-        "    status_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')\n"
+        "        stage(payload, 'comparing', 'Comparing local and remote builds.', 'Reading current and remote build numbers.')\n"
+        "        local = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True)\n"
+        "        remote = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'origin/master'], capture_output=True, text=True)\n"
+        "        payload['from_build'] = local.stdout.strip() or payload.get('from_build', 'unknown')\n"
+        "        payload['to_build'] = remote.stdout.strip() or payload.get('to_build', 'unknown')\n"
+        "        if local.returncode != 0 or remote.returncode != 0:\n"
+        "            stage(payload, 'failed', 'Update failed while reading build numbers.', 'Git rev-parse failed.', 'See web-update.log for git rev-parse output.')\n"
+        "            payload['state'] = 'failed'\n"
+        "            payload['return_code'] = 1\n"
+        "            payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "        elif payload['to_build'] and payload['from_build'] and payload['to_build'] == payload['from_build']:\n"
+        "            stage(payload, 'completed', 'Already up to date.', f\"Current build: {payload['from_build']}\")\n"
+        "            payload['state'] = 'ok'\n"
+        "            payload['return_code'] = 0\n"
+        "            payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "        else:\n"
+        "            stage(payload, 'pulling', 'Pulling latest changes from GitHub.', f\"{payload['from_build']} -> {payload['to_build']}\")\n"
+        "            pull = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'pull', '--ff-only', 'origin', 'master'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+        "            if pull.returncode != 0:\n"
+        "                stage(payload, 'failed', 'Update failed while pulling changes.', 'Git pull failed.', 'See web-update.log for git pull output.')\n"
+        "                payload['state'] = 'failed'\n"
+        "                payload['return_code'] = 1\n"
+        "                payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "            else:\n"
+        "                stage(payload, 'writing-build', 'Writing new build metadata.', 'Refreshing build-info.json from the deployed checkout.')\n"
+        "                write_build = subprocess.run(\n"
+        "                    ['python3', '-c', (\n"
+        "                        'import json, pathlib, subprocess; '\n"
+        "                        'repo = pathlib.Path(\"/opt/va-connect-watchdog\"); '\n"
+        "                        'commit = subprocess.run([\"git\", \"-C\", str(repo), \"rev-parse\", \"--short\", \"HEAD\"], capture_output=True, text=True).stdout.strip() or \"unknown\"; '\n"
+        "                        'branch = subprocess.run([\"git\", \"-C\", str(repo), \"rev-parse\", \"--abbrev-ref\", \"HEAD\"], capture_output=True, text=True).stdout.strip() or \"unknown\"; '\n"
+        "                        'status = \"clean\" if subprocess.run([\"git\", \"-C\", str(repo), \"diff\", \"--quiet\", \"--ignore-submodules\", \"HEAD\"]).returncode == 0 else \"dirty\"; '\n"
+        "                        'payload = {\"deployed_at\": __import__(\"datetime\").datetime.utcnow().replace(microsecond=0).isoformat() + \"+00:00\", \"git_branch\": branch, \"git_commit\": commit, \"git_status\": status, \"source_repo_dir\": str(repo)}; '\n"
+        "                        'repo.joinpath(\"build-info.json\").write_text(json.dumps(payload, indent=2, sort_keys=True) + \"\\\\n\", encoding=\"utf-8\")'\n"
+        "                    )], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+        "                if write_build.returncode != 0:\n"
+        "                    stage(payload, 'failed', 'Update failed while writing build metadata.', 'Unable to refresh build-info.json.', 'See web-update.log for build metadata output.')\n"
+        "                    payload['state'] = 'failed'\n"
+        "                    payload['return_code'] = 1\n"
+        "                    payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "                else:\n"
+        "                    stage(payload, 'restarting', 'Restarting the web service.', 'Waiting for the new build to come back online.')\n"
+        "                    restart = subprocess.run(['systemctl', 'restart', 'va-connect-watchdog-web'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+        "                    if restart.returncode != 0:\n"
+        "                        stage(payload, 'failed', 'Update failed while restarting the web service.', 'Systemctl restart failed.', 'See web-update.log for restart output.')\n"
+        "                        payload['state'] = 'failed'\n"
+        "                        payload['return_code'] = 1\n"
+        "                        payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "                    else:\n"
+        "                        stage(payload, 'completed', 'Update completed successfully.', f\"{payload['from_build']} -> {payload['to_build']}\")\n"
+        "                        payload['state'] = 'ok'\n"
+        "                        payload['return_code'] = 0\n"
+        "                        payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
+        "    save_status(payload)\n"
         "PY"
     )
     subprocess.Popen(
@@ -4589,6 +4678,7 @@ def render_page(status: Dict[str, Any]) -> str:
             <span id="updateMessage">{html.escape(str(status["update_status"].get("message", "No web update run yet.")))}</span>
           </div>
           <p class="hint" id="updateMeta">{html.escape(str(status["update_status"].get("from_build", "unknown")))} to {html.escape(str(status["update_status"].get("to_build", "unknown")))} | {html.escape(str(status["update_status"].get("finished_at", "not finished yet")))}</p>
+          <p class="hint" id="updateDetail">{html.escape(str(status["update_status"].get("detail", "")))}</p>
           <div class="update-progress" id="updateProgress"><div class="update-progress-bar"></div></div>
           <div class="console-box" id="updateConsole" style="display:none;">{html.escape(chr(10).join(status.get("update_console_lines", []) or ["No update progress yet."]))}</div>
         </div>
@@ -6263,6 +6353,7 @@ def render_page(status: Dict[str, Any]) -> str:
       const updateProgress = document.getElementById('updateProgress');
       const targetBuild = updateState.to_build || updateState.from_build || 'unknown';
       const updateMessageEl = document.getElementById('updateMessage');
+      const updateDetailEl = document.getElementById('updateDetail');
       let autoHardRefreshPending = false;
       try {{
         autoHardRefreshPending = window.sessionStorage.getItem('watchdogAutoHardRefreshPending') === '1';
@@ -6273,17 +6364,31 @@ def render_page(status: Dict[str, Any]) -> str:
         if (updateMessageEl) {{
           updateMessageEl.textContent = `Updating to ${{targetBuild}}...`;
         }}
+        if (updateDetailEl) {{
+          const phase = updateState.phase ? `Phase: ${{updateState.phase}}` : 'Phase: running';
+          const detail = updateState.detail ? ` | ${{updateState.detail}}` : '';
+          updateDetailEl.textContent = `${{phase}}${{detail}}`;
+        }}
       }} else if (updateState.state === 'ok') {{
         if (updateMessageEl) {{
           updateMessageEl.textContent = `Completed: ${{targetBuild}}`;
+        }}
+        if (updateDetailEl) {{
+          updateDetailEl.textContent = updateState.detail || updateState.message || 'Update completed successfully.';
         }}
       }} else if (updateState.state === 'failed') {{
         if (updateMessageEl) {{
           updateMessageEl.textContent = `Failed: ${{targetBuild}}`;
         }}
+        if (updateDetailEl) {{
+          updateDetailEl.textContent = updateState.last_error || updateState.detail || updateState.message || 'Update failed.';
+        }}
       }} else {{
         if (updateMessageEl) {{
           updateMessageEl.textContent = `Current build: ${{targetBuild}}`;
+        }}
+        if (updateDetailEl) {{
+          updateDetailEl.textContent = updateState.detail || '';
         }}
       }}
       const updateMetaParts = [];
@@ -6300,9 +6405,10 @@ def render_page(status: Dict[str, Any]) -> str:
       const updateConsole = document.getElementById('updateConsole');
       const updateConsoleLines = status.update_console_lines || [];
       if (updateConsole) {{
-        if (updateState.state === 'failed') {{
+        if (updateState.state === 'running' || updateState.state === 'failed') {{
           updateConsole.style.display = 'block';
-          updateConsole.textContent = updateConsoleLines.length ? updateConsoleLines.slice(-10).join('\\n') : 'Update failed with no log lines.';
+          const lines = updateConsoleLines.length ? updateConsoleLines.slice(-15).join('\\n') : (updateState.state === 'failed' ? 'Update failed with no log lines.' : 'Update running. Waiting for log output.');
+          updateConsole.textContent = updateState.last_error ? `${{updateState.last_error}}\\n\\n${{lines}}` : lines;
         }} else {{
           updateConsole.style.display = 'none';
           updateConsole.textContent = '';
@@ -7107,6 +7213,7 @@ def render_page(status: Dict[str, Any]) -> str:
         const updateNowButton = document.getElementById('updateNowButton');
         const updateMessage = document.getElementById('updateMessage');
         const updateMeta = document.getElementById('updateMeta');
+        const updateDetail = document.getElementById('updateDetail');
         const updateProgress = document.getElementById('updateProgress');
         if (updateNowButton) {{
           updateNowButton.textContent = 'Updating...';
@@ -7118,6 +7225,9 @@ def render_page(status: Dict[str, Any]) -> str:
         }}
         if (updateMeta) {{
           updateMeta.textContent = '';
+        }}
+        if (updateDetail) {{
+          updateDetail.textContent = 'Waiting for GitHub update task to start.';
         }}
         if (updateProgress) {{
           updateProgress.style.display = 'block';
@@ -7146,6 +7256,7 @@ def render_page(status: Dict[str, Any]) -> str:
         const updateNowButton = document.getElementById('updateNowButton');
         const updateMessage = document.getElementById('updateMessage');
         const updateMeta = document.getElementById('updateMeta');
+        const updateDetail = document.getElementById('updateDetail');
         const updateProgress = document.getElementById('updateProgress');
         const startedAt = payload.status.started_at ? formatLocalTimestamp(payload.status.started_at) : '';
         const targetBuild = payload.status.to_build || payload.status.from_build || 'unknown';
@@ -7158,7 +7269,16 @@ def render_page(status: Dict[str, Any]) -> str:
           updateMessage.textContent = payload.status.state === 'running' ? `Updating to ${{targetBuild}}...` : (payload.message || 'Update requested.');
         }}
         if (updateMeta) {{
-          updateMeta.textContent = startedAt ? `Started ${{startedAt}}` : '';
+          const phase = payload.status.phase ? `Phase: ${{payload.status.phase}}` : '';
+          const finishedAt = payload.status.finished_at ? `Finished ${{formatLocalTimestamp(payload.status.finished_at)}}` : '';
+          const metaParts = [];
+          if (startedAt) metaParts.push(`Started ${{startedAt}}`);
+          if (phase) metaParts.push(phase);
+          if (finishedAt) metaParts.push(finishedAt);
+          updateMeta.textContent = metaParts.join(' | ');
+        }}
+        if (updateDetail) {{
+          updateDetail.textContent = payload.status.last_error || payload.status.detail || payload.message || '';
         }}
         if (updateProgress) {{
           updateProgress.style.display = payload.status.state === 'running' ? 'block' : 'none';
