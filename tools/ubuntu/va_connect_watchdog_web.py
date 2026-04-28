@@ -3555,6 +3555,27 @@ def render_base_page(status: Dict[str, Any]) -> str:
 </html>"""
 
 
+def render_latest_redirect_page(current_build: str) -> str:
+    target = f"/v/{html.escape(str(current_build or 'unknown'))}"
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta http-equiv="refresh" content="0; url={target}">
+  <title>VA-Connect Gateway</title>
+</head>
+<body style="margin:0; background:#0f1419; color:#e8eef5; font-family:Arial,sans-serif;">
+  <div style="padding:24px;">Loading latest build...</div>
+  <script>
+    window.location.replace("{target}");
+  </script>
+</body>
+</html>"""
+
+
 def launch_update() -> Dict[str, Any]:
     current = read_json(UPDATE_STATUS_PATH, {})
     if current.get("state") == "running":
@@ -7654,6 +7675,39 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path in {"/", "/index.html"}:
             body = render_base_page(status_snapshot_payload()).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if parsed.path in {"/latest", "/latest/index.html"}:
+            current = current_build_number()
+            body = render_latest_redirect_page(current).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if parsed.path.startswith("/v/"):
+            requested_build = parsed.path.removeprefix("/v/").strip("/") or "unknown"
+            status = status_snapshot_payload()
+            if requested_build != str(status.get("build_number") or status.get("build") or "unknown"):
+                self.send_response(HTTPStatus.SEE_OTHER)
+                self.send_header("Location", "/latest")
+                self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Expires", "0")
+                self.end_headers()
+                return
+            body = render_base_page(status).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
