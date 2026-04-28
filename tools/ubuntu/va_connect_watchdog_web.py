@@ -569,12 +569,31 @@ def sanitize_patch(data: Dict[str, Any]) -> Dict[str, Any]:
 def recent_events(limit: int = 30) -> List[Dict[str, Any]]:
     if not EVENTS_PATH.exists():
         return []
-    events = []
-    for line in EVENTS_PATH.read_text(encoding="utf-8").splitlines()[-limit:]:
+    events: List[Dict[str, Any]] = []
+    for line in EVENTS_PATH.read_text(encoding="utf-8", errors="ignore").splitlines()[-limit:]:
         try:
-            events.append(json.loads(line))
+            item = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(item, dict):
+            continue
+        ts = event_timestamp_value(item)
+        if not ts:
+            continue
+        message = event_message_value(item) or str(item.get("event") or item.get("component") or "event")
+        kind = str(item.get("event") or item.get("component") or item.get("type") or "event")
+        level = str(item.get("level") or item.get("severity") or "info").strip().lower() or "info"
+        events.append(
+            {
+                "ts": ts,
+                "summary": message,
+                "message": message,
+                "kind": kind,
+                "level": level,
+                "component": str(item.get("component") or ""),
+                "incident_id": str(item.get("incident_id") or ""),
+            }
+        )
     return list(reversed(events))
 
 
@@ -601,7 +620,7 @@ def all_incidents() -> List[Dict[str, Any]]:
             continue
         if isinstance(item, dict):
             incidents.append(item)
-    incidents.sort(key=lambda item: str(item.get("reboot_detected_at") or item.get("ts") or ""), reverse=True)
+    incidents.sort(key=lambda item: incident_timestamp_value(item), reverse=True)
     return incidents
 
 
@@ -945,6 +964,24 @@ def extract_tail_lines(path: Path, limit: int = 20) -> List[str]:
         if line:
             lines.append(line[:240])
     return lines[-limit:]
+
+
+def event_timestamp_value(event: Dict[str, Any]) -> str:
+    return str(event.get("timestamp") or event.get("ts") or event.get("reboot_detected_at") or "").strip()
+
+
+def incident_timestamp_value(incident: Dict[str, Any]) -> str:
+    return str(
+        incident.get("timestamp")
+        or incident.get("incident_time")
+        or incident.get("reboot_detected_at")
+        or incident.get("ts")
+        or ""
+    ).strip()
+
+
+def event_message_value(event: Dict[str, Any]) -> str:
+    return str(event.get("message") or event.get("summary") or event.get("detail") or "").strip()
 
 
 def latest_incident() -> Optional[Dict[str, Any]]:
@@ -1789,11 +1826,11 @@ def suspect_scores_payload(state: Dict[str, Any], crash_review: Dict[str, Any], 
 
 
 def summarize_event(event: Dict[str, Any]) -> Dict[str, str]:
-    event_type = str(event.get("event", "event"))
-    ts = str(event.get("ts", ""))
+    event_type = str(event.get("event") or event.get("type") or event.get("component") or "event")
+    ts = event_timestamp_value(event)
     severity = "info"
     title = event_type.replace("_", " ").title()
-    detail = ""
+    detail = event_message_value(event)
 
     if event_type == "unexpected_reboot_detected":
         severity = "warn"
@@ -1849,6 +1886,11 @@ def summarize_event(event: Dict[str, Any]) -> Dict[str, str]:
         severity = "danger"
         title = "Watchdog error"
         detail = str(event.get("detail", ""))
+    elif event.get("component") and event.get("message") and event_type == str(event.get("component")):
+        title = str(event.get("component")).replace("_", " ").title()
+        detail = str(event.get("message"))
+    elif not detail:
+        detail = "Event recorded."
 
     return {"ts": ts, "title": title, "detail": detail, "severity": severity}
 
@@ -3227,22 +3269,21 @@ def pre_crash_timeline_payload() -> Dict[str, Any]:
             "events": [],
         }
 
-    anchor = parse_iso(
-        str(
-            incident.get("timestamp")
-            or incident.get("incident_time")
-            or incident.get("reboot_detected_at")
-            or ""
-        )
-    )
+    anchor = parse_iso(incident_timestamp_value(incident))
     if anchor is None:
         anchor = parse_iso(str(incident.get("last_known_healthy_at") or "")) or parse_iso(now_iso())
 
     incident_id = str(incident.get("incident_id") or "").strip()
     candidate_events = []
     for event in all_events():
-        event_ts = parse_iso(str(event.get("ts", "")))
-        if event_ts is None or (anchor is not None and event_ts > anchor):
+        event_ts = parse_iso(event_timestamp_value(event))
+        if event_ts is None:
+            continue
+        event_incident_id = str(event.get("incident_id") or "").strip()
+        if incident_id and event_incident_id == incident_id:
+            candidate_events.append((event_ts, event))
+            continue
+        if anchor is not None and event_ts > anchor:
             continue
         candidate_events.append((event_ts, event))
     candidate_events.sort(key=lambda item: item[0] or datetime.min.replace(tzinfo=timezone.utc))
@@ -3251,21 +3292,34 @@ def pre_crash_timeline_payload() -> Dict[str, Any]:
     for event in selected:
         summary = summarize_event(event)
         level = str(event.get("level") or summary.get("severity") or "info").strip().lower()
-        message = str(event.get("message") or summary.get("title") or summary.get("detail") or "Event recorded").strip()
+        message = event_message_value(event) or str(summary.get("title") or summary.get("detail") or "Event recorded").strip()
         timeline_events.append(
             {
-                "timestamp": str(event.get("ts") or summary.get("ts") or ""),
+                "timestamp": event_timestamp_value(event) or str(summary.get("ts") or ""),
                 "level": level,
                 "message": message,
             }
         )
+
+    if not timeline_events:
+        evidence = incident.get("evidence") or []
+        for item in evidence[:40]:
+            if not isinstance(item, dict):
+                continue
+            timeline_events.append(
+                {
+                    "timestamp": str(item.get("timestamp") or incident_timestamp_value(incident) or ""),
+                    "level": "warning" if str(incident.get("severity") or "").strip().lower() != "info" else "info",
+                    "message": str(item.get("message") or item.get("source") or "Evidence recorded").strip(),
+                }
+            )
 
     return {
         "available": True,
         "incident_id": incident_id,
         "title": "Pre-crash timeline",
         "detail": "Last events before the latest incident.",
-        "window": f"Up to 40 events before {incident_id or 'the latest incident'}",
+        "window": f"Up to 40 events around {incident_id or 'the latest incident'}",
         "event_count": len(timeline_events),
         "events": timeline_events,
     }
