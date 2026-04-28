@@ -3313,7 +3313,7 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
     device_id = str((config or {}).get("device_id") or state.get("device_id") or socket.gethostname()).strip() or socket.gethostname()
     display_name = str((config or {}).get("gateway_name") or device_id).strip() or device_id
 
-    latest_incident = latest_incident_snapshot_payload()
+    latest_incident = last_incident_snapshot_payload()
     reboot_incident = latest_incident_of_type("unexpected_reboot")
     active_incident = bool(
         str(state.get("open_incident_id") or "").strip()
