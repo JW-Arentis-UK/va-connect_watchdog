@@ -24,6 +24,7 @@ import xml.etree.ElementTree as ET
 CONFIG_PATH = Path(os.environ.get("SITE_WATCHDOG_CONFIG", "/opt/va-connect-watchdog/site-watchdog.json"))
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATE_PATH = Path("/var/lib/va-connect-site-watchdog/state.json")
+DEVICE_STATUS_PATH = Path("/var/lib/va-connect-site-watchdog/device_status.json")
 EVENTS_PATH = Path("/var/lib/va-connect-site-watchdog/events.jsonl")
 METRICS_PATH = Path("/var/lib/va-connect-site-watchdog/metrics.jsonl")
 INCIDENTS_PATH = Path("/var/lib/va-connect-site-watchdog/incidents.jsonl")
@@ -1929,6 +1930,135 @@ def build_incident_timeline(events: List[Dict[str, Any]]) -> List[Dict[str, str]
     return interesting
 
 
+def path_age_seconds(path: Path) -> Optional[int]:
+    try:
+        if not path.exists():
+            return None
+        return max(0, int(time.time() - path.stat().st_mtime))
+    except Exception:
+        return None
+
+
+def path_mtime_iso(path: Path) -> str:
+    try:
+        if not path.exists():
+            return ""
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).replace(microsecond=0).isoformat()
+    except Exception:
+        return ""
+
+
+def read_boot_time_iso() -> str:
+    try:
+        for line in Path("/proc/stat").read_text(encoding="utf-8", errors="ignore").splitlines():
+            if not line.startswith("btime "):
+                continue
+            epoch = int(line.split()[1])
+            return datetime.fromtimestamp(epoch, tz=timezone.utc).replace(microsecond=0).isoformat()
+    except Exception:
+        return ""
+    return ""
+
+
+def read_uptime_seconds() -> Optional[int]:
+    try:
+        raw = Path("/proc/uptime").read_text(encoding="utf-8", errors="ignore").split()[0]
+        return max(0, int(float(raw)))
+    except Exception:
+        return None
+
+
+def format_duration(seconds: Optional[int]) -> str:
+    if seconds is None:
+        return "-"
+    seconds = max(0, int(seconds))
+    days, remainder = divmod(seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, secs = divmod(remainder, 60)
+    parts: List[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if not parts:
+        parts.append(f"{secs}s")
+    return " ".join(parts[:3])
+
+
+def format_local_timestamp(value: str, *, default: str = "-") -> str:
+    parsed = parse_iso(str(value or "").strip())
+    if parsed is None:
+        return default
+    return parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_local_clock(value: str, *, default: str = "-") -> str:
+    parsed = parse_iso(str(value or "").strip())
+    if parsed is None:
+        return default
+    return parsed.astimezone().strftime("%H:%M:%S")
+
+
+def yes_no_unknown(value: Any) -> str:
+    if value is True:
+        return "YES"
+    if value is False:
+        return "NO"
+    return "UNKNOWN"
+
+
+def freshness_state(age_seconds: Optional[int]) -> str:
+    if age_seconds is None:
+        return "data-stale"
+    if age_seconds <= 10:
+        return "ok"
+    if age_seconds <= 30:
+        return "warning"
+    return "data-stale"
+
+
+def freshness_label(age_seconds: Optional[int]) -> str:
+    state = freshness_state(age_seconds)
+    if state == "ok":
+        return "OK"
+    if state == "warning":
+        return "WARNING"
+    return "DATA STALE"
+
+
+def level_class(level: str) -> str:
+    normalized = str(level or "info").strip().lower()
+    return {
+        "debug": "muted",
+        "info": "ok",
+        "warn": "warn",
+        "warning": "warn",
+        "error": "bad",
+        "critical": "bad",
+        "crit": "bad",
+    }.get(normalized, "muted")
+
+
+def incident_confidence(incident: Dict[str, Any]) -> str:
+    severity = str(incident.get("severity") or "").strip().lower()
+    if severity == "critical":
+        return "HIGH"
+    if severity == "warning":
+        return "MEDIUM"
+    if severity == "info":
+        return "LOW"
+    return "MEDIUM"
+
+
+def latest_incident_of_type(incident_type: str) -> Optional[Dict[str, Any]]:
+    for incident in all_incidents():
+        if str(incident.get("type") or "").strip() == incident_type:
+            return incident
+    return None
+
+
 def metric_at_or_before(ts_value: str) -> Dict[str, Any]:
     target = parse_iso(ts_value)
     if target is None or not METRICS_PATH.exists():
@@ -3123,7 +3253,7 @@ def status_payload() -> Dict[str, Any]:
     }
 
 
-def status_snapshot_payload() -> Dict[str, Any]:
+def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
     try:
         state = read_json(STATE_PATH, {})
     except Exception:
@@ -3133,9 +3263,21 @@ def status_snapshot_payload() -> Dict[str, Any]:
     except Exception:
         config = {}
     try:
-        events = recent_events()
+        device_status = read_json(DEVICE_STATUS_PATH, {})
+    except Exception:
+        device_status = {}
+    try:
+        events = recent_events(50)
     except Exception:
         events = []
+    try:
+        build_info = read_json(BUILD_INFO_PATH, {})
+    except Exception:
+        build_info = {}
+    try:
+        update_status = normalize_update_status(read_json(UPDATE_STATUS_PATH, {"state": "idle"}), build_info)
+    except Exception:
+        update_status = {"state": "idle", "phase": "idle", "detail": "", "last_error": ""}
     try:
         web_service = service_status_payload("va-connect-watchdog-web.service")
     except Exception:
@@ -3147,59 +3289,171 @@ def status_snapshot_payload() -> Dict[str, Any]:
             "ok": False,
             "detail": "service status unavailable",
         }
-    device_id = str((config or {}).get("device_id") or socket.gethostname()).strip()
-    if not device_id:
-        device_id = socket.gethostname()
-    if not web_service.get("ok"):
-        overall_status = "starting"
-    elif state.get("fault_active"):
-        overall_status = "degraded"
-    else:
-        overall_status = "healthy"
+
     build_number = current_build_number()
-    latest_build = build_number
-    update_available = False
+    build_info_commit = str(build_info.get("git_commit") or build_info.get("commit_sha") or "").strip()
+    latest_build = build_info_commit or build_number
+    update_available = bool(build_info_commit and build_info_commit != build_number)
+    if update_status.get("state") == "running":
+        update_state = "running"
+    elif update_status.get("state") == "failed":
+        update_state = "failed"
+    elif update_available:
+        update_state = "available"
+    else:
+        update_state = "current"
+
+    state_age_seconds = path_age_seconds(STATE_PATH)
+    state_mtime = path_mtime_iso(STATE_PATH)
+    freshness = freshness_state(state_age_seconds)
+    boot_time_iso = read_boot_time_iso()
+    uptime_seconds = read_uptime_seconds()
+    uptime_label = format_duration(uptime_seconds)
+
+    device_id = str((config or {}).get("device_id") or state.get("device_id") or socket.gethostname()).strip() or socket.gethostname()
+    display_name = str((config or {}).get("gateway_name") or device_id).strip() or device_id
+
+    latest_incident = latest_incident_snapshot_payload()
+    reboot_incident = latest_incident_of_type("unexpected_reboot")
+    active_incident = bool(
+        str(state.get("open_incident_id") or "").strip()
+        or bool(device_status.get("health", {}).get("fault_active"))
+        or (latest_incident.get("available") and latest_incident.get("status") != "resolved")
+    )
+
+    watchdog_status = str(device_status.get("overall_status") or state.get("last_status") or "unknown").strip() or "unknown"
+    gateway_process_running = device_status.get("checks", {}).get("app", {}).get("ok")
+    boot_id = str(state.get("boot_id") or device_status.get("health", {}).get("boot_id") or "").strip()
+    last_check_at = str(state.get("last_check_at") or device_status.get("last_seen") or "")
+    last_healthy_at = str(state.get("last_healthy_at") or device_status.get("health", {}).get("last_healthy_at") or "")
+    last_watchdog_write_at = last_check_at
+    if not last_watchdog_write_at and state_mtime:
+        last_watchdog_write_at = state_mtime
+
+    latest_metric = {}
     try:
-        build_info = read_json(BUILD_INFO_PATH, {})
+        points = recent_metrics(1)
+        if points:
+            latest_metric = points[-1]
     except Exception:
-        build_info = {}
-    if isinstance(build_info, dict) and build_info.get("git_commit"):
-        current = str(build_info.get("git_commit") or "").strip()
-        if current and current != build_number:
-            latest_build = build_number
-            update_available = True
-    hardware_review = hardware_review_payload(state)
-    crash_review = crash_review_payload()
-    linux_stability = linux_stability_payload(state, hardware_review, crash_review)
+        latest_metric = {}
+
+    current_system_state = {
+        "gateway_process_running": gateway_process_running,
+        "cpu_percent": latest_metric.get("cpu_percent"),
+        "memory_percent": latest_metric.get("memory_percent"),
+        "disk_percent": latest_metric.get("disk_percent"),
+        "temperature_c": latest_metric.get("temperature_c"),
+        "load_1": latest_metric.get("load_1"),
+        "load_5": latest_metric.get("load_5"),
+        "load_15": latest_metric.get("load_15"),
+        "boot_time_iso": boot_time_iso,
+        "uptime_seconds": uptime_seconds,
+        "uptime_label": uptime_label,
+        "last_watchdog_write_at": last_watchdog_write_at,
+    }
+
+    incident_banner = None
+    if latest_incident.get("available") and str(latest_incident.get("type") or "").strip() == "unexpected_reboot":
+        incident_banner = {
+            "title": "INCIDENT DETECTED — UNEXPECTED REBOOT",
+            "detail": str(latest_incident.get("summary") or latest_incident.get("detail") or "Unexpected reboot detected."),
+            "level": "bad",
+        }
+    elif active_incident:
+        incident_banner = {
+            "title": "INCIDENT DETECTED",
+            "detail": str(latest_incident.get("summary") or latest_incident.get("detail") or "A current incident is active."),
+            "level": "warn",
+        }
+
+    if freshness == "data-stale":
+        freshness_banner = {
+            "title": f"DATA STALE — watchdog data has not updated for {state_age_seconds or 0}s",
+            "detail": "The state file is older than the recommended threshold.",
+            "level": "warn" if (state_age_seconds or 0) <= 60 else "bad",
+        }
+    elif freshness == "warning":
+        freshness_banner = {
+            "title": f"Freshness warning — data is {state_age_seconds or 0}s old",
+            "detail": "The state file is approaching the stale threshold.",
+            "level": "warn",
+        }
+    else:
+        freshness_banner = None
+
+    if not active_incident and latest_incident.get("available"):
+        summary_line = (
+            f"{watchdog_status.title()} system. "
+            f"Latest incident: {str(latest_incident.get('type') or 'unknown').replace('_', ' ').upper()} "
+            f"({str(latest_incident.get('severity') or '-').upper()}). "
+            f"Cause: {str(latest_incident.get('cause') or latest_incident.get('summary') or 'not recorded yet.').strip()}"
+        )
+    elif active_incident and latest_incident.get("available"):
+        summary_line = (
+            f"{watchdog_status.title()} system. "
+            f"Active incident: {str(latest_incident.get('type') or 'unknown').replace('_', ' ').upper()}. "
+            f"Cause: {str(latest_incident.get('cause') or latest_incident.get('summary') or 'not recorded yet.').strip()}"
+        )
+    else:
+        summary_line = (
+            f"{watchdog_status.title()} system. "
+            f"No incident recorded yet. Last healthy: {format_local_timestamp(last_healthy_at) if last_healthy_at else '-'}"
+        )
+
     return {
+        "hostname": socket.gethostname(),
+        "site_name": display_name,
+        "display_name": display_name,
         "device_id": device_id,
-        "display_name": str((config or {}).get("gateway_name") or device_id),
         "build": build_number,
         "build_number": build_number,
         "latest_build": latest_build,
         "update_available": update_available,
-        "overall_status": overall_status,
-        "fault_active": bool((state or {}).get("fault_active")),
-        "last_check_at": str((state or {}).get("last_check_at", "")),
-        "last_healthy_at": str((state or {}).get("last_healthy_at", "")),
-        "monitoring_state": str((state or {}).get("monitoring_state", "unknown")),
-        "diagnosis": {
-            "title": "Web base ready" if web_service.get("ok") else "Web base starting",
-            "detail": "The legacy web UI is up and serving a minimal summary." if web_service.get("ok") else "The legacy web UI is not fully healthy yet.",
-        },
-        "web_service": web_service,
-        "hardware_review": hardware_review,
-        "linux_stability": linux_stability,
-        "recent_events": [
+        "update_state": update_state,
+        "update_status": update_status,
+        "status_badge": "DATA STALE" if freshness == "data-stale" else ("INCIDENT" if active_incident or incident_banner else ("WARNING" if latest_incident.get("available") else "OK")),
+        "freshness_state": freshness,
+        "state_file_age_seconds": state_age_seconds,
+        "state_file_age_label": format_duration(state_age_seconds),
+        "last_data_refresh_at": state_mtime,
+        "last_data_refresh_age_seconds": state_age_seconds,
+        "last_data_refresh_label": format_duration(state_age_seconds),
+        "overall_status": "starting" if update_status.get("state") == "running" else ("degraded" if active_incident else watchdog_status),
+        "watchdog_status": watchdog_status,
+        "last_check_at": last_check_at,
+        "last_healthy_at": last_healthy_at,
+        "last_watchdog_write_at": last_watchdog_write_at,
+        "boot_id": boot_id,
+        "boot_time_iso": boot_time_iso,
+        "uptime_seconds": uptime_seconds,
+        "uptime_label": uptime_label,
+        "gateway_process_running": gateway_process_running,
+        "summary_line": summary_line,
+        "incident_banner": incident_banner,
+        "freshness_banner": freshness_banner,
+        "current_summary": summary_line,
+        "current_system_state": current_system_state,
+        "current_incident": latest_incident,
+        "latest_incident": latest_incident,
+        "reboot_incident": reboot_incident,
+        "events_before_reboot": pre_crash_timeline_payload(window_seconds=window_seconds),
+        "system_events": [
             {
-                "ts": str(item.get("ts", "")),
-                "summary": str(item.get("summary", "")),
-                "kind": str(item.get("kind", "")),
+                "timestamp": str(item.get("ts") or item.get("timestamp") or ""),
+                "level": str(item.get("level") or "info"),
+                "message": str(item.get("summary") or item.get("message") or ""),
+                "kind": str(item.get("kind") or item.get("component") or ""),
             }
-            for item in events[:10]
+            for item in events[:50]
         ],
-        "last_incident": last_incident_snapshot_payload(),
-        "pre_crash_timeline": pre_crash_timeline_payload(),
+        "api_url": "/api/base-status",
+        "metrics_url": "/api/metrics?hours=1",
+        "state": state,
+        "config": config,
+        "device_status": device_status,
+        "build_info": build_info,
+        "web_service": web_service,
     }
 
 
@@ -3211,60 +3465,95 @@ def last_incident_snapshot_payload() -> Dict[str, Any]:
             "incident_id": "",
             "boot_id": "",
             "timestamp": "",
+            "detected_at": "",
             "type": "",
             "severity": "",
             "status": "",
             "cause": "",
+            "summary": "No incidents recorded.",
+            "confidence": "",
+            "detected_because": [],
             "evidence_count": 0,
             "action_count": 0,
             "key_events": [],
-            "title": "No incident recorded yet",
-            "detail": "The gateway has not stored an incident yet.",
+            "title": "Latest Incident",
+            "detail": "No incidents recorded.",
         }
 
     status = str(incident.get("status") or ("resolved" if incident.get("resolved_at") else "open")).strip() or "unknown"
     severity = str(incident.get("severity") or ("critical" if status == "open" else "warning")).strip() or "unknown"
+    incident_type = str(incident.get("type") or incident.get("classification") or "unknown").strip() or "unknown"
     key_events: List[str] = []
-    for item in (incident.get("actions_taken") or [])[:3]:
+    detected_because: List[str] = []
+    for item in (incident.get("actions_taken") or [])[:4]:
         text = str(item).strip()
         if text:
             key_events.append(text)
-    if not key_events:
-        for item in (incident.get("evidence") or [])[:3]:
-            text = str(item.get("message") or item.get("source") or "").strip()
-            if text:
-                key_events.append(text)
+    for item in (incident.get("evidence") or [])[:4]:
+        if not isinstance(item, dict):
+            continue
+        message = str(item.get("message") or item.get("source") or "").strip()
+        if message:
+            key_events.append(message)
+            detected_because.append(message)
+        data = item.get("data") or {}
+        if isinstance(data, dict):
+            if data.get("previous_boot_id") and data.get("current_boot_id"):
+                detected_because.append("Boot ID changed")
+            if data.get("check"):
+                detected_because.append(f"{data.get('check')} check failed")
     if not key_events:
         for item in recent_events(5)[:3]:
             text = str(item.get("summary") or item.get("message") or "").strip()
             if text:
                 key_events.append(text)
+    if incident_type == "unexpected_reboot":
+        summary = "Unexpected reboot detected following loss of heartbeat and system reset."
+        detected_because = detected_because or [
+            "Heartbeat stopped",
+            "Boot time changed",
+            "Process restarted",
+        ]
+    elif incident_type == "app_crash":
+        summary = "Application process failed and the watchdog recorded an incident."
+        detected_because = detected_because or ["App process missing", "Watchdog check failed"]
+    elif incident_type == "wan_down":
+        summary = "WAN connectivity failed and the watchdog opened an incident."
+        detected_because = detected_because or ["WAN check failed"]
+    else:
+        summary = str(incident.get("cause") or incident.get("reporting_text") or incident.get("suspected_reason") or "Incident recorded.").strip()
+
     return {
         "available": True,
         "incident_id": str(incident.get("incident_id", "")),
         "boot_id": str(incident.get("boot_id") or ""),
         "timestamp": str(incident.get("timestamp") or incident.get("incident_time") or incident.get("reboot_detected_at") or ""),
-        "type": str(incident.get("type") or incident.get("classification") or "unknown"),
+        "detected_at": str(incident.get("timestamp") or incident.get("incident_time") or incident.get("reboot_detected_at") or ""),
+        "type": incident_type,
         "severity": severity,
         "status": status,
         "cause": str(incident.get("cause") or incident.get("reporting_text") or incident.get("suspected_reason") or ""),
+        "summary": summary,
+        "confidence": incident_confidence(incident),
+        "detected_because": list(dict.fromkeys(text for text in detected_because if text))[:4],
         "evidence_count": len(incident.get("evidence") or []),
         "action_count": len(incident.get("actions_taken") or []),
-        "key_events": key_events,
-        "title": f"Last incident: {str(incident.get('type') or incident.get('classification') or 'unknown')}",
-        "detail": str(incident.get("cause") or incident.get("reporting_text") or incident.get("suspected_reason") or "No cause recorded yet."),
+        "key_events": key_events[:5],
+        "title": "Latest Incident",
+        "detail": summary,
     }
 
 
-def pre_crash_timeline_payload() -> Dict[str, Any]:
+def pre_crash_timeline_payload(window_seconds: int = 60) -> Dict[str, Any]:
     incident = latest_incident() or {}
     if not incident:
         return {
             "available": False,
             "incident_id": "",
-            "title": "Pre-crash timeline",
+            "title": "Events Before Reboot",
             "detail": "No incident recorded yet.",
-            "window": "",
+            "window": "No incident recorded yet.",
+            "window_seconds": int(window_seconds),
             "event_count": 0,
             "events": [],
         }
@@ -3274,28 +3563,30 @@ def pre_crash_timeline_payload() -> Dict[str, Any]:
         anchor = parse_iso(str(incident.get("last_known_healthy_at") or "")) or parse_iso(now_iso())
 
     incident_id = str(incident.get("incident_id") or "").strip()
-    candidate_events = []
+    window_seconds = max(30, min(int(window_seconds or 60), 300))
+    window_start = anchor - timedelta(seconds=window_seconds) if anchor else None
+    candidate_events: List[tuple[datetime, Dict[str, Any]]] = []
     for event in all_events():
         event_ts = parse_iso(event_timestamp_value(event))
         if event_ts is None:
             continue
-        event_incident_id = str(event.get("incident_id") or "").strip()
-        if incident_id and event_incident_id == incident_id:
-            candidate_events.append((event_ts, event))
-            continue
         if anchor is not None and event_ts > anchor:
             continue
+        if window_start is not None and event_ts < window_start:
+            continue
+        event_incident_id = str(event.get("incident_id") or "").strip()
+        if incident_id and event_incident_id not in {"", incident_id}:
+            continue
         candidate_events.append((event_ts, event))
-    candidate_events.sort(key=lambda item: item[0] or datetime.min.replace(tzinfo=timezone.utc))
-    selected = [item[1] for item in candidate_events[-40:]]
+    candidate_events.sort(key=lambda item: item[0])
+
     timeline_events: List[Dict[str, str]] = []
-    for event in selected:
-        summary = summarize_event(event)
-        level = str(event.get("level") or summary.get("severity") or "info").strip().lower()
-        message = event_message_value(event) or str(summary.get("title") or summary.get("detail") or "Event recorded").strip()
+    for event_ts, event in candidate_events:
+        level = str(event.get("level") or "info").strip().lower() or "info"
+        message = event_message_value(event) or str(event.get("event") or event.get("component") or "event").strip()
         timeline_events.append(
             {
-                "timestamp": event_timestamp_value(event) or str(summary.get("ts") or ""),
+                "timestamp": event_ts.astimezone().strftime("%H:%M:%S"),
                 "level": level,
                 "message": message,
             }
@@ -3306,20 +3597,26 @@ def pre_crash_timeline_payload() -> Dict[str, Any]:
         for item in evidence[:40]:
             if not isinstance(item, dict):
                 continue
+            ts = format_local_clock(str(item.get("timestamp") or incident_timestamp_value(incident) or ""))
             timeline_events.append(
                 {
-                    "timestamp": str(item.get("timestamp") or incident_timestamp_value(incident) or ""),
+                    "timestamp": ts if ts else "-",
                     "level": "warning" if str(incident.get("severity") or "").strip().lower() != "info" else "info",
                     "message": str(item.get("message") or item.get("source") or "Evidence recorded").strip(),
                 }
             )
 
+    window_label = f"Last {window_seconds}s before the incident"
+    if not timeline_events:
+        window_label = "No events were recorded in the selected window before this reboot."
+
     return {
         "available": True,
         "incident_id": incident_id,
-        "title": "Pre-crash timeline",
-        "detail": "Last events before the latest incident.",
-        "window": f"Up to 40 events around {incident_id or 'the latest incident'}",
+        "title": "Events Before Reboot",
+        "detail": "The last recorded events before the selected incident.",
+        "window": window_label,
+        "window_seconds": window_seconds,
         "event_count": len(timeline_events),
         "events": timeline_events,
     }
@@ -3327,6 +3624,435 @@ def pre_crash_timeline_payload() -> Dict[str, Any]:
 
 def base_status_payload() -> Dict[str, Any]:
     return status_snapshot_payload()
+
+
+def timeline_window_seconds_from_query(query: str) -> int:
+    raw = str(parse_qs(query).get("window", ["60"])[0]).strip().lower()
+    if raw in {"30", "30s", "last30", "last30s"}:
+        return 30
+    if raw in {"300", "5m", "5min", "5mins", "last5min", "last5m"}:
+        return 300
+    return 60
+
+
+def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60) -> str:
+    def esc(value: Any) -> str:
+        return html.escape(str(value if value is not None else ""))
+
+    def metric_text(value: Any, suffix: str = "", default: str = "-") -> str:
+        if value in (None, ""):
+            return default
+        try:
+            number = float(value)
+        except Exception:
+            return esc(value)
+        if number.is_integer():
+            return f"{int(number)}{suffix}"
+        return f"{number:.1f}{suffix}"
+
+    def kv(label: str, value: Any, extra_class: str = "") -> str:
+        text = esc(value if value not in (None, "") else "-")
+        return f"""
+        <div class="kv {extra_class}">
+          <div class="kv-label">{esc(label)}</div>
+          <div class="kv-value">{text}</div>
+        </div>
+        """
+
+    def pill(label: str, kind: str = "ok") -> str:
+        return f'<span class="pill {esc(kind)}">{esc(label)}</span>'
+
+    def event_line(event: Dict[str, Any]) -> str:
+        ts = esc(event.get("timestamp") or event.get("ts") or "-")
+        level = str(event.get("level") or "info").strip().upper() or "INFO"
+        message = esc(event.get("message") or event.get("summary") or "-")
+        return f"""
+        <div class="event-row">
+          <span class="event-ts">{ts}</span>
+          <span class="event-level {level_class(level)}">{esc(level)}</span>
+          <span class="event-msg">{message}</span>
+        </div>
+        """
+
+    def empty_line(message: str) -> str:
+        return f'<div class="empty-state">{esc(message)}</div>'
+
+    status_badge = str(snapshot.get("status_badge") or "OK").upper()
+    freshness_state_value = str(snapshot.get("freshness_state") or "ok")
+    current_summary = str(snapshot.get("summary_line") or snapshot.get("current_summary") or "").strip()
+    site_name = str(snapshot.get("site_name") or snapshot.get("display_name") or "VA-Connect Gateway").strip() or "VA-Connect Gateway"
+    device_id = str(snapshot.get("device_id") or socket.gethostname()).strip()
+    build_number = str(snapshot.get("build_number") or snapshot.get("build") or "unknown").strip()
+    latest_build = str(snapshot.get("latest_build") or build_number).strip()
+    update_state = str(snapshot.get("update_state") or "current").strip()
+    update_status = snapshot.get("update_status") or {}
+    incident_banner = snapshot.get("incident_banner") or {}
+    freshness_banner = snapshot.get("freshness_banner") or {}
+    latest_incident = snapshot.get("latest_incident") or {}
+    current_system_state = snapshot.get("current_system_state") or {}
+    events_before_reboot = snapshot.get("events_before_reboot") or {}
+    system_events = snapshot.get("system_events") or []
+    state_age_label = str(snapshot.get("state_file_age_label") or "-")
+    last_data_refresh_at = str(snapshot.get("last_data_refresh_at") or "")
+    last_check_at = str(snapshot.get("last_check_at") or "")
+    last_healthy_at = str(snapshot.get("last_healthy_at") or "")
+    boot_time_iso = str(snapshot.get("boot_time_iso") or "")
+    uptime_label = str(snapshot.get("uptime_label") or "-")
+    uptime_seconds = snapshot.get("uptime_seconds")
+    active_incident = bool(snapshot.get("current_incident") or False) and str((snapshot.get("current_incident") or {}).get("status") or "") != "resolved"
+    reboot_incident = snapshot.get("reboot_incident") or {}
+    reboot_detected = bool(reboot_incident.get("available"))
+    incident_type = str(latest_incident.get("type") or "").strip()
+    incident_status = str(latest_incident.get("status") or "").strip()
+    incident_title = str(latest_incident.get("title") or "Latest Incident")
+    incident_summary = str(latest_incident.get("summary") or latest_incident.get("detail") or "No incidents recorded.").strip()
+    confidence = str(latest_incident.get("confidence") or "").strip()
+    detected_because = latest_incident.get("detected_because") or []
+    key_events = latest_incident.get("key_events") or []
+    timeline_events = events_before_reboot.get("events") or []
+    timeline_window = str(events_before_reboot.get("window") or "").strip()
+    timeline_window_seconds = int(events_before_reboot.get("window_seconds") or window_seconds or 60)
+    freshness_seconds = snapshot.get("state_file_age_seconds")
+    freshness_badge = freshness_label(freshness_seconds if isinstance(freshness_seconds, int) else None)
+    top_banner_html = ""
+    if freshness_banner:
+        top_banner_html += f"""
+        <section class="banner {esc(freshness_banner.get('level') or 'warn')}">
+          <div class="banner-title">{esc(freshness_banner.get('title') or 'DATA STALE')}</div>
+          <div class="banner-detail">{esc(freshness_banner.get('detail') or '')}</div>
+        </section>
+        """
+    if incident_banner:
+        top_banner_html += f"""
+        <section class="banner {esc(incident_banner.get('level') or 'warn')}">
+          <div class="banner-title">{esc(incident_banner.get('title') or 'INCIDENT DETECTED')}</div>
+          <div class="banner-detail">{esc(incident_banner.get('detail') or '')}</div>
+        </section>
+        """
+
+    timeline_buttons = []
+    for seconds, label in ((30, "Last 30s"), (60, "Last 60s"), (300, "Last 5 min")):
+        active = " active" if seconds == timeline_window_seconds else ""
+        timeline_buttons.append(f'<a class="window-btn{active}" href="/latest?window={seconds}">{esc(label)}</a>')
+    timeline_buttons_html = "".join(timeline_buttons)
+
+    latest_incident_rows = [
+        kv("Incident ID", str(latest_incident.get("incident_id") or "none") if latest_incident.get("available") else "none"),
+        kv("Incident Type", incident_type.replace("_", " ").upper() or "-"),
+        kv("Severity", str(latest_incident.get("severity") or "-").upper() if latest_incident else "-"),
+        kv("Status", incident_status.upper() or "-"),
+        kv("Detected at", format_local_timestamp(str(latest_incident.get("timestamp") or latest_incident.get("detected_at") or ""))),
+        kv("Confidence", confidence or "-"),
+    ]
+    latest_incident_rows_html = "".join(latest_incident_rows)
+    detected_because_html = "".join(f"<li>{esc(item)}</li>" for item in detected_because if str(item).strip()) or "<li>No clear cause recorded yet.</li>"
+    key_events_html = "".join(f"<li>{esc(item)}</li>" for item in key_events if str(item).strip()) or "<li>No key events recorded yet.</li>"
+
+    if timeline_events:
+        timeline_rows_html = "".join(
+            f"""
+            <div class="timeline-row">
+              <span class="timeline-ts">{esc(item.get('timestamp') or '-')}</span>
+              <span class="timeline-level {level_class(str(item.get('level') or 'info'))}">{esc(str(item.get('level') or 'info').upper())}</span>
+              <span class="timeline-msg">{esc(item.get('message') or '')}</span>
+            </div>
+            """
+            for item in timeline_events[:50]
+        )
+    else:
+        timeline_rows_html = empty_line(str(timeline_window or "No events were recorded in the selected window before this reboot."))
+
+    current_system_rows = [
+        kv("Gateway process running", yes_no_unknown(current_system_state.get("gateway_process_running"))),
+        kv("CPU", metric_text(current_system_state.get("cpu_percent"), "%")),
+        kv("Memory", metric_text(current_system_state.get("memory_percent"), "%")),
+        kv("Disk", metric_text(current_system_state.get("disk_percent"), "%")),
+        kv("Load", " / ".join(
+            metric_text(current_system_state.get(key), "", "-")
+            for key in ("load_1", "load_5", "load_15")
+        )),
+        kv("Temperature", metric_text(current_system_state.get("temperature_c"), " C")),
+        kv("Current boot time", format_local_timestamp(boot_time_iso)),
+        kv("Current uptime", uptime_label),
+        kv("Last watchdog write time", format_local_timestamp(last_watchdog_write_at := str(snapshot.get("last_watchdog_write_at") or ""))),
+    ]
+    current_system_rows_html = "".join(current_system_rows)
+
+    system_events_html = "".join(
+        f"""
+        <div class="system-event">
+          <span class="system-event-ts">{esc(format_local_clock(str(item.get('timestamp') or '')) or '-')}</span>
+          <span class="system-event-level {level_class(str(item.get('level') or 'info'))}">{esc(str(item.get('level') or 'info').upper())}</span>
+          <span class="system-event-msg">{esc(item.get('message') or item.get('summary') or '')}</span>
+        </div>
+        """
+        for item in system_events[:20]
+    ) or empty_line("No recent events yet.")
+
+    update_message = str(update_status.get("detail") or update_status.get("message") or "Ready to update.").strip()
+    update_last_error = str(update_status.get("last_error") or "").strip()
+    update_phase = str(update_status.get("phase") or "idle").strip()
+    update_state_label = update_state.upper() if update_state else "CURRENT"
+    update_state_class = {
+        "current": "ok",
+        "available": "warning",
+        "running": "warning",
+        "failed": "bad",
+    }.get(update_state, "ok")
+
+    footer_update_line = f"{update_state_label} • {esc(update_message)}"
+    if update_last_error:
+        footer_update_line += f" • {esc(update_last_error)}"
+
+    refresh_href = f"/latest?window={timeline_window_seconds}&_={int(time.time())}"
+    selected_window_display = esc(timeline_window or "No incident recorded yet.")
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>VA-Connect Gateway</title>
+  <style>
+    :root {{
+      --bg: #0f1419;
+      --panel: #17212b;
+      --panel-2: #0f1720;
+      --line: #2a3947;
+      --text: #e8eef5;
+      --muted: #93a4b3;
+      --ok: #5ee06d;
+      --warn: #ffb84d;
+      --bad: #ff6b6b;
+      --accent: #7aa7d9;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; font-family: Arial, sans-serif; font-size: 13px; line-height: 1.25; background: var(--bg); color: var(--text); }}
+    a {{ color: #9fd0ff; text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    .wrap {{ max-width: 1360px; margin: 0 auto; padding: 14px; }}
+    .topbar {{ display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }}
+    .site-title {{ font-size: 24px; font-weight: 700; line-height: 1.05; }}
+    .subtitle {{ color: var(--muted); margin-top: 2px; }}
+    .top-actions {{ display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }}
+    .btn {{ border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; background: #203142; color: var(--text); cursor: pointer; font-size: 13px; }}
+    .btn:hover {{ filter: brightness(1.05); }}
+    .btn.primary {{ background: #3d6c3f; border-color: #4f8e52; }}
+    .btn.secondary {{ background: #243244; }}
+    .btn.small {{ padding: 6px 10px; font-size: 12px; }}
+    .meta-row {{ display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 0; }}
+    .pill {{ display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--line); background: #101821; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }}
+    .pill.ok {{ color: var(--ok); }}
+    .pill.warn {{ color: var(--warn); }}
+    .pill.bad {{ color: var(--bad); }}
+    .pill.muted {{ color: var(--muted); }}
+    .banner {{ margin-top: 12px; border: 1px solid var(--line); border-left-width: 4px; border-radius: 10px; padding: 10px 12px; background: #19232f; }}
+    .banner .banner-title {{ font-size: 15px; font-weight: 700; }}
+    .banner .banner-detail {{ color: var(--muted); margin-top: 4px; }}
+    .banner.ok {{ border-left-color: var(--ok); }}
+    .banner.warn {{ border-left-color: var(--warn); }}
+    .banner.bad {{ border-left-color: var(--bad); }}
+    .card {{ margin-top: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 12px; }}
+    .card-title {{ font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: #b6c6d4; margin-bottom: 10px; }}
+    .card-subtitle {{ color: var(--muted); margin-top: -4px; margin-bottom: 10px; }}
+    .summary-line {{ font-size: 15px; margin-top: 8px; color: #d8e5f0; }}
+    .kv-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }}
+    .kv {{ background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }}
+    .kv-label {{ color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }}
+    .kv-value {{ margin-top: 4px; font-size: 15px; font-weight: 700; word-break: break-word; }}
+    .kv.small .kv-value {{ font-size: 13px; font-weight: 600; }}
+    .incident-hero {{ border-left: 4px solid var(--warn); }}
+    .incident-hero.critical {{ border-left-color: var(--bad); }}
+    .incident-hero.warning {{ border-left-color: var(--warn); }}
+    .incident-hero .title-row {{ display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap; }}
+    .incident-title {{ font-size: 16px; font-weight: 700; }}
+    .incident-summary {{ margin-top: 6px; color: #d8e5f0; }}
+    .small-muted {{ color: var(--muted); font-size: 12px; }}
+    .incident-lists {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }}
+    .incident-lists ul {{ margin: 6px 0 0 18px; padding: 0; }}
+    .window-bar {{ display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }}
+    .window-btn {{ border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; background: #101821; color: var(--text); font-size: 12px; }}
+    .window-btn.active {{ background: #203142; border-color: #55708d; color: #d7ecff; }}
+    .timeline-list {{ display: grid; gap: 6px; }}
+    .timeline-row, .system-event {{ display: grid; grid-template-columns: 86px 78px 1fr; gap: 8px; align-items: baseline; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: #101821; }}
+    .timeline-row:nth-child(odd), .system-event:nth-child(odd) {{ background: #111b25; }}
+    .timeline-ts, .system-event-ts {{ color: #bac8d4; font-family: Consolas, monospace; font-size: 12px; }}
+    .timeline-level, .system-event-level {{ font-family: Consolas, monospace; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }}
+    .timeline-msg, .system-event-msg {{ color: #e5edf4; }}
+    .event-level.ok, .timeline-level.ok, .system-event-level.ok {{ color: var(--ok); }}
+    .event-level.warn, .timeline-level.warn, .system-event-level.warn {{ color: var(--warn); }}
+    .event-level.bad, .timeline-level.bad, .system-event-level.bad {{ color: var(--bad); }}
+    .event-level.muted, .timeline-level.muted, .system-event-level.muted {{ color: var(--muted); }}
+    .event-row {{ display: grid; grid-template-columns: 86px 78px 1fr; gap: 8px; align-items: baseline; padding: 6px 8px; border-bottom: 1px solid rgba(42,57,71,.55); }}
+    .event-row:last-child {{ border-bottom: 0; }}
+    .event-ts {{ color: #bac8d4; font-family: Consolas, monospace; font-size: 12px; }}
+    .event-msg {{ color: #e5edf4; }}
+    .empty-state {{ padding: 8px 0; color: var(--muted); }}
+    details.card {{ padding: 0; overflow: hidden; }}
+    details.card > summary {{ list-style: none; cursor: pointer; padding: 12px; }}
+    details.card > summary::-webkit-details-marker {{ display: none; }}
+    details.card[open] > summary {{ border-bottom: 1px solid var(--line); }}
+    details.card .card-body {{ padding: 12px; }}
+    .footer {{ display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 12px 0 4px; color: var(--muted); font-size: 12px; }}
+    .footer strong {{ color: var(--text); }}
+    .status-ok {{ color: var(--ok); }}
+    .status-warning {{ color: var(--warn); }}
+    .status-incident {{ color: var(--bad); }}
+    .status-data-stale {{ color: #ff9f43; }}
+    @media (max-width: 820px) {{
+      .topbar {{ flex-direction: column; }}
+      .event-row, .timeline-row, .system-event {{ grid-template-columns: 72px 64px 1fr; }}
+      .wrap {{ padding: 10px; }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div>
+        <div class="site-title">{esc(site_name)}</div>
+        <div class="subtitle">Investigation-first crash/reboot dashboard</div>
+      </div>
+      <div class="top-actions">
+        <button class="btn secondary" type="button" onclick="hardRefresh()">Hard refresh page</button>
+        <button class="btn primary" type="button" onclick="triggerUpdate('check_updates')">Check updates</button>
+        <button class="btn primary" type="button" onclick="triggerUpdate('update_watchdog')">Update from GitHub</button>
+      </div>
+    </div>
+
+    <div class="meta-row">
+      <span class="pill {esc({'OK': 'ok', 'WARNING': 'warn', 'INCIDENT': 'bad', 'DATA STALE': 'bad'}.get(status_badge, 'ok'))}">{esc(status_badge)}</span>
+      <span class="pill muted">Last update: {esc(format_local_timestamp(last_data_refresh_at) if last_data_refresh_at else '-')}</span>
+      <span class="pill muted">State age: {esc(state_age_label)}</span>
+      <span class="pill muted">Build: {esc(build_number)}</span>
+      <span class="pill muted">Update: {esc(update_state)}</span>
+    </div>
+
+    {top_banner_html}
+
+    <section class="card">
+      <div class="card-title">Current Summary</div>
+      <div class="summary-line">{esc(current_summary)}</div>
+      <div class="kv-grid" style="margin-top: 10px;">
+        {kv("Watchdog status", str(snapshot.get("watchdog_status") or "unknown").title(), "small")}
+        {kv("Current uptime", uptime_label, "small")}
+        {kv("Last boot time", format_local_timestamp(boot_time_iso), "small")}
+        {kv("Last reboot detected", format_local_timestamp(str(reboot_incident.get("timestamp") or reboot_incident.get("detected_at") or "")), "small")}
+        {kv("Active incident", yes_no_unknown(active_incident), "small")}
+        {kv("Unexpected reboot detected", yes_no_unknown(reboot_detected), "small")}
+      </div>
+    </section>
+
+    <section class="card incident-hero {esc(str(latest_incident.get('severity') or 'warning').lower()) if latest_incident.get('available') else 'warning'}">
+      <div class="title-row">
+        <div class="incident-title">Latest Incident</div>
+        <div class="small-muted">Build {esc(build_number)} • Latest {esc(latest_build)}</div>
+      </div>
+      <div class="incident-summary">{esc(incident_summary)}</div>
+      <div class="kv-grid" style="margin-top: 10px;">
+        {latest_incident_rows_html if latest_incident.get("available") else kv("Incident", "none", "small")}
+      </div>
+      <div class="incident-lists">
+        <div>
+          <div class="card-title" style="margin-bottom: 6px;">Detected because</div>
+          <ul>{detected_because_html}</ul>
+        </div>
+        <div>
+          <div class="card-title" style="margin-bottom: 6px;">Key events</div>
+          <ul>{key_events_html}</ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="title-row" style="display:flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <div class="card-title" style="margin: 0;">Events Before Reboot</div>
+        <div class="window-bar">{timeline_buttons_html}</div>
+      </div>
+      <div class="card-subtitle">{esc(timeline_window or 'No incident recorded yet.')}</div>
+      <div class="timeline-list">
+        {timeline_rows_html}
+      </div>
+      <div class="small-muted" style="margin-top: 8px;">Showing {len(timeline_events)} event(s) in the selected window.</div>
+    </section>
+
+    <section class="card">
+      <div class="card-title">Current System State</div>
+      <div class="card-subtitle">Current clues only. No extra operator tools.</div>
+      <div class="kv-grid">
+        {current_system_rows_html}
+      </div>
+      <div class="small-muted" style="margin-top: 8px;">Last watchdog write time uses the active state file and the latest recorded check.</div>
+    </section>
+
+    <details class="card">
+      <summary>
+        <div class="card-title" style="margin: 0;">System Events</div>
+        <div class="card-subtitle" style="margin: 0;">Last {min(20, len(system_events))} of {len(system_events)} events.</div>
+      </summary>
+      <div class="card-body">
+        <div class="timeline-list">
+          {system_events_html}
+        </div>
+      </div>
+    </details>
+
+    <div class="footer">
+      <div>API: <a href="{esc(snapshot.get('api_url') or '/api/base-status')}">{esc(snapshot.get('api_url') or '/api/base-status')}</a></div>
+      <div>Build: <strong>{esc(build_number)}</strong> • Latest: <strong>{esc(latest_build)}</strong> • Update: <strong class="status-{esc(update_state_class)}">{esc(footer_update_line)}</strong></div>
+    </div>
+  </div>
+
+  <script>
+    const windowSeconds = {int(timeline_window_seconds)};
+    async function triggerUpdate(action) {{
+      const statusLine = document.getElementById('updateStatusLine');
+      try {{
+        if (statusLine) {{
+          statusLine.textContent = action === 'update_watchdog' ? 'Starting update...' : 'Checking for updates...';
+        }}
+        const response = await fetch('/api/action', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ action }})
+        }});
+        const payload = await response.json();
+        if (statusLine) {{
+          statusLine.textContent = payload.message || payload.detail || (response.ok ? 'Update request sent.' : 'Update request failed.');
+        }}
+        if (response.ok) {{
+          setTimeout(() => {{
+            const url = new URL(window.location.href);
+            url.searchParams.set('window', String(windowSeconds));
+            url.searchParams.set('_', String(Date.now()));
+            window.location.href = url.toString();
+          }}, 2000);
+        }}
+      }} catch (error) {{
+        if (statusLine) {{
+          statusLine.textContent = error && error.message ? error.message : String(error || 'Update request failed');
+        }}
+      }}
+    }}
+    function hardRefresh() {{
+      const url = new URL(window.location.href);
+      url.searchParams.set('window', String(windowSeconds));
+      url.searchParams.set('_', String(Date.now()));
+      window.location.href = url.toString();
+    }}
+    const footer = document.querySelector('.footer');
+    if (footer) {{
+      const line = document.createElement('div');
+      line.id = 'updateStatusLine';
+      line.textContent = {json.dumps(update_message)};
+      footer.appendChild(line);
+    }}
+  </script>
+</body>
+</html>"""
 
 
 def render_base_page(status: Dict[str, Any]) -> str:
@@ -7725,10 +8451,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send_file(safe_tools_install_file("log"), download_name="watchdog-tools-install.log")
             return
         if parsed.path in {"/api/base-status", "/status.json"}:
-            self._send_json(status_snapshot_payload())
+            self._send_json(status_snapshot_payload(window_seconds=timeline_window_seconds_from_query(parsed.query)))
             return
         if parsed.path in {"/", "/index.html"}:
-            body = render_base_page(status_snapshot_payload()).encode("utf-8")
+            window_seconds = timeline_window_seconds_from_query(parsed.query)
+            body = render_investigation_page(status_snapshot_payload(window_seconds=window_seconds), window_seconds=window_seconds).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -7739,8 +8466,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if parsed.path in {"/latest", "/latest/index.html"}:
-            current = current_build_number()
-            body = render_latest_redirect_page(current).encode("utf-8")
+            window_seconds = timeline_window_seconds_from_query(parsed.query)
+            body = render_investigation_page(status_snapshot_payload(window_seconds=window_seconds), window_seconds=window_seconds).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -7752,7 +8479,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path.startswith("/v/"):
             requested_build = parsed.path.removeprefix("/v/").strip("/") or "unknown"
-            status = status_snapshot_payload()
+            window_seconds = timeline_window_seconds_from_query(parsed.query)
+            status = status_snapshot_payload(window_seconds=window_seconds)
             if requested_build != str(status.get("build_number") or status.get("build") or "unknown"):
                 self.send_response(HTTPStatus.SEE_OTHER)
                 self.send_header("Location", "/latest")
@@ -7761,7 +8489,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Expires", "0")
                 self.end_headers()
                 return
-            body = render_base_page(status).encode("utf-8")
+            body = render_investigation_page(status, window_seconds=window_seconds).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
