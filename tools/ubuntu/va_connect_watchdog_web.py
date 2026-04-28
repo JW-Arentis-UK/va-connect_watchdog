@@ -3080,6 +3080,9 @@ def status_snapshot_payload() -> Dict[str, Any]:
         if current and current != build_number:
             latest_build = build_number
             update_available = True
+    hardware_review = hardware_review_payload(state)
+    crash_review = crash_review_payload()
+    linux_stability = linux_stability_payload(state, hardware_review, crash_review)
     return {
         "device_id": device_id,
         "display_name": str((config or {}).get("gateway_name") or device_id),
@@ -3097,6 +3100,8 @@ def status_snapshot_payload() -> Dict[str, Any]:
             "detail": "The legacy web UI is up and serving a minimal summary." if web_service.get("ok") else "The legacy web UI is not fully healthy yet.",
         },
         "web_service": web_service,
+        "hardware_review": hardware_review,
+        "linux_stability": linux_stability,
         "recent_events": [
             {
                 "ts": str(item.get("ts", "")),
@@ -3237,6 +3242,8 @@ def render_base_page(status: Dict[str, Any]) -> str:
     recent_events = status.get("recent_events") or []
     last_incident = status.get("last_incident") or {}
     pre_crash_timeline = status.get("pre_crash_timeline") or {}
+    hardware_review = status.get("hardware_review") or {}
+    linux_stability = status.get("linux_stability") or {}
     events_html = "".join(
         f"<li><span class=\"muted\">{html.escape(str(item.get('ts', '')))}</span> {html.escape(str(item.get('summary', '')))}</li>"
         for item in recent_events
@@ -3260,6 +3267,12 @@ def render_base_page(status: Dict[str, Any]) -> str:
     incident_action_count = html.escape(str(last_incident.get("action_count") or 0))
     timeline_window = html.escape(str(pre_crash_timeline.get("window") or ""))
     timeline_event_count = html.escape(str(pre_crash_timeline.get("event_count") or 0))
+    hardware_warnings = len(hardware_review.get("warnings") or [])
+    hardware_smart = len(hardware_review.get("smart") or [])
+    hardware_pstore = len(hardware_review.get("pstore_entries") or [])
+    current_warning_counts = linux_stability.get("current_warning_counts") or {}
+    current_clue_total = sum(int(v or 0) for v in current_warning_counts.values()) if isinstance(current_warning_counts, dict) else 0
+    strongest_current_line = html.escape(str(linux_stability.get("strongest_current_line") or "No highlighted current-warning line yet."))
     if last_incident.get("available"):
         current_summary = (
             f"{overall_status.title()} system. "
@@ -3317,6 +3330,16 @@ def render_base_page(status: Dict[str, Any]) -> str:
     <div class="card summary-banner {status_class}" style="margin-top:10px; padding:10px 12px;">
       <div class="label">Current summary</div>
       <div style="margin-top:4px; font-size:14px;">{current_summary}</div>
+    </div>
+    <div class="card">
+      <div class="label">Hardware / stability</div>
+      <div class="grid">
+        <div class="item"><div class="label">Warnings</div><div class="value">{hardware_warnings}</div></div>
+        <div class="item"><div class="label">SMART</div><div class="value">{hardware_smart}</div></div>
+        <div class="item"><div class="label">pstore</div><div class="value">{hardware_pstore}</div></div>
+        <div class="item"><div class="label">Current clues</div><div class="value">{current_clue_total}</div></div>
+      </div>
+      <div class="section-note">Strongest current warning: {strongest_current_line}</div>
     </div>
     <div class="card">
       <div class="grid">
