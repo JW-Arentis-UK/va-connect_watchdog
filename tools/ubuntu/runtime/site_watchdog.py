@@ -236,6 +236,30 @@ def create_incident_from_checks(config: V2Config, checks: dict[str, dict[str, An
     return normalize_incident(incident)
 
 
+def create_reboot_incident(config: V2Config, boot_id: str, previous_boot_id: str) -> dict[str, Any]:
+    incident = {
+        "incident_id": build_incident_id(config.device_id),
+        "timestamp": iso_utc(),
+        "boot_id": boot_id,
+        "device_id": config.device_id,
+        "type": "unexpected_reboot",
+        "status": "open",
+        "severity": "warning",
+        "cause": "Unexpected reboot detected.",
+        "evidence": [
+            {
+                "source": "boot",
+                "timestamp": iso_utc(),
+                "message": "boot id changed",
+                "data": {"previous_boot_id": previous_boot_id, "current_boot_id": boot_id},
+            }
+        ],
+        "actions_taken": ["Unexpected reboot detected by site watchdog"],
+        "resolved_at": None,
+    }
+    return normalize_incident(incident)
+
+
 def resolve_incident_record(incident: dict[str, Any], boot_id: str) -> dict[str, Any]:
     actions = list(incident.get("actions_taken", []))
     actions.append("Recovered and marked resolved by site watchdog")
@@ -290,10 +314,41 @@ class SiteWatchdog:
         status = build_device_status(self.config, checks, state, observed_at)
         open_incident = latest_open_incident(self.config)
         now = observed_at
+        previous_boot_id = str(state.get("boot_id") or "").strip()
+        reboot_detected = bool(previous_boot_id and previous_boot_id != boot_id)
+
+        if reboot_detected:
+            self.logger.warning(
+                format_log(
+                    f"unexpected reboot detected previous_boot_id={previous_boot_id}",
+                    boot_id,
+                )
+            )
 
         self.logger.info(format_log(f"status={status['overall_status']}", boot_id))
 
-        if status["overall_status"] == "healthy":
+        if reboot_detected and status["overall_status"] == "healthy" and open_incident is None:
+            incident = create_reboot_incident(self.config, boot_id, previous_boot_id)
+            self.logger.warning(format_log("incident created type=unexpected_reboot", boot_id, incident["incident_id"]))
+            append_event(
+                self.config,
+                build_event(
+                    component="site_watchdog",
+                    level="warning",
+                    message="unexpected reboot detected",
+                    incident_id=incident["incident_id"],
+                    boot_id=boot_id,
+                    context={
+                        "overall_status": status["overall_status"],
+                        "previous_boot_id": previous_boot_id,
+                        "current_boot_id": boot_id,
+                    },
+                ),
+            )
+            save_incident(self.config, incident)
+            state["open_incident_id"] = incident["incident_id"]
+            state["last_error"] = incident["cause"]
+        elif status["overall_status"] == "healthy":
             if open_incident:
                 self.logger.info(
                     format_log("incident resolved", boot_id, str(open_incident["incident_id"]))
