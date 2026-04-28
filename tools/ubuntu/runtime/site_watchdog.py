@@ -419,6 +419,9 @@ class SiteWatchdog:
         state["boot_id"] = boot_id
         state["last_check_at"] = now
         state["last_status"] = status["overall_status"]
+        state["last_watchdog_write_at"] = observed_at
+        state["gateway_process_running"] = bool(checks["app"]["ok"])
+        state["system_metrics"] = system_sample
         save_device_status(self.config, status)
         save_state(self.config, state)
         self.logger.info(format_log("check cycle complete", boot_id))

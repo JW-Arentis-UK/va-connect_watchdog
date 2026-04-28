@@ -46,7 +46,7 @@ def _cpu_percent() -> float | None:
     return round(busy * 100.0, 1)
 
 
-def _memory_percent() -> float | None:
+def _memory_info() -> tuple[int | None, int | None] | None:
     total_kb = None
     available_kb = None
     try:
@@ -59,6 +59,14 @@ def _memory_percent() -> float | None:
         return None
     if not total_kb or available_kb is None:
         return None
+    return total_kb, available_kb
+
+
+def _memory_percent() -> float | None:
+    info = _memory_info()
+    if info is None:
+        return None
+    total_kb, available_kb = info
     used = max(0, total_kb - available_kb)
     return round((used / total_kb) * 100.0, 1)
 
@@ -87,11 +95,13 @@ def _temperature_c() -> float | None:
 
 def collect_system_sample() -> dict[str, Any]:
     cpu = _cpu_percent()
+    memory_info = _memory_info()
     memory = _memory_percent()
     try:
         usage = shutil.disk_usage(_disk_root())
         disk = round((usage.used / usage.total) * 100.0, 1) if usage.total else None
     except Exception:
+        usage = None
         disk = None
     try:
         if hasattr(os, "getloadavg"):
@@ -100,10 +110,27 @@ def collect_system_sample() -> dict[str, Any]:
             load_1 = load_5 = load_15 = None
     except Exception:
         load_1 = load_5 = load_15 = None
+    memory_total_bytes = int(memory_info[0] * 1024) if memory_info and memory_info[0] is not None else None
+    memory_available_bytes = int(memory_info[1] * 1024) if memory_info and memory_info[1] is not None else None
+    memory_used_bytes = (
+        max(0, memory_total_bytes - memory_available_bytes)
+        if memory_total_bytes is not None and memory_available_bytes is not None
+        else None
+    )
+    disk_total_bytes = int(usage.total) if usage is not None else None
+    disk_used_bytes = int(usage.used) if usage is not None else None
+    disk_free_bytes = int(usage.free) if usage is not None else None
     return {
         "timestamp": iso_utc(),
+        "cpu_source": "proc_stat" if cpu is not None else "",
         "cpu_percent": cpu,
+        "memory_total_bytes": memory_total_bytes,
+        "memory_available_bytes": memory_available_bytes,
+        "memory_used_bytes": memory_used_bytes,
         "memory_percent": memory,
+        "disk_total_bytes": disk_total_bytes,
+        "disk_used_bytes": disk_used_bytes,
+        "disk_free_bytes": disk_free_bytes,
         "disk_percent": disk,
         "temperature_c": _temperature_c(),
         "load_1": round(float(load_1), 2) if load_1 is not None else None,

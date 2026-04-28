@@ -192,14 +192,40 @@ def normalize_state(value: Any, *, device_id: str | None = None, boot_id: str | 
     last_status = _clean_str(raw.get("last_status"), "unknown")
     if last_status not in OVERALL_STATUSES:
         last_status = "unknown"
+    metrics_raw = raw.get("system_metrics", {})
+    metrics: dict[str, Any] = {}
+    if isinstance(metrics_raw, Mapping):
+        metrics.update(dict(metrics_raw))
+    for key in (
+        "timestamp",
+        "cpu_percent",
+        "cpu_source",
+        "memory_total_bytes",
+        "memory_available_bytes",
+        "memory_used_bytes",
+        "memory_percent",
+        "disk_total_bytes",
+        "disk_used_bytes",
+        "disk_free_bytes",
+        "disk_percent",
+        "temperature_c",
+        "load_1",
+        "load_5",
+        "load_15",
+    ):
+        if key in raw and key not in metrics:
+            metrics[key] = raw.get(key)
     model = StateRecord(
         device_id=_clean_str(raw.get("device_id"), device_id or "unknown-device"),
         boot_id=_clean_str(raw.get("boot_id"), boot_id or "") or None,
         last_check_at=normalize_timestamp(raw.get("last_check_at"), default_now=False) or None,
         last_healthy_at=normalize_timestamp(raw.get("last_healthy_at"), default_now=False) or None,
+        last_watchdog_write_at=normalize_timestamp(raw.get("last_watchdog_write_at"), default_now=False) or None,
         open_incident_id=_clean_str(raw.get("open_incident_id"), "") or None,
         last_status=last_status,  # type: ignore[arg-type]
         last_error=_clean_str(raw.get("last_error"), "") or None,
+        gateway_process_running=bool(raw.get("gateway_process_running")) if raw.get("gateway_process_running") is not None else None,
+        system_metrics=metrics,
     )
     return asdict(model)
 
@@ -218,7 +244,14 @@ def normalize_metric_sample(value: Any) -> dict[str, Any]:
     return {
         "timestamp": normalize_timestamp(raw.get("timestamp")),
         "cpu_percent": as_float(raw.get("cpu_percent")),
+        "cpu_source": _clean_str(raw.get("cpu_source"), ""),
+        "memory_total_bytes": as_float(raw.get("memory_total_bytes")),
+        "memory_available_bytes": as_float(raw.get("memory_available_bytes")),
+        "memory_used_bytes": as_float(raw.get("memory_used_bytes")),
         "memory_percent": as_float(raw.get("memory_percent")),
+        "disk_total_bytes": as_float(raw.get("disk_total_bytes")),
+        "disk_used_bytes": as_float(raw.get("disk_used_bytes")),
+        "disk_free_bytes": as_float(raw.get("disk_free_bytes")),
         "disk_percent": as_float(raw.get("disk_percent")),
         "temperature_c": as_float(raw.get("temperature_c")),
         "load_1": as_float(raw.get("load_1")),

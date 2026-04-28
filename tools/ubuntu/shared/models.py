@@ -86,6 +86,9 @@ class StateRecord:
     boot_id: str | None = None
     last_check_at: str | None = None
     last_healthy_at: str | None = None
+    last_watchdog_write_at: str | None = None
     open_incident_id: str | None = None
     last_status: OverallStatus = "unknown"
     last_error: str | None = None
+    gateway_process_running: bool | None = None
+    system_metrics: Dict[str, Any] = field(default_factory=dict)

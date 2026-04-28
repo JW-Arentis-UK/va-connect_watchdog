@@ -1987,6 +1987,25 @@ def format_duration(seconds: Optional[int]) -> str:
     return " ".join(parts[:3])
 
 
+def format_bytes(value: Any, *, default: str = "Unavailable") -> str:
+    try:
+        if value in (None, ""):
+            return default
+        number = float(value)
+    except Exception:
+        return default
+    units = ["B", "KB", "MB", "GB", "TB"]
+    index = 0
+    while number >= 1024 and index < len(units) - 1:
+        number /= 1024.0
+        index += 1
+    if index == 0:
+        return f"{int(number)}{units[index]}"
+    if number >= 10 or number.is_integer():
+        return f"{number:.0f}{units[index]}"
+    return f"{number:.1f}{units[index]}"
+
+
 def format_local_timestamp(value: str, *, default: str = "-") -> str:
     parsed = parse_iso(str(value or "").strip())
     if parsed is None:
@@ -2050,6 +2069,30 @@ def incident_confidence(incident: Dict[str, Any]) -> str:
     if severity == "info":
         return "LOW"
     return "MEDIUM"
+
+
+def incident_confidence_breakdown(incident: Dict[str, Any], event_count: int | None = None) -> List[Dict[str, Any]]:
+    evidence = incident.get("evidence") or []
+    has_boot_change = False
+    has_watchdog_restart = False
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        data = item.get("data") or {}
+        if isinstance(data, dict) and data.get("previous_boot_id") and data.get("current_boot_id"):
+            has_boot_change = True
+        message = str(item.get("message") or item.get("source") or "").strip().lower()
+        if "watchdog" in message or "boot" in message:
+            has_watchdog_restart = True
+    if str(incident.get("type") or "").strip() == "unexpected_reboot":
+        has_boot_change = True if not has_boot_change else has_boot_change
+        has_watchdog_restart = True if not has_watchdog_restart else has_watchdog_restart
+    pre_crash_missing = event_count in (None, 0)
+    return [
+        {"label": "Boot ID changed", "ok": has_boot_change},
+        {"label": "Watchdog restart detected", "ok": has_watchdog_restart},
+        {"label": "Pre-crash events missing", "ok": pre_crash_missing},
+    ]
 
 
 def latest_incident_of_type(incident_type: str) -> Optional[Dict[str, Any]]:
@@ -3313,36 +3356,57 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
     device_id = str((config or {}).get("device_id") or state.get("device_id") or socket.gethostname()).strip() or socket.gethostname()
     display_name = str((config or {}).get("gateway_name") or device_id).strip() or device_id
 
+    state_metrics = state.get("system_metrics") if isinstance(state.get("system_metrics"), dict) else {}
+    if not isinstance(state_metrics, dict):
+        state_metrics = {}
     latest_incident = last_incident_snapshot_payload()
-    reboot_incident = latest_incident_of_type("unexpected_reboot")
-    active_incident = bool(
-        str(state.get("open_incident_id") or "").strip()
-        or bool(device_status.get("health", {}).get("fault_active"))
-        or (latest_incident.get("available") and latest_incident.get("status") != "resolved")
-    )
+    reboot_incident = latest_incident if latest_incident.get("available") and str(latest_incident.get("type") or "").strip() == "unexpected_reboot" else (latest_incident_of_type("unexpected_reboot") or {})
+    active_incident = bool(latest_incident.get("available") and str(latest_incident.get("status") or "").strip() == "open")
 
     watchdog_status = str(device_status.get("overall_status") or state.get("last_status") or "unknown").strip() or "unknown"
-    gateway_process_running = device_status.get("checks", {}).get("app", {}).get("ok")
+    gateway_process_running = state.get("gateway_process_running")
+    if gateway_process_running is None:
+        gateway_process_running = device_status.get("checks", {}).get("app", {}).get("ok")
     boot_id = str(state.get("boot_id") or device_status.get("health", {}).get("boot_id") or "").strip()
     last_check_at = str(state.get("last_check_at") or device_status.get("last_seen") or "")
     last_healthy_at = str(state.get("last_healthy_at") or device_status.get("health", {}).get("last_healthy_at") or "")
-    last_watchdog_write_at = last_check_at
+    last_watchdog_write_at = str(state.get("last_watchdog_write_at") or last_check_at or "")
     if not last_watchdog_write_at and state_mtime:
         last_watchdog_write_at = state_mtime
 
-    latest_metric = {}
+    latest_metric = state_metrics if isinstance(state_metrics, dict) else {}
     try:
-        points = recent_metrics(1)
-        if points:
-            latest_metric = points[-1]
+        if not latest_metric:
+            points = recent_metrics(1)
+            if points:
+                latest_metric = points[-1]
     except Exception:
         latest_metric = {}
+
+    events_before_reboot = pre_crash_timeline_payload(window_seconds=window_seconds)
+    if latest_incident.get("available"):
+        latest_incident["confidence_breakdown"] = incident_confidence_breakdown(
+            latest_incident,
+            event_count=int(events_before_reboot.get("event_count") or 0),
+        )
+
+    metrics_available = any(
+        latest_metric.get(key) not in (None, "", [])
+        for key in ("cpu_percent", "memory_percent", "disk_percent", "load_1", "load_5", "load_15", "temperature_c")
+    )
 
     current_system_state = {
         "gateway_process_running": gateway_process_running,
         "cpu_percent": latest_metric.get("cpu_percent"),
+        "cpu_source": latest_metric.get("cpu_source"),
         "memory_percent": latest_metric.get("memory_percent"),
+        "memory_total_bytes": latest_metric.get("memory_total_bytes"),
+        "memory_available_bytes": latest_metric.get("memory_available_bytes"),
+        "memory_used_bytes": latest_metric.get("memory_used_bytes"),
         "disk_percent": latest_metric.get("disk_percent"),
+        "disk_total_bytes": latest_metric.get("disk_total_bytes"),
+        "disk_used_bytes": latest_metric.get("disk_used_bytes"),
+        "disk_free_bytes": latest_metric.get("disk_free_bytes"),
         "temperature_c": latest_metric.get("temperature_c"),
         "load_1": latest_metric.get("load_1"),
         "load_5": latest_metric.get("load_5"),
@@ -3351,12 +3415,13 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "uptime_seconds": uptime_seconds,
         "uptime_label": uptime_label,
         "last_watchdog_write_at": last_watchdog_write_at,
+        "metrics_available": metrics_available,
     }
 
     incident_banner = None
     if latest_incident.get("available") and str(latest_incident.get("type") or "").strip() == "unexpected_reboot":
         incident_banner = {
-            "title": "INCIDENT DETECTED — UNEXPECTED REBOOT",
+            "title": "INCIDENT DETECTED - UNEXPECTED REBOOT",
             "detail": str(latest_incident.get("summary") or latest_incident.get("detail") or "Unexpected reboot detected."),
             "level": "bad",
         }
@@ -3369,37 +3434,36 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
 
     if freshness == "data-stale":
         freshness_banner = {
-            "title": f"DATA STALE — watchdog data has not updated for {state_age_seconds or 0}s",
-            "detail": "The state file is older than the recommended threshold.",
-            "level": "warn" if (state_age_seconds or 0) <= 60 else "bad",
+            "title": "DATA STALE - watchdog not updating",
+            "detail": f"Last update was {state_age_seconds or 0}s ago.",
+            "level": "bad",
         }
     elif freshness == "warning":
         freshness_banner = {
-            "title": f"Freshness warning — data is {state_age_seconds or 0}s old",
-            "detail": "The state file is approaching the stale threshold.",
+            "title": f"DATA DELAY - {state_age_seconds or 0}s since last update",
+            "detail": "The watchdog is still running, but the state file is lagging behind.",
             "level": "warn",
         }
     else:
         freshness_banner = None
 
-    if not active_incident and latest_incident.get("available"):
-        summary_line = (
-            f"{watchdog_status.title()} system. "
-            f"Latest incident: {str(latest_incident.get('type') or 'unknown').replace('_', ' ').upper()} "
-            f"({str(latest_incident.get('severity') or '-').upper()}). "
-            f"Cause: {str(latest_incident.get('cause') or latest_incident.get('summary') or 'not recorded yet.').strip()}"
-        )
-    elif active_incident and latest_incident.get("available"):
-        summary_line = (
-            f"{watchdog_status.title()} system. "
-            f"Active incident: {str(latest_incident.get('type') or 'unknown').replace('_', ' ').upper()}. "
-            f"Cause: {str(latest_incident.get('cause') or latest_incident.get('summary') or 'not recorded yet.').strip()}"
-        )
+    if latest_incident.get("available") and str(latest_incident.get("type") or "").strip() == "unexpected_reboot":
+        summary_line = "Status: INCIDENT - Unexpected reboot detected"
+    elif latest_incident.get("available") and active_incident:
+        summary_line = f"Status: INCIDENT - {str(latest_incident.get('type') or 'unknown').replace('_', ' ').title()}"
+    elif latest_incident.get("available"):
+        summary_line = f"Status: {watchdog_status.upper()} - Last incident recorded: {str(latest_incident.get('type') or 'unknown').replace('_', ' ').title()}"
     else:
-        summary_line = (
-            f"{watchdog_status.title()} system. "
-            f"No incident recorded yet. Last healthy: {format_local_timestamp(last_healthy_at) if last_healthy_at else '-'}"
-        )
+        summary_line = f"Status: {watchdog_status.upper()} - No incident recorded yet"
+
+    if not metrics_available:
+        system_diagnostics_banner = {
+            "title": "System diagnostics unavailable - watchdog running in minimal mode",
+            "detail": "CPU, memory, disk, load, and temperature values are not available from the latest state sample.",
+            "level": "warn",
+        }
+    else:
+        system_diagnostics_banner = None
 
     return {
         "hostname": socket.gethostname(),
@@ -3412,7 +3476,7 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "update_available": update_available,
         "update_state": update_state,
         "update_status": update_status,
-        "status_badge": "DATA STALE" if freshness == "data-stale" else ("INCIDENT" if active_incident or incident_banner else ("WARNING" if latest_incident.get("available") else "OK")),
+        "status_badge": "DATA STALE" if freshness == "data-stale" else ("INCIDENT" if active_incident or (latest_incident.get("available") and str(latest_incident.get("type") or "").strip() == "unexpected_reboot") or incident_banner else ("WARNING" if latest_incident.get("available") else "OK")),
         "freshness_state": freshness,
         "state_file_age_seconds": state_age_seconds,
         "state_file_age_label": format_duration(state_age_seconds),
@@ -3432,12 +3496,13 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "summary_line": summary_line,
         "incident_banner": incident_banner,
         "freshness_banner": freshness_banner,
+        "system_diagnostics_banner": system_diagnostics_banner,
         "current_summary": summary_line,
         "current_system_state": current_system_state,
-        "current_incident": latest_incident,
+        "current_incident": latest_incident if active_incident else {},
         "latest_incident": latest_incident,
         "reboot_incident": reboot_incident,
-        "events_before_reboot": pre_crash_timeline_payload(window_seconds=window_seconds),
+        "events_before_reboot": events_before_reboot,
         "system_events": [
             {
                 "timestamp": str(item.get("ts") or item.get("timestamp") or ""),
@@ -3473,6 +3538,7 @@ def last_incident_snapshot_payload() -> Dict[str, Any]:
             "summary": "No incidents recorded.",
             "confidence": "",
             "detected_because": [],
+            "confidence_breakdown": [],
             "evidence_count": 0,
             "action_count": 0,
             "key_events": [],
@@ -3523,6 +3589,7 @@ def last_incident_snapshot_payload() -> Dict[str, Any]:
     else:
         summary = str(incident.get("cause") or incident.get("reporting_text") or incident.get("suspected_reason") or "Incident recorded.").strip()
 
+    confidence_breakdown = incident_confidence_breakdown(incident, event_count=len(incident.get("evidence") or []))
     return {
         "available": True,
         "incident_id": str(incident.get("incident_id", "")),
@@ -3536,6 +3603,7 @@ def last_incident_snapshot_payload() -> Dict[str, Any]:
         "summary": summary,
         "confidence": incident_confidence(incident),
         "detected_because": list(dict.fromkeys(text for text in detected_because if text))[:4],
+        "confidence_breakdown": confidence_breakdown,
         "evidence_count": len(incident.get("evidence") or []),
         "action_count": len(incident.get("actions_taken") or []),
         "key_events": key_events[:5],
@@ -3554,6 +3622,8 @@ def pre_crash_timeline_payload(window_seconds: int = 60) -> Dict[str, Any]:
             "detail": "No incident recorded yet.",
             "window": "No incident recorded yet.",
             "window_seconds": int(window_seconds),
+            "window_covered_seconds": 0,
+            "events_available_count": 0,
             "event_count": 0,
             "events": [],
         }
@@ -3592,23 +3662,13 @@ def pre_crash_timeline_payload(window_seconds: int = 60) -> Dict[str, Any]:
             }
         )
 
-    if not timeline_events:
-        evidence = incident.get("evidence") or []
-        for item in evidence[:40]:
-            if not isinstance(item, dict):
-                continue
-            ts = format_local_clock(str(item.get("timestamp") or incident_timestamp_value(incident) or ""))
-            timeline_events.append(
-                {
-                    "timestamp": ts if ts else "-",
-                    "level": "warning" if str(incident.get("severity") or "").strip().lower() != "info" else "info",
-                    "message": str(item.get("message") or item.get("source") or "Evidence recorded").strip(),
-                }
-            )
+    window_covered_seconds = 0
+    if len(candidate_events) > 1:
+        window_covered_seconds = max(0, int((candidate_events[-1][0] - candidate_events[0][0]).total_seconds()))
 
     window_label = f"Last {window_seconds}s before the incident"
     if not timeline_events:
-        window_label = "No events were recorded in the selected window before this reboot."
+        window_label = f"No diagnostic events were recorded in the {window_seconds}s before reboot"
 
     return {
         "available": True,
@@ -3617,6 +3677,8 @@ def pre_crash_timeline_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "detail": "The last recorded events before the selected incident.",
         "window": window_label,
         "window_seconds": window_seconds,
+        "window_covered_seconds": window_covered_seconds,
+        "events_available_count": len(candidate_events),
         "event_count": len(timeline_events),
         "events": timeline_events,
     }
@@ -3639,7 +3701,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     def esc(value: Any) -> str:
         return html.escape(str(value if value is not None else ""))
 
-    def metric_text(value: Any, suffix: str = "", default: str = "-") -> str:
+    def metric_text(value: Any, suffix: str = "", default: str = "Unavailable") -> str:
         if value in (None, ""):
             return default
         try:
@@ -3651,7 +3713,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         return f"{number:.1f}{suffix}"
 
     def kv(label: str, value: Any, extra_class: str = "") -> str:
-        text = esc(value if value not in (None, "") else "-")
+        text = esc(value if value not in (None, "") else "Unavailable")
         return f"""
         <div class="kv {extra_class}">
           <div class="kv-label">{esc(label)}</div>
@@ -3663,9 +3725,9 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         return f'<span class="pill {esc(kind)}">{esc(label)}</span>'
 
     def event_line(event: Dict[str, Any]) -> str:
-        ts = esc(event.get("timestamp") or event.get("ts") or "-")
+        ts = esc(event.get("timestamp") or event.get("ts") or "Unavailable")
         level = str(event.get("level") or "info").strip().upper() or "INFO"
-        message = esc(event.get("message") or event.get("summary") or "-")
+        message = esc(event.get("message") or event.get("summary") or "Unavailable")
         return f"""
         <div class="event-row">
           <span class="event-ts">{ts}</span>
@@ -3688,30 +3750,34 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     update_status = snapshot.get("update_status") or {}
     incident_banner = snapshot.get("incident_banner") or {}
     freshness_banner = snapshot.get("freshness_banner") or {}
+    system_diagnostics_banner = snapshot.get("system_diagnostics_banner") or {}
     latest_incident = snapshot.get("latest_incident") or {}
     current_system_state = snapshot.get("current_system_state") or {}
     events_before_reboot = snapshot.get("events_before_reboot") or {}
     system_events = snapshot.get("system_events") or []
-    state_age_label = str(snapshot.get("state_file_age_label") or "-")
+    state_age_label = str(snapshot.get("state_file_age_label") or "Unavailable")
     last_data_refresh_at = str(snapshot.get("last_data_refresh_at") or "")
     last_check_at = str(snapshot.get("last_check_at") or "")
     last_healthy_at = str(snapshot.get("last_healthy_at") or "")
     boot_time_iso = str(snapshot.get("boot_time_iso") or "")
-    uptime_label = str(snapshot.get("uptime_label") or "-")
+    uptime_label = str(snapshot.get("uptime_label") or "Unavailable")
     uptime_seconds = snapshot.get("uptime_seconds")
-    active_incident = bool(snapshot.get("current_incident") or False) and str((snapshot.get("current_incident") or {}).get("status") or "") != "resolved"
-    reboot_incident = snapshot.get("reboot_incident") or {}
-    reboot_detected = bool(reboot_incident.get("available"))
+    active_incident = str((snapshot.get("current_incident") or {}).get("status") or "").strip().lower() == "open"
     incident_type = str(latest_incident.get("type") or "").strip()
     incident_status = str(latest_incident.get("status") or "").strip()
     incident_title = str(latest_incident.get("title") or "Latest Incident")
     incident_summary = str(latest_incident.get("summary") or latest_incident.get("detail") or "No incidents recorded.").strip()
     confidence = str(latest_incident.get("confidence") or "").strip()
+    confidence_breakdown = latest_incident.get("confidence_breakdown") or []
     detected_because = latest_incident.get("detected_because") or []
     key_events = latest_incident.get("key_events") or []
+    reboot_incident = snapshot.get("reboot_incident") or {}
+    reboot_detected = bool(latest_incident.get("available") and incident_type == "unexpected_reboot")
     timeline_events = events_before_reboot.get("events") or []
     timeline_window = str(events_before_reboot.get("window") or "").strip()
     timeline_window_seconds = int(events_before_reboot.get("window_seconds") or window_seconds or 60)
+    timeline_events_available_count = int(events_before_reboot.get("events_available_count") or len(timeline_events) or 0)
+    timeline_window_covered_seconds = int(events_before_reboot.get("window_covered_seconds") or 0)
     freshness_seconds = snapshot.get("state_file_age_seconds")
     freshness_badge = freshness_label(freshness_seconds if isinstance(freshness_seconds, int) else None)
     top_banner_html = ""
@@ -3729,6 +3795,13 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
           <div class="banner-detail">{esc(incident_banner.get('detail') or '')}</div>
         </section>
         """
+    if system_diagnostics_banner:
+        top_banner_html += f"""
+        <section class="banner {esc(system_diagnostics_banner.get('level') or 'warn')}">
+          <div class="banner-title">{esc(system_diagnostics_banner.get('title') or 'System diagnostics unavailable')}</div>
+          <div class="banner-detail">{esc(system_diagnostics_banner.get('detail') or '')}</div>
+        </section>
+        """
 
     timeline_buttons = []
     for seconds, label in ((30, "Last 30s"), (60, "Last 60s"), (300, "Last 5 min")):
@@ -3737,22 +3810,27 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     timeline_buttons_html = "".join(timeline_buttons)
 
     latest_incident_rows = [
-        kv("Incident ID", str(latest_incident.get("incident_id") or "none") if latest_incident.get("available") else "none"),
-        kv("Incident Type", incident_type.replace("_", " ").upper() or "-"),
-        kv("Severity", str(latest_incident.get("severity") or "-").upper() if latest_incident else "-"),
-        kv("Status", incident_status.upper() or "-"),
-        kv("Detected at", format_local_timestamp(str(latest_incident.get("timestamp") or latest_incident.get("detected_at") or ""))),
-        kv("Confidence", confidence or "-"),
+        kv("Incident ID", str(latest_incident.get("incident_id") or "Unavailable") if latest_incident.get("available") else "Unavailable"),
+        kv("Incident Type", incident_type.replace("_", " ").upper() or "Unavailable"),
+        kv("Severity", str(latest_incident.get("severity") or "Unavailable").upper() if latest_incident else "Unavailable"),
+        kv("Status", incident_status.upper() or "Unavailable"),
+        kv("Detected at", format_local_timestamp(str(latest_incident.get("timestamp") or latest_incident.get("detected_at") or ""), default="Unavailable")),
+        kv("Confidence", confidence or "Unavailable"),
     ]
     latest_incident_rows_html = "".join(latest_incident_rows)
     detected_because_html = "".join(f"<li>{esc(item)}</li>" for item in detected_because if str(item).strip()) or "<li>No clear cause recorded yet.</li>"
     key_events_html = "".join(f"<li>{esc(item)}</li>" for item in key_events if str(item).strip()) or "<li>No key events recorded yet.</li>"
+    confidence_breakdown_html = "".join(
+        f"<li><span class=\"{ 'status-ok' if bool(item.get('ok')) else 'status-incident' }\">{ '&#10004;' if bool(item.get('ok')) else '&#10006;' }</span> {esc(item.get('label') or '')}</li>"
+        for item in confidence_breakdown
+        if isinstance(item, dict) and str(item.get("label") or "").strip()
+    ) or "<li>Unavailable</li>"
 
     if timeline_events:
         timeline_rows_html = "".join(
             f"""
             <div class="timeline-row">
-              <span class="timeline-ts">{esc(item.get('timestamp') or '-')}</span>
+              <span class="timeline-ts">{esc(item.get('timestamp') or 'Unavailable')}</span>
               <span class="timeline-level {level_class(str(item.get('level') or 'info'))}">{esc(str(item.get('level') or 'info').upper())}</span>
               <span class="timeline-msg">{esc(item.get('message') or '')}</span>
             </div>
@@ -3760,28 +3838,50 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
             for item in timeline_events[:50]
         )
     else:
-        timeline_rows_html = empty_line(str(timeline_window or "No events were recorded in the selected window before this reboot."))
+        timeline_rows_html = empty_line(str(timeline_window or f"No diagnostic events were recorded in the {timeline_window_seconds}s before reboot"))
 
+    memory_total_bytes = current_system_state.get("memory_total_bytes")
+    memory_available_bytes = current_system_state.get("memory_available_bytes")
+    memory_used_bytes = current_system_state.get("memory_used_bytes")
+    disk_total_bytes = current_system_state.get("disk_total_bytes")
+    disk_used_bytes = current_system_state.get("disk_used_bytes")
+    disk_free_bytes = current_system_state.get("disk_free_bytes")
+    cpu_percent = current_system_state.get("cpu_percent")
+    cpu_source = str(current_system_state.get("cpu_source") or "").strip()
+    cpu_display = metric_text(cpu_percent, "%")
+    if cpu_display == "Unavailable" and current_system_state.get("load_1") is not None:
+        cpu_display = "Unavailable"
+    memory_display = "Unavailable"
+    if memory_total_bytes not in (None, "") and memory_available_bytes not in (None, ""):
+        memory_display = f"{metric_text(current_system_state.get('memory_percent'), '%')} ({format_bytes(memory_used_bytes)} / {format_bytes(memory_total_bytes)})"
+    disk_display = "Unavailable"
+    if disk_total_bytes not in (None, ""):
+        disk_display = f"{metric_text(current_system_state.get('disk_percent'), '%')} used ({format_bytes(disk_used_bytes)} of {format_bytes(disk_total_bytes)})"
+    load_display = "Unavailable"
+    if any(current_system_state.get(key) not in (None, "") for key in ("load_1", "load_5", "load_15")):
+        load_display = " / ".join(metric_text(current_system_state.get(key), "", "Unavailable") for key in ("load_1", "load_5", "load_15"))
+    temperature_display = metric_text(current_system_state.get("temperature_c"), "Ã‚Â°C")
+    system_metrics_missing = not any(
+        current_system_state.get(key) not in (None, "") for key in ("cpu_percent", "memory_percent", "disk_percent", "load_1", "load_5", "load_15", "temperature_c")
+    )
     current_system_rows = [
         kv("Gateway process running", yes_no_unknown(current_system_state.get("gateway_process_running"))),
-        kv("CPU", metric_text(current_system_state.get("cpu_percent"), "%")),
-        kv("Memory", metric_text(current_system_state.get("memory_percent"), "%")),
-        kv("Disk", metric_text(current_system_state.get("disk_percent"), "%")),
-        kv("Load", " / ".join(
-            metric_text(current_system_state.get(key), "", "-")
-            for key in ("load_1", "load_5", "load_15")
-        )),
-        kv("Temperature", metric_text(current_system_state.get("temperature_c"), " C")),
+        kv("CPU", cpu_display),
+        kv("Memory", memory_display),
+        kv("Disk", disk_display),
+        kv("Load", load_display),
         kv("Current boot time", format_local_timestamp(boot_time_iso)),
         kv("Current uptime", uptime_label),
-        kv("Last watchdog write time", format_local_timestamp(last_watchdog_write_at := str(snapshot.get("last_watchdog_write_at") or ""))),
+        kv("Last watchdog write time", format_local_timestamp(last_watchdog_write_at := str(snapshot.get("last_watchdog_write_at") or ""), default="Unavailable")),
     ]
+    if current_system_state.get("temperature_c") is not None:
+        current_system_rows.insert(5, kv("Temperature", temperature_display))
     current_system_rows_html = "".join(current_system_rows)
 
     system_events_html = "".join(
         f"""
         <div class="system-event">
-          <span class="system-event-ts">{esc(format_local_clock(str(item.get('timestamp') or '')) or '-')}</span>
+          <span class="system-event-ts">{esc(format_local_clock(str(item.get('timestamp') or '')) or 'Unavailable')}</span>
           <span class="system-event-level {level_class(str(item.get('level') or 'info'))}">{esc(str(item.get('level') or 'info').upper())}</span>
           <span class="system-event-msg">{esc(item.get('message') or item.get('summary') or '')}</span>
         </div>
@@ -3800,9 +3900,9 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         "failed": "bad",
     }.get(update_state, "ok")
 
-    footer_update_line = f"{update_state_label} • {esc(update_message)}"
+    footer_update_line = f"{update_state_label} ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ {esc(update_message)}"
     if update_last_error:
-        footer_update_line += f" • {esc(update_last_error)}"
+        footer_update_line += f" ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ {esc(update_last_error)}"
 
     refresh_href = f"/latest?window={timeline_window_seconds}&_={int(time.time())}"
     selected_window_display = esc(timeline_window or "No incident recorded yet.")
@@ -3925,13 +4025,41 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
 
     <div class="meta-row">
       <span class="pill {esc({'OK': 'ok', 'WARNING': 'warn', 'INCIDENT': 'bad', 'DATA STALE': 'bad'}.get(status_badge, 'ok'))}">{esc(status_badge)}</span>
-      <span class="pill muted">Last update: {esc(format_local_timestamp(last_data_refresh_at) if last_data_refresh_at else '-')}</span>
+      <span class="pill muted">Last update: {esc(format_local_timestamp(last_data_refresh_at) if last_data_refresh_at else 'Unavailable')}</span>
       <span class="pill muted">State age: {esc(state_age_label)}</span>
       <span class="pill muted">Build: {esc(build_number)}</span>
       <span class="pill muted">Update: {esc(update_state)}</span>
     </div>
 
     {top_banner_html}
+
+    <section class="card incident-hero {esc(str(latest_incident.get('severity') or 'warning').lower()) if latest_incident.get('available') else 'warning'}">
+      <div class="title-row">
+        <div class="incident-title">Latest Incident</div>
+        <div class="small-muted">Build {esc(build_number)} | Latest {esc(latest_build)}</div>
+      </div>
+      <div class="incident-summary">{esc(incident_summary)}</div>
+      <div class="kv-grid" style="margin-top: 10px;">
+        {latest_incident_rows_html if latest_incident.get("available") else kv("Incident", "none", "small")}
+        {kv("Events available", str(timeline_events_available_count), "small")}
+        {kv("Window covered", f"{format_duration(timeline_window_covered_seconds)} of {timeline_window_seconds}s", "small")}
+      </div>
+      <div class="incident-lists">
+        <div>
+          <div class="card-title" style="margin-bottom: 6px;">Detected because</div>
+          <ul>{detected_because_html}</ul>
+        </div>
+        <div>
+          <div class="card-title" style="margin-bottom: 6px;">Confidence breakdown</div>
+          <ul>{confidence_breakdown_html}</ul>
+        </div>
+        <div>
+          <div class="card-title" style="margin-bottom: 6px;">Key events</div>
+          <ul>{key_events_html}</ul>
+        </div>
+      </div>
+      <div class="small-muted" style="margin-top: 8px;">Detected from the latest incident record and the 60-second event window before reboot.</div>
+    </section>
 
     <section class="card">
       <div class="card-title">Current Summary</div>
@@ -3946,27 +4074,6 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       </div>
     </section>
 
-    <section class="card incident-hero {esc(str(latest_incident.get('severity') or 'warning').lower()) if latest_incident.get('available') else 'warning'}">
-      <div class="title-row">
-        <div class="incident-title">Latest Incident</div>
-        <div class="small-muted">Build {esc(build_number)} • Latest {esc(latest_build)}</div>
-      </div>
-      <div class="incident-summary">{esc(incident_summary)}</div>
-      <div class="kv-grid" style="margin-top: 10px;">
-        {latest_incident_rows_html if latest_incident.get("available") else kv("Incident", "none", "small")}
-      </div>
-      <div class="incident-lists">
-        <div>
-          <div class="card-title" style="margin-bottom: 6px;">Detected because</div>
-          <ul>{detected_because_html}</ul>
-        </div>
-        <div>
-          <div class="card-title" style="margin-bottom: 6px;">Key events</div>
-          <ul>{key_events_html}</ul>
-        </div>
-      </div>
-    </section>
-
     <section class="card">
       <div class="title-row" style="display:flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap;">
         <div class="card-title" style="margin: 0;">Events Before Reboot</div>
@@ -3976,7 +4083,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       <div class="timeline-list">
         {timeline_rows_html}
       </div>
-      <div class="small-muted" style="margin-top: 8px;">Showing {len(timeline_events)} event(s) in the selected window.</div>
+      <div class="small-muted" style="margin-top: 8px;">Events available: {timeline_events_available_count} | Time window covered: {format_duration(timeline_window_covered_seconds)} of {timeline_window_seconds}s</div>
     </section>
 
     <section class="card">
@@ -3987,7 +4094,6 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       </div>
       <div class="small-muted" style="margin-top: 8px;">Last watchdog write time uses the active state file and the latest recorded check.</div>
     </section>
-
     <details class="card">
       <summary>
         <div class="card-title" style="margin: 0;">System Events</div>
@@ -4002,7 +4108,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
 
     <div class="footer">
       <div>API: <a href="{esc(snapshot.get('api_url') or '/api/base-status')}">{esc(snapshot.get('api_url') or '/api/base-status')}</a></div>
-      <div>Build: <strong>{esc(build_number)}</strong> • Latest: <strong>{esc(latest_build)}</strong> • Update: <strong class="status-{esc(update_state_class)}">{esc(footer_update_line)}</strong></div>
+      <div>Build: <strong>{esc(build_number)}</strong> | Latest: <strong>{esc(latest_build)}</strong> | Update: <strong class="status-{esc(update_state_class)}">{esc(footer_update_line)}</strong></div>
     </div>
   </div>
 
