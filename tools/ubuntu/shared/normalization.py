@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from typing import Any
 import re
@@ -45,6 +46,8 @@ def _clean_str(value: Any, default: str = "") -> str:
 
 
 def _dict(value: Any) -> dict[str, Any]:
+    if is_dataclass(value):
+        return dict(asdict(value))
     if isinstance(value, Mapping):
         return dict(value)
     return {}
@@ -78,7 +81,7 @@ def normalize_evidence_item(value: Any) -> dict[str, Any]:
         message=_clean_str(raw.get("message"), "evidence"),
         data=dict(data),
     )
-    return model.model_dump()
+    return asdict(model)
 
 
 def normalize_check_result(value: Any) -> dict[str, Any]:
@@ -88,7 +91,7 @@ def normalize_check_result(value: Any) -> dict[str, Any]:
         last_checked=normalize_timestamp(raw.get("last_checked")),
         detail=_clean_str(raw.get("detail"), "no detail"),
     )
-    return model.model_dump()
+    return asdict(model)
 
 
 def normalize_health(value: Any) -> dict[str, Any]:
@@ -103,7 +106,7 @@ def normalize_health(value: Any) -> dict[str, Any]:
         last_healthy_at=normalize_timestamp(raw.get("last_healthy_at"), default_now=False) or None,
         notes=_clean_str(raw.get("notes"), ""),
     )
-    return model.model_dump()
+    return asdict(model)
 
 
 def normalize_device_status(value: Any) -> dict[str, Any]:
@@ -122,9 +125,9 @@ def normalize_device_status(value: Any) -> dict[str, Any]:
         overall_status=overall_status,  # type: ignore[arg-type]
         last_seen=normalize_timestamp(raw.get("last_seen")),
         checks=checks,
-        health=DeviceHealth.model_validate(health),
+        health=DeviceHealth(**health),
     )
-    return model.model_dump()
+    return asdict(model)
 
 
 def normalize_event(value: Any) -> dict[str, Any]:
@@ -146,7 +149,7 @@ def normalize_event(value: Any) -> dict[str, Any]:
         boot_id=boot_id,
         context=dict(context) if isinstance(context, Mapping) else None,
     )
-    return model.model_dump()
+    return asdict(model)
 
 
 def normalize_incident(value: Any) -> dict[str, Any]:
@@ -181,7 +184,7 @@ def normalize_incident(value: Any) -> dict[str, Any]:
         actions_taken=actions or ["Recorded by watchdog"],
         resolved_at=resolved_at,
     )
-    return model.model_dump()
+    return asdict(model)
 
 
 def normalize_state(value: Any, *, device_id: str | None = None, boot_id: str | None = None) -> dict[str, Any]:
@@ -198,7 +201,7 @@ def normalize_state(value: Any, *, device_id: str | None = None, boot_id: str | 
         last_status=last_status,  # type: ignore[arg-type]
         last_error=_clean_str(raw.get("last_error"), "") or None,
     )
-    return model.model_dump()
+    return asdict(model)
 
 
 def normalize_metric_sample(value: Any) -> dict[str, Any]:

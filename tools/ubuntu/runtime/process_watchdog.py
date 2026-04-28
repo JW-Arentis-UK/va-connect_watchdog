@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import asdict
 from typing import Any
 
 from ..shared.config import V2Config, load_config
@@ -31,7 +32,7 @@ def build_process_check(match: str) -> dict[str, Any]:
         last_checked=iso_utc(),
         detail=f"process {'found' if ok else 'missing'} for match '{match}'",
     )
-    return normalize_check_result(result.model_dump())
+    return normalize_check_result(asdict(result))
 
 
 def run_once(config: V2Config) -> dict[str, Any]:

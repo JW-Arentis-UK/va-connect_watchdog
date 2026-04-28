@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any, Dict, Literal
-
-from pydantic import BaseModel, ConfigDict, Field
 
 
 IncidentType = Literal[
@@ -22,18 +21,16 @@ EventLevel = Literal["debug", "info", "warning", "error"]
 OverallStatus = Literal["healthy", "degraded", "faulted", "unknown"]
 
 
-class EvidenceItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+@dataclass(frozen=True)
+class EvidenceItem:
     source: str
     timestamp: str
     message: str
-    data: Dict[str, Any] = Field(default_factory=dict)
+    data: Dict[str, Any] = field(default_factory=dict)
 
 
-class Incident(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+@dataclass(frozen=True)
+class Incident:
     incident_id: str
     timestamp: str
     boot_id: str
@@ -47,17 +44,15 @@ class Incident(BaseModel):
     resolved_at: str | None = None
 
 
-class CheckResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+@dataclass(frozen=True)
+class CheckResult:
     ok: bool
     last_checked: str
     detail: str
 
 
-class DeviceHealth(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+@dataclass(frozen=True)
+class DeviceHealth:
     fault_active: bool
     last_incident_id: str | None = None
     last_incident_type: IncidentType | None = None
@@ -65,9 +60,8 @@ class DeviceHealth(BaseModel):
     notes: str = ""
 
 
-class DeviceStatus(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+@dataclass(frozen=True)
+class DeviceStatus:
     device_id: str
     overall_status: OverallStatus
     last_seen: str
@@ -75,9 +69,8 @@ class DeviceStatus(BaseModel):
     health: DeviceHealth
 
 
-class EventRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+@dataclass(frozen=True)
+class EventRecord:
     timestamp: str
     component: str
     level: EventLevel
@@ -87,9 +80,8 @@ class EventRecord(BaseModel):
     context: Dict[str, Any] | None = None
 
 
-class StateRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+@dataclass(frozen=True)
+class StateRecord:
     device_id: str
     boot_id: str | None = None
     last_check_at: str | None = None
