@@ -37,6 +37,7 @@ def load_config() -> V2Config:
     candidate_paths = []
     if env_config:
         candidate_paths.append(Path(env_config))
+    candidate_paths.append(repo_root() / "site-watchdog.json")
     candidate_paths.append(repo_root() / "config.json")
     candidate_paths.append(default_data_dir() / "config.json")
 

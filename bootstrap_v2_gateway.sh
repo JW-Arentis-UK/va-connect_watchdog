@@ -186,6 +186,7 @@ install_systemd_unit() {
     rm -f "$SYSTEMD_DIR/$unit"
   done
 
+  cp "$TARGET_DIR/tools/ubuntu/deploy/site_watchdog.service" "$SYSTEMD_DIR/$SERVICE_NAME"
   cat > "$SYSTEMD_DIR/$WEB_SERVICE_NAME" <<EOF
 [Unit]
 Description=VA-Connect watchdog web UI
@@ -208,6 +209,7 @@ WantedBy=multi-user.target
 EOF
 
   systemctl daemon-reload
+  systemctl enable --now "$SERVICE_NAME"
   systemctl enable --now "$WEB_SERVICE_NAME"
 }
 
@@ -220,8 +222,8 @@ Repository:
   $TARGET_DIR
 
 Service:
-  systemctl status va-connect-watchdog-web
-  journalctl -u va-connect-watchdog-web -f
+  systemctl status site_watchdog va-connect-watchdog-web
+  journalctl -u site_watchdog -u va-connect-watchdog-web -f
 
 Browser:
   http://<gateway-ip>/

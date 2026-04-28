@@ -5,12 +5,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=root
 WorkingDirectory=/opt/va-connect-watchdog
 Environment=PYTHONUNBUFFERED=1
-Environment=VA_CONNECT_V2_DATA_DIR=/var/lib/va-connect-v2
-Environment=VA_CONNECT_V2_CONFIG=/opt/va-connect-watchdog/config.json
+Environment=VA_CONNECT_V2_CONFIG=/opt/va-connect-watchdog/site-watchdog.json
+Environment=VA_CONNECT_V2_DATA_DIR=/var/lib/va-connect-site-watchdog
 EnvironmentFile=-/opt/va-connect-watchdog/site_watchdog.env
-ExecStart=/opt/va-connect-watchdog/.venv/bin/python -m tools.ubuntu.runtime.site_watchdog
+ExecStart=/usr/bin/python3 -m tools.ubuntu.runtime.site_watchdog
 Restart=always
 RestartSec=5
 
