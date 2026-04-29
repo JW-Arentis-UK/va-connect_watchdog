@@ -301,7 +301,7 @@ class SiteWatchdog:
         boot_id = load_boot_id()
         self.logger.info(format_log("check cycle start", boot_id))
         state = load_state(self.config)
-        system_sample = collect_system_sample()
+        system_sample = collect_system_sample(self.config)
         append_metric(self.config, system_sample)
         checks = build_basic_checks(self.config)
         observed_at = iso_utc()

@@ -200,21 +200,37 @@ def normalize_state(value: Any, *, device_id: str | None = None, boot_id: str | 
         "timestamp",
         "cpu_percent",
         "cpu_source",
+        "cpu_count",
+        "cpu_status",
         "memory_total_bytes",
         "memory_available_bytes",
         "memory_used_bytes",
         "memory_percent",
+        "memory_status",
         "disk_total_bytes",
         "disk_used_bytes",
         "disk_free_bytes",
         "disk_percent",
+        "disk_status",
         "temperature_c",
         "load_1",
         "load_5",
         "load_15",
+        "load_status",
+        "metrics_available",
+        "all_metrics_unavailable",
     ):
         if key in raw and key not in metrics:
             metrics[key] = raw.get(key)
+    for key in ("os_disk", "recording_storage", "monitor_paths", "disk_thresholds", "potential_factors"):
+        if key in raw and key not in metrics:
+            value = raw.get(key)
+            if isinstance(value, Mapping):
+                metrics[key] = dict(value)
+            elif isinstance(value, list):
+                metrics[key] = list(value)
+            else:
+                metrics[key] = value
     model = StateRecord(
         device_id=_clean_str(raw.get("device_id"), device_id or "unknown-device"),
         boot_id=_clean_str(raw.get("boot_id"), boot_id or "") or None,
@@ -245,18 +261,30 @@ def normalize_metric_sample(value: Any) -> dict[str, Any]:
         "timestamp": normalize_timestamp(raw.get("timestamp")),
         "cpu_percent": as_float(raw.get("cpu_percent")),
         "cpu_source": _clean_str(raw.get("cpu_source"), ""),
+        "cpu_count": as_float(raw.get("cpu_count")),
+        "cpu_status": _clean_str(raw.get("cpu_status"), ""),
         "memory_total_bytes": as_float(raw.get("memory_total_bytes")),
         "memory_available_bytes": as_float(raw.get("memory_available_bytes")),
         "memory_used_bytes": as_float(raw.get("memory_used_bytes")),
         "memory_percent": as_float(raw.get("memory_percent")),
+        "memory_status": _clean_str(raw.get("memory_status"), ""),
         "disk_total_bytes": as_float(raw.get("disk_total_bytes")),
         "disk_used_bytes": as_float(raw.get("disk_used_bytes")),
         "disk_free_bytes": as_float(raw.get("disk_free_bytes")),
         "disk_percent": as_float(raw.get("disk_percent")),
+        "disk_status": _clean_str(raw.get("disk_status"), ""),
         "temperature_c": as_float(raw.get("temperature_c")),
         "load_1": as_float(raw.get("load_1")),
         "load_5": as_float(raw.get("load_5")),
         "load_15": as_float(raw.get("load_15")),
+        "load_status": _clean_str(raw.get("load_status"), ""),
+        "metrics_available": bool(raw.get("metrics_available", False)),
+        "all_metrics_unavailable": bool(raw.get("all_metrics_unavailable", False)),
+        "os_disk": dict(_dict(raw.get("os_disk"))) if isinstance(raw.get("os_disk"), Mapping) else raw.get("os_disk"),
+        "recording_storage": dict(_dict(raw.get("recording_storage"))) if isinstance(raw.get("recording_storage"), Mapping) else raw.get("recording_storage"),
+        "monitor_paths": dict(_dict(raw.get("monitor_paths"))) if isinstance(raw.get("monitor_paths"), Mapping) else raw.get("monitor_paths"),
+        "disk_thresholds": dict(_dict(raw.get("disk_thresholds"))) if isinstance(raw.get("disk_thresholds"), Mapping) else raw.get("disk_thresholds"),
+        "potential_factors": list(raw.get("potential_factors") or []) if isinstance(raw.get("potential_factors"), list) else [],
     }
 
 

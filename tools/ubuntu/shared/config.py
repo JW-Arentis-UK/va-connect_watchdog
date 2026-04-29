@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import json
 import os
@@ -21,6 +21,8 @@ class V2Config:
     web_host: str
     web_port: int
     log_level: str
+    monitor_paths: dict[str, Any] = field(default_factory=dict)
+    disk_thresholds: dict[str, Any] = field(default_factory=dict)
 
 
 def _load_config_file(path: Path) -> dict[str, Any]:
@@ -57,6 +59,12 @@ def load_config() -> V2Config:
     web_host = str(os.environ.get("VA_CONNECT_V2_WEB_HOST", raw.get("web_host", "127.0.0.1"))).strip() or "127.0.0.1"
     web_port = int(os.environ.get("VA_CONNECT_V2_WEB_PORT", raw.get("web_port", 8787)))
     log_level = str(os.environ.get("VA_CONNECT_V2_LOG_LEVEL", raw.get("log_level", "INFO"))).strip().upper() or "INFO"
+    monitor_paths = raw.get("monitor_paths", {})
+    if not isinstance(monitor_paths, dict):
+        monitor_paths = {}
+    disk_thresholds = raw.get("disk_thresholds", {})
+    if not isinstance(disk_thresholds, dict):
+        disk_thresholds = {}
 
     return V2Config(
         device_id=device_id,
@@ -68,4 +76,6 @@ def load_config() -> V2Config:
         web_host=web_host,
         web_port=web_port,
         log_level=log_level,
+        monitor_paths=monitor_paths,
+        disk_thresholds=disk_thresholds,
     )

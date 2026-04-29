@@ -1970,7 +1970,7 @@ def read_uptime_seconds() -> Optional[int]:
 
 def format_duration(seconds: Optional[int]) -> str:
     if seconds is None:
-        return "-"
+        return "Unavailable"
     seconds = max(0, int(seconds))
     days, remainder = divmod(seconds, 86400)
     hours, remainder = divmod(remainder, 3600)
@@ -2006,14 +2006,14 @@ def format_bytes(value: Any, *, default: str = "Unavailable") -> str:
     return f"{number:.1f}{units[index]}"
 
 
-def format_local_timestamp(value: str, *, default: str = "-") -> str:
+def format_local_timestamp(value: str, *, default: str = "Unavailable") -> str:
     parsed = parse_iso(str(value or "").strip())
     if parsed is None:
         return default
     return parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def format_local_clock(value: str, *, default: str = "-") -> str:
+def format_local_clock(value: str, *, default: str = "Unavailable") -> str:
     parsed = parse_iso(str(value or "").strip())
     if parsed is None:
         return default
@@ -2058,6 +2058,56 @@ def level_class(level: str) -> str:
         "critical": "bad",
         "crit": "bad",
     }.get(normalized, "muted")
+
+
+def metric_class(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return {
+        "ok": "ok",
+        "healthy": "ok",
+        "warning": "warn",
+        "warn": "warn",
+        "critical": "bad",
+        "bad": "bad",
+        "unavailable": "unavailable",
+        "unknown": "unavailable",
+    }.get(normalized, "unavailable")
+
+
+def yes_no_unknown_class(value: Any) -> str:
+    normalized = yes_no_unknown(value)
+    return {"YES": "ok", "NO": "bad", "UNKNOWN": "unavailable"}.get(normalized, "unavailable")
+
+
+def clean_reason_text(value: Any) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    lowered = text.lower()
+    canonical = {
+        "boot id changed": "Boot ID changed",
+        "watchdog restart detected": "Watchdog restart detected",
+        "heartbeat stopped": "Heartbeat stopped",
+        "process restarted": "Process restarted",
+        "process missing": "Process missing",
+        "process found": "Process found",
+        "wan check failed": "WAN check failed",
+        "app check failed": "App check failed",
+        "memory pressure": "Memory pressure",
+        "system overloaded": "System overloaded",
+        "high cpu load": "High CPU load",
+        "disk critically low": "Disk critically low",
+        "recording location critically low": "Recording location critically low",
+        "recording path unavailable": "Recording path unavailable",
+        "os disk critically low": "OS disk critically low",
+    }
+    if lowered in canonical:
+        return canonical[lowered]
+    if lowered.startswith("cpu "):
+        return "CPU " + text[4:].strip()
+    if lowered.startswith("wan "):
+        return "WAN " + text[4:].strip()
+    return text[:1].upper() + text[1:]
 
 
 def incident_confidence(incident: Dict[str, Any]) -> str:
@@ -3390,32 +3440,39 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
             event_count=int(events_before_reboot.get("event_count") or 0),
         )
 
-    metrics_available = any(
-        latest_metric.get(key) not in (None, "", [])
-        for key in ("cpu_percent", "memory_percent", "disk_percent", "load_1", "load_5", "load_15", "temperature_c")
-    )
+    metrics_available = bool(latest_metric.get("metrics_available"))
 
     current_system_state = {
         "gateway_process_running": gateway_process_running,
         "cpu_percent": latest_metric.get("cpu_percent"),
         "cpu_source": latest_metric.get("cpu_source"),
+        "cpu_status": latest_metric.get("cpu_status"),
         "memory_percent": latest_metric.get("memory_percent"),
         "memory_total_bytes": latest_metric.get("memory_total_bytes"),
         "memory_available_bytes": latest_metric.get("memory_available_bytes"),
         "memory_used_bytes": latest_metric.get("memory_used_bytes"),
+        "memory_status": latest_metric.get("memory_status"),
         "disk_percent": latest_metric.get("disk_percent"),
         "disk_total_bytes": latest_metric.get("disk_total_bytes"),
         "disk_used_bytes": latest_metric.get("disk_used_bytes"),
         "disk_free_bytes": latest_metric.get("disk_free_bytes"),
+        "disk_status": latest_metric.get("disk_status"),
         "temperature_c": latest_metric.get("temperature_c"),
         "load_1": latest_metric.get("load_1"),
         "load_5": latest_metric.get("load_5"),
         "load_15": latest_metric.get("load_15"),
+        "load_status": latest_metric.get("load_status"),
+        "os_disk": latest_metric.get("os_disk"),
+        "recording_storage": latest_metric.get("recording_storage"),
+        "monitor_paths": latest_metric.get("monitor_paths"),
+        "disk_thresholds": latest_metric.get("disk_thresholds"),
+        "potential_factors": latest_metric.get("potential_factors") or [],
         "boot_time_iso": boot_time_iso,
         "uptime_seconds": uptime_seconds,
         "uptime_label": uptime_label,
         "last_watchdog_write_at": last_watchdog_write_at,
         "metrics_available": metrics_available,
+        "all_metrics_unavailable": bool(latest_metric.get("all_metrics_unavailable")) or not metrics_available,
     }
 
     incident_banner = None
@@ -3456,7 +3513,7 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
     else:
         summary_line = f"Status: {watchdog_status.upper()} - No incident recorded yet"
 
-    if not metrics_available:
+    if bool(latest_metric.get("all_metrics_unavailable")):
         system_diagnostics_banner = {
             "title": "System diagnostics unavailable - watchdog running in minimal mode",
             "detail": "CPU, memory, disk, load, and temperature values are not available from the latest state sample.",
@@ -3547,8 +3604,10 @@ def last_incident_snapshot_payload() -> Dict[str, Any]:
         }
 
     status = str(incident.get("status") or ("resolved" if incident.get("resolved_at") else "open")).strip() or "unknown"
-    severity = str(incident.get("severity") or ("critical" if status == "open" else "warning")).strip() or "unknown"
     incident_type = str(incident.get("type") or incident.get("classification") or "unknown").strip() or "unknown"
+    severity = str(incident.get("severity") or ("critical" if status == "open" else "warning")).strip().lower() or "unknown"
+    if incident_type == "unexpected_reboot":
+        severity = "critical"
     key_events: List[str] = []
     detected_because: List[str] = []
     for item in (incident.get("actions_taken") or [])[:4]:
@@ -3558,7 +3617,7 @@ def last_incident_snapshot_payload() -> Dict[str, Any]:
     for item in (incident.get("evidence") or [])[:4]:
         if not isinstance(item, dict):
             continue
-        message = str(item.get("message") or item.get("source") or "").strip()
+        message = clean_reason_text(item.get("message") or item.get("source") or "")
         if message:
             key_events.append(message)
             detected_because.append(message)
@@ -3566,11 +3625,13 @@ def last_incident_snapshot_payload() -> Dict[str, Any]:
         if isinstance(data, dict):
             if data.get("previous_boot_id") and data.get("current_boot_id"):
                 detected_because.append("Boot ID changed")
+            if data.get("watchdog_restart_detected"):
+                detected_because.append("Watchdog restart detected")
             if data.get("check"):
-                detected_because.append(f"{data.get('check')} check failed")
+                detected_because.append(clean_reason_text(f"{data.get('check')} check failed"))
     if not key_events:
         for item in recent_events(5)[:3]:
-            text = str(item.get("summary") or item.get("message") or "").strip()
+            text = clean_reason_text(item.get("summary") or item.get("message") or "")
             if text:
                 key_events.append(text)
     if incident_type == "unexpected_reboot":
@@ -3590,6 +3651,8 @@ def last_incident_snapshot_payload() -> Dict[str, Any]:
         summary = str(incident.get("cause") or incident.get("reporting_text") or incident.get("suspected_reason") or "Incident recorded.").strip()
 
     confidence_breakdown = incident_confidence_breakdown(incident, event_count=len(incident.get("evidence") or []))
+    key_events = list(dict.fromkeys(clean_reason_text(text) for text in key_events if clean_reason_text(text)))[:5]
+    detected_because = list(dict.fromkeys(clean_reason_text(text) for text in detected_because if clean_reason_text(text)))[:4]
     return {
         "available": True,
         "incident_id": str(incident.get("incident_id", "")),
@@ -3602,11 +3665,11 @@ def last_incident_snapshot_payload() -> Dict[str, Any]:
         "cause": str(incident.get("cause") or incident.get("reporting_text") or incident.get("suspected_reason") or ""),
         "summary": summary,
         "confidence": incident_confidence(incident),
-        "detected_because": list(dict.fromkeys(text for text in detected_because if text))[:4],
+        "detected_because": detected_because,
         "confidence_breakdown": confidence_breakdown,
         "evidence_count": len(incident.get("evidence") or []),
         "action_count": len(incident.get("actions_taken") or []),
-        "key_events": key_events[:5],
+        "key_events": key_events,
         "title": "Latest Incident",
         "detail": summary,
     }
@@ -3649,9 +3712,11 @@ def pre_crash_timeline_payload(window_seconds: int = 60) -> Dict[str, Any]:
             continue
         candidate_events.append((event_ts, event))
     candidate_events.sort(key=lambda item: item[0])
+    pre_crash_events = [(event_ts, event) for event_ts, event in candidate_events if anchor is None or event_ts < anchor]
+    reboot_event_present = bool(candidate_events) and anchor is not None and any(event_ts == anchor for event_ts, _ in candidate_events)
 
     timeline_events: List[Dict[str, str]] = []
-    for event_ts, event in candidate_events:
+    for event_ts, event in pre_crash_events:
         level = str(event.get("level") or "info").strip().lower() or "info"
         message = event_message_value(event) or str(event.get("event") or event.get("component") or "event").strip()
         timeline_events.append(
@@ -3663,12 +3728,15 @@ def pre_crash_timeline_payload(window_seconds: int = 60) -> Dict[str, Any]:
         )
 
     window_covered_seconds = 0
-    if len(candidate_events) > 1:
-        window_covered_seconds = max(0, int((candidate_events[-1][0] - candidate_events[0][0]).total_seconds()))
+    if len(pre_crash_events) > 1:
+        window_covered_seconds = max(0, int((pre_crash_events[-1][0] - pre_crash_events[0][0]).total_seconds()))
 
     window_label = f"Last {window_seconds}s before the incident"
     if not timeline_events:
-        window_label = f"No diagnostic events were recorded in the {window_seconds}s before reboot"
+        if reboot_event_present:
+            window_label = "No diagnostic events were recorded before reboot. Only the reboot event itself is available."
+        else:
+            window_label = f"No diagnostic events were recorded in the {window_seconds}s before reboot"
 
     return {
         "available": True,
@@ -3678,9 +3746,10 @@ def pre_crash_timeline_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "window": window_label,
         "window_seconds": window_seconds,
         "window_covered_seconds": window_covered_seconds,
-        "events_available_count": len(candidate_events),
+        "events_available_count": len(pre_crash_events),
         "event_count": len(timeline_events),
         "events": timeline_events,
+        "reboot_event_present": reboot_event_present,
     }
 
 
@@ -3712,12 +3781,14 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
             return f"{int(number)}{suffix}"
         return f"{number:.1f}{suffix}"
 
-    def kv(label: str, value: Any, extra_class: str = "") -> str:
+    def kv(label: str, value: Any, extra_class: str = "", note: str = "") -> str:
         text = esc(value if value not in (None, "") else "Unavailable")
+        note_html = f'<div class="kv-note">{esc(note)}</div>' if str(note or "").strip() else ""
         return f"""
         <div class="kv {extra_class}">
           <div class="kv-label">{esc(label)}</div>
           <div class="kv-value">{text}</div>
+          {note_html}
         </div>
         """
 
@@ -3739,8 +3810,8 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     def empty_line(message: str) -> str:
         return f'<div class="empty-state">{esc(message)}</div>'
 
-    status_badge = str(snapshot.get("status_badge") or "OK").upper()
-    freshness_state_value = str(snapshot.get("freshness_state") or "ok")
+    watchdog_status_label = str(snapshot.get("watchdog_status") or "unknown").strip().upper() or "UNKNOWN"
+    freshness_badge = freshness_label(freshness_seconds if isinstance(freshness_seconds, int) else None)
     current_summary = str(snapshot.get("summary_line") or snapshot.get("current_summary") or "").strip()
     site_name = str(snapshot.get("site_name") or snapshot.get("display_name") or "VA-Connect Gateway").strip() or "VA-Connect Gateway"
     device_id = str(snapshot.get("device_id") or socket.gethostname()).strip()
@@ -3771,6 +3842,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     confidence_breakdown = latest_incident.get("confidence_breakdown") or []
     detected_because = latest_incident.get("detected_because") or []
     key_events = latest_incident.get("key_events") or []
+    potential_factors = current_system_state.get("potential_factors") or []
     reboot_incident = snapshot.get("reboot_incident") or {}
     reboot_detected = bool(latest_incident.get("available") and incident_type == "unexpected_reboot")
     timeline_events = events_before_reboot.get("events") or []
@@ -3778,8 +3850,8 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     timeline_window_seconds = int(events_before_reboot.get("window_seconds") or window_seconds or 60)
     timeline_events_available_count = int(events_before_reboot.get("events_available_count") or len(timeline_events) or 0)
     timeline_window_covered_seconds = int(events_before_reboot.get("window_covered_seconds") or 0)
+    reboot_event_present = bool(events_before_reboot.get("reboot_event_present"))
     freshness_seconds = snapshot.get("state_file_age_seconds")
-    freshness_badge = freshness_label(freshness_seconds if isinstance(freshness_seconds, int) else None)
     top_banner_html = ""
     if freshness_banner:
         top_banner_html += f"""
@@ -3843,39 +3915,54 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     memory_total_bytes = current_system_state.get("memory_total_bytes")
     memory_available_bytes = current_system_state.get("memory_available_bytes")
     memory_used_bytes = current_system_state.get("memory_used_bytes")
-    disk_total_bytes = current_system_state.get("disk_total_bytes")
-    disk_used_bytes = current_system_state.get("disk_used_bytes")
-    disk_free_bytes = current_system_state.get("disk_free_bytes")
     cpu_percent = current_system_state.get("cpu_percent")
-    cpu_source = str(current_system_state.get("cpu_source") or "").strip()
+    cpu_status = current_system_state.get("cpu_status")
+    memory_status = current_system_state.get("memory_status")
+    load_status = current_system_state.get("load_status")
     cpu_display = metric_text(cpu_percent, "%")
-    if cpu_display == "Unavailable" and current_system_state.get("load_1") is not None:
-        cpu_display = "Unavailable"
     memory_display = "Unavailable"
     if memory_total_bytes not in (None, "") and memory_available_bytes not in (None, ""):
         memory_display = f"{metric_text(current_system_state.get('memory_percent'), '%')} ({format_bytes(memory_used_bytes)} / {format_bytes(memory_total_bytes)})"
-    disk_display = "Unavailable"
-    if disk_total_bytes not in (None, ""):
-        disk_display = f"{metric_text(current_system_state.get('disk_percent'), '%')} used ({format_bytes(disk_used_bytes)} of {format_bytes(disk_total_bytes)})"
     load_display = "Unavailable"
     if any(current_system_state.get(key) not in (None, "") for key in ("load_1", "load_5", "load_15")):
         load_display = " / ".join(metric_text(current_system_state.get(key), "", "Unavailable") for key in ("load_1", "load_5", "load_15"))
-    temperature_display = metric_text(current_system_state.get("temperature_c"), "Ã‚Â°C")
-    system_metrics_missing = not any(
-        current_system_state.get(key) not in (None, "") for key in ("cpu_percent", "memory_percent", "disk_percent", "load_1", "load_5", "load_15", "temperature_c")
-    )
+    temperature_c = current_system_state.get("temperature_c")
+    temperature_display = metric_text(temperature_c, "\u00b0C") if temperature_c is not None else "Unavailable"
+    os_disk = current_system_state.get("os_disk") if isinstance(current_system_state.get("os_disk"), dict) else {}
+    recording_storage = current_system_state.get("recording_storage") if isinstance(current_system_state.get("recording_storage"), dict) else {}
+    os_disk_value = "Unavailable"
+    os_disk_note = ""
+    if os_disk:
+        os_disk_value = f"{metric_text(os_disk.get('used_percent'), '%')} used / {format_bytes(os_disk.get('free_bytes'))} free"
+        os_disk_note = str(os_disk.get("note") or "").strip()
+    recording_path = str((current_system_state.get("monitor_paths") or {}).get("recording_path") or "").strip()
+    recording_value = "Unavailable"
+    recording_note = ""
+    if recording_storage:
+        recording_value = f"{metric_text(recording_storage.get('used_percent'), '%')} used / {format_bytes(recording_storage.get('free_bytes'))} free"
+        recording_note = str(recording_storage.get("note") or "").strip()
+    if recording_path:
+        recording_note = f"{recording_note} Recording path: {recording_path}".strip()
     current_system_rows = [
-        kv("Gateway process running", yes_no_unknown(current_system_state.get("gateway_process_running"))),
-        kv("CPU", cpu_display),
-        kv("Memory", memory_display),
-        kv("Disk", disk_display),
-        kv("Load", load_display),
-        kv("Current boot time", format_local_timestamp(boot_time_iso)),
-        kv("Current uptime", uptime_label),
-        kv("Last watchdog write time", format_local_timestamp(last_watchdog_write_at := str(snapshot.get("last_watchdog_write_at") or ""), default="Unavailable")),
+        kv("Gateway process running", yes_no_unknown(current_system_state.get("gateway_process_running")), yes_no_unknown_class(current_system_state.get("gateway_process_running"))),
+        kv("CPU", cpu_display, metric_class(cpu_status), "CPU usage from /proc/stat"),
+        kv("Memory", memory_display, metric_class(memory_status), "Memory usage from /proc/meminfo"),
+        kv("Load", load_display, metric_class(load_status), "1 / 5 / 15 minute load average"),
     ]
-    if current_system_state.get("temperature_c") is not None:
-        current_system_rows.insert(5, kv("Temperature", temperature_display))
+    if temperature_c is not None:
+        current_system_rows.append(kv("Temperature", temperature_display, "ok"))
+    current_system_rows.append(kv("OS Disk", os_disk_value, metric_class(os_disk.get("status")), os_disk_note or f"OS path: {os_disk.get('path') or '/'}"))
+    if recording_storage or recording_path:
+        current_system_rows.append(
+            kv("Recording Storage", recording_value, metric_class(recording_storage.get("status")), recording_note or f"Recording path: {recording_storage.get('path') or recording_path or '/'}")
+        )
+    current_system_rows.extend(
+        [
+            kv("Current uptime", uptime_label, "unavailable"),
+            kv("Current boot time", format_local_timestamp(boot_time_iso, default="Unavailable"), "unavailable"),
+            kv("Last watchdog write time", format_local_timestamp(last_watchdog_write_at := str(snapshot.get("last_watchdog_write_at") or ""), default="Unavailable"), "unavailable"),
+        ]
+    )
     current_system_rows_html = "".join(current_system_rows)
 
     system_events_html = "".join(
@@ -3900,9 +3987,9 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         "failed": "bad",
     }.get(update_state, "ok")
 
-    footer_update_line = f"{update_state_label} ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ {esc(update_message)}"
+    footer_update_line = f"{update_state_label} - {esc(update_message)}"
     if update_last_error:
-        footer_update_line += f" ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ {esc(update_last_error)}"
+        footer_update_line += f" - {esc(update_last_error)}"
 
     refresh_href = f"/latest?window={timeline_window_seconds}&_={int(time.time())}"
     selected_window_display = esc(timeline_window or "No incident recorded yet.")
@@ -3964,6 +4051,15 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     .kv-label {{ color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }}
     .kv-value {{ margin-top: 4px; font-size: 15px; font-weight: 700; word-break: break-word; }}
     .kv.small .kv-value {{ font-size: 13px; font-weight: 600; }}
+    .kv-note {{ margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.2; }}
+    .kv.ok {{ border-color: rgba(94, 224, 109, .35); }}
+    .kv.ok .kv-value {{ color: var(--ok); }}
+    .kv.warn {{ border-color: rgba(255, 184, 77, .35); }}
+    .kv.warn .kv-value {{ color: var(--warn); }}
+    .kv.bad {{ border-color: rgba(255, 107, 107, .35); }}
+    .kv.bad .kv-value {{ color: var(--bad); }}
+    .kv.unavailable {{ border-color: rgba(147, 164, 179, .35); }}
+    .kv.unavailable .kv-value {{ color: var(--muted); }}
     .incident-hero {{ border-left: 4px solid var(--warn); }}
     .incident-hero.critical {{ border-left-color: var(--bad); }}
     .incident-hero.warning {{ border-left-color: var(--warn); }}
@@ -4024,8 +4120,9 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     </div>
 
     <div class="meta-row">
-      <span class="pill {esc({'OK': 'ok', 'WARNING': 'warn', 'INCIDENT': 'bad', 'DATA STALE': 'bad'}.get(status_badge, 'ok'))}">{esc(status_badge)}</span>
-      <span class="pill muted">Last update: {esc(format_local_timestamp(last_data_refresh_at) if last_data_refresh_at else 'Unavailable')}</span>
+      <span class="pill {esc({'HEALTHY': 'ok', 'UNKNOWN': 'warn'}.get(watchdog_status_label, 'warn'))}">Watchdog: {esc(watchdog_status_label)}</span>
+      <span class="pill {esc({'OK': 'ok', 'WARNING': 'warn', 'DATA STALE': 'bad'}.get(freshness_badge, 'warn'))}">Data: {esc(freshness_badge)}</span>
+      <span class="pill muted">Last update: {esc(format_local_timestamp(last_data_refresh_at, default='Unavailable') if last_data_refresh_at else 'Unavailable')}</span>
       <span class="pill muted">State age: {esc(state_age_label)}</span>
       <span class="pill muted">Build: {esc(build_number)}</span>
       <span class="pill muted">Update: {esc(update_state)}</span>
@@ -4057,6 +4154,10 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
           <div class="card-title" style="margin-bottom: 6px;">Key events</div>
           <ul>{key_events_html}</ul>
         </div>
+        <div>
+          <div class="card-title" style="margin-bottom: 6px;">Potential contributing factors</div>
+          <ul>{''.join(f'<li>{esc(item)}</li>' for item in potential_factors if str(item).strip()) or '<li>No strong contributing factors identified.</li>'}</ul>
+        </div>
       </div>
       <div class="small-muted" style="margin-top: 8px;">Detected from the latest incident record and the 60-second event window before reboot.</div>
     </section>
@@ -4067,7 +4168,6 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       <div class="kv-grid" style="margin-top: 10px;">
         {kv("Watchdog status", str(snapshot.get("watchdog_status") or "unknown").title(), "small")}
         {kv("Current uptime", uptime_label, "small")}
-        {kv("Last boot time", format_local_timestamp(boot_time_iso), "small")}
         {kv("Last reboot detected", format_local_timestamp(str(reboot_incident.get("timestamp") or reboot_incident.get("detected_at") or "")), "small")}
         {kv("Active incident", yes_no_unknown(active_incident), "small")}
         {kv("Unexpected reboot detected", yes_no_unknown(reboot_detected), "small")}
