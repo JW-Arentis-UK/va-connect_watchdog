@@ -3810,6 +3810,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     def empty_line(message: str) -> str:
         return f'<div class="empty-state">{esc(message)}</div>'
 
+    freshness_seconds = snapshot.get("state_file_age_seconds")
     watchdog_status_label = str(snapshot.get("watchdog_status") or "unknown").strip().upper() or "UNKNOWN"
     freshness_badge = freshness_label(freshness_seconds if isinstance(freshness_seconds, int) else None)
     current_summary = str(snapshot.get("summary_line") or snapshot.get("current_summary") or "").strip()
@@ -3851,7 +3852,6 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     timeline_events_available_count = int(events_before_reboot.get("events_available_count") or len(timeline_events) or 0)
     timeline_window_covered_seconds = int(events_before_reboot.get("window_covered_seconds") or 0)
     reboot_event_present = bool(events_before_reboot.get("reboot_event_present"))
-    freshness_seconds = snapshot.get("state_file_age_seconds")
     top_banner_html = ""
     if freshness_banner:
         top_banner_html += f"""
