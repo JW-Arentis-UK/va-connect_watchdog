@@ -3396,6 +3396,21 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
     else:
         update_state = "current"
 
+    update_summary = ""
+    if update_status.get("state") == "running":
+        phase = str(update_status.get("phase") or "running").strip()
+        detail = str(update_status.get("detail") or update_status.get("message") or "").strip()
+        update_summary = f"RUNNING - {phase}" + (f" - {detail}" if detail else "")
+    elif update_status.get("state") == "failed":
+        failure = str(update_status.get("last_error") or update_status.get("detail") or update_status.get("message") or "Update failed.").strip()
+        update_summary = f"FAILED - {failure}"
+    elif update_available:
+        update_summary = f"AVAILABLE - {build_number} -> {latest_build}"
+    else:
+        update_summary = f"CURRENT - Current build: {build_number}"
+
+    update_button_visible = bool(update_available or update_status.get("state") in {"running", "failed"})
+
     state_age_seconds = path_age_seconds(STATE_PATH)
     state_mtime = path_mtime_iso(STATE_PATH)
     freshness = freshness_state(state_age_seconds)
@@ -3533,6 +3548,8 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "update_available": update_available,
         "update_state": update_state,
         "update_status": update_status,
+        "update_summary": update_summary,
+        "update_button_visible": update_button_visible,
         "status_badge": "DATA STALE" if freshness == "data-stale" else ("INCIDENT" if active_incident or (latest_incident.get("available") and str(latest_incident.get("type") or "").strip() == "unexpected_reboot") or incident_banner else ("WARNING" if latest_incident.get("available") else "OK")),
         "freshness_state": freshness,
         "state_file_age_seconds": state_age_seconds,
@@ -3820,6 +3837,8 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     latest_build = str(snapshot.get("latest_build") or build_number).strip()
     update_state = str(snapshot.get("update_state") or "current").strip()
     update_status = snapshot.get("update_status") or {}
+    update_summary = str(snapshot.get("update_summary") or "").strip()
+    update_button_visible = bool(snapshot.get("update_button_visible"))
     incident_banner = snapshot.get("incident_banner") or {}
     freshness_banner = snapshot.get("freshness_banner") or {}
     system_diagnostics_banner = snapshot.get("system_diagnostics_banner") or {}
@@ -3976,10 +3995,9 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         for item in system_events[:20]
     ) or empty_line("No recent events yet.")
 
-    update_message = str(update_status.get("detail") or update_status.get("message") or "Ready to update.").strip()
+    update_message = update_summary or str(update_status.get("message") or "Ready to update.").strip()
     update_last_error = str(update_status.get("last_error") or "").strip()
     update_phase = str(update_status.get("phase") or "idle").strip()
-    update_state_label = update_state.upper() if update_state else "CURRENT"
     update_state_class = {
         "current": "ok",
         "available": "warning",
@@ -3987,7 +4005,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         "failed": "bad",
     }.get(update_state, "ok")
 
-    footer_update_line = f"{update_state_label} - {esc(update_message)}"
+    footer_update_line = esc(update_message)
     if update_last_error:
         footer_update_line += f" - {esc(update_last_error)}"
 
@@ -4115,7 +4133,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       <div class="top-actions">
         <button class="btn secondary" type="button" onclick="hardRefresh()">Hard refresh page</button>
         <button class="btn primary" type="button" onclick="triggerUpdate('check_updates')">Check updates</button>
-        <button class="btn primary" type="button" onclick="triggerUpdate('update_watchdog')">Update from GitHub</button>
+        <button id="updateButton" class="btn primary" type="button" onclick="triggerUpdate('update_watchdog')" style="display: {('inline-flex' if update_button_visible else 'none')};">Update from GitHub</button>
       </div>
     </div>
 
@@ -4214,8 +4232,44 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
 
   <script>
     const windowSeconds = {int(timeline_window_seconds)};
+    let updateProgressTimer = null;
+
+    function setUpdateButtonVisible(visible) {{
+      const updateButton = document.getElementById('updateButton');
+      if (!updateButton) {{
+        return;
+      }}
+      updateButton.style.display = visible ? 'inline-flex' : 'none';
+      if (!visible) {{
+        updateButton.disabled = false;
+        updateButton.textContent = 'Update from GitHub';
+        updateButton.className = 'btn primary';
+      }}
+    }}
+
+    function updateStatusTextFromPayload(data, fallbackText) {{
+      const updateState = data && data.update_status ? data.update_status : {{}};
+      const nextBuild = (data && (data.build_number || data.build)) || '';
+      if (updateState.state === 'running') {{
+        const phase = updateState.phase ? String(updateState.phase).replace(/_/g, ' ') : 'running';
+        const detail = updateState.detail ? ` - ${{updateState.detail}}` : '';
+        return `Update running: ${{phase}}${{detail}}`;
+      }}
+      if (updateState.state === 'failed') {{
+        return `Update failed: ${{updateState.last_error || updateState.detail || updateState.message || fallbackText || 'unknown error'}}`;
+      }}
+      if (data && data.update_available) {{
+        return `Update available: ${{updateState.from_build || nextBuild || 'current'}} -> ${{updateState.to_build || 'new build'}}`;
+      }}
+      if (nextBuild) {{
+        return `Current build: ${{nextBuild}}`;
+      }}
+      return fallbackText || 'Ready to update.';
+    }}
+
     async function triggerUpdate(action) {{
       const statusLine = document.getElementById('updateStatusLine');
+      const updateButton = document.getElementById('updateButton');
       try {{
         if (statusLine) {{
           statusLine.textContent = action === 'update_watchdog' ? 'Starting update...' : 'Checking for updates...';
@@ -4227,19 +4281,31 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         }});
         const payload = await response.json();
         if (statusLine) {{
-          statusLine.textContent = payload.message || payload.detail || (response.ok ? 'Update request sent.' : 'Update request failed.');
+          statusLine.textContent = action === 'check_updates'
+            ? updateStatusTextFromPayload(payload.status || payload, payload.message || payload.detail || 'Update check complete.')
+            : (payload.message || payload.detail || (response.ok ? 'Update request sent.' : 'Update request failed.'));
+        }}
+        if (action === 'check_updates') {{
+          const updateAvailable = Boolean(payload && payload.status && payload.status.update_available);
+          setUpdateButtonVisible(updateAvailable || Boolean(payload && payload.status && ['running', 'failed'].includes(payload.status.state)));
+          return;
         }}
         if (response.ok) {{
-          setTimeout(() => {{
-            const url = new URL(window.location.href);
-            url.searchParams.set('window', String(windowSeconds));
-            url.searchParams.set('_', String(Date.now()));
-            window.location.href = url.toString();
-          }}, 2000);
+          if (updateButton) {{
+            updateButton.disabled = true;
+            updateButton.textContent = 'Updating...';
+            updateButton.className = 'btn primary status-running';
+          }}
+          monitorUpdateProgress();
         }}
       }} catch (error) {{
         if (statusLine) {{
           statusLine.textContent = error && error.message ? error.message : String(error || 'Update request failed');
+        }}
+        if (action === 'update_watchdog' && updateButton) {{
+          updateButton.disabled = false;
+          updateButton.textContent = 'Update from GitHub';
+          updateButton.className = 'btn primary';
         }}
       }}
     }}
@@ -4249,13 +4315,57 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       url.searchParams.set('_', String(Date.now()));
       window.location.href = url.toString();
     }}
+    function monitorUpdateProgress() {{
+      const statusLine = document.getElementById('updateStatusLine');
+      const updateButton = document.getElementById('updateButton');
+      if (updateProgressTimer) {{
+        clearInterval(updateProgressTimer);
+      }}
+      let attempts = 0;
+      updateProgressTimer = setInterval(async () => {{
+        attempts += 1;
+        try {{
+          const response = await fetch('/api/base-status?_=' + Date.now(), {{ cache: 'no-store' }});
+          const data = await response.json();
+          const updateState = data && data.update_status ? data.update_status : {{}};
+          const nextBuild = (data && (data.build_number || data.build)) || '';
+          if (statusLine) {{
+            statusLine.textContent = updateStatusTextFromPayload(data, statusLine.textContent);
+          }}
+          if (updateState.state === 'ok' || updateState.state === 'failed') {{
+            clearInterval(updateProgressTimer);
+            updateProgressTimer = null;
+            if (updateButton) {{
+              updateButton.disabled = false;
+              updateButton.textContent = 'Update from GitHub';
+              updateButton.className = 'btn primary';
+            }}
+            if (updateState.state === 'ok' && nextBuild) {{
+              hardRefresh();
+            }}
+            return;
+          }}
+        }} catch (_error) {{
+          // keep waiting; the service may be restarting.
+        }}
+        if (attempts >= 24) {{
+          clearInterval(updateProgressTimer);
+          updateProgressTimer = null;
+          if (statusLine) {{
+            statusLine.textContent = 'Update progress timed out. Refreshing page.';
+          }}
+          hardRefresh();
+        }}
+      }}, 5000);
+    }}
     const footer = document.querySelector('.footer');
     if (footer) {{
       const line = document.createElement('div');
       line.id = 'updateStatusLine';
-      line.textContent = {json.dumps(update_message)};
+      line.textContent = {json.dumps(update_summary or update_message)};
       footer.appendChild(line);
     }}
+    setUpdateButtonVisible({str(update_button_visible).lower()});
   </script>
 </body>
 </html>"""
