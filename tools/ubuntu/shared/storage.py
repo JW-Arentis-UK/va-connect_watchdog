@@ -17,6 +17,9 @@ from .paths import build_info_path, device_status_path, events_path, incidents_p
 from .time import parse_iso, utc_now
 
 
+_LAST_METRICS_PRUNE_AT = 0.0
+
+
 def ensure_layout(config: V2Config) -> None:
     config.data_dir.mkdir(parents=True, exist_ok=True)
     logs_dir(config).mkdir(parents=True, exist_ok=True)
@@ -131,6 +134,28 @@ def append_event(config: V2Config, event: Any) -> dict[str, Any]:
     return normalized
 
 
+def append_planned_reboot_marker(
+    config: V2Config,
+    *,
+    reason: str = "user_requested_or_software_requested_reboot",
+    source: str = "va-connect",
+) -> dict[str, Any]:
+    return append_event(
+        config,
+        {
+            "timestamp": utc_now().astimezone().replace(microsecond=0).isoformat(),
+            "component": source,
+            "event_type": "planned_reboot",
+            "level": "info",
+            "message": "planned reboot marker",
+            "context": {
+                "source": source,
+                "reason": reason,
+            },
+        },
+    )
+
+
 def load_incidents(config: V2Config) -> list[dict[str, Any]]:
     latest: OrderedDict[str, dict[str, Any]] = OrderedDict()
     for item in read_jsonl(incidents_path(config)):
@@ -174,6 +199,25 @@ def latest_event(config: V2Config) -> dict[str, Any] | None:
     return events[-1] if events else None
 
 
+def latest_planned_reboot_marker(config: V2Config, *, within_seconds: int = 120, reference_at: str | None = None) -> dict[str, Any] | None:
+    events = load_events(config)
+    if not events:
+        return None
+    reference_dt = parse_iso(reference_at) if reference_at else None
+    if reference_dt is None:
+        reference_dt = utc_now()
+    cutoff = reference_dt.timestamp() - max(0, int(within_seconds))
+    for event in reversed(events):
+        if str(event.get("event_type") or "").strip() != "planned_reboot":
+            continue
+        event_dt = parse_iso(str(event.get("timestamp") or ""))
+        if event_dt is None:
+            continue
+        if event_dt.timestamp() >= cutoff and event_dt <= reference_dt:
+            return event
+    return None
+
+
 def load_metrics(config: V2Config) -> list[dict[str, Any]]:
     return [normalize_metric_sample(item) for item in read_jsonl(metrics_path(config))]
 
@@ -181,7 +225,11 @@ def load_metrics(config: V2Config) -> list[dict[str, Any]]:
 def append_metric(config: V2Config, metric: Any) -> dict[str, Any]:
     normalized = normalize_metric_sample(metric)
     append_jsonl(metrics_path(config), normalized)
-    trim_jsonl_by_age(metrics_path(config), max_age_seconds=30 * 60)
+    global _LAST_METRICS_PRUNE_AT
+    now = utc_now().timestamp()
+    if now - _LAST_METRICS_PRUNE_AT >= 300:
+        trim_jsonl_by_age(metrics_path(config), max_age_seconds=7 * 24 * 3600)
+        _LAST_METRICS_PRUNE_AT = now
     return normalized
 
 

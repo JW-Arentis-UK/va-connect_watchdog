@@ -135,6 +135,7 @@ def normalize_event(value: Any) -> dict[str, Any]:
     level = _clean_str(raw.get("level"), "info")
     if level not in EVENT_LEVELS:
         level = "info"
+    event_type = _clean_str(raw.get("event_type")) or _clean_str(raw.get("event"), "") or None
     incident_id = _clean_str(raw.get("incident_id")) or None
     boot_id = _clean_str(raw.get("boot_id")) or None
     context = raw.get("context")
@@ -145,6 +146,7 @@ def normalize_event(value: Any) -> dict[str, Any]:
         component=_clean_str(raw.get("component"), "site_watchdog"),
         level=level,  # type: ignore[arg-type]
         message=_clean_str(raw.get("message"), "event"),
+        event_type=event_type,
         incident_id=incident_id,
         boot_id=boot_id,
         context=dict(context) if isinstance(context, Mapping) else None,
@@ -299,6 +301,7 @@ def build_event(
     component: str,
     level: EventLevel,
     message: str,
+    event_type: str | None = None,
     incident_id: str | None = None,
     boot_id: str | None = None,
     context: dict[str, Any] | None = None,
@@ -309,6 +312,7 @@ def build_event(
             "component": component,
             "level": level,
             "message": message,
+            "event_type": event_type,
             "incident_id": incident_id,
             "boot_id": boot_id,
             "context": context,

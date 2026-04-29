@@ -75,6 +75,7 @@ class EventRecord:
     component: str
     level: EventLevel
     message: str
+    event_type: str | None = None
     incident_id: str | None = None
     boot_id: str | None = None
     context: Dict[str, Any] | None = None

@@ -827,6 +827,185 @@ def metric_sample_history(minutes: int = 5, *, anchor_iso: str | None = None) ->
     }
 
 
+def metrics_history_range_config(range_value: str) -> tuple[str, int, int | None]:
+    raw = str(range_value or "1h").strip().lower()
+    mapping = {
+        "1h": ("1h", 3600, None),
+        "1d": ("1d", 24 * 3600, 300),
+        "7d": ("7d", 7 * 24 * 3600, 1800),
+    }
+    aliases = {
+        "60m": "1h",
+        "1hr": "1h",
+        "hour": "1h",
+        "day": "1d",
+        "24h": "1d",
+        "168h": "7d",
+        "week": "7d",
+    }
+    key = aliases.get(raw, raw)
+    return mapping.get(key, mapping["1h"])
+
+
+def _metric_history_sample_from_raw(item: Dict[str, Any]) -> Dict[str, Any]:
+    os_disk = item.get("os_disk") if isinstance(item.get("os_disk"), dict) else {}
+    recording_storage = item.get("recording_storage") if isinstance(item.get("recording_storage"), dict) else {}
+    timestamp = str(item.get("timestamp") or item.get("ts") or "").strip()
+    parsed = parse_iso(timestamp)
+    display_time = ""
+    if parsed is not None:
+        timestamp = parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+        display_time = parsed.astimezone().strftime("%H:%M:%S")
+    return {
+        "timestamp": timestamp,
+        "display_time": display_time,
+        "cpu_percent": item.get("cpu_percent"),
+        "memory_percent": item.get("memory_percent"),
+        "load_1": item.get("load_1"),
+        "load_5": item.get("load_5"),
+        "load_15": item.get("load_15"),
+        "temperature_c": item.get("temperature_c"),
+        "os_disk_free_gb": (os_disk or {}).get("free_gb") if isinstance(os_disk, dict) else item.get("os_disk_free_gb", item.get("disk_free_gb")),
+        "os_disk_used_percent": (os_disk or {}).get("used_percent") if isinstance(os_disk, dict) else item.get("os_disk_used_percent", item.get("disk_percent")),
+        "recording_disk_free_gb": (recording_storage or {}).get("free_gb") if isinstance(recording_storage, dict) else item.get("recording_disk_free_gb"),
+        "recording_disk_used_percent": (recording_storage or {}).get("used_percent") if isinstance(recording_storage, dict) else item.get("recording_disk_used_percent"),
+    }
+
+
+def _downsample_metric_history_samples(samples: List[Dict[str, Any]], bucket_seconds: int | None) -> List[Dict[str, Any]]:
+    if bucket_seconds is None or bucket_seconds <= 0:
+        return samples
+    metric_keys = (
+        "cpu_percent",
+        "memory_percent",
+        "load_1",
+        "load_5",
+        "load_15",
+        "temperature_c",
+        "os_disk_free_gb",
+        "os_disk_used_percent",
+        "recording_disk_free_gb",
+        "recording_disk_used_percent",
+    )
+    buckets: dict[int, dict[str, Any]] = {}
+    for sample in samples:
+        ts = parse_iso(str(sample.get("timestamp") or ""))
+        if ts is None:
+            continue
+        bucket_start_epoch = int(ts.timestamp()) // bucket_seconds * bucket_seconds
+        bucket = buckets.get(bucket_start_epoch)
+        if bucket is None:
+            bucket_start = datetime.fromtimestamp(bucket_start_epoch, tz=timezone.utc)
+            bucket = {
+                "timestamp": bucket_start.replace(microsecond=0).astimezone(timezone.utc).isoformat(),
+                "display_time": bucket_start.astimezone().strftime("%H:%M:%S"),
+                "_count": 0,
+                "_sum": {key: 0.0 for key in metric_keys},
+                "_seen": {key: 0 for key in metric_keys},
+            }
+            buckets[bucket_start_epoch] = bucket
+        bucket["_count"] += 1
+        for key in metric_keys:
+            value = sample.get(key)
+            try:
+                if value in (None, ""):
+                    continue
+                number = float(value)
+            except Exception:
+                continue
+            bucket["_sum"][key] = float(bucket["_sum"].get(key, 0.0)) + number
+            bucket["_seen"][key] = int(bucket["_seen"].get(key, 0)) + 1
+    downsampled: List[Dict[str, Any]] = []
+    for bucket_start_epoch in sorted(buckets):
+        bucket = buckets[bucket_start_epoch]
+        row: Dict[str, Any] = {
+            "timestamp": bucket["timestamp"],
+            "display_time": bucket["display_time"],
+        }
+        for key in metric_keys:
+            seen = int(bucket["_seen"].get(key, 0))
+            row[key] = round(float(bucket["_sum"].get(key, 0.0)) / seen, 2) if seen else None
+        downsampled.append(row)
+    return downsampled
+
+
+def metrics_history_payload(range_value: str = "1h") -> Dict[str, Any]:
+    range_key, range_seconds, bucket_seconds = metrics_history_range_config(range_value)
+    end_dt = datetime.utcnow().replace(tzinfo=timezone.utc)
+    start_dt = end_dt - timedelta(seconds=range_seconds)
+    raw_samples: List[Dict[str, Any]] = []
+    if METRICS_PATH.exists():
+        try:
+            lines = METRICS_PATH.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception:
+            lines = []
+        for line in lines:
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                item = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(item, dict):
+                continue
+            sample = _metric_history_sample_from_raw(item)
+            parsed = parse_iso(str(sample.get("timestamp") or ""))
+            if parsed is None or parsed < start_dt or parsed > end_dt:
+                continue
+            raw_samples.append(sample)
+    raw_samples.sort(key=lambda item: str(item.get("timestamp") or ""))
+    samples = _downsample_metric_history_samples(raw_samples, bucket_seconds)
+    markers: List[Dict[str, Any]] = []
+    for incident in all_incidents():
+        incident_ts = parse_iso(incident_timestamp_value(incident))
+        if incident_ts is None or incident_ts < start_dt or incident_ts > end_dt:
+            continue
+        incident_type = str(incident.get("type") or "").strip()
+        markers.append(
+            {
+                "timestamp": incident_ts.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+                "type": "incident",
+                "label": "Incident" if incident_type not in {"unexpected_reboot", "watchdog_reboot"} else incident_type.replace("_", " ").title(),
+                "severity": str(incident.get("severity") or "").strip().lower() or "warning",
+            }
+        )
+        if incident_type in {"unexpected_reboot", "watchdog_reboot"}:
+            markers.append(
+                {
+                    "timestamp": incident_ts.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+                    "type": "reboot",
+                    "label": "Reboot",
+                    "severity": "critical" if incident_type == "unexpected_reboot" else "info",
+                }
+            )
+    for event in all_events():
+        if str(event.get("event_type") or "").strip() != "planned_reboot":
+            continue
+        event_ts = parse_iso(event_timestamp_value(event))
+        if event_ts is None or event_ts < start_dt or event_ts > end_dt:
+            continue
+        markers.append(
+            {
+                "timestamp": event_ts.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+                "type": "planned_reboot",
+                "label": "Planned reboot",
+                "severity": "info",
+            }
+        )
+    markers.sort(key=lambda item: str(item.get("timestamp") or ""))
+    return {
+        "range": range_key,
+        "range_seconds": range_seconds,
+        "bucket_seconds": bucket_seconds or 0,
+        "samples": samples,
+        "markers": markers,
+        "sample_count": len(samples),
+        "window_start": start_dt.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+        "window_end": end_dt.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+    }
+
+
 def service_status_payload(service_name: str) -> Dict[str, Any]:
     installed = False
     active = False
@@ -2222,18 +2401,25 @@ def incident_confidence_breakdown(incident: Dict[str, Any], event_count: int | N
     evidence = incident.get("evidence") or []
     has_boot_change = False
     has_watchdog_restart = False
+    has_planned_marker = False
     for item in evidence:
         if not isinstance(item, dict):
             continue
         data = item.get("data") or {}
         if isinstance(data, dict) and data.get("previous_boot_id") and data.get("current_boot_id"):
             has_boot_change = True
+        if isinstance(data, dict) and (data.get("watchdog_restart_detected") or data.get("planned_reboot_reason")):
+            has_planned_marker = has_planned_marker or bool(data.get("planned_reboot_reason"))
         message = str(item.get("message") or item.get("source") or "").strip().lower()
         if "watchdog" in message or "boot" in message:
             has_watchdog_restart = True
-    if str(incident.get("type") or "").strip() == "unexpected_reboot":
+        if "planned reboot" in message:
+            has_planned_marker = True
+    if str(incident.get("type") or "").strip() in {"unexpected_reboot", "watchdog_reboot"}:
         has_boot_change = True if not has_boot_change else has_boot_change
         has_watchdog_restart = True if not has_watchdog_restart else has_watchdog_restart
+    if str(incident.get("type") or "").strip() == "watchdog_reboot":
+        has_planned_marker = True if not has_planned_marker else has_planned_marker
     pre_crash_missing = event_count in (None, 0)
     return [
         {"label": "Boot ID changed", "state": "ok" if has_boot_change else "warn", "icon": "✓"},
@@ -2244,6 +2430,43 @@ def incident_confidence_breakdown(incident: Dict[str, Any], event_count: int | N
             "icon": "⚠" if pre_crash_missing else "✓",
         },
     ]
+
+
+def incident_confidence_breakdown_v2(incident: Dict[str, Any], event_count: int | None = None) -> List[Dict[str, Any]]:
+    evidence = incident.get("evidence") or []
+    incident_type = str(incident.get("type") or "").strip()
+    has_boot_change = False
+    has_watchdog_restart = False
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        data = item.get("data") or {}
+        if isinstance(data, dict):
+            if data.get("previous_boot_id") and data.get("current_boot_id"):
+                has_boot_change = True
+            if data.get("watchdog_restart_detected") or data.get("planned_reboot_reason"):
+                has_watchdog_restart = True
+        message = str(item.get("message") or item.get("source") or "").strip().lower()
+        if "boot" in message:
+            has_boot_change = True
+        if "watchdog" in message or "planned reboot" in message:
+            has_watchdog_restart = True
+    if incident_type in {"unexpected_reboot", "watchdog_reboot"}:
+        has_boot_change = True
+        has_watchdog_restart = True
+    pre_crash_missing = event_count in (None, 0)
+    return [
+        {"label": "Boot ID changed", "state": "ok" if has_boot_change else "warn", "icon": "✓"},
+        {"label": "Watchdog restart detected", "state": "ok" if has_watchdog_restart else "warn", "icon": "✓"},
+        {
+            "label": "No pre-crash events captured" if pre_crash_missing else "Pre-crash events captured",
+            "state": "warn" if pre_crash_missing else "ok",
+            "icon": "⚠" if pre_crash_missing else "✓",
+        },
+    ]
+
+
+incident_confidence_breakdown = incident_confidence_breakdown_v2
 
 
 def latest_incident_of_type(incident_type: str) -> Optional[Dict[str, Any]]:
@@ -3535,7 +3758,11 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
     if not isinstance(state_metrics, dict):
         state_metrics = {}
     latest_incident = last_incident_snapshot_payload()
-    reboot_incident = latest_incident if latest_incident.get("available") and str(latest_incident.get("type") or "").strip() == "unexpected_reboot" else (latest_incident_of_type("unexpected_reboot") or {})
+    reboot_incident = (
+        latest_incident
+        if latest_incident.get("available") and str(latest_incident.get("type") or "").strip() in {"unexpected_reboot", "watchdog_reboot"}
+        else (latest_incident_of_type("unexpected_reboot") or latest_incident_of_type("watchdog_reboot") or {})
+    )
     active_incident = bool(latest_incident.get("available") and str(latest_incident.get("status") or "").strip() == "open")
     reboot_detected_at = parse_iso(str(reboot_incident.get("timestamp") or reboot_incident.get("detected_at") or "")) if reboot_incident else None
     last_reboot_age_seconds = None
@@ -3612,8 +3839,15 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "all_metrics_unavailable": bool(latest_metric.get("all_metrics_unavailable")) or not metrics_available,
     }
 
+    latest_incident_type = str(latest_incident.get("type") or "").strip()
     incident_banner = None
-    if latest_incident.get("available") and str(latest_incident.get("type") or "").strip() == "unexpected_reboot":
+    if latest_incident.get("available") and latest_incident_type == "watchdog_reboot":
+        incident_banner = {
+            "title": "EXPECTED REBOOT - INITIATED BY VA-CONNECT",
+            "detail": str(latest_incident.get("summary") or latest_incident.get("detail") or "Expected reboot detected."),
+            "level": "ok",
+        }
+    elif latest_incident.get("available") and latest_incident_type == "unexpected_reboot":
         incident_banner = {
             "title": "INCIDENT DETECTED - UNEXPECTED REBOOT",
             "detail": str(latest_incident.get("summary") or latest_incident.get("detail") or "Unexpected reboot detected."),
@@ -3641,12 +3875,14 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
     else:
         freshness_banner = None
 
-    if latest_incident.get("available") and str(latest_incident.get("type") or "").strip() == "unexpected_reboot":
+    if latest_incident.get("available") and latest_incident_type == "watchdog_reboot":
+        summary_line = "Status: INFO - Expected reboot — initiated by VA-Connect"
+    elif latest_incident.get("available") and latest_incident_type == "unexpected_reboot":
         summary_line = "Status: INCIDENT - Unexpected reboot detected"
     elif latest_incident.get("available") and active_incident:
-        summary_line = f"Status: INCIDENT - {str(latest_incident.get('type') or 'unknown').replace('_', ' ').title()}"
+        summary_line = f"Status: INCIDENT - {latest_incident_type.replace('_', ' ').title()}"
     elif latest_incident.get("available"):
-        summary_line = f"Status: {watchdog_status.upper()} - Last incident recorded: {str(latest_incident.get('type') or 'unknown').replace('_', ' ').title()}"
+        summary_line = f"Status: {watchdog_status.upper()} - Last incident recorded: {latest_incident_type.replace('_', ' ').title()}"
     else:
         summary_line = f"Status: {watchdog_status.upper()} - No incident recorded yet"
 
@@ -3672,7 +3908,7 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "update_status": update_status,
         "update_summary": update_summary,
         "update_button_visible": update_button_visible,
-        "status_badge": "DATA STALE" if freshness == "data-stale" else ("INCIDENT" if active_incident or (latest_incident.get("available") and str(latest_incident.get("type") or "").strip() == "unexpected_reboot") or incident_banner else ("WARNING" if latest_incident.get("available") else "OK")),
+        "status_badge": "DATA STALE" if freshness == "data-stale" else ("INCIDENT" if active_incident or (latest_incident.get("available") and latest_incident_type == "unexpected_reboot") or (incident_banner and str(incident_banner.get("level") or "") == "bad") else ("WARNING" if latest_incident.get("available") and latest_incident_type != "watchdog_reboot" else "OK")),
         "freshness_state": freshness,
         "freshness_thresholds": {
             "warning_seconds": freshness_warning_seconds,
@@ -3786,6 +4022,13 @@ def last_incident_snapshot_payload() -> Dict[str, Any]:
             "Heartbeat stopped",
             "Boot time changed",
             "Process restarted",
+        ]
+    elif incident_type == "watchdog_reboot":
+        summary = "Expected reboot — initiated by VA-Connect."
+        detected_because = detected_because or [
+            "Boot ID changed",
+            "Watchdog restart detected",
+            "Planned reboot marker found",
         ]
     elif incident_type == "app_crash":
         summary = "Application process failed and the watchdog recorded an incident."
@@ -4050,6 +4293,13 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         active = " active" if seconds == timeline_window_seconds else ""
         timeline_buttons.append(f'<a class="window-btn{active}" href="/latest?window={seconds}">{esc(label)}</a>')
     timeline_buttons_html = "".join(timeline_buttons)
+    history_buttons = []
+    for range_key, label in (("1h", "1 hour"), ("1d", "1 day"), ("7d", "7 days")):
+        active = " active" if range_key == "1h" else ""
+        history_buttons.append(
+            f'<button type="button" class="window-btn{active}" data-history-range="{esc(range_key)}" onclick="loadMetricsHistory(\'{esc(range_key)}\')">{esc(label)}</button>'
+        )
+    history_buttons_html = "".join(history_buttons)
 
     latest_incident_rows = [
         kv("Incident ID", str(latest_incident.get("incident_id") or "Unavailable") if latest_incident.get("available") else "Unavailable"),
@@ -4339,6 +4589,17 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     .timeline-level, .system-event-level {{ font-family: Consolas, monospace; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }}
     .timeline-msg, .system-event-msg {{ color: #e5edf4; }}
     .metrics-trend {{ display: grid; gap: 6px; }}
+    .metrics-history-summary {{ margin-top: 8px; color: #d8e5f0; }}
+    .history-grid {{ display: grid; gap: 10px; margin-top: 10px; }}
+    .history-chart-card {{ background: #101821; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }}
+    .history-chart-title {{ color: #b6c6d4; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px; }}
+    .history-canvas {{ width: 100%; height: 160px; display: block; }}
+    .history-marker-legend {{ display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }}
+    .history-marker-pill {{ display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; background: #101821; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }}
+    .history-marker-dot {{ width: 8px; height: 8px; border-radius: 999px; display: inline-block; }}
+    .history-marker-dot.incident {{ background: var(--bad); }}
+    .history-marker-dot.reboot {{ background: var(--warn); }}
+    .history-marker-dot.planned_reboot {{ background: #7aa7d9; }}
     .metric-row {{ display: grid; grid-template-columns: 86px repeat(5, minmax(72px, 1fr)); gap: 8px; align-items: baseline; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: #101821; }}
     .metric-row:nth-child(odd) {{ background: #111b25; }}
     .metric-row.metric-header {{ background: #0f1720; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }}
@@ -4476,12 +4737,30 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     </section>
 
     <section class="card">
-      <div class="card-title">System Metrics (recent)</div>
-      <div class="card-subtitle">{esc(recent_metric_window)} | {len(recent_metric_samples)} samples | {format_duration(recent_metric_covered_seconds)} covered</div>
-      <div class="metrics-trend">
-        {recent_metric_table_html}
+      <div class="title-row" style="display:flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <div>
+          <div class="card-title" style="margin: 0;">System Metrics History</div>
+          <div class="card-subtitle" id="historyMetricsStatus">Metrics history not available yet.</div>
+        </div>
+        <div class="window-bar">{history_buttons_html}</div>
       </div>
-      <div class="small-muted" style="margin-top: 8px;">Metrics are sampled each watchdog cycle and retained for the last 30 minutes in <code>/var/lib/va-connect-site-watchdog/metrics.jsonl</code>.</div>
+      <div class="metrics-history-summary" id="historyMetricsSummary">CPU, memory, temperature, load average, and storage trends will appear here.</div>
+      <div class="meta-row" id="historyMarkerLegend"></div>
+      <div class="history-grid">
+        <div class="history-chart-card">
+          <div class="history-chart-title">CPU / Memory</div>
+          <canvas id="historyCpuMemoryChart" class="history-canvas" width="1000" height="180"></canvas>
+        </div>
+        <div class="history-chart-card">
+          <div class="history-chart-title">Temperature</div>
+          <canvas id="historyTemperatureChart" class="history-canvas" width="1000" height="160"></canvas>
+        </div>
+        <div class="history-chart-card">
+          <div class="history-chart-title">Disk free</div>
+          <canvas id="historyDiskChart" class="history-canvas" width="1000" height="160"></canvas>
+        </div>
+      </div>
+      <div class="small-muted" style="margin-top: 8px;">Metrics history is stored in <code>/var/lib/va-connect-site-watchdog/metrics.jsonl</code> and is kept for 7 days.</div>
     </section>
     <details class="card">
       <summary>
@@ -4515,6 +4794,337 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         updateButton.disabled = false;
         updateButton.textContent = 'Update from GitHub';
         updateButton.className = 'btn primary';
+      }}
+    }}
+
+    const metricsHistoryState = {{ range: '1h', payload: null }};
+
+    function metricsHistoryLabel(range) {{
+      if (range === '1d') {{
+        return 'Last 1 day';
+      }}
+      if (range === '7d') {{
+        return 'Last 7 days';
+      }}
+      return 'Last 1 hour';
+    }}
+
+    function metricsHistoryTitle(range) {{
+      if (range === '1d') {{
+        return '1 day';
+      }}
+      if (range === '7d') {{
+        return '7 days';
+      }}
+      return '1 hour';
+    }}
+
+    function formatMetricValue(value, suffix) {{
+      if (value === null || value === undefined || value === '') {{
+        return 'Unavailable';
+      }}
+      const number = Number(value);
+      if (!Number.isFinite(number)) {{
+        return String(value);
+      }}
+      const text = Math.abs(number - Math.round(number)) < 0.05 ? String(Math.round(number)) : number.toFixed(1);
+      return text + (suffix || '');
+    }}
+
+    function formatHistoryDuration(seconds) {{
+      const total = Math.max(0, Math.floor(Number(seconds || 0)));
+      if (total < 60) {{
+        return total + 's';
+      }}
+      if (total < 3600) {{
+        return Math.round(total / 60) + 'm';
+      }}
+      if (total < 86400) {{
+        const hours = Math.floor(total / 3600);
+        const minutes = Math.floor((total % 3600) / 60);
+        return hours + 'h ' + minutes + 'm';
+      }}
+      const days = Math.floor(total / 86400);
+      const hours = Math.floor((total % 86400) / 3600);
+      return days + 'd ' + hours + 'h';
+    }}
+
+    function setHistoryButtonsActive(range) {{
+      document.querySelectorAll('[data-history-range]').forEach((button) => {{
+        button.classList.toggle('active', button.getAttribute('data-history-range') === range);
+      }});
+    }}
+
+    function resizeHistoryCanvas(canvas) {{
+      if (!canvas || !canvas.getContext) {{
+        return null;
+      }}
+      const rect = canvas.getBoundingClientRect();
+      const width = Math.max(320, Math.floor(rect.width || canvas.clientWidth || 320));
+      const height = Math.max(140, Math.floor(rect.height || 140));
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      canvas.width = Math.max(1, Math.floor(width * dpr));
+      canvas.height = Math.max(1, Math.floor(height * dpr));
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return {{ ctx, width, height }};
+    }}
+
+    function drawHistoryChart(canvasId, samples, series, markers, options) {{
+      const canvas = document.getElementById(canvasId);
+      if (!canvas || !canvas.getContext) {{
+        return;
+      }}
+      const sized = resizeHistoryCanvas(canvas);
+      if (!sized) {{
+        return;
+      }}
+      const ctx = sized.ctx;
+      const width = sized.width;
+      const height = sized.height;
+      const padLeft = 42;
+      const padRight = 10;
+      const padTop = 16;
+      const padBottom = 20;
+      const chartWidth = Math.max(1, width - padLeft - padRight);
+      const chartHeight = Math.max(1, height - padTop - padBottom);
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = '#0f1820';
+      ctx.fillRect(0, 0, width, height);
+      ctx.strokeStyle = '#29404f';
+      ctx.lineWidth = 1;
+
+      const numericPoints = (samples || []).map((point) => {{
+        const epoch = Date.parse((point || {{}}).timestamp || '');
+        return Number.isFinite(epoch) ? {{ epoch, point }} : null;
+      }}).filter(Boolean);
+
+      if (!numericPoints.length) {{
+        ctx.fillStyle = '#8ea5b9';
+        ctx.font = '14px Arial';
+        ctx.fillText('No metrics history available yet.', padLeft, Math.floor(height / 2));
+        return;
+      }}
+
+      const valueKeys = (series || []).map((item) => item.key);
+      let minValue = options && Number.isFinite(Number(options.min)) ? Number(options.min) : Number.POSITIVE_INFINITY;
+      let maxValue = options && Number.isFinite(Number(options.max)) ? Number(options.max) : Number.NEGATIVE_INFINITY;
+      if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) {{
+        minValue = Number.POSITIVE_INFINITY;
+        maxValue = Number.NEGATIVE_INFINITY;
+        numericPoints.forEach((item) => {{
+          valueKeys.forEach((key) => {{
+            const value = Number((item.point || {{}})[key]);
+            if (!Number.isFinite(value)) {{
+              return;
+            }}
+            minValue = Math.min(minValue, value);
+            maxValue = Math.max(maxValue, value);
+          }});
+        }});
+        if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) {{
+          minValue = 0;
+          maxValue = 1;
+        }}
+      }}
+      if (minValue === maxValue) {{
+        maxValue = minValue + 1;
+      }}
+      if (options && options.zeroBase) {{
+        minValue = Math.min(0, minValue);
+      }}
+
+      for (let i = 0; i <= 4; i += 1) {{
+        const y = padTop + (chartHeight / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(padLeft, y);
+        ctx.lineTo(padLeft + chartWidth, y);
+        ctx.stroke();
+      }}
+
+      ctx.fillStyle = '#8ea5b9';
+      ctx.font = '11px Arial';
+      ctx.fillText(formatMetricValue(maxValue, options && options.unit ? options.unit : ''), 4, padTop + 4);
+      ctx.fillText(formatMetricValue(minValue, options && options.unit ? options.unit : ''), 4, padTop + chartHeight);
+
+      const firstEpoch = numericPoints[0].epoch;
+      const lastEpoch = numericPoints[numericPoints.length - 1].epoch;
+      const spanEpoch = Math.max(1, lastEpoch - firstEpoch);
+      const xForEpoch = (epoch) => padLeft + (((epoch - firstEpoch) / spanEpoch) * chartWidth);
+      const yForValue = (value) => padTop + chartHeight - (((value - minValue) / (maxValue - minValue)) * chartHeight);
+
+      (series || []).forEach((item, index) => {{
+        ctx.strokeStyle = item.color || '#67a8db';
+        ctx.lineWidth = 2;
+        let started = false;
+        numericPoints.forEach((entry) => {{
+          const value = Number((entry.point || {{}})[item.key]);
+          if (!Number.isFinite(value)) {{
+            if (started) {{
+              ctx.stroke();
+              started = false;
+            }}
+            return;
+          }}
+          const x = xForEpoch(entry.epoch);
+          const y = yForValue(Math.max(minValue, Math.min(maxValue, value)));
+          if (!started) {{
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            started = true;
+          }} else {{
+            ctx.lineTo(x, y);
+          }}
+        }});
+        if (started) {{
+          ctx.stroke();
+        }}
+        ctx.fillStyle = item.color || '#67a8db';
+        ctx.fillRect(padLeft + index * 120, 6, 10, 10);
+        ctx.fillStyle = '#d8e6f1';
+        ctx.font = '10px Arial';
+        ctx.fillText(item.label || item.key, padLeft + index * 120 + 14, 15);
+      }});
+
+      (markers || []).forEach((marker, index) => {{
+        const markerEpoch = Date.parse((marker || {{}}).timestamp || '');
+        if (!Number.isFinite(markerEpoch)) {{
+          return;
+        }}
+        const x = xForEpoch(markerEpoch);
+        if (x < padLeft || x > padLeft + chartWidth) {{
+          return;
+        }}
+        const markerType = String((marker || {{}}).type || 'incident');
+        const color = markerType === 'reboot' ? '#ffb84d' : (markerType === 'planned_reboot' ? '#7aa7d9' : '#ff6b6b');
+        ctx.strokeStyle = color;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x, padTop);
+        ctx.lineTo(x, padTop + chartHeight);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(x, padTop + 8 + (index % 3) * 8, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = color;
+        ctx.font = '10px Arial';
+        ctx.fillText(String((marker || {{}}).label || markerType), x + 4, 12 + (index % 3) * 10);
+      }});
+
+      if (firstEpoch && lastEpoch) {{
+        ctx.fillStyle = '#8ea5b9';
+        ctx.font = '10px Arial';
+        const firstLabel = typeof formatLocalTimestamp === 'function' ? formatLocalTimestamp(new Date(firstEpoch).toISOString()) : new Date(firstEpoch).toLocaleTimeString();
+        const lastLabel = typeof formatLocalTimestamp === 'function' ? formatLocalTimestamp(new Date(lastEpoch).toISOString()) : new Date(lastEpoch).toLocaleTimeString();
+        ctx.fillText(firstLabel, padLeft, height - 6);
+        ctx.fillText(lastLabel, Math.max(padLeft, width - padRight - ctx.measureText(lastLabel).width), height - 6);
+      }}
+    }}
+
+    function renderHistoryLegend(markers) {{
+      const legend = document.getElementById('historyMarkerLegend');
+      if (!legend) {{
+        return;
+      }}
+      const counts = {{ incident: 0, reboot: 0, planned_reboot: 0 }};
+      (markers || []).forEach((marker) => {{
+        const key = String((marker || {{}}).type || 'incident');
+        if (counts[key] === undefined) {{
+          counts[key] = 0;
+        }}
+        counts[key] += 1;
+      }});
+      legend.innerHTML = '' +
+        '<span class="history-marker-pill"><span class="history-marker-dot incident"></span>Incident (' + counts.incident + ')</span>' +
+        '<span class="history-marker-pill"><span class="history-marker-dot reboot"></span>Reboot (' + counts.reboot + ')</span>' +
+        '<span class="history-marker-pill"><span class="history-marker-dot planned_reboot"></span>Planned reboot (' + counts.planned_reboot + ')</span>';
+    }}
+
+    function renderHistorySummary(payload) {{
+      const status = document.getElementById('historyMetricsStatus');
+      const summary = document.getElementById('historyMetricsSummary');
+      const samples = payload && payload.samples ? payload.samples : [];
+      const markers = payload && payload.markers ? payload.markers : [];
+      renderHistoryLegend(markers);
+      if (!samples.length) {{
+        if (status) {{
+          status.textContent = 'Metrics history not available yet.';
+        }}
+        if (summary) {{
+          summary.textContent = 'No metrics history available yet.';
+        }}
+        drawHistoryChart('historyCpuMemoryChart', [], [
+          {{ key: 'cpu_percent', label: 'CPU', color: '#67a8db' }},
+          {{ key: 'memory_percent', label: 'Memory', color: '#e07b7b' }}
+        ], [], {{ min: 0, max: 100, zeroBase: true, unit: '%' }});
+        drawHistoryChart('historyTemperatureChart', [], [
+          {{ key: 'temperature_c', label: 'Temperature', color: '#ff9f6e' }}
+        ], [], {{ min: 0, max: 120, zeroBase: true, unit: '°C' }});
+        drawHistoryChart('historyDiskChart', [], [
+          {{ key: 'os_disk_free_gb', label: 'OS free', color: '#7ab08a' }},
+          {{ key: 'recording_disk_free_gb', label: 'Recording free', color: '#d4a34a' }}
+        ], [], {{ zeroBase: true, unit: ' GB' }});
+        return;
+      }}
+      const firstEpoch = Date.parse((samples[0] || {{}}).timestamp || '');
+      const lastEpoch = Date.parse((samples[samples.length - 1] || {{}}).timestamp || '');
+      const covered = Number.isFinite(firstEpoch) && Number.isFinite(lastEpoch) ? Math.max(0, Math.floor((lastEpoch - firstEpoch) / 1000)) : 0;
+      if (status) {{
+        status.textContent = metricsHistoryLabel(metricsHistoryState.range) + ' | ' + samples.length + ' samples | ' + formatHistoryDuration(covered) + ' covered';
+      }}
+      const latest = samples[samples.length - 1] || {{}};
+      const parts = [
+        'CPU ' + formatMetricValue(latest.cpu_percent, '%'),
+        'Memory ' + formatMetricValue(latest.memory_percent, '%'),
+        'Load ' + formatMetricValue(latest.load_1) + ' / ' + formatMetricValue(latest.load_5) + ' / ' + formatMetricValue(latest.load_15),
+        'Temp ' + formatMetricValue(latest.temperature_c, '°C'),
+        'OS free ' + formatMetricValue(latest.os_disk_free_gb, ' GB')
+      ];
+      if (latest.recording_disk_free_gb !== undefined && latest.recording_disk_free_gb !== null) {{
+        parts.push('Recording free ' + formatMetricValue(latest.recording_disk_free_gb, ' GB'));
+      }}
+      if (summary) {{
+        summary.textContent = parts.join(' | ');
+      }}
+      drawHistoryChart('historyCpuMemoryChart', samples, [
+        {{ key: 'cpu_percent', label: 'CPU', color: '#67a8db' }},
+        {{ key: 'memory_percent', label: 'Memory', color: '#e07b7b' }}
+      ], markers, {{ min: 0, max: 100, zeroBase: true, unit: '%' }});
+      drawHistoryChart('historyTemperatureChart', samples, [
+        {{ key: 'temperature_c', label: 'Temperature', color: '#ff9f6e' }}
+      ], markers, {{ min: 0, max: 120, zeroBase: true, unit: '°C' }});
+      drawHistoryChart('historyDiskChart', samples, [
+        {{ key: 'os_disk_free_gb', label: 'OS free', color: '#7ab08a' }},
+        {{ key: 'recording_disk_free_gb', label: 'Recording free', color: '#d4a34a' }}
+      ], markers, {{ zeroBase: true, unit: ' GB' }});
+    }}
+
+    async function loadMetricsHistory(range) {{
+      const selectedRange = range || metricsHistoryState.range || '1h';
+      metricsHistoryState.range = selectedRange;
+      setHistoryButtonsActive(selectedRange);
+      const status = document.getElementById('historyMetricsStatus');
+      if (status) {{
+        status.textContent = metricsHistoryLabel(selectedRange) + ' loading...';
+      }}
+      try {{
+        const response = await fetch('/api/metrics/history?range=' + encodeURIComponent(selectedRange) + '&_=' + Date.now(), {{ cache: 'no-store' }});
+        const payload = await response.json();
+        metricsHistoryState.payload = payload;
+        renderHistorySummary(payload);
+      }} catch (error) {{
+        const message = error && error.message ? error.message : String(error || 'metrics history unavailable');
+        metricsHistoryState.payload = null;
+        const statusLine = document.getElementById('historyMetricsStatus');
+        const summaryLine = document.getElementById('historyMetricsSummary');
+        if (statusLine) {{
+          statusLine.textContent = 'Metrics history unavailable.';
+        }}
+        if (summaryLine) {{
+          summaryLine.textContent = message;
+        }}
       }}
     }}
 
@@ -4636,6 +5246,12 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       line.textContent = {json.dumps(update_summary or update_message)};
       footer.appendChild(line);
     }}
+    window.addEventListener('resize', () => {{
+      if (metricsHistoryState.payload) {{
+        renderHistorySummary(metricsHistoryState.payload);
+      }}
+    }});
+    loadMetricsHistory('1h');
     setUpdateButtonVisible({str(update_button_visible).lower()});
   </script>
 </body>
@@ -8974,6 +9590,10 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/status":
             self._send_json(status_payload())
+            return
+        if parsed.path == "/api/metrics/history":
+            history_range = parse_qs(parsed.query).get("range", ["1h"])[0]
+            self._send_json(metrics_history_payload(history_range))
             return
         if parsed.path == "/run-hik-probe":
             hik_probe_payload(load_config())

@@ -19,6 +19,7 @@ from ..shared.paths import log_file_path
 from ..shared.storage import (
     append_event,
     append_metric,
+    latest_planned_reboot_marker,
     load_build_info,
     get_incident,
     latest_open_incident,
@@ -260,6 +261,45 @@ def create_reboot_incident(config: V2Config, boot_id: str, previous_boot_id: str
     return normalize_incident(incident)
 
 
+def create_expected_reboot_incident(
+    config: V2Config,
+    boot_id: str,
+    previous_boot_id: str,
+    planned_marker: dict[str, Any],
+) -> dict[str, Any]:
+    marker_reason = str((planned_marker.get("context") or {}).get("reason") or "user_requested_or_software_requested_reboot").strip()
+    incident = {
+        "incident_id": build_incident_id(config.device_id),
+        "timestamp": iso_utc(),
+        "boot_id": boot_id,
+        "device_id": config.device_id,
+        "type": "watchdog_reboot",
+        "status": "resolved",
+        "severity": "info",
+        "cause": "Expected reboot — initiated by VA-Connect",
+        "evidence": [
+            {
+                "source": "boot",
+                "timestamp": iso_utc(),
+                "message": "boot id changed",
+                "data": {"previous_boot_id": previous_boot_id, "current_boot_id": boot_id},
+            },
+            {
+                "source": "planned_reboot",
+                "timestamp": str(planned_marker.get("timestamp") or iso_utc()),
+                "message": "planned reboot marker found",
+                "data": {
+                    "reason": marker_reason,
+                    "source": str((planned_marker.get("context") or {}).get("source") or "va-connect"),
+                },
+            },
+        ],
+        "actions_taken": ["Expected reboot initiated by VA-Connect"],
+        "resolved_at": iso_utc(),
+    }
+    return normalize_incident(incident)
+
+
 def resolve_incident_record(incident: dict[str, Any], boot_id: str) -> dict[str, Any]:
     actions = list(incident.get("actions_taken", []))
     actions.append("Recovered and marked resolved by site watchdog")
@@ -327,27 +367,50 @@ class SiteWatchdog:
 
         self.logger.info(format_log(f"status={status['overall_status']}", boot_id))
 
+        planned_marker = latest_planned_reboot_marker(self.config, within_seconds=120, reference_at=observed_at)
+
         if reboot_detected and status["overall_status"] == "healthy" and open_incident is None:
-            incident = create_reboot_incident(self.config, boot_id, previous_boot_id)
-            self.logger.warning(format_log("incident created type=unexpected_reboot", boot_id, incident["incident_id"]))
-            append_event(
-                self.config,
-                build_event(
-                    component="site_watchdog",
-                    level="warning",
-                    message="unexpected reboot detected",
-                    incident_id=incident["incident_id"],
-                    boot_id=boot_id,
-                    context={
-                        "overall_status": status["overall_status"],
-                        "previous_boot_id": previous_boot_id,
-                        "current_boot_id": boot_id,
-                    },
-                ),
-            )
+            if planned_marker is not None:
+                incident = create_expected_reboot_incident(self.config, boot_id, previous_boot_id, planned_marker)
+                self.logger.info(format_log("incident created type=watchdog_reboot", boot_id, incident["incident_id"]))
+                append_event(
+                    self.config,
+                    build_event(
+                        component="site_watchdog",
+                        level="info",
+                        event_type="planned_reboot",
+                        message="expected reboot observed",
+                        incident_id=incident["incident_id"],
+                        boot_id=boot_id,
+                        context={
+                            "overall_status": status["overall_status"],
+                            "previous_boot_id": previous_boot_id,
+                            "current_boot_id": boot_id,
+                            "planned_reboot_reason": str((planned_marker.get("context") or {}).get("reason") or "user_requested_or_software_requested_reboot"),
+                        },
+                    ),
+                )
+            else:
+                incident = create_reboot_incident(self.config, boot_id, previous_boot_id)
+                self.logger.warning(format_log("incident created type=unexpected_reboot", boot_id, incident["incident_id"]))
+                append_event(
+                    self.config,
+                    build_event(
+                        component="site_watchdog",
+                        level="warning",
+                        message="unexpected reboot detected",
+                        incident_id=incident["incident_id"],
+                        boot_id=boot_id,
+                        context={
+                            "overall_status": status["overall_status"],
+                            "previous_boot_id": previous_boot_id,
+                            "current_boot_id": boot_id,
+                        },
+                    ),
+                )
             save_incident(self.config, incident)
-            state["open_incident_id"] = incident["incident_id"]
-            state["last_error"] = incident["cause"]
+            state["open_incident_id"] = None if incident.get("status") == "resolved" else incident["incident_id"]
+            state["last_error"] = None if incident.get("status") == "resolved" else incident["cause"]
         elif status["overall_status"] == "healthy":
             if open_incident:
                 self.logger.info(
