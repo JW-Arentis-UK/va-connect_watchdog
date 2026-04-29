@@ -751,6 +751,82 @@ def recent_metric_events(hours: int = 24) -> List[Dict[str, Any]]:
     return markers[-200:]
 
 
+def metric_sample_history(minutes: int = 5, *, anchor_iso: str | None = None) -> Dict[str, Any]:
+    minutes = max(1, int(minutes or 5))
+    anchor_dt = parse_iso(anchor_iso) if anchor_iso else None
+    if anchor_dt is None:
+        anchor_dt = datetime.utcnow().replace(tzinfo=timezone.utc)
+    window_start = anchor_dt - timedelta(minutes=minutes)
+    samples: List[Dict[str, Any]] = []
+    if METRICS_PATH.exists():
+        try:
+            lines = METRICS_PATH.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception:
+            lines = []
+        for line in lines:
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                item = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(item, dict):
+                continue
+            ts = parse_iso(str(item.get("timestamp") or item.get("ts") or ""))
+            if ts is None:
+                continue
+            if ts > anchor_dt or ts < window_start:
+                continue
+            samples.append(
+                {
+                    "timestamp": ts.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+                    "display_time": ts.astimezone().strftime("%H:%M:%S"),
+                    "cpu_percent": item.get("cpu_percent"),
+                    "memory_percent": item.get("memory_percent"),
+                    "load_1": item.get("load_1"),
+                    "load_5": item.get("load_5"),
+                    "load_15": item.get("load_15"),
+                    "temperature_c": item.get("temperature_c"),
+                    "disk_free_gb": (
+                        (item.get("os_disk") or {}).get("free_gb")
+                        if isinstance(item.get("os_disk"), dict)
+                        else item.get("disk_free_gb")
+                    ),
+                    "disk_percent": (
+                        (item.get("os_disk") or {}).get("used_percent")
+                        if isinstance(item.get("os_disk"), dict)
+                        else item.get("disk_percent")
+                    ),
+                    "cpu_status": item.get("cpu_status"),
+                    "memory_status": item.get("memory_status"),
+                    "load_status": item.get("load_status"),
+                    "disk_status": (
+                        (item.get("os_disk") or {}).get("status")
+                        if isinstance(item.get("os_disk"), dict)
+                        else item.get("disk_status")
+                    ),
+                }
+            )
+    samples.sort(key=lambda item: str(item.get("timestamp") or ""))
+    covered_seconds = 0
+    if len(samples) > 1:
+        first_ts = parse_iso(str(samples[0].get("timestamp") or ""))
+        last_ts = parse_iso(str(samples[-1].get("timestamp") or ""))
+        if first_ts and last_ts:
+            covered_seconds = max(0, int((last_ts - first_ts).total_seconds()))
+    return {
+        "window_minutes": minutes,
+        "window_seconds": minutes * 60,
+        "window_label": f"Last {minutes} minute" + ("s" if minutes != 1 else ""),
+        "window_start": window_start.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+        "window_end": anchor_dt.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+        "sample_count": len(samples),
+        "window_covered_seconds": covered_seconds,
+        "samples": samples,
+    }
+
+
 def service_status_payload(service_name: str) -> Dict[str, Any]:
     installed = False
     active = False
@@ -3490,6 +3566,11 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         latest_metric = {}
 
     events_before_reboot = pre_crash_timeline_payload(window_seconds=window_seconds)
+    metrics_recent = metric_sample_history(minutes=5)
+    incident_metrics = metric_sample_history(
+        minutes=1,
+        anchor_iso=str(latest_incident.get("timestamp") or latest_incident.get("detected_at") or "") if latest_incident.get("available") else None,
+    )
     if latest_incident.get("available"):
         latest_incident["confidence_breakdown"] = incident_confidence_breakdown(
             latest_incident,
@@ -3623,6 +3704,8 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "reboot_incident": reboot_incident,
         "last_reboot_age_seconds": last_reboot_age_seconds,
         "events_before_reboot": events_before_reboot,
+        "metrics_recent": metrics_recent,
+        "incident_metrics": incident_metrics,
         "system_events": [
             {
                 "timestamp": str(item.get("ts") or item.get("timestamp") or ""),
@@ -3903,6 +3986,8 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     latest_incident = snapshot.get("latest_incident") or {}
     current_system_state = snapshot.get("current_system_state") or {}
     events_before_reboot = snapshot.get("events_before_reboot") or {}
+    metrics_recent = snapshot.get("metrics_recent") or {}
+    incident_metrics = snapshot.get("incident_metrics") or {}
     system_events = snapshot.get("system_events") or []
     state_age_label = str(snapshot.get("state_file_age_label") or "Unavailable")
     last_data_refresh_at = str(snapshot.get("last_data_refresh_at") or "")
@@ -3929,6 +4014,14 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     timeline_events_available_count = int(events_before_reboot.get("events_available_count") or len(timeline_events) or 0)
     timeline_window_covered_seconds = int(events_before_reboot.get("window_covered_seconds") or 0)
     reboot_event_present = bool(events_before_reboot.get("reboot_event_present"))
+    recent_metric_samples = metrics_recent.get("samples") or []
+    recent_metric_window = str(metrics_recent.get("window_label") or "Last 5 minutes").strip()
+    recent_metric_covered_seconds = int(metrics_recent.get("window_covered_seconds") or 0)
+    incident_metric_samples = incident_metrics.get("samples") or []
+    incident_metric_window = str(incident_metrics.get("window_label") or "Last 60 seconds before the incident").strip()
+    if latest_incident.get("available"):
+        incident_metric_window = "Last 60 seconds before the incident"
+    incident_metric_covered_seconds = int(incident_metrics.get("window_covered_seconds") or 0)
     top_banner_html = ""
     if freshness_banner:
         top_banner_html += f"""
@@ -3988,6 +4081,68 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         )
     else:
         timeline_rows_html = empty_line(str(events_before_reboot.get("empty_message") or f"No diagnostic events were recorded in the {timeline_window_seconds}s before reboot"))
+
+    def metric_row_state(*states: Any) -> str:
+        normalized = [str(item or "").strip().lower() for item in states if str(item or "").strip()]
+        if any(item in {"critical", "bad"} for item in normalized):
+            return "bad"
+        if any(item in {"warning", "warn"} for item in normalized):
+            return "warn"
+        if any(item in {"unavailable", "unknown"} for item in normalized):
+            return "unavailable"
+        return "ok"
+
+    def metric_sample_line(sample: Dict[str, Any]) -> str:
+        ts = esc(sample.get("display_time") or format_local_clock(str(sample.get("timestamp") or "")) or "Unavailable")
+        cpu_state = metric_class(sample.get("cpu_status"))
+        memory_state = metric_class(sample.get("memory_status"))
+        load_state = metric_class(sample.get("load_status"))
+        disk_state = metric_class(sample.get("disk_status"))
+        row_state = metric_row_state(cpu_state, memory_state, load_state, disk_state)
+        cpu_value = metric_text(sample.get("cpu_percent"), "%")
+        memory_value = metric_text(sample.get("memory_percent"), "%")
+        load_value = metric_text(sample.get("load_1"), "")
+        temp_value = metric_text(sample.get("temperature_c"), "\u00b0C") if sample.get("temperature_c") is not None else "Unavailable"
+        disk_free = format_gb(sample.get("disk_free_gb"))
+        return f"""
+        <div class="metric-row {row_state}">
+          <span class="metric-ts">{ts}</span>
+          <span class="metric-cell {esc(cpu_state)}">{esc(cpu_value)}</span>
+          <span class="metric-cell {esc(memory_state)}">{esc(memory_value)}</span>
+          <span class="metric-cell {esc(load_state)}">{esc(load_value)}</span>
+          <span class="metric-cell {esc(metric_class('ok') if sample.get('temperature_c') is not None else 'unavailable')}">{esc(temp_value)}</span>
+          <span class="metric-cell {esc(disk_state)}">{esc(f'{disk_free} GB free' if disk_free != 'Unavailable' else 'Unavailable')}</span>
+        </div>
+        """
+
+    recent_metric_rows_html = "".join(metric_sample_line(item) for item in recent_metric_samples[:12]) or empty_line("No recent metrics collected yet.")
+    incident_metric_rows = "".join(metric_sample_line(item) for item in incident_metric_samples[:4])
+    incident_metric_marker = ""
+    if latest_incident.get("available"):
+        incident_time_label = format_local_timestamp(str(latest_incident.get("timestamp") or latest_incident.get("detected_at") or ""), default="Unavailable")
+        incident_metric_marker = f"""
+        <div class="metric-row bad metric-incident">
+          <span class="metric-ts">{esc(incident_time_label)}</span>
+          <span class="metric-cell bad">INCIDENT</span>
+          <span class="metric-cell bad">{esc(incident_type.replace('_', ' ').upper() or 'UNEXPECTED REBOOT')}</span>
+          <span class="metric-cell bad">CRITICAL</span>
+          <span class="metric-cell bad">-</span>
+          <span class="metric-cell bad">-</span>
+        </div>
+        """
+    incident_metric_rows_html = incident_metric_rows + incident_metric_marker if incident_metric_rows or incident_metric_marker else empty_line("No metrics were recorded in the 60s before this incident.")
+    metric_header_html = """
+        <div class="metric-row metric-header">
+          <span>Time</span>
+          <span>CPU</span>
+          <span>Memory</span>
+          <span>Load</span>
+          <span>Temp</span>
+          <span>OS Disk free</span>
+        </div>
+    """
+    recent_metric_table_html = metric_header_html + recent_metric_rows_html if recent_metric_samples else recent_metric_rows_html
+    incident_metric_table_html = metric_header_html + incident_metric_rows_html if incident_metric_samples or latest_incident.get("available") else incident_metric_rows_html
 
     memory_total_bytes = current_system_state.get("memory_total_bytes")
     memory_available_bytes = current_system_state.get("memory_available_bytes")
@@ -4183,6 +4338,21 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     .timeline-ts, .system-event-ts {{ color: #bac8d4; font-family: Consolas, monospace; font-size: 12px; }}
     .timeline-level, .system-event-level {{ font-family: Consolas, monospace; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }}
     .timeline-msg, .system-event-msg {{ color: #e5edf4; }}
+    .metrics-trend {{ display: grid; gap: 6px; }}
+    .metric-row {{ display: grid; grid-template-columns: 86px repeat(5, minmax(72px, 1fr)); gap: 8px; align-items: baseline; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: #101821; }}
+    .metric-row:nth-child(odd) {{ background: #111b25; }}
+    .metric-row.metric-header {{ background: #0f1720; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }}
+    .metric-row.ok {{ border-color: rgba(94, 224, 109, .22); }}
+    .metric-row.warn {{ border-color: rgba(255, 184, 77, .28); }}
+    .metric-row.bad {{ border-color: rgba(255, 107, 107, .34); }}
+    .metric-row.unavailable {{ border-color: rgba(147, 164, 179, .24); }}
+    .metric-row.metric-incident {{ background: rgba(255, 107, 107, .08); }}
+    .metric-ts {{ color: #bac8d4; font-family: Consolas, monospace; font-size: 12px; }}
+    .metric-cell {{ font-family: Consolas, monospace; font-size: 12px; }}
+    .metric-cell.ok {{ color: var(--ok); }}
+    .metric-cell.warn {{ color: var(--warn); }}
+    .metric-cell.bad {{ color: var(--bad); }}
+    .metric-cell.unavailable {{ color: var(--muted); }}
     .event-level.ok, .timeline-level.ok, .system-event-level.ok {{ color: var(--ok); }}
     .event-level.warn, .timeline-level.warn, .system-event-level.warn {{ color: var(--warn); }}
     .event-level.bad, .timeline-level.bad, .system-event-level.bad {{ color: var(--bad); }}
@@ -4264,6 +4434,11 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
           <ul>{''.join(f'<li>{esc(item)}</li>' for item in potential_factors if str(item).strip()) or '<li>No strong contributing factors identified.</li>'}</ul>
         </div>
       </div>
+      <div class="card-title" style="margin-top: 10px; margin-bottom: 6px;">Metrics before incident</div>
+      <div class="card-subtitle">{esc(incident_metric_window)} | {len(incident_metric_samples)} samples | {format_duration(incident_metric_covered_seconds)} covered</div>
+      <div class="metrics-trend">
+        {incident_metric_table_html}
+      </div>
       <div class="small-muted" style="margin-top: 8px;">Detected from the latest incident record and the 60-second event window before reboot.</div>
     </section>
 
@@ -4298,6 +4473,15 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         {current_system_rows_html}
       </div>
       <div class="small-muted" style="margin-top: 8px;">Last watchdog write time uses the active state file and the latest recorded check.</div>
+    </section>
+
+    <section class="card">
+      <div class="card-title">System Metrics (recent)</div>
+      <div class="card-subtitle">{esc(recent_metric_window)} | {len(recent_metric_samples)} samples | {format_duration(recent_metric_covered_seconds)} covered</div>
+      <div class="metrics-trend">
+        {recent_metric_table_html}
+      </div>
+      <div class="small-muted" style="margin-top: 8px;">Metrics are sampled each watchdog cycle and retained for the last 30 minutes in <code>/var/lib/va-connect-site-watchdog/metrics.jsonl</code>.</div>
     </section>
     <details class="card">
       <summary>

@@ -14,6 +14,7 @@ from .normalization import (
     normalize_state,
 )
 from .paths import build_info_path, device_status_path, events_path, incidents_path, log_file_path, logs_dir, metrics_path, state_path
+from .time import parse_iso, utc_now
 
 
 def ensure_layout(config: V2Config) -> None:
@@ -56,6 +57,36 @@ def append_jsonl(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def trim_jsonl_by_age(path: Path, *, max_age_seconds: int) -> None:
+    if not path.exists():
+        return
+    cutoff = utc_now().timestamp() - max(0, int(max_age_seconds))
+    kept: list[str] = []
+    changed = False
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return
+    for line in lines:
+        raw = line.strip()
+        if not raw:
+            changed = True
+            continue
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            kept.append(raw)
+            continue
+        if isinstance(payload, dict):
+            ts = parse_iso(str(payload.get("timestamp") or payload.get("ts") or ""))
+            if ts is not None and ts.timestamp() < cutoff:
+                changed = True
+                continue
+        kept.append(json.dumps(payload, sort_keys=True))
+    if changed:
+        path.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
 
 
 def load_state(config: V2Config) -> dict[str, Any]:
@@ -150,6 +181,7 @@ def load_metrics(config: V2Config) -> list[dict[str, Any]]:
 def append_metric(config: V2Config, metric: Any) -> dict[str, Any]:
     normalized = normalize_metric_sample(metric)
     append_jsonl(metrics_path(config), normalized)
+    trim_jsonl_by_age(metrics_path(config), max_age_seconds=30 * 60)
     return normalized
 
 
