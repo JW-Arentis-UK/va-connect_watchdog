@@ -2006,6 +2006,27 @@ def format_bytes(value: Any, *, default: str = "Unavailable") -> str:
     return f"{number:.1f}{units[index]}"
 
 
+def _coerce_float(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def format_gb(value: Any, *, default: str = "Unavailable") -> str:
+    try:
+        if value in (None, ""):
+            return default
+        number = float(value)
+    except Exception:
+        return default
+    if number >= 10 or number.is_integer():
+        return f"{number:.0f}"
+    return f"{number:.1f}"
+
+
 def format_local_timestamp(value: str, *, default: str = "Unavailable") -> str:
     parsed = parse_iso(str(value or "").strip())
     if parsed is None:
@@ -2028,18 +2049,18 @@ def yes_no_unknown(value: Any) -> str:
     return "UNKNOWN"
 
 
-def freshness_state(age_seconds: Optional[int]) -> str:
+def freshness_state(age_seconds: Optional[int], warning_seconds: int = 30, stale_seconds: int = 90) -> str:
     if age_seconds is None:
         return "data-stale"
-    if age_seconds <= 10:
+    if age_seconds < warning_seconds:
         return "ok"
-    if age_seconds <= 30:
+    if age_seconds <= stale_seconds:
         return "warning"
     return "data-stale"
 
 
-def freshness_label(age_seconds: Optional[int]) -> str:
-    state = freshness_state(age_seconds)
+def freshness_label(age_seconds: Optional[int], warning_seconds: int = 30, stale_seconds: int = 90) -> str:
+    state = freshness_state(age_seconds, warning_seconds=warning_seconds, stale_seconds=stale_seconds)
     if state == "ok":
         return "OK"
     if state == "warning":
@@ -2139,9 +2160,13 @@ def incident_confidence_breakdown(incident: Dict[str, Any], event_count: int | N
         has_watchdog_restart = True if not has_watchdog_restart else has_watchdog_restart
     pre_crash_missing = event_count in (None, 0)
     return [
-        {"label": "Boot ID changed", "ok": has_boot_change},
-        {"label": "Watchdog restart detected", "ok": has_watchdog_restart},
-        {"label": "Pre-crash events missing", "ok": pre_crash_missing},
+        {"label": "Boot ID changed", "state": "ok" if has_boot_change else "warn", "icon": "✓"},
+        {"label": "Watchdog restart detected", "state": "ok" if has_watchdog_restart else "warn", "icon": "✓"},
+        {
+            "label": "No pre-crash events captured" if pre_crash_missing else "Pre-crash events captured",
+            "state": "warn" if pre_crash_missing else "ok",
+            "icon": "⚠" if pre_crash_missing else "✓",
+        },
     ]
 
 
@@ -3355,6 +3380,11 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         config = load_config()
     except Exception:
         config = {}
+    freshness_thresholds = {}
+    if hasattr(config, "freshness_thresholds"):
+        freshness_thresholds = getattr(config, "freshness_thresholds") or {}
+    if not isinstance(freshness_thresholds, dict):
+        freshness_thresholds = {}
     try:
         device_status = read_json(DEVICE_STATUS_PATH, {})
     except Exception:
@@ -3413,7 +3443,11 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
 
     state_age_seconds = path_age_seconds(STATE_PATH)
     state_mtime = path_mtime_iso(STATE_PATH)
-    freshness = freshness_state(state_age_seconds)
+    freshness_warning_seconds = int(_coerce_float(freshness_thresholds.get("warning_seconds")) or 30)
+    freshness_stale_seconds = int(_coerce_float(freshness_thresholds.get("stale_seconds")) or 90)
+    if freshness_stale_seconds < freshness_warning_seconds:
+        freshness_stale_seconds = freshness_warning_seconds
+    freshness = freshness_state(state_age_seconds, warning_seconds=freshness_warning_seconds, stale_seconds=freshness_stale_seconds)
     boot_time_iso = read_boot_time_iso()
     uptime_seconds = read_uptime_seconds()
     uptime_label = format_duration(uptime_seconds)
@@ -3427,6 +3461,13 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
     latest_incident = last_incident_snapshot_payload()
     reboot_incident = latest_incident if latest_incident.get("available") and str(latest_incident.get("type") or "").strip() == "unexpected_reboot" else (latest_incident_of_type("unexpected_reboot") or {})
     active_incident = bool(latest_incident.get("available") and str(latest_incident.get("status") or "").strip() == "open")
+    reboot_detected_at = parse_iso(str(reboot_incident.get("timestamp") or reboot_incident.get("detected_at") or "")) if reboot_incident else None
+    last_reboot_age_seconds = None
+    if reboot_detected_at is not None:
+        try:
+            last_reboot_age_seconds = max(0, int((datetime.utcnow().astimezone() - reboot_detected_at).total_seconds()))
+        except Exception:
+            last_reboot_age_seconds = None
 
     watchdog_status = str(device_status.get("overall_status") or state.get("last_status") or "unknown").strip() or "unknown"
     gateway_process_running = state.get("gateway_process_running")
@@ -3552,6 +3593,10 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "update_button_visible": update_button_visible,
         "status_badge": "DATA STALE" if freshness == "data-stale" else ("INCIDENT" if active_incident or (latest_incident.get("available") and str(latest_incident.get("type") or "").strip() == "unexpected_reboot") or incident_banner else ("WARNING" if latest_incident.get("available") else "OK")),
         "freshness_state": freshness,
+        "freshness_thresholds": {
+            "warning_seconds": freshness_warning_seconds,
+            "stale_seconds": freshness_stale_seconds,
+        },
         "state_file_age_seconds": state_age_seconds,
         "state_file_age_label": format_duration(state_age_seconds),
         "last_data_refresh_at": state_mtime,
@@ -3576,6 +3621,7 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "current_incident": latest_incident if active_incident else {},
         "latest_incident": latest_incident,
         "reboot_incident": reboot_incident,
+        "last_reboot_age_seconds": last_reboot_age_seconds,
         "events_before_reboot": events_before_reboot,
         "system_events": [
             {
@@ -3700,7 +3746,8 @@ def pre_crash_timeline_payload(window_seconds: int = 60) -> Dict[str, Any]:
             "incident_id": "",
             "title": "Events Before Reboot",
             "detail": "No incident recorded yet.",
-            "window": "No incident recorded yet.",
+            "window": f"Last {int(window_seconds)}s before the incident",
+            "empty_message": "No diagnostic events were recorded before reboot. Only the reboot event itself is available.",
             "window_seconds": int(window_seconds),
             "window_covered_seconds": 0,
             "events_available_count": 0,
@@ -3749,11 +3796,12 @@ def pre_crash_timeline_payload(window_seconds: int = 60) -> Dict[str, Any]:
         window_covered_seconds = max(0, int((pre_crash_events[-1][0] - pre_crash_events[0][0]).total_seconds()))
 
     window_label = f"Last {window_seconds}s before the incident"
+    empty_message = ""
     if not timeline_events:
         if reboot_event_present:
-            window_label = "No diagnostic events were recorded before reboot. Only the reboot event itself is available."
+            empty_message = "No diagnostic events were recorded before reboot. Only the reboot event itself is available."
         else:
-            window_label = f"No diagnostic events were recorded in the {window_seconds}s before reboot"
+            empty_message = f"No diagnostic events were recorded in the {window_seconds}s before reboot"
 
     return {
         "available": True,
@@ -3761,6 +3809,7 @@ def pre_crash_timeline_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "title": "Events Before Reboot",
         "detail": "The last recorded events before the selected incident.",
         "window": window_label,
+        "empty_message": empty_message,
         "window_seconds": window_seconds,
         "window_covered_seconds": window_covered_seconds,
         "events_available_count": len(pre_crash_events),
@@ -3829,7 +3878,11 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
 
     freshness_seconds = snapshot.get("state_file_age_seconds")
     watchdog_status_label = str(snapshot.get("watchdog_status") or "unknown").strip().upper() or "UNKNOWN"
-    freshness_badge = freshness_label(freshness_seconds if isinstance(freshness_seconds, int) else None)
+    freshness_badge = freshness_label(
+        freshness_seconds if isinstance(freshness_seconds, int) else None,
+        warning_seconds=freshness_warning_seconds,
+        stale_seconds=freshness_stale_seconds,
+    )
     current_summary = str(snapshot.get("summary_line") or snapshot.get("current_summary") or "").strip()
     site_name = str(snapshot.get("site_name") or snapshot.get("display_name") or "VA-Connect Gateway").strip() or "VA-Connect Gateway"
     device_id = str(snapshot.get("device_id") or socket.gethostname()).strip()
@@ -3839,6 +3892,11 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     update_status = snapshot.get("update_status") or {}
     update_summary = str(snapshot.get("update_summary") or "").strip()
     update_button_visible = bool(snapshot.get("update_button_visible"))
+    freshness_thresholds = snapshot.get("freshness_thresholds") or {}
+    freshness_warning_seconds = int(_coerce_float(freshness_thresholds.get("warning_seconds")) or 30)
+    freshness_stale_seconds = int(_coerce_float(freshness_thresholds.get("stale_seconds")) or 90)
+    if freshness_stale_seconds < freshness_warning_seconds:
+        freshness_stale_seconds = freshness_warning_seconds
     incident_banner = snapshot.get("incident_banner") or {}
     freshness_banner = snapshot.get("freshness_banner") or {}
     system_diagnostics_banner = snapshot.get("system_diagnostics_banner") or {}
@@ -3912,7 +3970,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     detected_because_html = "".join(f"<li>{esc(item)}</li>" for item in detected_because if str(item).strip()) or "<li>No clear cause recorded yet.</li>"
     key_events_html = "".join(f"<li>{esc(item)}</li>" for item in key_events if str(item).strip()) or "<li>No key events recorded yet.</li>"
     confidence_breakdown_html = "".join(
-        f"<li><span class=\"{ 'status-ok' if bool(item.get('ok')) else 'status-incident' }\">{ '&#10004;' if bool(item.get('ok')) else '&#10006;' }</span> {esc(item.get('label') or '')}</li>"
+        f"<li><span class=\"{ 'status-ok' if str(item.get('state') or '').strip() == 'ok' else 'status-warning' if str(item.get('state') or '').strip() == 'warn' else 'status-incident' }\">{esc(item.get('icon') or ('\u2713' if str(item.get('state') or '').strip() == 'ok' else '\u26a0'))}</span> {esc(item.get('label') or '')}</li>"
         for item in confidence_breakdown
         if isinstance(item, dict) and str(item.get("label") or "").strip()
     ) or "<li>Unavailable</li>"
@@ -3929,7 +3987,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
             for item in timeline_events[:50]
         )
     else:
-        timeline_rows_html = empty_line(str(timeline_window or f"No diagnostic events were recorded in the {timeline_window_seconds}s before reboot"))
+        timeline_rows_html = empty_line(str(events_before_reboot.get("empty_message") or f"No diagnostic events were recorded in the {timeline_window_seconds}s before reboot"))
 
     memory_total_bytes = current_system_state.get("memory_total_bytes")
     memory_available_bytes = current_system_state.get("memory_available_bytes")
@@ -3949,17 +4007,34 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     temperature_display = metric_text(temperature_c, "\u00b0C") if temperature_c is not None else "Unavailable"
     os_disk = current_system_state.get("os_disk") if isinstance(current_system_state.get("os_disk"), dict) else {}
     recording_storage = current_system_state.get("recording_storage") if isinstance(current_system_state.get("recording_storage"), dict) else {}
+    disk_thresholds = current_system_state.get("disk_thresholds") if isinstance(current_system_state.get("disk_thresholds"), dict) else {}
+    os_warning_free_gb = _coerce_float(disk_thresholds.get("os_warning_free_gb"))
+    os_critical_free_gb = _coerce_float(disk_thresholds.get("os_critical_free_gb"))
+    recording_warning_free_gb = _coerce_float(disk_thresholds.get("recording_warning_free_gb"))
+    recording_critical_free_gb = _coerce_float(disk_thresholds.get("recording_critical_free_gb"))
     os_disk_value = "Unavailable"
     os_disk_note = ""
     if os_disk:
         os_disk_value = f"{metric_text(os_disk.get('used_percent'), '%')} used / {format_bytes(os_disk.get('free_bytes'))} free"
-        os_disk_note = str(os_disk.get("note") or "").strip()
+        os_disk_note = " | ".join(
+            part for part in (
+                f"Warning below: {format_gb(os_warning_free_gb)}GB" if os_warning_free_gb is not None else "",
+                f"Critical below: {format_gb(os_critical_free_gb)}GB" if os_critical_free_gb is not None else "",
+                str(os_disk.get("note") or "").strip(),
+            ) if part
+        )
     recording_path = str((current_system_state.get("monitor_paths") or {}).get("recording_path") or "").strip()
     recording_value = "Unavailable"
     recording_note = ""
     if recording_storage:
         recording_value = f"{metric_text(recording_storage.get('used_percent'), '%')} used / {format_bytes(recording_storage.get('free_bytes'))} free"
-        recording_note = str(recording_storage.get("note") or "").strip()
+        recording_note = " | ".join(
+            part for part in (
+                f"Warning below: {format_gb(recording_warning_free_gb)}GB" if recording_warning_free_gb is not None else "",
+                f"Critical below: {format_gb(recording_critical_free_gb)}GB" if recording_critical_free_gb is not None else "",
+                str(recording_storage.get("note") or "").strip(),
+            ) if part
+        )
     if recording_path:
         recording_note = f"{recording_note} Recording path: {recording_path}".strip()
     current_system_rows = [
@@ -3978,6 +4053,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     current_system_rows.extend(
         [
             kv("Current uptime", uptime_label, "unavailable"),
+            kv("Last reboot age", format_duration(snapshot.get("last_reboot_age_seconds")) if isinstance(snapshot.get("last_reboot_age_seconds"), int) else "Unavailable", "unavailable"),
             kv("Current boot time", format_local_timestamp(boot_time_iso, default="Unavailable"), "unavailable"),
             kv("Last watchdog write time", format_local_timestamp(last_watchdog_write_at := str(snapshot.get("last_watchdog_write_at") or ""), default="Unavailable"), "unavailable"),
         ]
@@ -4005,9 +4081,20 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         "failed": "bad",
     }.get(update_state, "ok")
 
-    footer_update_line = esc(update_message)
+    footer_parts = [update_state.upper() if update_state else "CURRENT"]
+    if update_state == "available" and latest_build and latest_build != build_number:
+        footer_parts.append(f"{esc(build_number)} -> {esc(latest_build)}")
+    elif update_state == "current":
+        footer_parts.append("CURRENT")
+    elif update_state == "running":
+        footer_parts.append(esc(update_message))
+    elif update_state == "failed":
+        footer_parts.append(esc(update_message))
+    else:
+        footer_parts.append(esc(update_message))
     if update_last_error:
-        footer_update_line += f" - {esc(update_last_error)}"
+        footer_parts.append(esc(update_last_error))
+    footer_update_line = " | ".join(footer_parts)
 
     refresh_href = f"/latest?window={timeline_window_seconds}&_={int(time.time())}"
     selected_window_display = esc(timeline_window or "No incident recorded yet.")
@@ -4226,7 +4313,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
 
     <div class="footer">
       <div>API: <a href="{esc(snapshot.get('api_url') or '/api/base-status')}">{esc(snapshot.get('api_url') or '/api/base-status')}</a></div>
-      <div>Build: <strong>{esc(build_number)}</strong> | Latest: <strong>{esc(latest_build)}</strong> | Update: <strong class="status-{esc(update_state_class)}">{esc(footer_update_line)}</strong></div>
+      <div>{'Build: <strong>' + esc(build_number) + '</strong>' + (' | Latest: <strong>' + esc(latest_build) + '</strong>' if latest_build and latest_build != build_number else '') + ' | Update: <strong class="status-' + esc(update_state_class) + '">' + footer_update_line + '</strong>'}</div>
     </div>
   </div>
 

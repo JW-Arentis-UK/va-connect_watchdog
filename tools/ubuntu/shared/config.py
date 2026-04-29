@@ -23,6 +23,7 @@ class V2Config:
     log_level: str
     monitor_paths: dict[str, Any] = field(default_factory=dict)
     disk_thresholds: dict[str, Any] = field(default_factory=dict)
+    freshness_thresholds: dict[str, Any] = field(default_factory=dict)
 
 
 def _load_config_file(path: Path) -> dict[str, Any]:
@@ -65,6 +66,9 @@ def load_config() -> V2Config:
     disk_thresholds = raw.get("disk_thresholds", {})
     if not isinstance(disk_thresholds, dict):
         disk_thresholds = {}
+    freshness_thresholds = raw.get("freshness_thresholds", {})
+    if not isinstance(freshness_thresholds, dict):
+        freshness_thresholds = {}
 
     return V2Config(
         device_id=device_id,
@@ -78,4 +82,5 @@ def load_config() -> V2Config:
         log_level=log_level,
         monitor_paths=monitor_paths,
         disk_thresholds=disk_thresholds,
+        freshness_thresholds=freshness_thresholds,
     )
