@@ -3970,7 +3970,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     detected_because_html = "".join(f"<li>{esc(item)}</li>" for item in detected_because if str(item).strip()) or "<li>No clear cause recorded yet.</li>"
     key_events_html = "".join(f"<li>{esc(item)}</li>" for item in key_events if str(item).strip()) or "<li>No key events recorded yet.</li>"
     confidence_breakdown_html = "".join(
-        f"<li><span class=\"{ 'status-ok' if str(item.get('state') or '').strip() == 'ok' else 'status-warning' if str(item.get('state') or '').strip() == 'warn' else 'status-incident' }\">{esc(item.get('icon') or ('\u2713' if str(item.get('state') or '').strip() == 'ok' else '\u26a0'))}</span> {esc(item.get('label') or '')}</li>"
+        f"<li><span class=\"{ 'status-ok' if str(item.get('state') or '').strip() == 'ok' else 'status-warning' if str(item.get('state') or '').strip() == 'warn' else 'status-incident' }\">{esc(item.get('icon') or ('✓' if str(item.get('state') or '').strip() == 'ok' else '⚠'))}</span> {esc(item.get('label') or '')}</li>"
         for item in confidence_breakdown
         if isinstance(item, dict) and str(item.get("label") or "").strip()
     ) or "<li>Unavailable</li>"
