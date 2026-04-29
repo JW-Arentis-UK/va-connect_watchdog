@@ -3876,6 +3876,11 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     def empty_line(message: str) -> str:
         return f'<div class="empty-state">{esc(message)}</div>'
 
+    freshness_thresholds = snapshot.get("freshness_thresholds") or {}
+    freshness_warning_seconds = int(_coerce_float(freshness_thresholds.get("warning_seconds")) or 30)
+    freshness_stale_seconds = int(_coerce_float(freshness_thresholds.get("stale_seconds")) or 90)
+    if freshness_stale_seconds < freshness_warning_seconds:
+        freshness_stale_seconds = freshness_warning_seconds
     freshness_seconds = snapshot.get("state_file_age_seconds")
     watchdog_status_label = str(snapshot.get("watchdog_status") or "unknown").strip().upper() or "UNKNOWN"
     freshness_badge = freshness_label(
@@ -3892,11 +3897,6 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     update_status = snapshot.get("update_status") or {}
     update_summary = str(snapshot.get("update_summary") or "").strip()
     update_button_visible = bool(snapshot.get("update_button_visible"))
-    freshness_thresholds = snapshot.get("freshness_thresholds") or {}
-    freshness_warning_seconds = int(_coerce_float(freshness_thresholds.get("warning_seconds")) or 30)
-    freshness_stale_seconds = int(_coerce_float(freshness_thresholds.get("stale_seconds")) or 90)
-    if freshness_stale_seconds < freshness_warning_seconds:
-        freshness_stale_seconds = freshness_warning_seconds
     incident_banner = snapshot.get("incident_banner") or {}
     freshness_banner = snapshot.get("freshness_banner") or {}
     system_diagnostics_banner = snapshot.get("system_diagnostics_banner") or {}
