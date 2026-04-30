@@ -4750,7 +4750,8 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     body {{ margin: 0; font-family: Arial, sans-serif; font-size: 13px; line-height: 1.25; background: var(--bg); color: var(--text); }}
     a {{ color: #9fd0ff; text-decoration: none; }}
     a:hover {{ text-decoration: underline; }}
-    .wrap {{ max-width: 1360px; margin: 0 auto; padding: 14px; }}
+    :root {{ --page-zoom: 1; }}
+    .wrap {{ max-width: 1360px; margin: 0 auto; padding: 14px; zoom: var(--page-zoom); transform-origin: top center; }}
     .topbar {{ display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }}
     .site-title {{ font-size: 24px; font-weight: 700; line-height: 1.05; }}
     .subtitle {{ color: var(--muted); margin-top: 2px; }}
@@ -4800,8 +4801,9 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     .incident-lists {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }}
     .incident-lists ul {{ margin: 6px 0 0 18px; padding: 0; }}
     .window-bar {{ display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }}
-    .window-btn {{ border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; background: #101821; color: var(--text); font-size: 12px; }}
-    .window-btn.active {{ background: #203142; border-color: #55708d; color: #d7ecff; }}
+    .window-btn {{ border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; background: #101821; color: var(--text); font-size: 12px; cursor: pointer; transition: background .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease, transform .12s ease; }}
+    .window-btn:hover, .window-btn:focus-visible {{ border-color: #56718e; box-shadow: 0 0 0 2px rgba(122,167,217,.10); outline: none; }}
+    .window-btn.active {{ background: #203142; border-color: #55708d; color: #d7ecff; box-shadow: inset 0 0 0 1px rgba(122,167,217,.18); transform: translateY(-1px); }}
     .timeline-list {{ display: grid; gap: 6px; }}
     .timeline-row, .system-event {{ display: grid; grid-template-columns: 86px 78px 1fr; gap: 8px; align-items: baseline; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: #101821; }}
     .timeline-row:nth-child(odd), .system-event:nth-child(odd) {{ background: #111b25; }}
@@ -4816,8 +4818,14 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     .history-canvas {{ width: 100%; height: 420px; display: block; }}
     .history-chart-card {{ position: relative; }}
     .history-toolbar {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }}
-    .history-toggle {{ border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; background: #101821; color: var(--text); font-size: 12px; }}
-    .history-toggle.active {{ background: #203142; border-color: #55708d; color: #d7ecff; }}
+    .history-toggle {{ border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; background: #101821; color: var(--text); font-size: 12px; cursor: pointer; transition: background .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease, transform .12s ease; }}
+    .history-toggle:hover, .history-toggle:focus-visible {{ border-color: #56718e; box-shadow: 0 0 0 2px rgba(122,167,217,.10); outline: none; }}
+    .history-toggle.active {{ background: #203142; border-color: #55708d; color: #d7ecff; box-shadow: inset 0 0 0 1px rgba(122,167,217,.18); transform: translateY(-1px); }}
+    .zoom-bar {{ display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: center; }}
+    .zoom-label {{ color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin-right: 2px; align-self: center; }}
+    .zoom-btn {{ border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px; background: #101821; color: var(--text); font-size: 12px; cursor: pointer; transition: background .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease, transform .12s ease; }}
+    .zoom-btn:hover, .zoom-btn:focus-visible {{ border-color: #56718e; box-shadow: 0 0 0 2px rgba(122,167,217,.10); outline: none; }}
+    .zoom-btn.active {{ background: #203142; border-color: #55708d; color: #d7ecff; box-shadow: inset 0 0 0 1px rgba(122,167,217,.18); transform: translateY(-1px); }}
     .history-tooltip {{ position: fixed; z-index: 20; max-width: 320px; background: #0b1117; border: 1px solid #3c5568; border-radius: 10px; padding: 8px 10px; color: #e8eef5; font-size: 12px; white-space: pre-line; box-shadow: 0 10px 30px rgba(0,0,0,.35); pointer-events: none; }}
     .incident-history-grid {{ display: grid; gap: 6px; }}
     .incident-history-head, .incident-history-row {{ display: grid; grid-template-columns: 160px 160px 100px 90px 1fr; gap: 8px; align-items: center; }}
@@ -4883,6 +4891,13 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         <button class="btn secondary" type="button" onclick="hardRefresh()">Hard refresh page</button>
         <button class="btn primary" type="button" onclick="triggerUpdate('check_updates')">Check updates</button>
         <button id="updateButton" class="btn primary" type="button" onclick="triggerUpdate('update_watchdog')" style="display: {('inline-flex' if update_button_visible else 'none')};">Update from GitHub</button>
+        <div class="zoom-bar" aria-label="Page zoom controls">
+          <span class="zoom-label">Zoom</span>
+          <button class="zoom-btn" type="button" data-page-zoom="0.9" onclick="setPageZoom(0.9)">90%</button>
+          <button class="zoom-btn active" type="button" data-page-zoom="1" onclick="setPageZoom(1)">100%</button>
+          <button class="zoom-btn" type="button" data-page-zoom="1.1" onclick="setPageZoom(1.1)">110%</button>
+          <button class="zoom-btn" type="button" data-page-zoom="1.25" onclick="setPageZoom(1.25)">125%</button>
+        </div>
       </div>
     </div>
 
@@ -4982,11 +4997,11 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       <div class="title-row" style="display:flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap;">
         <div>
           <div class="card-title" style="margin: 0;">System Metrics History</div>
-          <div class="card-subtitle" id="historyMetricsStatus">Metrics history not available yet.</div>
+          <div class="card-subtitle" id="historyMetricsStatus">Loading metrics history...</div>
         </div>
         <div class="window-bar">{history_buttons_html}</div>
       </div>
-      <div class="metrics-history-summary" id="historyMetricsSummary">CPU, memory, temperature, load average, and storage trends will appear here.</div>
+      <div class="metrics-history-summary" id="historyMetricsSummary">Select a range to load the history view. CPU, memory, temperature, load average, and storage trends will appear here.</div>
       <div class="meta-row" id="historyMarkerLegend"></div>
       <div class="history-toolbar">
         <button type="button" class="history-toggle active" data-metric-toggle="cpu_percent">CPU</button>
@@ -5023,6 +5038,36 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     const windowSeconds = {int(timeline_window_seconds)};
     const selectedIncidentId = {json.dumps(selected_incident_id)};
     let updateProgressTimer = null;
+    let pageZoom = 1;
+
+    function setPageZoom(value) {{
+      const nextZoom = Math.min(1.5, Math.max(0.75, Number(value) || 1));
+      pageZoom = nextZoom;
+      document.documentElement.style.setProperty('--page-zoom', String(nextZoom));
+      try {{
+        window.localStorage.setItem('va-connect-page-zoom', String(nextZoom));
+      }} catch (error) {{
+        // ignore storage failures
+      }}
+      document.querySelectorAll('[data-page-zoom]').forEach((button) => {{
+        const buttonZoom = Number(button.getAttribute('data-page-zoom') || '1');
+        button.classList.toggle('active', Math.abs(buttonZoom - nextZoom) < 0.001);
+      }});
+    }}
+
+    function restorePageZoom() {{
+      let saved = 1;
+      try {{
+        const raw = window.localStorage.getItem('va-connect-page-zoom');
+        const parsed = Number(raw);
+        if (Number.isFinite(parsed) && parsed > 0) {{
+          saved = parsed;
+        }}
+      }} catch (error) {{
+        saved = 1;
+      }}
+      setPageZoom(saved);
+    }}
 
     function setUpdateButtonVisible(visible) {{
       const updateButton = document.getElementById('updateButton');
@@ -5103,7 +5148,9 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
 
     function setHistoryButtonsActive(range) {{
       document.querySelectorAll('[data-history-range]').forEach((button) => {{
-        button.classList.toggle('active', button.getAttribute('data-history-range') === range);
+        const active = button.getAttribute('data-history-range') === range;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
       }});
     }}
 
@@ -5297,7 +5344,9 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     function setMetricToggleState() {{
       document.querySelectorAll('[data-metric-toggle]').forEach((button) => {{
         const key = button.getAttribute('data-metric-toggle');
-        button.classList.toggle('active', !!(metricsHistoryState.active && metricsHistoryState.active[key] !== false));
+        const active = !!(metricsHistoryState.active && metricsHistoryState.active[key] !== false);
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
       }});
     }}
 
@@ -5718,8 +5767,12 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       metricsHistoryState.range = selectedRange;
       setHistoryButtonsActive(selectedRange);
       const status = document.getElementById('historyMetricsStatus');
+      const summary = document.getElementById('historyMetricsSummary');
       if (status) {{
         status.textContent = metricsHistoryLabel(selectedRange) + ' loading...';
+      }}
+      if (summary) {{
+        summary.textContent = 'Selected range: ' + metricsHistoryLabel(selectedRange) + '. Loading metrics...';
       }}
       try {{
         const response = await fetch('/api/metrics/history?range=' + encodeURIComponent(selectedRange) + '&incident=' + encodeURIComponent(selectedIncidentId || '') + '&_=' + Date.now(), {{ cache: 'no-store' }});
@@ -6265,6 +6318,7 @@ def render_base_page(status: Dict[str, Any]) -> str:
     }}
 
     document.addEventListener('DOMContentLoaded', () => {{
+      restorePageZoom();
       watchForNewBuild();
       setInterval(watchForNewBuild, 15000);
     }});
