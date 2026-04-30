@@ -88,6 +88,9 @@ class StateRecord:
     last_check_at: str | None = None
     last_healthy_at: str | None = None
     last_watchdog_write_at: str | None = None
+    last_rtc_sync_at: str | None = None
+    last_rtc_sync_result: str | None = None
+    last_rtc_sync_message: str | None = None
     open_incident_id: str | None = None
     last_status: OverallStatus = "unknown"
     last_error: str | None = None

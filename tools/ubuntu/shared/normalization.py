@@ -239,6 +239,9 @@ def normalize_state(value: Any, *, device_id: str | None = None, boot_id: str | 
         last_check_at=normalize_timestamp(raw.get("last_check_at"), default_now=False) or None,
         last_healthy_at=normalize_timestamp(raw.get("last_healthy_at"), default_now=False) or None,
         last_watchdog_write_at=normalize_timestamp(raw.get("last_watchdog_write_at"), default_now=False) or None,
+        last_rtc_sync_at=normalize_timestamp(raw.get("last_rtc_sync_at"), default_now=False) or None,
+        last_rtc_sync_result=_clean_str(raw.get("last_rtc_sync_result"), "") or None,
+        last_rtc_sync_message=_clean_str(raw.get("last_rtc_sync_message"), "") or None,
         open_incident_id=_clean_str(raw.get("open_incident_id"), "") or None,
         last_status=last_status,  # type: ignore[arg-type]
         last_error=_clean_str(raw.get("last_error"), "") or None,

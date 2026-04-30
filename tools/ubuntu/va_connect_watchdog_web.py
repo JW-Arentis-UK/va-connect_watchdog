@@ -311,6 +311,115 @@ def load_config() -> Dict[str, Any]:
     return merged
 
 
+def current_system_time_label() -> str:
+    return datetime.now().astimezone().replace(microsecond=0).isoformat()
+
+
+def read_hwclock_show() -> dict[str, Any]:
+    try:
+        completed = subprocess.run(
+            ["hwclock", "--show"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {"ok": False, "text": "", "stderr": "hwclock command not found"}
+    except Exception as exc:
+        return {"ok": False, "text": "", "stderr": f"{type(exc).__name__}: {exc}"}
+
+    stdout = completed.stdout.strip()
+    stderr = completed.stderr.strip()
+    text = stdout or stderr or f"hwclock exit code {completed.returncode}"
+    return {
+        "ok": completed.returncode == 0,
+        "text": text,
+        "stdout": stdout,
+        "stderr": stderr,
+        "return_code": completed.returncode,
+    }
+
+
+def append_event_record(event: Dict[str, Any]) -> Dict[str, Any]:
+    EVENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    normalized = dict(event)
+    with EVENTS_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(normalized, sort_keys=True) + "\n")
+    return normalized
+
+
+def sync_rtc_action_payload() -> Dict[str, Any]:
+    state = read_json(STATE_PATH, {})
+    system_time = datetime.now().astimezone().replace(microsecond=0)
+    system_time_label = system_time.isoformat()
+    rtc_before = read_hwclock_show()
+    result = "failed"
+    message = "Failed to sync system time to RTC"
+    error = ""
+    rtc_time = rtc_before.get("text") or ""
+    if system_time.year < 2024:
+        error = f"System time is invalid for RTC sync: {system_time_label}"
+        message = error
+    else:
+        try:
+            completed = subprocess.run(
+                ["hwclock", "--systohc"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            stderr = completed.stderr.strip()
+            stdout = completed.stdout.strip()
+            rtc_after = read_hwclock_show()
+            rtc_time = rtc_after.get("text") or rtc_time
+            if completed.returncode == 0:
+                result = "success"
+                message = "System time synced to RTC successfully"
+                error = ""
+            else:
+                error = stderr or stdout or f"hwclock --systohc exit code {completed.returncode}"
+                message = "Failed to sync system time to RTC"
+        except FileNotFoundError:
+            error = "hwclock command not found"
+            message = "Failed to sync system time to RTC"
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            message = "Failed to sync system time to RTC"
+
+    payload = {
+        "timestamp": now_iso(),
+        "component": "web",
+        "level": "info" if result == "success" else "error",
+        "message": message,
+        "event_type": "rtc_sync",
+        "context": {
+            "result": result,
+            "message": message,
+            "stderr": error,
+            "system_time": system_time_label,
+            "rtc_time": rtc_time,
+            "hwclock_before": rtc_before.get("text") or "",
+        },
+    }
+    append_event_record(payload)
+    state["last_rtc_sync_at"] = now_iso()
+    state["last_rtc_sync_result"] = result
+    state["last_rtc_sync_message"] = message if result == "success" else (error or message)
+    write_json(STATE_PATH, state)
+    return {
+        "ok": result == "success",
+        "message": message if result == "success" else "Failed to sync system time to RTC",
+        "error": error,
+        "rtc_time": rtc_time,
+        "system_time": system_time_label,
+        "state": {
+            "last_rtc_sync_at": state["last_rtc_sync_at"],
+            "last_rtc_sync_result": state["last_rtc_sync_result"],
+            "last_rtc_sync_message": state["last_rtc_sync_message"],
+        },
+    }
+
+
 def command_exists(name: str) -> bool:
     return subprocess.run(["bash", "-lc", f"command -v {shlex.quote(name)}"], capture_output=True, text=True).returncode == 0
 
@@ -3595,6 +3704,7 @@ def status_payload() -> Dict[str, Any]:
     speedtest_history = recent_speedtests()
     reboot_leadup = reboot_leadup_payload(events)
     quick_export = quick_export_window(events_all, state)
+    rtc_time_info = read_hwclock_show()
     try:
         incidents = incidents_payload()
     except Exception:
@@ -3638,6 +3748,11 @@ def status_payload() -> Dict[str, Any]:
         "reboot_counts": reboot_counts,
         "diagnosis": {"title": diagnosis, "detail": diagnosis_detail},
         "teamviewer": teamviewer,
+        "current_system_time": current_system_time_label(),
+        "rtc_time": rtc_time_info.get("text") or "Unavailable",
+        "last_rtc_sync_at": str(state.get("last_rtc_sync_at") or ""),
+        "last_rtc_sync_result": str(state.get("last_rtc_sync_result") or ""),
+        "last_rtc_sync_message": str(state.get("last_rtc_sync_message") or ""),
         "clue_counters": clue_counters,
         "linux_stability": linux_stability,
         "fault_reporting": fault_reporting,
@@ -3757,6 +3872,7 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
     state_metrics = state.get("system_metrics") if isinstance(state.get("system_metrics"), dict) else {}
     if not isinstance(state_metrics, dict):
         state_metrics = {}
+    rtc_time_info = read_hwclock_show()
     latest_incident = last_incident_snapshot_payload()
     reboot_incident = (
         latest_incident
@@ -3835,6 +3951,11 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "uptime_seconds": uptime_seconds,
         "uptime_label": uptime_label,
         "last_watchdog_write_at": last_watchdog_write_at,
+        "current_system_time": current_system_time_label(),
+        "rtc_time": rtc_time_info.get("text") or "Unavailable",
+        "last_rtc_sync_at": str(state.get("last_rtc_sync_at") or ""),
+        "last_rtc_sync_result": str(state.get("last_rtc_sync_result") or ""),
+        "last_rtc_sync_message": str(state.get("last_rtc_sync_message") or ""),
         "metrics_available": metrics_available,
         "all_metrics_unavailable": bool(latest_metric.get("all_metrics_unavailable")) or not metrics_available,
     }
@@ -4239,6 +4360,11 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     boot_time_iso = str(snapshot.get("boot_time_iso") or "")
     uptime_label = str(snapshot.get("uptime_label") or "Unavailable")
     uptime_seconds = snapshot.get("uptime_seconds")
+    current_system_time = str(snapshot.get("current_system_time") or "unknown")
+    rtc_time = str(snapshot.get("rtc_time") or "Unavailable")
+    last_rtc_sync_at = str(snapshot.get("last_rtc_sync_at") or "")
+    last_rtc_sync_result = str(snapshot.get("last_rtc_sync_result") or "")
+    last_rtc_sync_message = str(snapshot.get("last_rtc_sync_message") or "")
     active_incident = str((snapshot.get("current_incident") or {}).get("status") or "").strip().lower() == "open"
     incident_type = str(latest_incident.get("type") or "").strip()
     incident_status = str(latest_incident.get("status") or "").strip()
@@ -4447,6 +4573,8 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         kv("CPU", cpu_display, metric_class(cpu_status), "CPU usage from /proc/stat"),
         kv("Memory", memory_display, metric_class(memory_status), "Memory usage from /proc/meminfo"),
         kv("Load", load_display, metric_class(load_status), "1 / 5 / 15 minute load average"),
+        kv("System time", current_system_time, "unavailable"),
+        kv("RTC time", rtc_time, "unavailable"),
     ]
     if temperature_c is not None:
         current_system_rows.append(kv("Temperature", temperature_display, "ok"))
@@ -4461,6 +4589,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
             kv("Last reboot age", format_duration(snapshot.get("last_reboot_age_seconds")) if isinstance(snapshot.get("last_reboot_age_seconds"), int) else "Unavailable", "unavailable"),
             kv("Current boot time", format_local_timestamp(boot_time_iso, default="Unavailable"), "unavailable"),
             kv("Last watchdog write time", format_local_timestamp(last_watchdog_write_at := str(snapshot.get("last_watchdog_write_at") or ""), default="Unavailable"), "unavailable"),
+            kv("Last RTC sync", f"{format_local_timestamp(last_rtc_sync_at, default='never')} - {last_rtc_sync_result or 'unknown'}", "unavailable", last_rtc_sync_message),
         ]
     )
     current_system_rows_html = "".join(current_system_rows)
@@ -5190,6 +5319,57 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         }}
       }}
     }}
+
+    async function syncRtcToHardwareClock() {{
+      const statusLine = document.getElementById('rtcStatus');
+      const timeLine = document.getElementById('rtcTimeStatus');
+      const syncButton = document.getElementById('syncRtcButton');
+      if (syncButton) {{
+        syncButton.disabled = true;
+        syncButton.textContent = 'Syncing...';
+      }}
+      if (statusLine) {{
+        statusLine.textContent = 'Syncing system time to RTC...';
+      }}
+      try {{
+        const response = await fetch('/api/actions/sync-rtc', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{}})
+        }});
+        const payload = await response.json().catch(() => ({{}}));
+        if (response.ok && payload.ok) {{
+          if (statusLine) {{
+            statusLine.textContent = `Last RTC sync: ${{payload.state && payload.state.last_rtc_sync_at ? payload.state.last_rtc_sync_at : 'now'}} - success`;
+          }}
+          if (timeLine) {{
+            timeLine.textContent = `System time: ${{payload.system_time || 'unknown'}} | RTC time: ${{payload.rtc_time || 'Unavailable'}}`;
+          }}
+          hardRefresh();
+          return;
+        }}
+        const errorText = payload.error || payload.message || 'Failed to sync system time to RTC.';
+        if (statusLine) {{
+          const whenText = payload.state && payload.state.last_rtc_sync_at ? payload.state.last_rtc_sync_at : 'now';
+          statusLine.textContent = `Last RTC sync: ${{whenText}} - failed`;
+        }}
+        if (timeLine && payload.system_time) {{
+          timeLine.textContent = `System time: ${{payload.system_time}} | RTC time: ${{payload.rtc_time || 'Unavailable'}}`;
+        }}
+        alert(errorText);
+      }} catch (error) {{
+        if (statusLine) {{
+          statusLine.textContent = 'Sync failed: ' + String(error);
+        }}
+        alert('Failed to sync system time to RTC.');
+      }} finally {{
+        if (syncButton) {{
+          syncButton.disabled = false;
+          syncButton.textContent = 'Sync system time to RTC';
+        }}
+      }}
+    }}
+
     function hardRefresh() {{
       const url = new URL(window.location.href);
       url.searchParams.set('window', String(windowSeconds));
@@ -5378,6 +5558,8 @@ def render_base_page(status: Dict[str, Any]) -> str:
         <div class="item"><div class="label">Update</div><div class="value {('warn' if update_available else 'ok')}">{'available' if update_available else 'current'}</div></div>
         <div class="item"><div class="label">Last check</div><div class="value">{html.escape(str(status.get("last_check_at") or "-"))}</div></div>
         <div class="item"><div class="label">Last healthy</div><div class="value">{html.escape(str(status.get("last_healthy_at") or "-"))}</div></div>
+        <div class="item"><div class="label">System time</div><div class="value">{html.escape(str(status.get("current_system_time") or "unknown"))}</div></div>
+        <div class="item"><div class="label">RTC time</div><div class="value">{html.escape(str(status.get("rtc_time") or "Unavailable"))}</div></div>
       </div>
       <div style="margin-top:12px;">{diagnosis}</div>
     </div>
@@ -5390,8 +5572,13 @@ def render_base_page(status: Dict[str, Any]) -> str:
         <button id="updateButton" onclick="updateFromGithub()" style="background:#2f5d3c;color:#e8eef5;border:1px solid #4b7d5a;border-radius:8px;padding:6px 10px;cursor:pointer;">
           Update from GitHub
         </button>
+        <button id="syncRtcButton" onclick="syncRtcToHardwareClock()" style="background:#4a4767;color:#e8eef5;border:1px solid #64608a;border-radius:8px;padding:6px 10px;cursor:pointer;">
+          Sync system time to RTC
+        </button>
       </div>
       <div id="updateStatus" class="muted" style="margin-top:10px;">Ready to update.</div>
+      <div id="rtcStatus" class="muted" style="margin-top:6px;">Last RTC sync: {html.escape(str(status.get("last_rtc_sync_at") or "never"))} - {html.escape(str(status.get("last_rtc_sync_result") or "unknown"))}</div>
+      <div id="rtcTimeStatus" class="muted" style="margin-top:4px;">System time: {html.escape(str(status.get("current_system_time") or "unknown"))} | RTC time: {html.escape(str(status.get("rtc_time") or "Unavailable"))}</div>
     </div>
     <div class="card">
       <div class="label">API</div>
@@ -5502,6 +5689,57 @@ def render_base_page(status: Dict[str, Any]) -> str:
         if (button) {{
           button.disabled = false;
           button.textContent = 'Update from GitHub';
+        }}
+      }}
+    }}
+
+    async function syncRtcToHardwareClock() {{
+      const statusEl = document.getElementById('rtcStatus');
+      const timeEl = document.getElementById('rtcTimeStatus');
+      const button = document.getElementById('syncRtcButton');
+      const currentBuildEl = document.getElementById('currentBuildValue');
+      if (button) {{
+        button.disabled = true;
+        button.textContent = 'Syncing...';
+      }}
+      if (statusEl) {{
+        statusEl.textContent = 'Syncing system time to RTC...';
+      }}
+      try {{
+        const response = await fetch('/api/actions/sync-rtc', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{}})
+        }});
+        const payload = await response.json().catch(() => ({{}}));
+        if (response.ok && payload.ok) {{
+          if (statusEl) {{
+            statusEl.textContent = `Last RTC sync: ${{payload.state && payload.state.last_rtc_sync_at ? payload.state.last_rtc_sync_at : 'now'}} - success`;
+          }}
+          if (timeEl) {{
+            timeEl.textContent = `System time: ${{payload.system_time || 'unknown'}} | RTC time: ${{payload.rtc_time || 'Unavailable'}}`;
+          }}
+          reloadSoon();
+          return;
+        }}
+        const errorText = payload.error || payload.message || 'Failed to sync system time to RTC.';
+        if (statusEl) {{
+          const whenText = payload.state && payload.state.last_rtc_sync_at ? payload.state.last_rtc_sync_at : 'now';
+          statusEl.textContent = `Last RTC sync: ${{whenText}} - failed`;
+        }}
+        if (timeEl && payload.system_time) {{
+          timeEl.textContent = `System time: ${{payload.system_time}} | RTC time: ${{payload.rtc_time || 'Unavailable'}}`;
+        }}
+        alert(errorText);
+      }} catch (error) {{
+        if (statusEl) {{
+          statusEl.textContent = 'Sync failed: ' + String(error);
+        }}
+        alert('Failed to sync system time to RTC.');
+      }} finally {{
+        if (button) {{
+          button.disabled = false;
+          button.textContent = 'Sync system time to RTC';
         }}
       }}
     }}
@@ -6679,10 +6917,13 @@ def render_page(status: Dict[str, Any]) -> str:
           <div class="button-row">
             <button class="secondary" id="updateNowButton" onclick="runAction('update_watchdog')">Update now</button>
             <button class="secondary" onclick="hardRefreshPage()">Hard refresh page</button>
+            <button class="secondary" id="syncRtcButton" onclick="syncRtcToHardwareClock()">Sync system time to RTC</button>
             <span id="updateMessage">{html.escape(str(status["update_status"].get("message", "No web update run yet.")))}</span>
           </div>
           <p class="hint" id="updateMeta">{html.escape(str(status["update_status"].get("from_build", "unknown")))} to {html.escape(str(status["update_status"].get("to_build", "unknown")))} | {html.escape(str(status["update_status"].get("finished_at", "not finished yet")))}</p>
           <p class="hint" id="updateDetail">{html.escape(str(status["update_status"].get("detail", "")))}</p>
+          <p class="hint" id="rtcStatus">Last RTC sync: {html.escape(str(status.get("last_rtc_sync_at") or "never"))} - {html.escape(str(status.get("last_rtc_sync_result") or "unknown"))}{' | ' + html.escape(str(status.get("last_rtc_sync_message") or "")) if str(status.get("last_rtc_sync_message") or "").strip() else ''}</p>
+          <p class="hint" id="rtcTimeStatus">System time: {html.escape(str(status.get("current_system_time") or "unknown"))} | RTC time: {html.escape(str(status.get("rtc_time") or "Unavailable"))}</p>
           <div class="update-progress" id="updateProgress"><div class="update-progress-bar"></div></div>
           <div class="console-box" id="updateConsole" style="display:none;">{html.escape(chr(10).join(status.get("update_console_lines", []) or ["No update progress yet."]))}</div>
         </div>
@@ -9751,6 +9992,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/speedtest":
             result = launch_speedtest()
+            self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+
+        if parsed.path == "/api/actions/sync-rtc":
+            result = sync_rtc_action_payload()
             self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
             return
 
