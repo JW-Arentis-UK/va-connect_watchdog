@@ -1052,6 +1052,7 @@ def metrics_history_payload(range_value: str = "1h", incident_id: str | None = N
         focus_start = (selected_incident_ts - timedelta(seconds=60)).astimezone(timezone.utc).replace(microsecond=0).isoformat()
         focus_end = (selected_incident_ts + timedelta(seconds=30)).astimezone(timezone.utc).replace(microsecond=0).isoformat()
     raw_samples: List[Dict[str, Any]] = []
+    history_source = "metrics.jsonl"
     if METRICS_PATH.exists():
         try:
             lines = METRICS_PATH.read_text(encoding="utf-8", errors="ignore").splitlines()
@@ -1072,6 +1073,23 @@ def metrics_history_payload(range_value: str = "1h", incident_id: str | None = N
             if parsed is None or parsed < start_dt or parsed > end_dt:
                 continue
             raw_samples.append(sample)
+    if not raw_samples:
+        try:
+            state = read_json(STATE_PATH, {})
+        except Exception:
+            state = {}
+        state_metrics = state.get("system_metrics") if isinstance(state.get("system_metrics"), dict) else {}
+        if isinstance(state_metrics, dict) and state_metrics:
+            fallback_source_ts = (
+                parse_iso(str(state.get("last_watchdog_write_at") or ""))
+                or parse_iso(str(state.get("last_check_at") or ""))
+                or parse_iso(str(state_metrics.get("timestamp") or ""))
+                or end_dt
+            )
+            fallback = dict(state_metrics)
+            fallback["timestamp"] = fallback_source_ts.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+            raw_samples.append(_metric_history_sample_from_raw(fallback))
+            history_source = "live_state_fallback"
     raw_samples.sort(key=lambda item: str(item.get("timestamp") or ""))
     samples = _downsample_metric_history_samples(raw_samples, bucket_seconds)
     markers: List[Dict[str, Any]] = []
@@ -1131,6 +1149,8 @@ def metrics_history_payload(range_value: str = "1h", incident_id: str | None = N
         "focus_window_start": focus_start or "",
         "focus_window_end": focus_end or "",
         "focus_incident": selected_incident or {},
+        "history_source": history_source,
+        "history_warming_up": history_source == "live_state_fallback",
     }
 
 
@@ -5320,6 +5340,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       const canvas = document.getElementById('historyUnifiedChart');
       const samples = payload && Array.isArray(payload.samples) ? payload.samples : [];
       const markers = payload && Array.isArray(payload.markers) ? payload.markers : [];
+      const warmingUp = !!(payload && payload.history_warming_up);
       renderHistoryLegend(markers);
 
       const selectedIncident = payload && payload.focus_incident ? payload.focus_incident : null;
@@ -5335,10 +5356,12 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
 
       if (!chartSamples.length) {{
         if (status) {{
-          status.textContent = 'Metrics history not available yet.';
+          status.textContent = warmingUp ? 'Live sample only | ' + metricsHistoryLabel(metricsHistoryState.range) : 'Metrics history not available yet.';
         }}
         if (summary) {{
-          summary.textContent = 'No metrics history available yet.';
+          summary.textContent = warmingUp
+            ? 'No saved metrics history yet. Showing the latest live sample from state.json.'
+            : 'No metrics history available yet.';
         }}
         if (tooltip) {{
           tooltip.style.display = 'none';
@@ -5364,7 +5387,8 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       const covered = Number.isFinite(firstEpoch) && Number.isFinite(lastEpoch) ? Math.max(0, Math.floor((lastEpoch - firstEpoch) / 1000)) : 0;
       if (status) {{
         const selectedLabel = selectedIncident && (selectedIncident.type || selectedIncident.summary) ? ' | incident focus' : '';
-        status.textContent = metricsHistoryLabel(metricsHistoryState.range) + selectedLabel + ' | ' + chartSamples.length + ' samples | ' + formatHistoryDuration(covered) + ' covered';
+        const warmLabel = warmingUp ? ' | live sample only' : '';
+        status.textContent = metricsHistoryLabel(metricsHistoryState.range) + selectedLabel + warmLabel + ' | ' + chartSamples.length + ' samples | ' + formatHistoryDuration(covered) + ' covered';
       }}
       const latest = chartSamples[chartSamples.length - 1] || {{}};
       const cpuCount = Number((latest || {{}}).cpu_count || 1) || 1;
@@ -5670,14 +5694,21 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       const markers = payload && payload.markers ? payload.markers : [];
       renderHistoryLegend(markers);
       if (status) {{
-        status.textContent = payload && payload.focus_window_start ? 'Focused incident view | ' + metricsHistoryLabel(metricsHistoryState.range) : metricsHistoryLabel(metricsHistoryState.range);
+        const warmingUp = !!(payload && payload.history_warming_up);
+        const prefix = warmingUp ? 'Live sample only | ' : (payload && payload.focus_window_start ? 'Focused incident view | ' : '');
+        status.textContent = prefix + metricsHistoryLabel(metricsHistoryState.range);
       }}
       if (!samples.length) {{
         if (summary) {{
-          summary.textContent = 'No metrics history available yet.';
+          summary.textContent = payload && payload.history_warming_up
+            ? 'No saved metrics history yet. Showing the latest live sample from state.json.'
+            : 'No metrics history available yet.';
         }}
         renderUnifiedHistory(payload || {{}});
         return;
+      }}
+      if (payload && payload.history_warming_up && summary) {{
+        summary.textContent = 'No saved metrics history yet. Showing the latest live sample from state.json.';
       }}
       renderUnifiedHistory(payload || {{}});
     }}
