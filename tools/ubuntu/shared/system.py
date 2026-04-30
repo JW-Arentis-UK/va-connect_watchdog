@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 import os
 import subprocess
 import shutil
+import time
 from typing import Any
-
-from .time import iso_utc
-
 
 _LAST_CPU_SAMPLE: tuple[int, int] | None = None
 
@@ -18,31 +17,124 @@ def _config_dict(config: Any | None) -> dict[str, Any]:
     if isinstance(config, dict):
         return dict(config)
     data: dict[str, Any] = {}
-    for key in ("monitor_paths", "disk_thresholds", "data_dir", "device_id", "app_match"):
+    for key in ("monitor_paths", "disk_thresholds", "data_dir", "device_id", "app_match", "watch_process"):
         if hasattr(config, key):
             data[key] = getattr(config, key)
     return data
 
 
-def _process_pids(match: str) -> list[int]:
-    pattern = str(match or "").strip()
-    if not pattern:
-        return []
+def _safe_read_text(path: Path) -> str:
     try:
-        completed = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True, check=False)
-    except FileNotFoundError:
+        return path.read_text(encoding="utf-8", errors="ignore").strip()
+    except Exception:
+        return ""
+
+
+def _watch_process_config(config: Any | None) -> dict[str, Any]:
+    config_data = _config_dict(config)
+    watch_process = config_data.get("watch_process") if isinstance(config_data.get("watch_process"), dict) else {}
+    if not isinstance(watch_process, dict):
+        watch_process = {}
+    name = str(watch_process.get("name") or config_data.get("app_match") or "").strip()
+    cmd_contains = str(watch_process.get("cmd_contains") or name).strip()
+    enabled = bool(watch_process.get("enabled", True))
+    return {
+        "enabled": enabled,
+        "name": name,
+        "cmd_contains": cmd_contains,
+    }
+
+
+def _proc_boot_time_epoch() -> float | None:
+    try:
+        uptime_raw = Path("/proc/uptime").read_text(encoding="utf-8").split()[0]
+        uptime_seconds = float(uptime_raw)
+        return time.time() - uptime_seconds
+    except Exception:
+        return None
+
+
+def _read_proc_cmdline(pid: int) -> str:
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except Exception:
+        return ""
+    return " ".join(part.decode("utf-8", errors="ignore") for part in raw.split(b"\x00") if part).strip()
+
+
+def _read_proc_comm(pid: int) -> str:
+    return _safe_read_text(Path(f"/proc/{pid}/comm"))
+
+
+def _read_proc_start_time(pid: int) -> str | None:
+    try:
+        stat_text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="ignore").strip()
+    except Exception:
+        return None
+    if not stat_text:
+        return None
+    try:
+        after_comm = stat_text.rsplit(") ", 1)[1]
+        fields = after_comm.split()
+        if len(fields) < 20:
+            return None
+        start_ticks = float(fields[19])
+        clk_tck = float(os.sysconf("SC_CLK_TCK"))
+        boot_epoch = _proc_boot_time_epoch()
+        if boot_epoch is None or clk_tck <= 0:
+            return None
+        start_epoch = boot_epoch + (start_ticks / clk_tck)
+        return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(start_epoch))
+    except Exception:
+        return None
+
+
+def _process_candidates(config: Any | None = None) -> list[dict[str, Any]]:
+    process_config = _watch_process_config(config)
+    if not process_config["enabled"]:
         return []
+    exact_name = process_config["name"]
+    cmd_contains = process_config["cmd_contains"]
+    candidates: list[dict[str, Any]] = []
+    try:
+        proc_entries = [entry for entry in os.listdir("/proc") if entry.isdigit()]
     except Exception:
         return []
-    if completed.returncode != 0:
-        return []
-    pids: list[int] = []
-    for line in completed.stdout.splitlines():
-        try:
-            pids.append(int(line.strip()))
-        except Exception:
+    for entry in proc_entries:
+        pid = int(entry)
+        comm = _read_proc_comm(pid)
+        cmdline = _read_proc_cmdline(pid)
+        match_exact = bool(exact_name) and comm == exact_name
+        match_cmd = bool(cmd_contains) and cmd_contains in cmdline
+        if not (match_exact or match_cmd):
             continue
-    return sorted(set(pids))
+        candidates.append(
+            {
+                "pid": pid,
+                "comm": comm,
+                "cmdline": cmdline,
+                "match_mode": "exact" if match_exact else "command",
+                "start_time": _read_proc_start_time(pid),
+            }
+        )
+    candidates.sort(key=lambda item: (0 if item.get("match_mode") == "exact" else 1, -int(item.get("pid") or 0)))
+    return candidates
+
+
+def collect_process_sample(config: Any | None = None) -> dict[str, Any]:
+    candidates = _process_candidates(config)
+    found = candidates[0] if candidates else {}
+    process_running = bool(found)
+    process_pid = int(found["pid"]) if found.get("pid") is not None else None
+    return {
+        "process_running": process_running,
+        "process_pid": process_pid,
+        "process_cmd": str(found.get("cmdline") or found.get("comm") or "") if found else "",
+        "process_start_time": str(found.get("start_time") or "") if found else "",
+        "process_match_mode": str(found.get("match_mode") or "") if found else "",
+        "process_name": str(found.get("comm") or "") if found else "",
+        "process_pids": [int(item["pid"]) for item in candidates if item.get("pid") is not None],
+    }
 
 
 def _read_cpu_times() -> tuple[int, int] | None:
@@ -120,6 +212,65 @@ def _temperature_c() -> float | None:
     if values:
         return max(values)
     return None
+
+
+def _read_rtc_info() -> dict[str, Any]:
+    rtc_root = Path("/sys/class/rtc/rtc0")
+    if not rtc_root.exists():
+        return {
+            "available": False,
+            "read_ok": False,
+            "text": "Not present",
+            "error": "RTC not present",
+        }
+    try:
+        date_text = _safe_read_text(rtc_root / "date")
+        time_text = _safe_read_text(rtc_root / "time")
+        if date_text and time_text:
+            return {
+                "available": True,
+                "read_ok": True,
+                "text": f"{date_text} {time_text}",
+                "error": "",
+            }
+    except Exception as exc:
+        return {
+            "available": True,
+            "read_ok": False,
+            "text": "Read error",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    try:
+        completed = subprocess.run(["hwclock", "--show"], capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return {
+            "available": True,
+            "read_ok": False,
+            "text": "Read error",
+            "error": "hwclock command not found",
+        }
+    except Exception as exc:
+        return {
+            "available": True,
+            "read_ok": False,
+            "text": "Read error",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    stdout = completed.stdout.strip()
+    stderr = completed.stderr.strip()
+    if completed.returncode != 0 or not stdout:
+        return {
+            "available": True,
+            "read_ok": False,
+            "text": "Read error" if stderr else "Unavailable",
+            "error": stderr or stdout or f"hwclock exit code {completed.returncode}",
+        }
+    return {
+        "available": True,
+        "read_ok": True,
+        "text": stdout,
+        "error": "",
+    }
 
 
 def _disk_usage_for_path(path: str) -> dict[str, Any]:
@@ -247,11 +398,11 @@ def collect_system_sample(config: Any | None = None) -> dict[str, Any]:
     config_data = _config_dict(config)
     monitor_paths = config_data.get("monitor_paths") if isinstance(config_data.get("monitor_paths"), dict) else {}
     disk_thresholds = config_data.get("disk_thresholds") if isinstance(config_data.get("disk_thresholds"), dict) else {}
-    app_match = str(config_data.get("app_match") or "").strip()
     os_path = str((monitor_paths or {}).get("os_path") or "/").strip() or "/"
     recording_path_raw = str((monitor_paths or {}).get("recording_path") or "").strip()
     recording_path = recording_path_raw or None
 
+    process_sample = collect_process_sample(config)
     cpu = _cpu_percent()
     memory_info = _memory_info()
     memory = _memory_percent()
@@ -273,8 +424,6 @@ def collect_system_sample(config: Any | None = None) -> dict[str, Any]:
     load_5_value = round(float(load_5), 2) if load_5 is not None else None
     load_15_value = round(float(load_15), 2) if load_15 is not None else None
     cpu_count = int(os.cpu_count() or 1)
-    gateway_process_pids = _process_pids(app_match) if app_match else []
-    gateway_process_pid = gateway_process_pids[-1] if gateway_process_pids else None
 
     os_disk = _disk_usage_for_path(os_path)
     recording_storage = None
@@ -300,6 +449,32 @@ def collect_system_sample(config: Any | None = None) -> dict[str, Any]:
     memory_status = _assess_memory(memory)
     load_status = _assess_load(load_1_value, cpu_count)
     temperature_c = _temperature_c()
+    system_dt = datetime.now().astimezone().replace(microsecond=0)
+    system_time = system_dt.isoformat()
+    rtc_info = _read_rtc_info()
+    clock_drift_seconds = None
+    if bool(rtc_info.get("read_ok")) and str(rtc_info.get("text") or "").strip():
+        rtc_text = str(rtc_info.get("text") or "").strip()
+        rtc_dt = None
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S.%f%z",
+            "%Y-%m-%d %H:%M:%S%z",
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S",
+        ):
+            try:
+                parsed = datetime.strptime(rtc_text, fmt)
+            except Exception:
+                continue
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=system_dt.tzinfo or timezone.utc)
+            rtc_dt = parsed.astimezone(system_dt.tzinfo or timezone.utc)
+            break
+        if rtc_dt is not None:
+            try:
+                clock_drift_seconds = abs(int((system_dt - rtc_dt).total_seconds()))
+            except Exception:
+                clock_drift_seconds = None
 
     potential_factors: list[str] = []
     if os_disk.get("status") == "critical":
@@ -352,7 +527,8 @@ def collect_system_sample(config: Any | None = None) -> dict[str, Any]:
     )
 
     return {
-        "timestamp": iso_utc(),
+        "timestamp": system_time,
+        "system_time": system_time,
         "cpu_source": "proc_stat" if cpu is not None else "",
         "cpu_percent": cpu,
         "cpu_count": cpu_count,
@@ -369,11 +545,20 @@ def collect_system_sample(config: Any | None = None) -> dict[str, Any]:
         "temperature_c": temperature_c,
         "os_disk": os_disk,
         "recording_storage": recording_storage,
-        "gateway_process_running": bool(gateway_process_pids),
-        "gateway_process_pid": gateway_process_pid,
-        "gateway_process_last_pid": gateway_process_pid,
-        "gateway_process_pids": gateway_process_pids,
+        "process_running": bool(process_sample.get("process_running")),
+        "process_pid": process_sample.get("process_pid"),
+        "process_cmd": process_sample.get("process_cmd"),
+        "process_start_time": process_sample.get("process_start_time"),
+        "process_match_mode": process_sample.get("process_match_mode"),
+        "gateway_process_running": bool(process_sample.get("process_running")),
+        "gateway_process_pid": process_sample.get("process_pid"),
+        "gateway_process_cmd": process_sample.get("process_cmd"),
+        "gateway_process_start_time": process_sample.get("process_start_time"),
+        "gateway_process_last_pid": process_sample.get("process_pid"),
+        "gateway_process_pids": process_sample.get("process_pids") or [],
         "gateway_process_restart_count": 0,
+        "gateway_process_restarted": False,
+        "gateway_process_last_restart_at": "",
         "monitor_paths": {
             "os_path": os_path,
             "recording_path": recording_path or "",
@@ -388,4 +573,9 @@ def collect_system_sample(config: Any | None = None) -> dict[str, Any]:
         "potential_factors": _dedupe_phrases(potential_factors),
         "metrics_available": metrics_available,
         "all_metrics_unavailable": all_metrics_unavailable,
+        "rtc_available": bool(rtc_info.get("available")),
+        "rtc_read_ok": bool(rtc_info.get("read_ok")),
+        "rtc_time": str(rtc_info.get("text") or ""),
+        "rtc_read_error": str(rtc_info.get("error") or ""),
+        "clock_drift_seconds": clock_drift_seconds,
     }

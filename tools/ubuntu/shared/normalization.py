@@ -200,6 +200,7 @@ def normalize_state(value: Any, *, device_id: str | None = None, boot_id: str | 
         metrics.update(dict(metrics_raw))
     for key in (
         "timestamp",
+        "system_time",
         "cpu_percent",
         "cpu_source",
         "cpu_count",
@@ -221,6 +222,28 @@ def normalize_state(value: Any, *, device_id: str | None = None, boot_id: str | 
         "load_status",
         "metrics_available",
         "all_metrics_unavailable",
+        "process_running",
+        "process_pid",
+        "process_cmd",
+        "process_start_time",
+        "process_match_mode",
+        "gateway_process_running",
+        "gateway_process_pid",
+        "gateway_process_cmd",
+        "gateway_process_start_time",
+        "gateway_process_restart_count",
+        "gateway_process_restarted",
+        "gateway_process_last_pid",
+        "gateway_process_last_restart_at",
+        "process_restarted",
+        "restart_count",
+        "last_process_pid",
+        "last_process_restart_time",
+        "rtc_available",
+        "rtc_read_ok",
+        "rtc_time",
+        "rtc_read_error",
+        "clock_drift_seconds",
     ):
         if key in raw and key not in metrics:
             metrics[key] = raw.get(key)
@@ -239,6 +262,15 @@ def normalize_state(value: Any, *, device_id: str | None = None, boot_id: str | 
         last_check_at=normalize_timestamp(raw.get("last_check_at"), default_now=False) or None,
         last_healthy_at=normalize_timestamp(raw.get("last_healthy_at"), default_now=False) or None,
         last_watchdog_write_at=normalize_timestamp(raw.get("last_watchdog_write_at"), default_now=False) or None,
+        system_time=normalize_timestamp(raw.get("system_time"), default_now=False) or None,
+        rtc_available=bool(raw.get("rtc_available")) if raw.get("rtc_available") is not None else None,
+        rtc_time=_clean_str(raw.get("rtc_time"), "") or None,
+        rtc_read_ok=bool(raw.get("rtc_read_ok")) if raw.get("rtc_read_ok") is not None else None,
+        clock_drift_seconds=(
+            int(raw.get("clock_drift_seconds"))
+            if isinstance(raw.get("clock_drift_seconds"), (int, float, str)) and str(raw.get("clock_drift_seconds")).strip() not in {"", "None"}
+            else None
+        ),
         last_rtc_sync_at=normalize_timestamp(raw.get("last_rtc_sync_at"), default_now=False) or None,
         last_rtc_sync_result=_clean_str(raw.get("last_rtc_sync_result"), "") or None,
         last_rtc_sync_message=_clean_str(raw.get("last_rtc_sync_message"), "") or None,
@@ -246,6 +278,45 @@ def normalize_state(value: Any, *, device_id: str | None = None, boot_id: str | 
         last_status=last_status,  # type: ignore[arg-type]
         last_error=_clean_str(raw.get("last_error"), "") or None,
         gateway_process_running=bool(raw.get("gateway_process_running")) if raw.get("gateway_process_running") is not None else None,
+        gateway_process_pid=(
+            int(raw.get("gateway_process_pid"))
+            if isinstance(raw.get("gateway_process_pid"), (int, float, str)) and str(raw.get("gateway_process_pid")).strip() not in {"", "None"}
+            else None
+        ),
+        gateway_process_cmd=_clean_str(raw.get("gateway_process_cmd"), "") or None,
+        gateway_process_start_time=_clean_str(raw.get("gateway_process_start_time"), "") or None,
+        gateway_process_restarted=bool(raw.get("gateway_process_restarted")) if raw.get("gateway_process_restarted") is not None else None,
+        gateway_process_restart_count=(
+            int(raw.get("gateway_process_restart_count"))
+            if isinstance(raw.get("gateway_process_restart_count"), (int, float, str)) and str(raw.get("gateway_process_restart_count")).strip() not in {"", "None"}
+            else None
+        ),
+        gateway_process_last_pid=(
+            int(raw.get("gateway_process_last_pid"))
+            if isinstance(raw.get("gateway_process_last_pid"), (int, float, str)) and str(raw.get("gateway_process_last_pid")).strip() not in {"", "None"}
+            else None
+        ),
+        gateway_process_last_restart_at=normalize_timestamp(raw.get("gateway_process_last_restart_at"), default_now=False) or None,
+        process_running=bool(raw.get("process_running")) if raw.get("process_running") is not None else None,
+        process_pid=(
+            int(raw.get("process_pid"))
+            if isinstance(raw.get("process_pid"), (int, float, str)) and str(raw.get("process_pid")).strip() not in {"", "None"}
+            else None
+        ),
+        process_cmd=_clean_str(raw.get("process_cmd"), "") or None,
+        process_start_time=_clean_str(raw.get("process_start_time"), "") or None,
+        process_restarted=bool(raw.get("process_restarted")) if raw.get("process_restarted") is not None else None,
+        restart_count=(
+            int(raw.get("restart_count"))
+            if isinstance(raw.get("restart_count"), (int, float, str)) and str(raw.get("restart_count")).strip() not in {"", "None"}
+            else None
+        ),
+        last_process_pid=(
+            int(raw.get("last_process_pid"))
+            if isinstance(raw.get("last_process_pid"), (int, float, str)) and str(raw.get("last_process_pid")).strip() not in {"", "None"}
+            else None
+        ),
+        last_process_restart_time=normalize_timestamp(raw.get("last_process_restart_time"), default_now=False) or None,
         system_metrics=metrics,
     )
     return asdict(model)
@@ -264,6 +335,7 @@ def normalize_metric_sample(value: Any) -> dict[str, Any]:
 
     return {
         "timestamp": normalize_timestamp(raw.get("timestamp")),
+        "system_time": normalize_timestamp(raw.get("system_time"), default_now=False) or None,
         "cpu_percent": as_float(raw.get("cpu_percent")),
         "cpu_source": _clean_str(raw.get("cpu_source"), ""),
         "cpu_count": as_float(raw.get("cpu_count")),
@@ -285,6 +357,52 @@ def normalize_metric_sample(value: Any) -> dict[str, Any]:
         "load_status": _clean_str(raw.get("load_status"), ""),
         "metrics_available": bool(raw.get("metrics_available", False)),
         "all_metrics_unavailable": bool(raw.get("all_metrics_unavailable", False)),
+        "process_running": bool(raw.get("process_running")) if raw.get("process_running") is not None else None,
+        "process_pid": (
+            int(raw.get("process_pid"))
+            if isinstance(raw.get("process_pid"), (int, float, str)) and str(raw.get("process_pid")).strip() not in {"", "None"}
+            else None
+        ),
+        "process_cmd": _clean_str(raw.get("process_cmd"), ""),
+        "process_start_time": _clean_str(raw.get("process_start_time"), ""),
+        "process_match_mode": _clean_str(raw.get("process_match_mode"), ""),
+        "gateway_process_running": bool(raw.get("gateway_process_running")) if raw.get("gateway_process_running") is not None else None,
+        "gateway_process_pid": (
+            int(raw.get("gateway_process_pid"))
+            if isinstance(raw.get("gateway_process_pid"), (int, float, str)) and str(raw.get("gateway_process_pid")).strip() not in {"", "None"}
+            else None
+        ),
+        "gateway_process_cmd": _clean_str(raw.get("gateway_process_cmd"), ""),
+        "gateway_process_start_time": _clean_str(raw.get("gateway_process_start_time"), ""),
+        "gateway_process_restart_count": (
+            int(raw.get("gateway_process_restart_count"))
+            if isinstance(raw.get("gateway_process_restart_count"), (int, float, str)) and str(raw.get("gateway_process_restart_count")).strip() not in {"", "None"}
+            else None
+        ),
+        "gateway_process_restarted": bool(raw.get("gateway_process_restarted")) if raw.get("gateway_process_restarted") is not None else None,
+        "gateway_process_last_pid": (
+            int(raw.get("gateway_process_last_pid"))
+            if isinstance(raw.get("gateway_process_last_pid"), (int, float, str)) and str(raw.get("gateway_process_last_pid")).strip() not in {"", "None"}
+            else None
+        ),
+        "gateway_process_last_restart_at": normalize_timestamp(raw.get("gateway_process_last_restart_at"), default_now=False) or None,
+        "process_restarted": bool(raw.get("process_restarted")) if raw.get("process_restarted") is not None else None,
+        "restart_count": (
+            int(raw.get("restart_count"))
+            if isinstance(raw.get("restart_count"), (int, float, str)) and str(raw.get("restart_count")).strip() not in {"", "None"}
+            else None
+        ),
+        "last_process_pid": (
+            int(raw.get("last_process_pid"))
+            if isinstance(raw.get("last_process_pid"), (int, float, str)) and str(raw.get("last_process_pid")).strip() not in {"", "None"}
+            else None
+        ),
+        "last_process_restart_time": normalize_timestamp(raw.get("last_process_restart_time"), default_now=False) or None,
+        "rtc_available": bool(raw.get("rtc_available")) if raw.get("rtc_available") is not None else None,
+        "rtc_read_ok": bool(raw.get("rtc_read_ok")) if raw.get("rtc_read_ok") is not None else None,
+        "rtc_time": _clean_str(raw.get("rtc_time"), ""),
+        "rtc_read_error": _clean_str(raw.get("rtc_read_error"), ""),
+        "clock_drift_seconds": as_float(raw.get("clock_drift_seconds")),
         "os_disk": dict(_dict(raw.get("os_disk"))) if isinstance(raw.get("os_disk"), Mapping) else raw.get("os_disk"),
         "recording_storage": dict(_dict(raw.get("recording_storage"))) if isinstance(raw.get("recording_storage"), Mapping) else raw.get("recording_storage"),
         "monitor_paths": dict(_dict(raw.get("monitor_paths"))) if isinstance(raw.get("monitor_paths"), Mapping) else raw.get("monitor_paths"),

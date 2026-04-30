@@ -94,7 +94,7 @@ def check_wan_hosts(config: V2Config) -> dict[str, Any]:
 
 def build_basic_checks(config: V2Config) -> dict[str, dict[str, Any]]:
     return {
-        "app": build_process_check(config.app_match),
+        "app": build_process_check(config),
         "wan": check_wan_hosts(config),
         "boot": normalize_check_result(
             {
@@ -483,23 +483,44 @@ class SiteWatchdog:
         state["last_check_at"] = now
         state["last_status"] = status["overall_status"]
         state["last_watchdog_write_at"] = observed_at
-        state["gateway_process_running"] = bool(checks["app"]["ok"])
-        current_pid = system_sample.get("gateway_process_pid")
-        previous_pid = state.get("gateway_process_pid")
-        restart_count = int(state.get("gateway_process_restart_count", 0) or 0)
+        process_running = bool(system_sample.get("process_running"))
+        current_pid = system_sample.get("process_pid")
+        previous_pid = state.get("process_pid")
+        restart_count = int(state.get("restart_count", state.get("gateway_process_restart_count", 0)) or 0)
         restarted = False
         if current_pid is not None:
             current_pid = int(current_pid)
             if previous_pid is not None and int(previous_pid) != current_pid:
                 restart_count += 1
                 restarted = True
-                state["gateway_process_last_pid"] = previous_pid
-                state["gateway_process_last_changed_at"] = observed_at
-            state["gateway_process_pid"] = current_pid
-        elif previous_pid is None:
-            state["gateway_process_pid"] = None
+                state["last_process_restart_time"] = observed_at
+            state["last_process_pid"] = int(previous_pid) if previous_pid is not None else current_pid
+            state["process_pid"] = current_pid
+            state["process_running"] = True
+            state["process_restarted"] = restarted
+            state["restart_count"] = restart_count
+        else:
+            state["process_running"] = False
+            state["process_pid"] = None
+            state["process_restarted"] = False
+            state["restart_count"] = restart_count
+        state["gateway_process_running"] = process_running
+        state["gateway_process_pid"] = current_pid if current_pid is not None else None
+        state["gateway_process_cmd"] = system_sample.get("process_cmd")
+        state["gateway_process_start_time"] = system_sample.get("process_start_time")
+        state["gateway_process_last_pid"] = state.get("last_process_pid")
         state["gateway_process_restart_count"] = restart_count
         state["gateway_process_restarted"] = restarted
+        state["gateway_process_last_restart_at"] = state.get("last_process_restart_time")
+        state["process_cmd"] = system_sample.get("process_cmd")
+        state["process_start_time"] = system_sample.get("process_start_time")
+        state["process_match_mode"] = system_sample.get("process_match_mode")
+        state["system_time"] = system_sample.get("system_time") or now
+        state["rtc_available"] = bool(system_sample.get("rtc_available"))
+        state["rtc_read_ok"] = bool(system_sample.get("rtc_read_ok"))
+        state["rtc_time"] = system_sample.get("rtc_time")
+        state["rtc_read_error"] = system_sample.get("rtc_read_error")
+        state["clock_drift_seconds"] = system_sample.get("clock_drift_seconds")
         state["system_metrics"] = system_sample
         save_device_status(self.config, status)
         save_state(self.config, state)

@@ -315,7 +315,29 @@ def current_system_time_label() -> str:
     return datetime.now().astimezone().replace(microsecond=0).isoformat()
 
 
+def parse_rtc_timestamp(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for candidate in (
+        text,
+        text.replace(" ", "T", 1),
+    ):
+        try:
+            parsed = datetime.fromisoformat(candidate)
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+        except Exception:
+            pass
+    try:
+        return datetime.strptime(text, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
 def read_hwclock_show() -> dict[str, Any]:
+    rtc_root = Path("/sys/class/rtc/rtc0")
+    if not rtc_root.exists():
+        return {"ok": False, "available": False, "text": "Not present", "stderr": "RTC not present"}
     try:
         completed = subprocess.run(
             ["hwclock", "--show"],
@@ -324,15 +346,25 @@ def read_hwclock_show() -> dict[str, Any]:
             check=False,
         )
     except FileNotFoundError:
-        return {"ok": False, "text": "", "stderr": "hwclock command not found"}
+        return {"ok": False, "available": True, "text": "Read error", "stderr": "hwclock command not found"}
     except Exception as exc:
-        return {"ok": False, "text": "", "stderr": f"{type(exc).__name__}: {exc}"}
+        return {"ok": False, "available": True, "text": "Read error", "stderr": f"{type(exc).__name__}: {exc}"}
 
     stdout = completed.stdout.strip()
     stderr = completed.stderr.strip()
-    text = stdout or stderr or f"hwclock exit code {completed.returncode}"
+    if completed.returncode != 0 or not stdout:
+        return {
+            "ok": False,
+            "available": True,
+            "text": "Read error" if stderr else "Unavailable",
+            "stderr": stderr or stdout or f"hwclock exit code {completed.returncode}",
+            "stdout": stdout,
+            "return_code": completed.returncode,
+        }
+    text = stdout
     return {
         "ok": completed.returncode == 0,
+        "available": True,
         "text": text,
         "stdout": stdout,
         "stderr": stderr,
@@ -1073,23 +1105,6 @@ def metrics_history_payload(range_value: str = "1h", incident_id: str | None = N
             if parsed is None or parsed < start_dt or parsed > end_dt:
                 continue
             raw_samples.append(sample)
-    if not raw_samples:
-        try:
-            state = read_json(STATE_PATH, {})
-        except Exception:
-            state = {}
-        state_metrics = state.get("system_metrics") if isinstance(state.get("system_metrics"), dict) else {}
-        if isinstance(state_metrics, dict) and state_metrics:
-            fallback_source_ts = (
-                parse_iso(str(state.get("last_watchdog_write_at") or ""))
-                or parse_iso(str(state.get("last_check_at") or ""))
-                or parse_iso(str(state_metrics.get("timestamp") or ""))
-                or end_dt
-            )
-            fallback = dict(state_metrics)
-            fallback["timestamp"] = fallback_source_ts.astimezone(timezone.utc).replace(microsecond=0).isoformat()
-            raw_samples.append(_metric_history_sample_from_raw(fallback))
-            history_source = "live_state_fallback"
     raw_samples.sort(key=lambda item: str(item.get("timestamp") or ""))
     samples = _downsample_metric_history_samples(raw_samples, bucket_seconds)
     markers: List[Dict[str, Any]] = []
@@ -1135,6 +1150,49 @@ def metrics_history_payload(range_value: str = "1h", incident_id: str | None = N
             }
         )
     markers.sort(key=lambda item: str(item.get("timestamp") or ""))
+    if not raw_samples:
+        fallback_state = read_json(STATE_PATH, {})
+        fallback_source = fallback_state.get("system_metrics") if isinstance(fallback_state.get("system_metrics"), dict) else fallback_state
+        fallback_sample = _metric_history_sample_from_raw(fallback_source if isinstance(fallback_source, dict) else {})
+        fallback_parsed = parse_iso(str(fallback_sample.get("timestamp") or "")) if fallback_sample else None
+        if fallback_sample and fallback_parsed is not None and start_dt <= fallback_parsed <= end_dt:
+            raw_samples.append(fallback_sample)
+            raw_samples.sort(key=lambda item: str(item.get("timestamp") or ""))
+            samples = _downsample_metric_history_samples(raw_samples, bucket_seconds)
+            return {
+                "range": range_key,
+                "range_seconds": range_seconds,
+                "bucket_seconds": bucket_seconds or 0,
+                "samples": samples,
+                "markers": markers,
+                "sample_count": len(samples),
+                "window_start": start_dt.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+                "window_end": end_dt.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+                "selected_incident_id": str((selected_incident or {}).get("incident_id") or ""),
+                "selected_incident_type": str((selected_incident or {}).get("type") or ""),
+                "focus_window_start": focus_start or "",
+                "focus_window_end": focus_end or "",
+                "focus_incident": selected_incident or {},
+                "history_source": "state.json",
+                "message": "Metrics history starting. Showing the latest live sample.",
+            }
+        return {
+            "range": range_key,
+            "range_seconds": range_seconds,
+            "bucket_seconds": bucket_seconds or 0,
+            "samples": [],
+            "markers": markers,
+            "sample_count": 0,
+            "window_start": start_dt.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+            "window_end": end_dt.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+            "selected_incident_id": str((selected_incident or {}).get("incident_id") or ""),
+            "selected_incident_type": str((selected_incident or {}).get("type") or ""),
+            "focus_window_start": focus_start or "",
+            "focus_window_end": focus_end or "",
+            "focus_incident": selected_incident or {},
+            "history_source": history_source,
+            "message": "Metrics history starting. Data will appear shortly.",
+        }
     return {
         "range": range_key,
         "range_seconds": range_seconds,
@@ -1150,7 +1208,7 @@ def metrics_history_payload(range_value: str = "1h", incident_id: str | None = N
         "focus_window_end": focus_end or "",
         "focus_incident": selected_incident or {},
         "history_source": history_source,
-        "history_warming_up": history_source == "live_state_fallback",
+        "message": "",
     }
 
 
@@ -3824,7 +3882,7 @@ def status_payload() -> Dict[str, Any]:
     }
 
 
-def status_snapshot_payload(window_seconds: int = 60, incident_id: str | None = None) -> Dict[str, Any]:
+def status_snapshot_payload(window_seconds: int = 60, incident_id: str | None = None, history_range: str = "1h") -> Dict[str, Any]:
     try:
         state = read_json(STATE_PATH, {})
     except Exception:
@@ -3962,13 +4020,37 @@ def status_snapshot_payload(window_seconds: int = 60, incident_id: str | None = 
         )
 
     metrics_available = bool(latest_metric.get("metrics_available"))
+    system_time_value = str(state.get("system_time") or latest_metric.get("system_time") or current_system_time_label()).strip()
+    rtc_time_value = str(state.get("rtc_time") or rtc_time_info.get("text") or "Not available").strip()
+    rtc_available = state.get("rtc_available")
+    if rtc_available is None:
+        rtc_available = bool(rtc_time_info.get("available"))
+    rtc_read_ok = state.get("rtc_read_ok")
+    if rtc_read_ok is None:
+        rtc_read_ok = bool(rtc_time_info.get("ok"))
+    rtc_drift_seconds = state.get("clock_drift_seconds")
+    if not isinstance(rtc_drift_seconds, int):
+        rtc_drift_seconds = None
+    if rtc_read_ok and rtc_time_value not in {"", "Read error", "Not present", "Unavailable"}:
+        rtc_dt = parse_rtc_timestamp(rtc_time_value)
+        system_dt = parse_iso(system_time_value)
+        if rtc_dt is not None and system_dt is not None:
+            try:
+                rtc_drift_seconds = abs(int((system_dt - rtc_dt).total_seconds()))
+            except Exception:
+                rtc_drift_seconds = None
+        else:
+            rtc_drift_seconds = None
 
     current_system_state = {
-        "gateway_process_running": gateway_process_running,
-        "gateway_process_pid": latest_metric.get("gateway_process_pid"),
-        "gateway_process_last_pid": str(state.get("gateway_process_last_pid") or latest_metric.get("gateway_process_last_pid") or ""),
-        "gateway_process_restart_count": int(state.get("gateway_process_restart_count", 0) or 0),
-        "gateway_process_restarted": bool(state.get("gateway_process_restarted")),
+        "gateway_process_running": state.get("process_running") if state.get("process_running") is not None else latest_metric.get("gateway_process_running", gateway_process_running),
+        "gateway_process_pid": state.get("process_pid") if state.get("process_pid") is not None else latest_metric.get("gateway_process_pid"),
+        "gateway_process_cmd": state.get("process_cmd") or latest_metric.get("gateway_process_cmd"),
+        "gateway_process_start_time": state.get("process_start_time") or latest_metric.get("gateway_process_start_time"),
+        "gateway_process_last_pid": state.get("last_process_pid") or state.get("gateway_process_last_pid") or latest_metric.get("gateway_process_last_pid") or "",
+        "gateway_process_restart_count": int(state.get("restart_count", state.get("gateway_process_restart_count", 0)) or 0),
+        "gateway_process_restarted": bool(state.get("process_restarted") if state.get("process_restarted") is not None else state.get("gateway_process_restarted")),
+        "gateway_process_last_restart_at": state.get("last_process_restart_time") or state.get("gateway_process_last_restart_at") or "",
         "cpu_percent": latest_metric.get("cpu_percent"),
         "cpu_source": latest_metric.get("cpu_source"),
         "cpu_status": latest_metric.get("cpu_status"),
@@ -3998,23 +4080,21 @@ def status_snapshot_payload(window_seconds: int = 60, incident_id: str | None = 
         "uptime_seconds": uptime_seconds,
         "uptime_label": uptime_label,
         "last_watchdog_write_at": last_watchdog_write_at,
-        "current_system_time": current_system_time_label(),
-        "rtc_time": rtc_time_info.get("text") or "Not available",
-        "rtc_available": bool(rtc_time_info.get("ok")),
-        "clock_drift_seconds": None,
+        "current_system_time": system_time_value,
+        "history_range": history_range,
+        "rtc_time": rtc_time_value if rtc_available else "Not present",
+        "rtc_available": bool(rtc_available),
+        "rtc_read_ok": bool(rtc_read_ok),
+        "rtc_read_error": str(state.get("rtc_read_error") or rtc_time_info.get("stderr") or ""),
+        "clock_drift_seconds": rtc_drift_seconds,
         "last_rtc_sync_at": str(state.get("last_rtc_sync_at") or ""),
         "last_rtc_sync_result": str(state.get("last_rtc_sync_result") or ""),
         "last_rtc_sync_message": str(state.get("last_rtc_sync_message") or ""),
         "metrics_available": metrics_available,
         "all_metrics_unavailable": bool(latest_metric.get("all_metrics_unavailable")) or not metrics_available,
     }
-    rtc_dt = parse_iso(str(rtc_time_info.get("text") or ""))
-    system_dt = parse_iso(current_system_time_label())
-    if rtc_dt is not None and system_dt is not None:
-        try:
-            current_system_state["clock_drift_seconds"] = abs(int((system_dt - rtc_dt).total_seconds()))
-        except Exception:
-            current_system_state["clock_drift_seconds"] = None
+    if not isinstance(current_system_state["clock_drift_seconds"], int):
+        current_system_state["clock_drift_seconds"] = None
 
     latest_incident_type = str(latest_incident.get("type") or "").strip()
     incident_banner = None
@@ -4433,8 +4513,8 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     boot_time_iso = str(snapshot.get("boot_time_iso") or "")
     uptime_label = str(snapshot.get("uptime_label") or "Unavailable")
     uptime_seconds = snapshot.get("uptime_seconds")
-    current_system_time = str(snapshot.get("current_system_time") or "unknown")
-    rtc_time = str(snapshot.get("rtc_time") or "Unavailable")
+    current_system_time = str(snapshot.get("current_system_time") or "Not available")
+    rtc_time = str(snapshot.get("rtc_time") or "Not available")
     last_rtc_sync_at = str(snapshot.get("last_rtc_sync_at") or "")
     last_rtc_sync_result = str(snapshot.get("last_rtc_sync_result") or "")
     last_rtc_sync_message = str(snapshot.get("last_rtc_sync_message") or "")
@@ -4494,10 +4574,11 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         timeline_buttons.append(f'<a class="window-btn{active}" href="/latest?window={seconds}">{esc(label)}</a>')
     timeline_buttons_html = "".join(timeline_buttons)
     history_buttons = []
+    history_range = str(snapshot.get("history_range") or "1h").strip() or "1h"
     for range_key, label in (("1h", "1 hour"), ("1d", "1 day"), ("7d", "7 days")):
-        active = " active" if range_key == "1h" else ""
+        active = " active" if range_key == history_range else ""
         history_buttons.append(
-            f'<button type="button" class="window-btn{active}" data-history-range="{esc(range_key)}" onclick="loadMetricsHistory(\'{esc(range_key)}\')">{esc(label)}</button>'
+            f'<a class="window-btn{active}" data-history-range="{esc(range_key)}" href="/latest?window={int(window_seconds)}&history={esc(range_key)}&incident={esc(selected_incident_id)}" role="button">{esc(label)}</a>'
         )
     history_buttons_html = "".join(history_buttons)
 
@@ -4658,15 +4739,17 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     current_system_rows = [
         kv("Gateway process running", yes_no_unknown(current_system_state.get("gateway_process_running")), yes_no_unknown_class(current_system_state.get("gateway_process_running"))),
         kv("Gateway process PID", str(current_system_state.get("gateway_process_pid") or "Not available"), "unavailable"),
+        kv("Process command", str(current_system_state.get("gateway_process_cmd") or "Not available"), "unavailable"),
         kv("Process restarted", yes_no_unknown(current_system_state.get("gateway_process_restarted")), yes_no_unknown_class(current_system_state.get("gateway_process_restarted"))),
         kv("Restart count", str(current_system_state.get("gateway_process_restart_count") if current_system_state.get("gateway_process_restart_count") is not None else "Not available"), "unavailable"),
+        kv("Last process restart", format_local_timestamp(str(current_system_state.get("gateway_process_last_restart_at") or ""), default="Not recorded"), "unavailable"),
         kv("CPU", cpu_display, metric_class(cpu_status), "CPU usage from /proc/stat"),
         kv("Memory", memory_display, metric_class(memory_status), "Memory usage from /proc/meminfo"),
         kv("Load", load_display + f" ({current_system_state.get('load_context') or 'OK'})", metric_class(load_status), "1 / 5 / 15 minute load average | HIGH means load is at or above core count"),
         kv("System time", current_system_time, "unavailable"),
         kv("RTC available", yes_no_unknown(current_system_state.get("rtc_available")), yes_no_unknown_class(current_system_state.get("rtc_available"))),
-        kv("RTC time", rtc_time if rtc_time else "Not available", "unavailable"),
-        kv("Clock drift", f"{int(current_system_state.get('clock_drift_seconds'))}s" if isinstance(current_system_state.get("clock_drift_seconds"), int) else "Not available", "unavailable"),
+        kv("RTC time", rtc_time if rtc_time else "Not present" if not current_system_state.get("rtc_available") else "Read error" if not current_system_state.get("rtc_read_ok") else "Not available", "unavailable"),
+        kv("Clock drift", f"{int(current_system_state.get('clock_drift_seconds'))}s" if isinstance(current_system_state.get("clock_drift_seconds"), int) else "Unavailable", "unavailable"),
     ]
     if temperature_c is not None:
         current_system_rows.append(kv("Temperature", temperature_display, "ok"))
@@ -4680,8 +4763,8 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
             kv("Current uptime", uptime_label, "unavailable"),
             kv("Last reboot age", format_duration(snapshot.get("last_reboot_age_seconds")) if isinstance(snapshot.get("last_reboot_age_seconds"), int) else "Unavailable", "unavailable"),
             kv("Last watchdog write time", format_local_timestamp(last_watchdog_write_at := str(snapshot.get("last_watchdog_write_at") or ""), default="Unavailable"), "unavailable"),
-            kv("Last RTC sync", f"{format_local_timestamp(last_rtc_sync_at, default='never')} - {last_rtc_sync_result or 'unknown'}", "unavailable", last_rtc_sync_message),
-        ]
+        kv("Last RTC sync", f"{format_local_timestamp(last_rtc_sync_at, default='Not recorded')} - {last_rtc_sync_result or 'Not recorded'}", "unavailable", last_rtc_sync_message or "Not recorded"),
+    ]
     )
     current_system_rows_html = "".join(current_system_rows)
 
@@ -4800,8 +4883,8 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     .small-muted {{ color: var(--muted); font-size: 12px; }}
     .incident-lists {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }}
     .incident-lists ul {{ margin: 6px 0 0 18px; padding: 0; }}
-    .window-bar {{ display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }}
-    .window-btn {{ border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; background: #101821; color: var(--text); font-size: 12px; cursor: pointer; transition: background .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease, transform .12s ease; }}
+    .window-bar {{ display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; position: relative; z-index: 2; }}
+    .window-btn {{ display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; background: #101821; color: var(--text); font-size: 12px; cursor: pointer; transition: background .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease, transform .12s ease; text-decoration: none; }}
     .window-btn:hover, .window-btn:focus-visible {{ border-color: #56718e; box-shadow: 0 0 0 2px rgba(122,167,217,.10); outline: none; }}
     .window-btn.active {{ background: #203142; border-color: #55708d; color: #d7ecff; box-shadow: inset 0 0 0 1px rgba(122,167,217,.18); transform: translateY(-1px); }}
     .timeline-list {{ display: grid; gap: 6px; }}
@@ -4817,11 +4900,11 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     .history-chart-title {{ color: #b6c6d4; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px; }}
     .history-canvas {{ width: 100%; height: 420px; display: block; }}
     .history-chart-card {{ position: relative; }}
-    .history-toolbar {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }}
+    .history-toolbar {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; position: relative; z-index: 2; }}
     .history-toggle {{ border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; background: #101821; color: var(--text); font-size: 12px; cursor: pointer; transition: background .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease, transform .12s ease; }}
     .history-toggle:hover, .history-toggle:focus-visible {{ border-color: #56718e; box-shadow: 0 0 0 2px rgba(122,167,217,.10); outline: none; }}
     .history-toggle.active {{ background: #203142; border-color: #55708d; color: #d7ecff; box-shadow: inset 0 0 0 1px rgba(122,167,217,.18); transform: translateY(-1px); }}
-    .zoom-bar {{ display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: center; }}
+    .zoom-bar {{ display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: center; position: relative; z-index: 2; }}
     .zoom-label {{ color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin-right: 2px; align-self: center; }}
     .zoom-btn {{ border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px; background: #101821; color: var(--text); font-size: 12px; cursor: pointer; transition: background .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease, transform .12s ease; }}
     .zoom-btn:hover, .zoom-btn:focus-visible {{ border-color: #56718e; box-shadow: 0 0 0 2px rgba(122,167,217,.10); outline: none; }}
@@ -5037,6 +5120,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
   <script>
     const windowSeconds = {int(timeline_window_seconds)};
     const selectedIncidentId = {json.dumps(selected_incident_id)};
+    const initialMetricsRange = {json.dumps(history_range)};
     let updateProgressTimer = null;
     let pageZoom = 1;
 
@@ -5389,7 +5473,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       const canvas = document.getElementById('historyUnifiedChart');
       const samples = payload && Array.isArray(payload.samples) ? payload.samples : [];
       const markers = payload && Array.isArray(payload.markers) ? payload.markers : [];
-      const warmingUp = !!(payload && payload.history_warming_up);
+      const historyMessage = payload && payload.message ? String(payload.message) : '';
       renderHistoryLegend(markers);
 
       const selectedIncident = payload && payload.focus_incident ? payload.focus_incident : null;
@@ -5405,12 +5489,10 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
 
       if (!chartSamples.length) {{
         if (status) {{
-          status.textContent = warmingUp ? 'Live sample only | ' + metricsHistoryLabel(metricsHistoryState.range) : 'Metrics history not available yet.';
+          status.textContent = historyMessage || 'Metrics history starting.';
         }}
         if (summary) {{
-          summary.textContent = warmingUp
-            ? 'No saved metrics history yet. Showing the latest live sample from state.json.'
-            : 'No metrics history available yet.';
+          summary.textContent = historyMessage || 'Metrics history starting. Data will appear shortly.';
         }}
         if (tooltip) {{
           tooltip.style.display = 'none';
@@ -5436,8 +5518,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       const covered = Number.isFinite(firstEpoch) && Number.isFinite(lastEpoch) ? Math.max(0, Math.floor((lastEpoch - firstEpoch) / 1000)) : 0;
       if (status) {{
         const selectedLabel = selectedIncident && (selectedIncident.type || selectedIncident.summary) ? ' | incident focus' : '';
-        const warmLabel = warmingUp ? ' | live sample only' : '';
-        status.textContent = metricsHistoryLabel(metricsHistoryState.range) + selectedLabel + warmLabel + ' | ' + chartSamples.length + ' samples | ' + formatHistoryDuration(covered) + ' covered';
+        status.textContent = metricsHistoryLabel(metricsHistoryState.range) + selectedLabel + ' | ' + chartSamples.length + ' samples | ' + formatHistoryDuration(covered) + ' covered';
       }}
       const latest = chartSamples[chartSamples.length - 1] || {{}};
       const cpuCount = Number((latest || {{}}).cpu_count || 1) || 1;
@@ -5743,21 +5824,18 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       const markers = payload && payload.markers ? payload.markers : [];
       renderHistoryLegend(markers);
       if (status) {{
-        const warmingUp = !!(payload && payload.history_warming_up);
-        const prefix = warmingUp ? 'Live sample only | ' : (payload && payload.focus_window_start ? 'Focused incident view | ' : '');
+        const prefix = payload && payload.focus_window_start ? 'Focused incident view | ' : '';
         status.textContent = prefix + metricsHistoryLabel(metricsHistoryState.range);
       }}
       if (!samples.length) {{
         if (summary) {{
-          summary.textContent = payload && payload.history_warming_up
-            ? 'No saved metrics history yet. Showing the latest live sample from state.json.'
-            : 'No metrics history available yet.';
+          summary.textContent = payload && payload.message ? String(payload.message) : 'Metrics history starting. Data will appear shortly.';
         }}
         renderUnifiedHistory(payload || {{}});
         return;
       }}
-      if (payload && payload.history_warming_up && summary) {{
-        summary.textContent = 'No saved metrics history yet. Showing the latest live sample from state.json.';
+      if (payload && payload.message && summary) {{
+        summary.textContent = String(payload.message);
       }}
       renderUnifiedHistory(payload || {{}});
     }}
@@ -5766,6 +5844,11 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       const selectedRange = range || metricsHistoryState.range || '1h';
       metricsHistoryState.range = selectedRange;
       setHistoryButtonsActive(selectedRange);
+      try {{
+        window.localStorage.setItem('va-connect-metrics-range', selectedRange);
+      }} catch (error) {{
+        // ignore storage failures
+      }}
       const status = document.getElementById('historyMetricsStatus');
       const summary = document.getElementById('historyMetricsSummary');
       if (status) {{
@@ -5791,6 +5874,13 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
           summaryLine.textContent = message;
         }}
       }}
+    }}
+
+    function refreshMetricsHistory() {{
+      if (!metricsHistoryState.range) {{
+        return;
+      }}
+      loadMetricsHistory(metricsHistoryState.range);
     }}
 
     function updateStatusTextFromPayload(data, fallbackText) {{
@@ -6318,9 +6408,57 @@ def render_base_page(status: Dict[str, Any]) -> str:
     }}
 
     document.addEventListener('DOMContentLoaded', () => {{
+      try {{
+        const savedRange = window.localStorage.getItem('va-connect-metrics-range');
+        if (savedRange) {{
+          metricsHistoryState.range = savedRange;
+        }}
+      }} catch (error) {{
+        // ignore storage failures
+      }}
+      document.querySelectorAll('[data-history-range]').forEach((button) => {{
+        button.addEventListener('click', (event) => {{
+          if (event && typeof event.preventDefault === 'function') {{
+            event.preventDefault();
+          }}
+          loadMetricsHistory(button.getAttribute('data-history-range') || '1h');
+        }});
+      }});
+      document.querySelectorAll('[data-metric-toggle]').forEach((button) => {{
+        button.addEventListener('click', () => {{
+          const key = button.getAttribute('data-metric-toggle');
+          if (!key) {{
+            return;
+          }}
+          metricsHistoryState.active[key] = !metricsHistoryState.active[key];
+          try {{
+            window.localStorage.setItem('va-connect-metrics-toggles', JSON.stringify(metricsHistoryState.active));
+          }} catch (error) {{
+            // ignore storage failures
+          }}
+          setMetricToggleState();
+          if (metricsHistoryState.payload) {{
+            renderUnifiedHistory(metricsHistoryState.payload);
+          }}
+        }});
+      }});
       restorePageZoom();
+      try {{
+        const savedToggles = window.localStorage.getItem('va-connect-metrics-toggles');
+        if (savedToggles) {{
+          const parsed = JSON.parse(savedToggles);
+          if (parsed && typeof parsed === 'object') {{
+            metricsHistoryState.active = Object.assign(metricsHistoryState.active, parsed);
+          }}
+        }}
+      }} catch (error) {{
+        // ignore storage failures
+      }}
+      setMetricToggleState();
       watchForNewBuild();
       setInterval(watchForNewBuild, 15000);
+      loadMetricsHistory(metricsHistoryState.range || initialMetricsRange || '1h');
+      setInterval(refreshMetricsHistory, 15000);
     }});
   </script>
 </body>
@@ -10461,8 +10599,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path in {"/", "/index.html"}:
             window_seconds = timeline_window_seconds_from_query(parsed.query)
             incident_id = parse_qs(parsed.query).get("incident", [""])[0] or None
+            history_range = parse_qs(parsed.query).get("history", ["1h"])[0]
             body = render_investigation_page(
-                status_snapshot_payload(window_seconds=window_seconds, incident_id=incident_id),
+                status_snapshot_payload(window_seconds=window_seconds, incident_id=incident_id, history_range=history_range),
                 window_seconds=window_seconds,
             ).encode("utf-8")
             self.send_response(HTTPStatus.OK)
@@ -10477,8 +10616,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path in {"/latest", "/latest/index.html"}:
             window_seconds = timeline_window_seconds_from_query(parsed.query)
             incident_id = parse_qs(parsed.query).get("incident", [""])[0] or None
+            history_range = parse_qs(parsed.query).get("history", ["1h"])[0]
             body = render_investigation_page(
-                status_snapshot_payload(window_seconds=window_seconds, incident_id=incident_id),
+                status_snapshot_payload(window_seconds=window_seconds, incident_id=incident_id, history_range=history_range),
                 window_seconds=window_seconds,
             ).encode("utf-8")
             self.send_response(HTTPStatus.OK)
@@ -10494,7 +10634,8 @@ class Handler(BaseHTTPRequestHandler):
             requested_build = parsed.path.removeprefix("/v/").strip("/") or "unknown"
             window_seconds = timeline_window_seconds_from_query(parsed.query)
             incident_id = parse_qs(parsed.query).get("incident", [""])[0] or None
-            status = status_snapshot_payload(window_seconds=window_seconds, incident_id=incident_id)
+            history_range = parse_qs(parsed.query).get("history", ["1h"])[0]
+            status = status_snapshot_payload(window_seconds=window_seconds, incident_id=incident_id, history_range=history_range)
             if requested_build != str(status.get("build_number") or status.get("build") or "unknown"):
                 self.send_response(HTTPStatus.SEE_OTHER)
                 self.send_header("Location", "/latest")

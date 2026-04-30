@@ -21,6 +21,7 @@ class V2Config:
     web_host: str
     web_port: int
     log_level: str
+    watch_process: dict[str, Any] = field(default_factory=dict)
     monitor_paths: dict[str, Any] = field(default_factory=dict)
     disk_thresholds: dict[str, Any] = field(default_factory=dict)
     freshness_thresholds: dict[str, Any] = field(default_factory=dict)
@@ -69,6 +70,9 @@ def load_config() -> V2Config:
     disk_thresholds = raw.get("disk_thresholds", {})
     if not isinstance(disk_thresholds, dict):
         disk_thresholds = {}
+    watch_process = raw.get("watch_process", {})
+    if not isinstance(watch_process, dict):
+        watch_process = {}
     freshness_thresholds = raw.get("freshness_thresholds", {})
     if not isinstance(freshness_thresholds, dict):
         freshness_thresholds = {}
@@ -86,6 +90,7 @@ def load_config() -> V2Config:
         web_host=web_host,
         web_port=web_port,
         log_level=log_level,
+        watch_process=watch_process,
         monitor_paths=monitor_paths,
         disk_thresholds=disk_thresholds,
         freshness_thresholds=freshness_thresholds,

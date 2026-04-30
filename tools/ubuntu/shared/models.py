@@ -88,6 +88,11 @@ class StateRecord:
     last_check_at: str | None = None
     last_healthy_at: str | None = None
     last_watchdog_write_at: str | None = None
+    system_time: str | None = None
+    rtc_available: bool | None = None
+    rtc_time: str | None = None
+    rtc_read_ok: bool | None = None
+    clock_drift_seconds: int | None = None
     last_rtc_sync_at: str | None = None
     last_rtc_sync_result: str | None = None
     last_rtc_sync_message: str | None = None
@@ -95,4 +100,19 @@ class StateRecord:
     last_status: OverallStatus = "unknown"
     last_error: str | None = None
     gateway_process_running: bool | None = None
+    gateway_process_pid: int | None = None
+    gateway_process_cmd: str | None = None
+    gateway_process_start_time: str | None = None
+    gateway_process_restarted: bool | None = None
+    gateway_process_restart_count: int | None = None
+    gateway_process_last_pid: int | None = None
+    gateway_process_last_restart_at: str | None = None
+    process_running: bool | None = None
+    process_pid: int | None = None
+    process_cmd: str | None = None
+    process_start_time: str | None = None
+    process_restarted: bool | None = None
+    restart_count: int | None = None
+    last_process_pid: int | None = None
+    last_process_restart_time: str | None = None
     system_metrics: Dict[str, Any] = field(default_factory=dict)

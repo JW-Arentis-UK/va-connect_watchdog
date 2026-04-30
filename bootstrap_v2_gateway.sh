@@ -161,6 +161,11 @@ defaults = {
     "web_bind": "0.0.0.0",
     "web_port": 80,
     "web_token": "",
+    "watch_process": {
+        "enabled": True,
+        "name": "va-connect",
+        "cmd_contains": "va-connect",
+    },
 }
 
 defaults.update(current if isinstance(current, dict) else {})
