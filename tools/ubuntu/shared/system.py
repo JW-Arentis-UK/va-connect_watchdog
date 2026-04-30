@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import subprocess
 import shutil
 from typing import Any
 
@@ -21,6 +22,27 @@ def _config_dict(config: Any | None) -> dict[str, Any]:
         if hasattr(config, key):
             data[key] = getattr(config, key)
     return data
+
+
+def _process_pids(match: str) -> list[int]:
+    pattern = str(match or "").strip()
+    if not pattern:
+        return []
+    try:
+        completed = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+    if completed.returncode != 0:
+        return []
+    pids: list[int] = []
+    for line in completed.stdout.splitlines():
+        try:
+            pids.append(int(line.strip()))
+        except Exception:
+            continue
+    return sorted(set(pids))
 
 
 def _read_cpu_times() -> tuple[int, int] | None:
@@ -225,6 +247,7 @@ def collect_system_sample(config: Any | None = None) -> dict[str, Any]:
     config_data = _config_dict(config)
     monitor_paths = config_data.get("monitor_paths") if isinstance(config_data.get("monitor_paths"), dict) else {}
     disk_thresholds = config_data.get("disk_thresholds") if isinstance(config_data.get("disk_thresholds"), dict) else {}
+    app_match = str(config_data.get("app_match") or "").strip()
     os_path = str((monitor_paths or {}).get("os_path") or "/").strip() or "/"
     recording_path_raw = str((monitor_paths or {}).get("recording_path") or "").strip()
     recording_path = recording_path_raw or None
@@ -250,6 +273,8 @@ def collect_system_sample(config: Any | None = None) -> dict[str, Any]:
     load_5_value = round(float(load_5), 2) if load_5 is not None else None
     load_15_value = round(float(load_15), 2) if load_15 is not None else None
     cpu_count = int(os.cpu_count() or 1)
+    gateway_process_pids = _process_pids(app_match) if app_match else []
+    gateway_process_pid = gateway_process_pids[-1] if gateway_process_pids else None
 
     os_disk = _disk_usage_for_path(os_path)
     recording_storage = None
@@ -344,6 +369,11 @@ def collect_system_sample(config: Any | None = None) -> dict[str, Any]:
         "temperature_c": temperature_c,
         "os_disk": os_disk,
         "recording_storage": recording_storage,
+        "gateway_process_running": bool(gateway_process_pids),
+        "gateway_process_pid": gateway_process_pid,
+        "gateway_process_last_pid": gateway_process_pid,
+        "gateway_process_pids": gateway_process_pids,
+        "gateway_process_restart_count": 0,
         "monitor_paths": {
             "os_path": os_path,
             "recording_path": recording_path or "",

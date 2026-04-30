@@ -484,6 +484,22 @@ class SiteWatchdog:
         state["last_status"] = status["overall_status"]
         state["last_watchdog_write_at"] = observed_at
         state["gateway_process_running"] = bool(checks["app"]["ok"])
+        current_pid = system_sample.get("gateway_process_pid")
+        previous_pid = state.get("gateway_process_pid")
+        restart_count = int(state.get("gateway_process_restart_count", 0) or 0)
+        restarted = False
+        if current_pid is not None:
+            current_pid = int(current_pid)
+            if previous_pid is not None and int(previous_pid) != current_pid:
+                restart_count += 1
+                restarted = True
+                state["gateway_process_last_pid"] = previous_pid
+                state["gateway_process_last_changed_at"] = observed_at
+            state["gateway_process_pid"] = current_pid
+        elif previous_pid is None:
+            state["gateway_process_pid"] = None
+        state["gateway_process_restart_count"] = restart_count
+        state["gateway_process_restarted"] = restarted
         state["system_metrics"] = system_sample
         save_device_status(self.config, status)
         save_state(self.config, state)

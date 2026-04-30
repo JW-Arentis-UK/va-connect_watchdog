@@ -1038,10 +1038,19 @@ def _downsample_metric_history_samples(samples: List[Dict[str, Any]], bucket_sec
     return downsampled
 
 
-def metrics_history_payload(range_value: str = "1h") -> Dict[str, Any]:
+def metrics_history_payload(range_value: str = "1h", incident_id: str | None = None) -> Dict[str, Any]:
     range_key, range_seconds, bucket_seconds = metrics_history_range_config(range_value)
     end_dt = datetime.utcnow().replace(tzinfo=timezone.utc)
     start_dt = end_dt - timedelta(seconds=range_seconds)
+    selected_incident = incident_by_id(incident_id) if incident_id else None
+    if selected_incident is None:
+        selected_incident = latest_incident()
+    selected_incident_ts = parse_iso(incident_timestamp_value(selected_incident or {})) if selected_incident else None
+    focus_start = None
+    focus_end = None
+    if selected_incident_ts is not None:
+        focus_start = (selected_incident_ts - timedelta(seconds=60)).astimezone(timezone.utc).replace(microsecond=0).isoformat()
+        focus_end = (selected_incident_ts + timedelta(seconds=30)).astimezone(timezone.utc).replace(microsecond=0).isoformat()
     raw_samples: List[Dict[str, Any]] = []
     if METRICS_PATH.exists():
         try:
@@ -1077,6 +1086,8 @@ def metrics_history_payload(range_value: str = "1h") -> Dict[str, Any]:
                 "type": "incident",
                 "label": "Incident" if incident_type not in {"unexpected_reboot", "watchdog_reboot"} else incident_type.replace("_", " ").title(),
                 "severity": str(incident.get("severity") or "").strip().lower() or "warning",
+                "incident_id": str(incident.get("incident_id") or "").strip(),
+                "summary": str(incident.get("summary") or incident.get("cause") or incident.get("detail") or "").strip(),
             }
         )
         if incident_type in {"unexpected_reboot", "watchdog_reboot"}:
@@ -1086,6 +1097,8 @@ def metrics_history_payload(range_value: str = "1h") -> Dict[str, Any]:
                     "type": "reboot",
                     "label": "Reboot",
                     "severity": "critical" if incident_type == "unexpected_reboot" else "info",
+                    "incident_id": str(incident.get("incident_id") or "").strip(),
+                    "summary": str(incident.get("summary") or incident.get("cause") or incident.get("detail") or "").strip(),
                 }
             )
     for event in all_events():
@@ -1100,6 +1113,7 @@ def metrics_history_payload(range_value: str = "1h") -> Dict[str, Any]:
                 "type": "planned_reboot",
                 "label": "Planned reboot",
                 "severity": "info",
+                "summary": event_message_value(event) or "planned reboot marker",
             }
         )
     markers.sort(key=lambda item: str(item.get("timestamp") or ""))
@@ -1112,6 +1126,11 @@ def metrics_history_payload(range_value: str = "1h") -> Dict[str, Any]:
         "sample_count": len(samples),
         "window_start": start_dt.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
         "window_end": end_dt.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+        "selected_incident_id": str((selected_incident or {}).get("incident_id") or ""),
+        "selected_incident_type": str((selected_incident or {}).get("type") or ""),
+        "focus_window_start": focus_start or "",
+        "focus_window_end": focus_end or "",
+        "focus_incident": selected_incident or {},
     }
 
 
@@ -3785,7 +3804,7 @@ def status_payload() -> Dict[str, Any]:
     }
 
 
-def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
+def status_snapshot_payload(window_seconds: int = 60, incident_id: str | None = None) -> Dict[str, Any]:
     try:
         state = read_json(STATE_PATH, {})
     except Exception:
@@ -3873,7 +3892,9 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
     if not isinstance(state_metrics, dict):
         state_metrics = {}
     rtc_time_info = read_hwclock_show()
-    latest_incident = last_incident_snapshot_payload()
+    latest_incident = incident_by_id(incident_id) if incident_id else last_incident_snapshot_payload()
+    if not latest_incident:
+        latest_incident = {}
     reboot_incident = (
         latest_incident
         if latest_incident.get("available") and str(latest_incident.get("type") or "").strip() in {"unexpected_reboot", "watchdog_reboot"}
@@ -3908,7 +3929,7 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
     except Exception:
         latest_metric = {}
 
-    events_before_reboot = pre_crash_timeline_payload(window_seconds=window_seconds)
+    events_before_reboot = pre_crash_timeline_payload(window_seconds=window_seconds, incident_id=incident_id)
     metrics_recent = metric_sample_history(minutes=5)
     incident_metrics = metric_sample_history(
         minutes=1,
@@ -3924,9 +3945,14 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
 
     current_system_state = {
         "gateway_process_running": gateway_process_running,
+        "gateway_process_pid": latest_metric.get("gateway_process_pid"),
+        "gateway_process_last_pid": str(state.get("gateway_process_last_pid") or latest_metric.get("gateway_process_last_pid") or ""),
+        "gateway_process_restart_count": int(state.get("gateway_process_restart_count", 0) or 0),
+        "gateway_process_restarted": bool(state.get("gateway_process_restarted")),
         "cpu_percent": latest_metric.get("cpu_percent"),
         "cpu_source": latest_metric.get("cpu_source"),
         "cpu_status": latest_metric.get("cpu_status"),
+        "cpu_count": latest_metric.get("cpu_count"),
         "memory_percent": latest_metric.get("memory_percent"),
         "memory_total_bytes": latest_metric.get("memory_total_bytes"),
         "memory_available_bytes": latest_metric.get("memory_available_bytes"),
@@ -3942,6 +3968,7 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "load_5": latest_metric.get("load_5"),
         "load_15": latest_metric.get("load_15"),
         "load_status": latest_metric.get("load_status"),
+        "load_context": "HIGH" if latest_metric.get("load_status") == "critical" else ("HIGH" if latest_metric.get("load_status") == "warning" and (latest_metric.get("load_1") or 0) >= max(1, int(latest_metric.get("cpu_count") or 1)) else "OK"),
         "os_disk": latest_metric.get("os_disk"),
         "recording_storage": latest_metric.get("recording_storage"),
         "monitor_paths": latest_metric.get("monitor_paths"),
@@ -3952,13 +3979,22 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "uptime_label": uptime_label,
         "last_watchdog_write_at": last_watchdog_write_at,
         "current_system_time": current_system_time_label(),
-        "rtc_time": rtc_time_info.get("text") or "Unavailable",
+        "rtc_time": rtc_time_info.get("text") or "Not available",
+        "rtc_available": bool(rtc_time_info.get("ok")),
+        "clock_drift_seconds": None,
         "last_rtc_sync_at": str(state.get("last_rtc_sync_at") or ""),
         "last_rtc_sync_result": str(state.get("last_rtc_sync_result") or ""),
         "last_rtc_sync_message": str(state.get("last_rtc_sync_message") or ""),
         "metrics_available": metrics_available,
         "all_metrics_unavailable": bool(latest_metric.get("all_metrics_unavailable")) or not metrics_available,
     }
+    rtc_dt = parse_iso(str(rtc_time_info.get("text") or ""))
+    system_dt = parse_iso(current_system_time_label())
+    if rtc_dt is not None and system_dt is not None:
+        try:
+            current_system_state["clock_drift_seconds"] = abs(int((system_dt - rtc_dt).total_seconds()))
+        except Exception:
+            current_system_state["clock_drift_seconds"] = None
 
     latest_incident_type = str(latest_incident.get("type") or "").strip()
     incident_banner = None
@@ -3997,7 +4033,7 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         freshness_banner = None
 
     if latest_incident.get("available") and latest_incident_type == "watchdog_reboot":
-        summary_line = "Status: INFO - Expected reboot — initiated by VA-Connect"
+        summary_line = "Status: INFO - Expected reboot - initiated by VA-Connect"
     elif latest_incident.get("available") and latest_incident_type == "unexpected_reboot":
         summary_line = "Status: INCIDENT - Unexpected reboot detected"
     elif latest_incident.get("available") and active_incident:
@@ -4063,6 +4099,18 @@ def status_snapshot_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "events_before_reboot": events_before_reboot,
         "metrics_recent": metrics_recent,
         "incident_metrics": incident_metrics,
+        "incident_history": [
+            {
+                "incident_id": str(item.get("incident_id") or ""),
+                "timestamp": str(item.get("timestamp") or item.get("incident_time") or item.get("reboot_detected_at") or ""),
+                "type": str(item.get("type") or ""),
+                "severity": str(item.get("severity") or ""),
+                "status": str(item.get("status") or ""),
+                "summary": str(item.get("summary") or item.get("cause") or item.get("detail") or ""),
+                "selected": bool(incident_id and str(item.get("incident_id") or "") == incident_id),
+            }
+            for item in all_incidents()[:5]
+        ],
         "system_events": [
             {
                 "timestamp": str(item.get("ts") or item.get("timestamp") or ""),
@@ -4185,8 +4233,9 @@ def last_incident_snapshot_payload() -> Dict[str, Any]:
     }
 
 
-def pre_crash_timeline_payload(window_seconds: int = 60) -> Dict[str, Any]:
-    incident = latest_incident() or {}
+def pre_crash_timeline_payload(window_seconds: int = 60, incident_id: str | None = None) -> Dict[str, Any]:
+    incident = incident_by_id(incident_id) if incident_id else latest_incident()
+    incident = incident or {}
     if not incident:
         return {
             "available": False,
@@ -4263,6 +4312,9 @@ def pre_crash_timeline_payload(window_seconds: int = 60) -> Dict[str, Any]:
         "event_count": len(timeline_events),
         "events": timeline_events,
         "reboot_event_present": reboot_event_present,
+        "incident_summary": str(incident.get("summary") or incident.get("cause") or "").strip(),
+        "incident_type": str(incident.get("type") or "").strip(),
+        "incident_timestamp": str(incident.get("timestamp") or incident.get("incident_time") or incident.get("reboot_detected_at") or ""),
     }
 
 
@@ -4352,6 +4404,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     events_before_reboot = snapshot.get("events_before_reboot") or {}
     metrics_recent = snapshot.get("metrics_recent") or {}
     incident_metrics = snapshot.get("incident_metrics") or {}
+    incident_history = snapshot.get("incident_history") or []
     system_events = snapshot.get("system_events") or []
     state_age_label = str(snapshot.get("state_file_age_label") or "Unavailable")
     last_data_refresh_at = str(snapshot.get("last_data_refresh_at") or "")
@@ -4370,6 +4423,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     incident_status = str(latest_incident.get("status") or "").strip()
     incident_title = str(latest_incident.get("title") or "Latest Incident")
     incident_summary = str(latest_incident.get("summary") or latest_incident.get("detail") or "No incidents recorded.").strip()
+    selected_incident_id = str(latest_incident.get("incident_id") or "").strip()
     confidence = str(latest_incident.get("confidence") or "").strip()
     confidence_breakdown = latest_incident.get("confidence_breakdown") or []
     detected_because = latest_incident.get("detected_because") or []
@@ -4443,6 +4497,19 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         for item in confidence_breakdown
         if isinstance(item, dict) and str(item.get("label") or "").strip()
     ) or "<li>Unavailable</li>"
+    incident_history_rows_html = "".join(
+        f"""
+        <a class="incident-history-row{' selected' if item.get('selected') else ''}" href="/latest?incident={esc(item.get('incident_id') or '')}&window={int(window_seconds)}">
+          <span>{esc(format_local_timestamp(str(item.get('timestamp') or ''), default='Unavailable'))}</span>
+          <span>{esc(str(item.get('type') or '').replace('_', ' ').title() or 'Incident')}</span>
+          <span class="status-{esc('incident' if str(item.get('severity') or '').strip().lower() == 'critical' else ('warning' if str(item.get('severity') or '').strip().lower() == 'warning' else 'ok'))}">{esc(str(item.get('severity') or 'warning').upper())}</span>
+          <span>{esc(str(item.get('status') or 'unknown').upper())}</span>
+          <span>{esc(str(item.get('summary') or '').strip() or 'No summary available')}</span>
+        </a>
+        """
+        for item in incident_history[:5]
+        if isinstance(item, dict)
+    ) or '<div class="empty-state">No incidents recorded yet.</div>'
 
     if timeline_events:
         timeline_rows_html = "".join(
@@ -4570,11 +4637,16 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         recording_note = f"{recording_note} Recording path: {recording_path}".strip()
     current_system_rows = [
         kv("Gateway process running", yes_no_unknown(current_system_state.get("gateway_process_running")), yes_no_unknown_class(current_system_state.get("gateway_process_running"))),
+        kv("Gateway process PID", str(current_system_state.get("gateway_process_pid") or "Not available"), "unavailable"),
+        kv("Process restarted", yes_no_unknown(current_system_state.get("gateway_process_restarted")), yes_no_unknown_class(current_system_state.get("gateway_process_restarted"))),
+        kv("Restart count", str(current_system_state.get("gateway_process_restart_count") if current_system_state.get("gateway_process_restart_count") is not None else "Not available"), "unavailable"),
         kv("CPU", cpu_display, metric_class(cpu_status), "CPU usage from /proc/stat"),
         kv("Memory", memory_display, metric_class(memory_status), "Memory usage from /proc/meminfo"),
-        kv("Load", load_display, metric_class(load_status), "1 / 5 / 15 minute load average"),
+        kv("Load", load_display + f" ({current_system_state.get('load_context') or 'OK'})", metric_class(load_status), "1 / 5 / 15 minute load average | HIGH means load is at or above core count"),
         kv("System time", current_system_time, "unavailable"),
-        kv("RTC time", rtc_time, "unavailable"),
+        kv("RTC available", yes_no_unknown(current_system_state.get("rtc_available")), yes_no_unknown_class(current_system_state.get("rtc_available"))),
+        kv("RTC time", rtc_time if rtc_time else "Not available", "unavailable"),
+        kv("Clock drift", f"{int(current_system_state.get('clock_drift_seconds'))}s" if isinstance(current_system_state.get("clock_drift_seconds"), int) else "Not available", "unavailable"),
     ]
     if temperature_c is not None:
         current_system_rows.append(kv("Temperature", temperature_display, "ok"))
@@ -4587,7 +4659,6 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         [
             kv("Current uptime", uptime_label, "unavailable"),
             kv("Last reboot age", format_duration(snapshot.get("last_reboot_age_seconds")) if isinstance(snapshot.get("last_reboot_age_seconds"), int) else "Unavailable", "unavailable"),
-            kv("Current boot time", format_local_timestamp(boot_time_iso, default="Unavailable"), "unavailable"),
             kv("Last watchdog write time", format_local_timestamp(last_watchdog_write_at := str(snapshot.get("last_watchdog_write_at") or ""), default="Unavailable"), "unavailable"),
             kv("Last RTC sync", f"{format_local_timestamp(last_rtc_sync_at, default='never')} - {last_rtc_sync_result or 'unknown'}", "unavailable", last_rtc_sync_message),
         ]
@@ -4722,7 +4793,18 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     .history-grid {{ display: grid; gap: 10px; margin-top: 10px; }}
     .history-chart-card {{ background: #101821; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }}
     .history-chart-title {{ color: #b6c6d4; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px; }}
-    .history-canvas {{ width: 100%; height: 160px; display: block; }}
+    .history-canvas {{ width: 100%; height: 420px; display: block; }}
+    .history-chart-card {{ position: relative; }}
+    .history-toolbar {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }}
+    .history-toggle {{ border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; background: #101821; color: var(--text); font-size: 12px; }}
+    .history-toggle.active {{ background: #203142; border-color: #55708d; color: #d7ecff; }}
+    .history-tooltip {{ position: fixed; z-index: 20; max-width: 320px; background: #0b1117; border: 1px solid #3c5568; border-radius: 10px; padding: 8px 10px; color: #e8eef5; font-size: 12px; white-space: pre-line; box-shadow: 0 10px 30px rgba(0,0,0,.35); pointer-events: none; }}
+    .incident-history-grid {{ display: grid; gap: 6px; }}
+    .incident-history-head, .incident-history-row {{ display: grid; grid-template-columns: 160px 160px 100px 90px 1fr; gap: 8px; align-items: center; }}
+    .incident-history-head {{ color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 0 4px; }}
+    .incident-history-row {{ text-decoration: none; color: inherit; padding: 8px 4px; border-top: 1px solid rgba(42,57,71,.55); }}
+    .incident-history-row:hover {{ background: rgba(103,168,219,.08); }}
+    .incident-history-row.selected {{ background: rgba(122,167,217,.12); border-radius: 8px; }}
     .history-marker-legend {{ display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }}
     .history-marker-pill {{ display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; background: #101821; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }}
     .history-marker-dot {{ width: 8px; height: 8px; border-radius: 999px; display: inline-block; }}
@@ -4845,6 +4927,17 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
     </section>
 
     <section class="card">
+      <div class="card-title">Incident History</div>
+      <div class="card-subtitle">Last 5 incidents. Click one to focus the incident view and metrics graph.</div>
+      <div class="incident-history-grid">
+        <div class="incident-history-head">
+          <span>Time</span><span>Type</span><span>Severity</span><span>Status</span><span>Summary</span>
+        </div>
+        {incident_history_rows_html}
+      </div>
+    </section>
+
+    <section class="card">
       <div class="title-row" style="display:flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap;">
         <div class="card-title" style="margin: 0;">Events Before Reboot</div>
         <div class="window-bar">{timeline_buttons_html}</div>
@@ -4875,19 +4968,16 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       </div>
       <div class="metrics-history-summary" id="historyMetricsSummary">CPU, memory, temperature, load average, and storage trends will appear here.</div>
       <div class="meta-row" id="historyMarkerLegend"></div>
-      <div class="history-grid">
-        <div class="history-chart-card">
-          <div class="history-chart-title">CPU / Memory</div>
-          <canvas id="historyCpuMemoryChart" class="history-canvas" width="1000" height="180"></canvas>
-        </div>
-        <div class="history-chart-card">
-          <div class="history-chart-title">Temperature</div>
-          <canvas id="historyTemperatureChart" class="history-canvas" width="1000" height="160"></canvas>
-        </div>
-        <div class="history-chart-card">
-          <div class="history-chart-title">Disk free</div>
-          <canvas id="historyDiskChart" class="history-canvas" width="1000" height="160"></canvas>
-        </div>
+      <div class="history-toolbar">
+        <button type="button" class="history-toggle active" data-metric-toggle="cpu_percent">CPU</button>
+        <button type="button" class="history-toggle active" data-metric-toggle="memory_percent">Memory</button>
+        <button type="button" class="history-toggle active" data-metric-toggle="temperature_c">Temp</button>
+        <button type="button" class="history-toggle active" data-metric-toggle="load_1">Load</button>
+        <button type="button" class="history-toggle active" data-metric-toggle="os_disk_free_gb">Disk</button>
+      </div>
+      <div class="history-chart-card">
+        <canvas id="historyUnifiedChart" class="history-canvas" width="1100" height="420"></canvas>
+        <div id="historyTooltip" class="history-tooltip" style="display:none;"></div>
       </div>
       <div class="small-muted" style="margin-top: 8px;">Metrics history is stored in <code>/var/lib/va-connect-site-watchdog/metrics.jsonl</code> and is kept for 7 days.</div>
     </section>
@@ -4911,6 +5001,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
 
   <script>
     const windowSeconds = {int(timeline_window_seconds)};
+    const selectedIncidentId = {json.dumps(selected_incident_id)};
     let updateProgressTimer = null;
 
     function setUpdateButtonVisible(visible) {{
@@ -4926,7 +5017,19 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       }}
     }}
 
-    const metricsHistoryState = {{ range: '1h', payload: null }};
+    const metricsHistoryState = {{
+      range: '1h',
+      payload: null,
+      hoverEpoch: null,
+      active: {{
+        cpu_percent: true,
+        memory_percent: true,
+        temperature_c: true,
+        load_1: true,
+        os_disk_free_gb: true,
+        recording_disk_free_gb: true
+      }}
+    }};
 
     function metricsHistoryLabel(range) {{
       if (range === '1d') {{
@@ -5171,39 +5274,100 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         '<span class="history-marker-pill"><span class="history-marker-dot planned_reboot"></span>Planned reboot (' + counts.planned_reboot + ')</span>';
     }}
 
-    function renderHistorySummary(payload) {{
+    function setMetricToggleState() {{
+      document.querySelectorAll('[data-metric-toggle]').forEach((button) => {{
+        const key = button.getAttribute('data-metric-toggle');
+        button.classList.toggle('active', !!(metricsHistoryState.active && metricsHistoryState.active[key] !== false));
+      }});
+    }}
+
+    function laneSeriesValue(sample, key, cpuCount) {{
+      if (!sample) {{
+        return null;
+      }}
+      if (key === 'load_1') {{
+        const load = Number(sample.load_1);
+        const cores = Math.max(1, Number(cpuCount || 1));
+        if (!Number.isFinite(load)) {{
+          return null;
+        }}
+        return Math.min(200, (load / cores) * 100);
+      }}
+      const value = Number(sample[key]);
+      return Number.isFinite(value) ? value : null;
+    }}
+
+    function laneValueLabel(key, value, cpuCount) {{
+      if (value === null || value === undefined || value === '') {{
+        return 'Unavailable';
+      }}
+      if (key === 'load_1') {{
+        return formatMetricValue(value, '');
+      }}
+      if (key === 'temperature_c') {{
+        return formatMetricValue(value, '°C');
+      }}
+      if (key === 'os_disk_free_gb' || key === 'recording_disk_free_gb') {{
+        return formatMetricValue(value, ' GB');
+      }}
+      return formatMetricValue(value, key.includes('percent') ? '%' : '');
+    }}
+
+    function renderUnifiedHistory(payload) {{
       const status = document.getElementById('historyMetricsStatus');
       const summary = document.getElementById('historyMetricsSummary');
-      const samples = payload && payload.samples ? payload.samples : [];
-      const markers = payload && payload.markers ? payload.markers : [];
+      const tooltip = document.getElementById('historyTooltip');
+      const canvas = document.getElementById('historyUnifiedChart');
+      const samples = payload && Array.isArray(payload.samples) ? payload.samples : [];
+      const markers = payload && Array.isArray(payload.markers) ? payload.markers : [];
       renderHistoryLegend(markers);
-      if (!samples.length) {{
+
+      const selectedIncident = payload && payload.focus_incident ? payload.focus_incident : null;
+      const focusStart = payload && payload.focus_window_start ? Date.parse(payload.focus_window_start) : NaN;
+      const focusEnd = payload && payload.focus_window_end ? Date.parse(payload.focus_window_end) : NaN;
+      const visibleStart = Number.isFinite(focusStart) ? focusStart : Date.parse((payload && payload.window_start) || '');
+      const visibleEnd = Number.isFinite(focusEnd) ? focusEnd : Date.parse((payload && payload.window_end) || '');
+      const visibleSamples = samples.filter((sample) => {{
+        const epoch = Date.parse((sample || {{}}).timestamp || '');
+        return Number.isFinite(epoch) && (!Number.isFinite(visibleStart) || epoch >= visibleStart) && (!Number.isFinite(visibleEnd) || epoch <= visibleEnd);
+      }});
+      const chartSamples = visibleSamples.length ? visibleSamples : samples;
+
+      if (!chartSamples.length) {{
         if (status) {{
           status.textContent = 'Metrics history not available yet.';
         }}
         if (summary) {{
           summary.textContent = 'No metrics history available yet.';
         }}
-        drawHistoryChart('historyCpuMemoryChart', [], [
-          {{ key: 'cpu_percent', label: 'CPU', color: '#67a8db' }},
-          {{ key: 'memory_percent', label: 'Memory', color: '#e07b7b' }}
-        ], [], {{ min: 0, max: 100, zeroBase: true, unit: '%' }});
-        drawHistoryChart('historyTemperatureChart', [], [
-          {{ key: 'temperature_c', label: 'Temperature', color: '#ff9f6e' }}
-        ], [], {{ min: 0, max: 120, zeroBase: true, unit: '°C' }});
-        drawHistoryChart('historyDiskChart', [], [
-          {{ key: 'os_disk_free_gb', label: 'OS free', color: '#7ab08a' }},
-          {{ key: 'recording_disk_free_gb', label: 'Recording free', color: '#d4a34a' }}
-        ], [], {{ zeroBase: true, unit: ' GB' }});
+        if (tooltip) {{
+          tooltip.style.display = 'none';
+        }}
+        if (canvas && canvas.getContext) {{
+          const ctx = canvas.getContext('2d');
+          const rect = canvas.getBoundingClientRect();
+          canvas.width = Math.max(1, Math.floor((rect.width || canvas.clientWidth || 320) * (window.devicePixelRatio || 1)));
+          canvas.height = Math.max(1, Math.floor((rect.height || 420) * (window.devicePixelRatio || 1)));
+          ctx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = '#0f1820';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = '#8ea5b9';
+          ctx.font = '14px Arial';
+          ctx.fillText('No metrics history available yet.', 20, 30);
+        }}
         return;
       }}
-      const firstEpoch = Date.parse((samples[0] || {{}}).timestamp || '');
-      const lastEpoch = Date.parse((samples[samples.length - 1] || {{}}).timestamp || '');
+
+      const firstEpoch = Date.parse((chartSamples[0] || {{}}).timestamp || '');
+      const lastEpoch = Date.parse((chartSamples[chartSamples.length - 1] || {{}}).timestamp || '');
       const covered = Number.isFinite(firstEpoch) && Number.isFinite(lastEpoch) ? Math.max(0, Math.floor((lastEpoch - firstEpoch) / 1000)) : 0;
       if (status) {{
-        status.textContent = metricsHistoryLabel(metricsHistoryState.range) + ' | ' + samples.length + ' samples | ' + formatHistoryDuration(covered) + ' covered';
+        const selectedLabel = selectedIncident && (selectedIncident.type || selectedIncident.summary) ? ' | incident focus' : '';
+        status.textContent = metricsHistoryLabel(metricsHistoryState.range) + selectedLabel + ' | ' + chartSamples.length + ' samples | ' + formatHistoryDuration(covered) + ' covered';
       }}
-      const latest = samples[samples.length - 1] || {{}};
+      const latest = chartSamples[chartSamples.length - 1] || {{}};
+      const cpuCount = Number((latest || {{}}).cpu_count || 1) || 1;
       const parts = [
         'CPU ' + formatMetricValue(latest.cpu_percent, '%'),
         'Memory ' + formatMetricValue(latest.memory_percent, '%'),
@@ -5217,17 +5381,305 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       if (summary) {{
         summary.textContent = parts.join(' | ');
       }}
-      drawHistoryChart('historyCpuMemoryChart', samples, [
-        {{ key: 'cpu_percent', label: 'CPU', color: '#67a8db' }},
-        {{ key: 'memory_percent', label: 'Memory', color: '#e07b7b' }}
-      ], markers, {{ min: 0, max: 100, zeroBase: true, unit: '%' }});
-      drawHistoryChart('historyTemperatureChart', samples, [
-        {{ key: 'temperature_c', label: 'Temperature', color: '#ff9f6e' }}
-      ], markers, {{ min: 0, max: 120, zeroBase: true, unit: '°C' }});
-      drawHistoryChart('historyDiskChart', samples, [
-        {{ key: 'os_disk_free_gb', label: 'OS free', color: '#7ab08a' }},
-        {{ key: 'recording_disk_free_gb', label: 'Recording free', color: '#d4a34a' }}
-      ], markers, {{ zeroBase: true, unit: ' GB' }});
+
+      if (!canvas || !canvas.getContext) {{
+        return;
+      }}
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const width = Math.max(640, Math.floor(rect.width || canvas.clientWidth || 640));
+      const height = Math.max(360, Math.floor(rect.height || 420));
+      canvas.width = Math.max(1, Math.floor(width * dpr));
+      canvas.height = Math.max(1, Math.floor(height * dpr));
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = '#0f1820';
+      ctx.fillRect(0, 0, width, height);
+
+      const lanes = [
+        {{
+          label: 'CPU / Memory',
+          keys: ['cpu_percent', 'memory_percent'],
+          colors: {{ cpu_percent: '#67a8db', memory_percent: '#e07b7b' }},
+          scale: 'percent',
+          unit: '%',
+        }},
+        {{
+          label: 'Temperature / Load',
+          keys: ['temperature_c', 'load_1'],
+          colors: {{ temperature_c: '#ff9f6e', load_1: '#7aa7d9' }},
+          scale: 'mixed',
+          unit: '°C',
+        }},
+        {{
+          label: 'Disk free',
+          keys: ['os_disk_free_gb', 'recording_disk_free_gb'],
+          colors: {{ os_disk_free_gb: '#7ab08a', recording_disk_free_gb: '#d4a34a' }},
+          scale: 'disk',
+          unit: 'GB',
+        }},
+      ];
+
+      const hoverState = metricsHistoryState.hoverEpoch;
+      const gapThreshold = Math.max(90, (payload && payload.bucket_seconds ? payload.bucket_seconds * 3 : 90));
+      const padding = {{ left: 58, right: 18, top: 18, bottom: 26, laneGap: 18 }};
+      const laneHeight = Math.floor((height - padding.top - padding.bottom - padding.laneGap * (lanes.length - 1)) / lanes.length);
+      const allTimestamps = chartSamples.map((sample) => Date.parse((sample || {{}}).timestamp || '')).filter((value) => Number.isFinite(value));
+      const minEpoch = Number.isFinite(visibleStart) ? visibleStart : (allTimestamps[0] || firstEpoch);
+      const maxEpoch = Number.isFinite(visibleEnd) ? visibleEnd : (allTimestamps[allTimestamps.length - 1] || lastEpoch);
+      const spanEpoch = Math.max(1, maxEpoch - minEpoch);
+      const xForEpoch = (epoch) => padding.left + ((epoch - minEpoch) / spanEpoch) * (width - padding.left - padding.right);
+      const yForValue = (laneTop, laneMax, laneMin, value) => laneTop + laneHeight - ((value - laneMin) / Math.max(1, laneMax - laneMin)) * laneHeight;
+      const activeKeys = Object.keys(metricsHistoryState.active || {{}}).filter((key) => metricsHistoryState.active[key] !== false);
+
+      const markersInRange = (markers || []).map((marker) => {{
+        const epoch = Date.parse((marker || {{}}).timestamp || '');
+        return Number.isFinite(epoch) ? {{ epoch, marker }} : null;
+      }}).filter(Boolean).sort((a, b) => a.epoch - b.epoch);
+
+      const segmentBreaks = [];
+      for (let i = 1; i < chartSamples.length; i += 1) {{
+        const prevEpoch = Date.parse((chartSamples[i - 1] || {{}}).timestamp || '');
+        const currentEpoch = Date.parse((chartSamples[i] || {{}}).timestamp || '');
+        if (!Number.isFinite(prevEpoch) || !Number.isFinite(currentEpoch)) {{
+          segmentBreaks.push(i);
+          continue;
+        }}
+        if (currentEpoch - prevEpoch > gapThreshold) {{
+          segmentBreaks.push(i);
+          continue;
+        }}
+        if (markersInRange.some((entry) => entry.epoch > prevEpoch && entry.epoch < currentEpoch && ['incident', 'reboot', 'planned_reboot'].includes(String(entry.marker.type || '')))) {{
+          segmentBreaks.push(i);
+        }}
+      }}
+
+      lanes.forEach((lane, laneIndex) => {{
+        const laneTop = padding.top + laneIndex * (laneHeight + padding.laneGap);
+        const laneBottom = laneTop + laneHeight;
+        ctx.fillStyle = laneIndex % 2 === 0 ? '#101821' : '#111b25';
+        ctx.fillRect(padding.left, laneTop, width - padding.left - padding.right, laneHeight);
+        ctx.strokeStyle = '#29404f';
+        ctx.strokeRect(padding.left, laneTop, width - padding.left - padding.right, laneHeight);
+        ctx.fillStyle = '#b6c6d4';
+        ctx.font = '12px Arial';
+        ctx.fillText(lane.label, 12, laneTop + 14);
+        ctx.fillStyle = '#8ea5b9';
+        ctx.font = '10px Arial';
+
+        const values = [];
+        chartSamples.forEach((sample) => {{
+          lane.keys.forEach((key) => {{
+            if (activeKeys.length && !activeKeys.includes(key)) {{
+              return;
+            }}
+            const value = laneSeriesValue(sample, key, cpuCount);
+            if (Number.isFinite(value)) {{
+              values.push(value);
+            }}
+          }});
+        }});
+        let minValue = lane.scale === 'percent' ? 0 : 0;
+        let maxValue = lane.scale === 'percent' ? 100 : (values.length ? Math.max(...values) : 100);
+        if (lane.scale === 'mixed') {{
+          const tempValues = chartSamples.map((sample) => laneSeriesValue(sample, 'temperature_c', cpuCount)).filter((value) => Number.isFinite(value));
+          const loadValues = chartSamples.map((sample) => laneSeriesValue(sample, 'load_1', cpuCount)).filter((value) => Number.isFinite(value));
+          maxValue = Math.max(120, ...(tempValues.length ? tempValues : [0]), ...(loadValues.length ? loadValues : [0]));
+        }}
+        if (lane.scale === 'disk') {{
+          maxValue = Math.max(1, ...values, 1);
+        }}
+        ctx.fillText(formatMetricValue(maxValue, lane.unit === 'GB' ? ' GB' : lane.unit), 6, laneTop + 10);
+        ctx.fillText(formatMetricValue(minValue, lane.unit === 'GB' ? ' GB' : lane.unit), 6, laneBottom - 4);
+
+        lane.keys.forEach((key) => {{
+          if (activeKeys.length && !activeKeys.includes(key)) {{
+            return;
+          }}
+          const color = lane.colors[key] || '#67a8db';
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          let started = false;
+          let lastEpoch = null;
+          chartSamples.forEach((sample, index) => {{
+            const epoch = Date.parse((sample || {{}}).timestamp || '');
+            const value = laneSeriesValue(sample, key, cpuCount);
+            if (!Number.isFinite(epoch) || !Number.isFinite(value)) {{
+              if (started) {{
+                ctx.stroke();
+                started = false;
+              }}
+              lastEpoch = null;
+              return;
+            }}
+            if (lastEpoch !== null && (epoch - lastEpoch > gapThreshold || segmentBreaks.includes(index))) {{
+              if (started) {{
+                ctx.stroke();
+                started = false;
+              }}
+            }}
+            const x = xForEpoch(epoch);
+            const y = yForValue(laneTop, maxValue, minValue, value);
+            if (!started) {{
+              ctx.beginPath();
+              ctx.moveTo(x, y);
+              started = true;
+            }} else {{
+              ctx.lineTo(x, y);
+            }}
+            lastEpoch = epoch;
+          }});
+          if (started) {{
+            ctx.stroke();
+          }}
+        }});
+
+        ctx.fillStyle = '#d8e6f1';
+        ctx.font = '10px Arial';
+        let legendX = width - padding.right - 260;
+        lane.keys.forEach((key) => {{
+          if (activeKeys.length && !activeKeys.includes(key)) {{
+            return;
+          }}
+          const color = lane.colors[key] || '#67a8db';
+          ctx.fillStyle = color;
+          ctx.fillRect(legendX, laneTop + 4, 8, 8);
+          ctx.fillStyle = '#d8e6f1';
+          ctx.fillText(key.replace(/_/g, ' ').replace(/\\b\\w/g, (m) => m.toUpperCase()), legendX + 12, laneTop + 11);
+          legendX += 120;
+        }});
+      }});
+
+      markersInRange.forEach((entry) => {{
+        const x = xForEpoch(entry.epoch);
+        if (x < padding.left || x > width - padding.right) {{
+          return;
+        }}
+        const markerType = String(entry.marker.type || 'incident');
+        const color = markerType === 'reboot' ? '#ffb84d' : (markerType === 'planned_reboot' ? '#7aa7d9' : '#ff6b6b');
+        ctx.strokeStyle = color;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x, padding.top);
+        ctx.lineTo(x, height - padding.bottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = color;
+        ctx.fillRect(x - 2, padding.top, 4, height - padding.bottom - padding.top);
+      }});
+
+      if (Number.isFinite(hoverState)) {{
+        const x = xForEpoch(hoverState);
+        if (x >= padding.left && x <= width - padding.right) {{
+          ctx.strokeStyle = '#8fd3ff';
+          ctx.setLineDash([3, 2]);
+          ctx.beginPath();
+          ctx.moveTo(x, padding.top);
+          ctx.lineTo(x, height - padding.bottom);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }}
+      }}
+
+      if (selectedIncident && payload.focus_window_start && payload.focus_window_end) {{
+        const focusStartEpoch = Date.parse(payload.focus_window_start);
+        const focusEndEpoch = Date.parse(payload.focus_window_end);
+        if (Number.isFinite(focusStartEpoch) && Number.isFinite(focusEndEpoch)) {{
+          const focusX1 = xForEpoch(focusStartEpoch);
+          const focusX2 = xForEpoch(focusEndEpoch);
+          ctx.fillStyle = 'rgba(122, 167, 217, 0.08)';
+          ctx.fillRect(Math.min(focusX1, focusX2), padding.top, Math.abs(focusX2 - focusX1), height - padding.top - padding.bottom);
+        }}
+      }}
+
+      if (chartSamples.length) {{
+        ctx.fillStyle = '#8ea5b9';
+        ctx.font = '10px Arial';
+        const startLabel = new Date(minEpoch).toLocaleTimeString();
+        const endLabel = new Date(maxEpoch).toLocaleTimeString();
+        ctx.fillText(startLabel, padding.left, height - 6);
+        const endWidth = ctx.measureText(endLabel).width;
+        ctx.fillText(endLabel, Math.max(padding.left, width - padding.right - endWidth), height - 6);
+      }}
+
+      const tooltipLine = (epoch, sample, markerText) => {{
+        const text = [];
+        text.push(formatLocalTimestamp(new Date(epoch).toISOString()));
+        text.push('CPU: ' + formatMetricValue(sample.cpu_percent, '%'));
+        text.push('Memory: ' + formatMetricValue(sample.memory_percent, '%'));
+        text.push('Temp: ' + formatMetricValue(sample.temperature_c, '°C'));
+        text.push('Load: ' + formatMetricValue(sample.load_1) + ' / ' + formatMetricValue(sample.load_5) + ' / ' + formatMetricValue(sample.load_15));
+        text.push('OS disk free: ' + formatMetricValue(sample.os_disk_free_gb, ' GB'));
+        if (sample.recording_disk_free_gb !== undefined && sample.recording_disk_free_gb !== null) {{
+          text.push('Recording free: ' + formatMetricValue(sample.recording_disk_free_gb, ' GB'));
+        }}
+        if (markerText) {{
+          text.push('Event: ' + markerText);
+        }}
+        return text.join('\n');
+      }};
+
+      const updateTooltip = (clientX, clientY) => {{
+        if (!tooltip) {{
+          return;
+        }}
+        const rect = canvas.getBoundingClientRect();
+        const x = Math.max(0, clientX - rect.left);
+        const relativeEpoch = minEpoch + ((x - padding.left) / Math.max(1, width - padding.left - padding.right)) * spanEpoch;
+        const nearest = chartSamples.reduce((best, sample) => {{
+          const epoch = Date.parse((sample || {{}}).timestamp || '');
+          if (!Number.isFinite(epoch)) {{
+            return best;
+          }}
+          const distance = Math.abs(epoch - relativeEpoch);
+          if (!best || distance < best.distance) {{
+            return {{ sample, epoch, distance }};
+          }}
+          return best;
+        }}, null);
+        if (!nearest) {{
+          tooltip.style.display = 'none';
+          return;
+        }}
+        metricsHistoryState.hoverEpoch = nearest.epoch;
+        const markerHit = markersInRange.find((entry) => Math.abs(entry.epoch - nearest.epoch) <= Math.max(5, gapThreshold / 6));
+        const markerText = markerHit ? ((markerHit.marker.label || markerHit.marker.type || 'event') + (markerHit.marker.summary ? ' - ' + markerHit.marker.summary : '')) : '';
+        tooltip.textContent = tooltipLine(nearest.epoch, nearest.sample, markerText);
+        tooltip.style.display = 'block';
+        const pageX = rect.left + x + 12;
+        const pageY = rect.top + 12 + (clientY - rect.top > height / 2 ? 18 : 0);
+        tooltip.style.left = Math.min(window.innerWidth - 320, pageX) + 'px';
+        tooltip.style.top = Math.min(window.innerHeight - 220, pageY) + 'px';
+      }};
+
+      canvas.onmousemove = (event) => updateTooltip(event.clientX, event.clientY);
+      canvas.onmouseleave = () => {{
+        metricsHistoryState.hoverEpoch = null;
+        if (tooltip) {{
+          tooltip.style.display = 'none';
+        }}
+        renderUnifiedHistory(payload);
+      }};
+    }}
+
+    function renderHistorySummary(payload) {{
+      const status = document.getElementById('historyMetricsStatus');
+      const summary = document.getElementById('historyMetricsSummary');
+      const samples = payload && payload.samples ? payload.samples : [];
+      const markers = payload && payload.markers ? payload.markers : [];
+      renderHistoryLegend(markers);
+      if (status) {{
+        status.textContent = payload && payload.focus_window_start ? 'Focused incident view | ' + metricsHistoryLabel(metricsHistoryState.range) : metricsHistoryLabel(metricsHistoryState.range);
+      }}
+      if (!samples.length) {{
+        if (summary) {{
+          summary.textContent = 'No metrics history available yet.';
+        }}
+        renderUnifiedHistory(payload || {{}});
+        return;
+      }}
+      renderUnifiedHistory(payload || {{}});
     }}
 
     async function loadMetricsHistory(range) {{
@@ -5239,7 +5691,7 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
         status.textContent = metricsHistoryLabel(selectedRange) + ' loading...';
       }}
       try {{
-        const response = await fetch('/api/metrics/history?range=' + encodeURIComponent(selectedRange) + '&_=' + Date.now(), {{ cache: 'no-store' }});
+        const response = await fetch('/api/metrics/history?range=' + encodeURIComponent(selectedRange) + '&incident=' + encodeURIComponent(selectedIncidentId || '') + '&_=' + Date.now(), {{ cache: 'no-store' }});
         const payload = await response.json();
         metricsHistoryState.payload = payload;
         renderHistorySummary(payload);
@@ -5426,11 +5878,25 @@ def render_investigation_page(snapshot: Dict[str, Any], window_seconds: int = 60
       line.textContent = {json.dumps(update_summary or update_message)};
       footer.appendChild(line);
     }}
+    document.querySelectorAll('[data-metric-toggle]').forEach((button) => {{
+      button.addEventListener('click', () => {{
+        const key = button.getAttribute('data-metric-toggle');
+        if (!metricsHistoryState.active) {{
+          metricsHistoryState.active = {{}};
+        }}
+        metricsHistoryState.active[key] = !metricsHistoryState.active[key];
+        button.classList.toggle('active', !!metricsHistoryState.active[key]);
+        if (metricsHistoryState.payload) {{
+          renderUnifiedHistory(metricsHistoryState.payload);
+        }}
+      }});
+    }});
     window.addEventListener('resize', () => {{
       if (metricsHistoryState.payload) {{
-        renderHistorySummary(metricsHistoryState.payload);
+        renderUnifiedHistory(metricsHistoryState.payload);
       }}
     }});
+    setMetricToggleState();
     loadMetricsHistory('1h');
     setUpdateButtonVisible({str(update_button_visible).lower()});
   </script>
@@ -9834,7 +10300,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/metrics/history":
             history_range = parse_qs(parsed.query).get("range", ["1h"])[0]
-            self._send_json(metrics_history_payload(history_range))
+            incident_id = parse_qs(parsed.query).get("incident", [""])[0] or None
+            self._send_json(metrics_history_payload(history_range, incident_id=incident_id))
             return
         if parsed.path == "/run-hik-probe":
             hik_probe_payload(load_config())
@@ -9899,11 +10366,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send_file(safe_tools_install_file("log"), download_name="watchdog-tools-install.log")
             return
         if parsed.path in {"/api/base-status", "/status.json"}:
-            self._send_json(status_snapshot_payload(window_seconds=timeline_window_seconds_from_query(parsed.query)))
+            self._send_json(
+                status_snapshot_payload(
+                    window_seconds=timeline_window_seconds_from_query(parsed.query),
+                    incident_id=parse_qs(parsed.query).get("incident", [""])[0] or None,
+                )
+            )
             return
         if parsed.path in {"/", "/index.html"}:
             window_seconds = timeline_window_seconds_from_query(parsed.query)
-            body = render_investigation_page(status_snapshot_payload(window_seconds=window_seconds), window_seconds=window_seconds).encode("utf-8")
+            incident_id = parse_qs(parsed.query).get("incident", [""])[0] or None
+            body = render_investigation_page(
+                status_snapshot_payload(window_seconds=window_seconds, incident_id=incident_id),
+                window_seconds=window_seconds,
+            ).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -9915,7 +10391,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path in {"/latest", "/latest/index.html"}:
             window_seconds = timeline_window_seconds_from_query(parsed.query)
-            body = render_investigation_page(status_snapshot_payload(window_seconds=window_seconds), window_seconds=window_seconds).encode("utf-8")
+            incident_id = parse_qs(parsed.query).get("incident", [""])[0] or None
+            body = render_investigation_page(
+                status_snapshot_payload(window_seconds=window_seconds, incident_id=incident_id),
+                window_seconds=window_seconds,
+            ).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -9928,7 +10408,8 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/v/"):
             requested_build = parsed.path.removeprefix("/v/").strip("/") or "unknown"
             window_seconds = timeline_window_seconds_from_query(parsed.query)
-            status = status_snapshot_payload(window_seconds=window_seconds)
+            incident_id = parse_qs(parsed.query).get("incident", [""])[0] or None
+            status = status_snapshot_payload(window_seconds=window_seconds, incident_id=incident_id)
             if requested_build != str(status.get("build_number") or status.get("build") or "unknown"):
                 self.send_response(HTTPStatus.SEE_OTHER)
                 self.send_header("Location", "/latest")

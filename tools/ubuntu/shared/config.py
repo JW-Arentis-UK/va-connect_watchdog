@@ -24,6 +24,9 @@ class V2Config:
     monitor_paths: dict[str, Any] = field(default_factory=dict)
     disk_thresholds: dict[str, Any] = field(default_factory=dict)
     freshness_thresholds: dict[str, Any] = field(default_factory=dict)
+    metrics_retention_days: int = 7
+    events_retention_days: int = 7
+    incidents_retention_days: int = 90
 
 
 def _load_config_file(path: Path) -> dict[str, Any]:
@@ -69,6 +72,9 @@ def load_config() -> V2Config:
     freshness_thresholds = raw.get("freshness_thresholds", {})
     if not isinstance(freshness_thresholds, dict):
         freshness_thresholds = {}
+    metrics_retention_days = int(os.environ.get("VA_CONNECT_V2_METRICS_RETENTION_DAYS", raw.get("metrics_retention_days", 7)))
+    events_retention_days = int(os.environ.get("VA_CONNECT_V2_EVENTS_RETENTION_DAYS", raw.get("events_retention_days", 7)))
+    incidents_retention_days = int(os.environ.get("VA_CONNECT_V2_INCIDENTS_RETENTION_DAYS", raw.get("incidents_retention_days", 90)))
 
     return V2Config(
         device_id=device_id,
@@ -83,4 +89,7 @@ def load_config() -> V2Config:
         monitor_paths=monitor_paths,
         disk_thresholds=disk_thresholds,
         freshness_thresholds=freshness_thresholds,
+        metrics_retention_days=metrics_retention_days,
+        events_retention_days=events_retention_days,
+        incidents_retention_days=incidents_retention_days,
     )

@@ -131,6 +131,7 @@ def load_events(config: V2Config) -> list[dict[str, Any]]:
 def append_event(config: V2Config, event: Any) -> dict[str, Any]:
     normalized = normalize_event(event)
     append_jsonl(events_path(config), normalized)
+    trim_jsonl_by_age(events_path(config), max_age_seconds=max(0, int(config.events_retention_days)) * 24 * 3600)
     return normalized
 
 
@@ -177,6 +178,7 @@ def latest_incident(config: V2Config) -> dict[str, Any] | None:
 def save_incident(config: V2Config, incident: Any) -> dict[str, Any]:
     normalized = normalize_incident(incident)
     append_jsonl(incidents_path(config), normalized)
+    trim_jsonl_by_age(incidents_path(config), max_age_seconds=max(0, int(config.incidents_retention_days)) * 24 * 3600)
     return normalized
 
 
@@ -228,7 +230,7 @@ def append_metric(config: V2Config, metric: Any) -> dict[str, Any]:
     global _LAST_METRICS_PRUNE_AT
     now = utc_now().timestamp()
     if now - _LAST_METRICS_PRUNE_AT >= 300:
-        trim_jsonl_by_age(metrics_path(config), max_age_seconds=7 * 24 * 3600)
+        trim_jsonl_by_age(metrics_path(config), max_age_seconds=max(0, int(config.metrics_retention_days)) * 24 * 3600)
         _LAST_METRICS_PRUNE_AT = now
     return normalized
 
