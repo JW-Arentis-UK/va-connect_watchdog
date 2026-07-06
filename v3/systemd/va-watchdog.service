@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 -m va_watchdog.watchdog
-WorkingDirectory=/opt/va-connect-watchdog-v3
+WorkingDirectory=/opt/va-connect-watchdog-v3/v3
 Restart=always
 RestartSec=5
 User=root
