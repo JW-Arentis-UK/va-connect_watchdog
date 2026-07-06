@@ -6,8 +6,13 @@ REPO_REF="${2:-codex/v3-gateway-ready}"
 INSTALL_DIR="${3:-/opt/va-connect-watchdog-v3}"
 
 if ! command -v git >/dev/null 2>&1; then
-  echo "git is required but not installed." >&2
-  exit 1
+  echo "git is missing; installing it first..."
+  if ! command -v apt-get >/dev/null 2>&1; then
+    echo "apt-get is required to install git automatically." >&2
+    exit 1
+  fi
+  sudo apt-get update
+  sudo apt-get install -y git
 fi
 
 if [ -d "$INSTALL_DIR/.git" ]; then
