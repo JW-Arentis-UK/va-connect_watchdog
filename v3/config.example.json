@@ -1,0 +1,35 @@
+{
+  "poll_interval_seconds": 5,
+  "web": {
+    "enabled": true,
+    "host": "0.0.0.0",
+    "port": 9110
+  },
+  "hardware_watchdog": {
+    "enabled": false,
+    "device": "/dev/watchdog0",
+    "feed_interval_seconds": 10
+  },
+  "recovery": {
+    "enabled": false,
+    "restart_failed_services": false,
+    "allow_reboot": false
+  },
+  "services": [
+    {
+      "name": "esg.service",
+      "critical": true,
+      "restart": true
+    },
+    {
+      "name": "bridge.service",
+      "critical": true,
+      "restart": true
+    },
+    {
+      "name": "esg-config.service",
+      "critical": false,
+      "restart": true
+    }
+  ]
+}

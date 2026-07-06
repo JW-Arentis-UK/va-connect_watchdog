@@ -2,6 +2,15 @@
 
 Lightweight Ubuntu watchdog tooling for a PC running VA-Connect.
 
+## V3 Start
+
+The v3 line now has its own entrypoint and notes:
+
+- [`v3/README.md`](v3/README.md)
+- [`v3/docs/start.md`](v3/docs/start.md)
+- [`v3/run_v3.bat`](v3/run_v3.bat)
+- [`bootstrap_v3_gateway.sh`](bootstrap_v3_gateway.sh)
+
 ## What is included
 
 - `tools/ubuntu/va_connect_watchdog.sh`
