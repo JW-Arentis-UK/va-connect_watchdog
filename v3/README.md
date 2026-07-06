@@ -12,6 +12,11 @@ Current scope:
 - Local HTTP status page/API
 - Optional hardware watchdog feeding
 
+Working plan:
+- [`docs/plan.md`](docs/plan.md)
+- [`docs/stage1_reboot_checklist.md`](docs/stage1_reboot_checklist.md)
+- [`scripts/stage1_reboot_check.sh`](scripts/stage1_reboot_check.sh)
+
 Default monitored services:
 - esg.service
 - bridge.service
