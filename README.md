@@ -10,6 +10,7 @@ The v3 line now has its own entrypoint and notes:
 - [`v3/docs/start.md`](v3/docs/start.md)
 - [`v3/run_v3.bat`](v3/run_v3.bat)
 - [`bootstrap_v3_gateway.sh`](bootstrap_v3_gateway.sh)
+- Pinned gateway download: `https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/1758091/bootstrap_v3_gateway.sh`
 
 ## What is included
 

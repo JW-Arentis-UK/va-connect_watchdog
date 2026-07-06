@@ -29,7 +29,7 @@ Or bootstrap from a downloaded script on the gateway:
 
 ```bash
 cd ~/Desktop
-wget -O bootstrap_v3_gateway.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/codex/v3-gateway-ready/bootstrap_v3_gateway.sh
+wget -O bootstrap_v3_gateway.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/1758091/bootstrap_v3_gateway.sh
 bash ./bootstrap_v3_gateway.sh
 ```
 
