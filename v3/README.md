@@ -17,6 +17,8 @@ Working plan:
 - [`docs/stage1_reboot_checklist.md`](docs/stage1_reboot_checklist.md)
 - [`scripts/stage1_reboot_check.sh`](scripts/stage1_reboot_check.sh)
 
+The web page now includes a watchdog update action that pulls the current branch and restarts the service in the background.
+
 Default monitored services:
 - esg.service
 - bridge.service

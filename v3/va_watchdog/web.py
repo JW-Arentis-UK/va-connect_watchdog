@@ -5,6 +5,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 
+from .update import launch_update_job, load_update_status
+
 HTML = """<!doctype html>
 <html>
 <head>
@@ -19,6 +21,9 @@ body { font-family: Arial, sans-serif; background:#111; color:#eee; margin:20px;
 .critical { color:#ef476f; }
 .unknown { color:#aaa; }
 pre { white-space: pre-wrap; }
+.button-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin: 10px 0; }
+button { background:#2f6fed; color:#fff; border:0; border-radius:6px; padding:10px 14px; cursor:pointer; font-weight:700; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -56,15 +61,51 @@ function renderStartupSummary(summary){
   return html;
 }
 
+function renderUpdateCard(updateStatus){
+  if (!updateStatus) return '';
+  const state = updateStatus.state || 'unknown';
+  const message = updateStatus.message || 'No update status available.';
+  const branch = updateStatus.branch || '';
+  const commit = updateStatus.commit || '';
+  const updatedAt = updateStatus.updated_at || '';
+  return `<div class="card"><h2>Watchdog update</h2><p class="${state}">${escapeHtml(state.toUpperCase())}</p><p>${escapeHtml(message)}</p><p>Branch: ${escapeHtml(branch || '-')}</p><p>Commit: ${escapeHtml(commit || '-')}</p><p>Updated: ${escapeHtml(updatedAt || '-')}</p><div class="button-row"><button id="update-button" onclick="triggerUpdate()">Update watchdog now</button></div><p id="update-feedback"></p></div>`;
+}
+
 async function load(){
-  const r = await fetch('/api/status');
-  const s = await r.json();
-  let html = renderStartupSummary(s.startup_summary);
+  const [statusResponse, updateResponse] = await Promise.all([
+    fetch('/api/status'),
+    fetch('/api/update-status'),
+  ]);
+  const s = await statusResponse.json();
+  const updateStatus = await updateResponse.json();
+  let html = renderUpdateCard(updateStatus);
+  html += renderStartupSummary(s.startup_summary);
   html += `<div class="card"><h2 class="${s.state}">${s.state.toUpperCase()} - ${s.score}%</h2><p>${escapeHtml(s.time)}</p><p>Critical failed: ${escapeHtml(s.critical_failed)}</p></div>`;
   for (const c of s.checks) {
     html += `<div class="card"><h3 class="${c.state}">${escapeHtml(c.name)}: ${escapeHtml(c.state)}</h3><p>${escapeHtml(c.message)}</p><pre>${escapeHtml(JSON.stringify(c.value, null, 2))}</pre></div>`;
   }
   document.getElementById('app').innerHTML = html;
+}
+
+async function triggerUpdate(){
+  const button = document.getElementById('update-button');
+  const feedback = document.getElementById('update-feedback');
+  if (!button || !feedback) return;
+  if (!confirm('Start a watchdog update now? The service will restart when the update finishes.')) {
+    return;
+  }
+  button.disabled = true;
+  feedback.textContent = 'Starting update...';
+  try {
+    const response = await fetch('/api/update', { method: 'POST' });
+    const payload = await response.json();
+    feedback.textContent = payload.message || 'Update request sent.';
+  } catch (error) {
+    feedback.textContent = `Update failed: ${error}`;
+  } finally {
+    button.disabled = false;
+    setTimeout(load, 3000);
+  }
 }
 load(); setInterval(load, 5000);
 </script>
@@ -83,6 +124,14 @@ def start_web(cfg):
         def log_message(self, fmt, *args):
             return
 
+        def _send_json(self, payload, status=200):
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self):
             if self.path == "/" or self.path.startswith("/index"):
                 self.send_response(200)
@@ -95,16 +144,25 @@ def start_web(cfg):
                     body = status_path.read_text(encoding="utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body.encode("utf-8"))))
                     self.end_headers()
                     self.wfile.write(body.encode("utf-8"))
                 except Exception as e:
-                    self.send_response(503)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+                    self._send_json({"error": str(e)}, status=503)
+                return
+            if self.path == "/api/update-status":
+                self._send_json(load_update_status(cfg))
                 return
             self.send_response(404)
             self.end_headers()
+
+        def do_POST(self):
+            if self.path == "/api/update":
+                result = launch_update_job(cfg)
+                status = 200 if result.get("ok") else 500
+                self._send_json(result, status=status)
+                return
+            self._send_json({"error": "not found"}, status=404)
 
     server = ThreadingHTTPServer((web_cfg["host"], int(web_cfg["port"])), Handler)
     t = Thread(target=server.serve_forever, daemon=True)

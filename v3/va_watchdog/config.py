@@ -45,6 +45,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_restart_attempts": 3,
         "critical_grace_seconds": 60,
         "allow_reboot": False
+    },
+    "update": {
+        "enabled": True,
+        "remote": "origin",
+        "branch": "",
+        "state_path": "/var/lib/va-watchdog/update-state.json",
+        "log_path": "/var/lib/va-watchdog/update.log"
     }
 }
 
