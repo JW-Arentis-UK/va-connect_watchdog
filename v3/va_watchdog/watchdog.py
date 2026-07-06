@@ -33,6 +33,20 @@ def main():
 
     event_log.add("info", "watchdog", "VA-Connect Watchdog V3 starting")
     hw.open()
+
+    status, checks = collect_health(cfg)
+    status["hardware_watchdog_feed"] = {
+        "enabled": hw.enabled,
+        "last_feed_unix": hw.last_feed,
+        "fed_this_cycle": False
+    }
+    event_log.add(
+        "info",
+        "watchdog",
+        status["startup_summary"]["headline"],
+        status["startup_summary"],
+    )
+    atomic_write_json(cfg["status_path"], status)
     start_web(cfg)
 
     while True:

@@ -25,12 +25,44 @@ pre { white-space: pre-wrap; }
 <h1>VA-Connect Watchdog V3</h1>
 <div id="app">Loading...</div>
 <script>
+function escapeHtml(value){
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function renderStartupSummary(summary){
+  if (!summary) return '';
+  const details = Array.isArray(summary.details) ? summary.details : [];
+  const services = Array.isArray(summary.service_states) ? summary.service_states : [];
+  let html = `<div class="card"><h2>Startup summary</h2><p class="${summary.critical_checks && summary.critical_checks.length ? 'critical' : (summary.warning_checks && summary.warning_checks.length ? 'warning' : 'healthy')}">${escapeHtml(summary.headline || 'Startup summary')}</p>`;
+  if (details.length) {
+    html += `<ul>`;
+    for (const item of details) {
+      html += `<li>${escapeHtml(item)}</li>`;
+    }
+    html += `</ul>`;
+  }
+  if (services.length) {
+    html += `<h3>Service state</h3>`;
+    for (const svc of services) {
+      html += `<p><strong>${escapeHtml(svc.name)}</strong> - ${escapeHtml(svc.state)}: ${escapeHtml(svc.message || '')}</p>`;
+    }
+  }
+  html += `</div>`;
+  return html;
+}
+
 async function load(){
   const r = await fetch('/api/status');
   const s = await r.json();
-  let html = `<div class="card"><h2 class="${s.state}">${s.state.toUpperCase()} - ${s.score}%</h2><p>${s.time}</p><p>Critical failed: ${s.critical_failed}</p></div>`;
+  let html = renderStartupSummary(s.startup_summary);
+  html += `<div class="card"><h2 class="${s.state}">${s.state.toUpperCase()} - ${s.score}%</h2><p>${escapeHtml(s.time)}</p><p>Critical failed: ${escapeHtml(s.critical_failed)}</p></div>`;
   for (const c of s.checks) {
-    html += `<div class="card"><h3 class="${c.state}">${c.name}: ${c.state}</h3><p>${c.message}</p><pre>${JSON.stringify(c.value, null, 2)}</pre></div>`;
+    html += `<div class="card"><h3 class="${c.state}">${escapeHtml(c.name)}: ${escapeHtml(c.state)}</h3><p>${escapeHtml(c.message)}</p><pre>${escapeHtml(JSON.stringify(c.value, null, 2))}</pre></div>`;
   }
   document.getElementById('app').innerHTML = html;
 }
