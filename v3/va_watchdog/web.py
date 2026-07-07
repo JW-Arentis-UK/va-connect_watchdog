@@ -71,6 +71,26 @@ function renderUpdateCard(updateStatus){
   return `<div class="card"><h2>Watchdog update</h2><p class="${state}">${escapeHtml(state.toUpperCase())}</p><p>${escapeHtml(message)}</p><p>Branch: ${escapeHtml(branch || '-')}</p><p>Commit: ${escapeHtml(commit || '-')}</p><p>Updated: ${escapeHtml(updatedAt || '-')}</p><div class="button-row"><button id="update-button" onclick="triggerUpdate()">Update watchdog now</button></div><p id="update-feedback"></p></div>`;
 }
 
+function renderRecoveryCard(recovery){
+  if (!recovery) return '';
+  const state = recovery.state || 'unknown';
+  const actions = Array.isArray(recovery.actions) ? recovery.actions : [];
+  const details = recovery.details || {};
+  let html = `<div class="card"><h2>Recovery</h2><p class="${state}">${escapeHtml(state.toUpperCase())}</p><p>${escapeHtml(recovery.message || '')}</p>`;
+  if (actions.length) {
+    html += `<h3>Actions</h3><ul>`;
+    for (const action of actions) {
+      html += `<li>${escapeHtml(action)}</li>`;
+    }
+    html += `</ul>`;
+  }
+  if (details && Object.keys(details).length) {
+    html += `<pre>${escapeHtml(JSON.stringify(details, null, 2))}</pre>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
 async function load(){
   const [statusResponse, updateResponse] = await Promise.all([
     fetch('/api/status'),
@@ -79,6 +99,7 @@ async function load(){
   const s = await statusResponse.json();
   const updateStatus = await updateResponse.json();
   let html = renderUpdateCard(updateStatus);
+  html += renderRecoveryCard(s.recovery);
   html += renderStartupSummary(s.startup_summary);
   html += `<div class="card"><h2 class="${s.state}">${s.state.toUpperCase()} - ${s.score}%</h2><p>${escapeHtml(s.time)}</p><p>Critical failed: ${escapeHtml(s.critical_failed)}</p></div>`;
   for (const c of s.checks) {

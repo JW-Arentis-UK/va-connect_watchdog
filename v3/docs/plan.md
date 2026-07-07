@@ -37,9 +37,10 @@ Goal: decide which failures only warn and which failures should recover.
 
 What to decide:
 
-- restart versus warning behavior
-- any reboot conditions
-- service-specific recovery rules
+- hardware watchdog missing stays a warning
+- noncritical service failures stay warnings unless explicitly restarted
+- critical service failures can restart if recovery is enabled
+- persistent critical failures can request a reboot if rebooting is allowed
 
 ## Stage 4. Dashboard refinement
 
@@ -70,4 +71,3 @@ What to add:
 - a clean release branch or tag
 - a short operator guide
 - a stable install URL
-

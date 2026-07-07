@@ -42,6 +42,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "recovery": {
         "enabled": False,
         "restart_failed_services": False,
+        "restart_noncritical_services": False,
         "max_restart_attempts": 3,
         "critical_grace_seconds": 60,
         "allow_reboot": False

@@ -40,6 +40,7 @@ def main():
         "last_feed_unix": hw.last_feed,
         "fed_this_cycle": False
     }
+    status["recovery"] = recovery.summary()
     event_log.add(
         "info",
         "watchdog",
@@ -60,6 +61,7 @@ def main():
                 "last_feed_unix": hw.last_feed,
                 "fed_this_cycle": fed
             }
+            status["recovery"] = recovery.summary()
             atomic_write_json(cfg["status_path"], status)
         except Exception as e:
             event_log.add("critical", "watchdog", f"Main loop error: {e}")
