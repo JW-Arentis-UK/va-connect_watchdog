@@ -15,6 +15,9 @@ HTML = """<!doctype html>
 <style>
 body { font-family: Arial, sans-serif; background:#111; color:#eee; margin:20px; }
 .card { background:#1d1d1d; padding:14px; margin:10px 0; border-radius:8px; }
+.section { margin-top: 20px; }
+.section h2 { margin: 18px 0 8px; font-size: 1.1rem; letter-spacing: 0.04em; text-transform: uppercase; color: #bbb; }
+.section .section-note { color:#999; margin: 0 0 8px; }
 .healthy { color:#66d17a; }
 .warning { color:#ffd166; }
 .degraded { color:#ff9f1c; }
@@ -91,6 +94,42 @@ function renderRecoveryCard(recovery){
   return html;
 }
 
+function groupChecks(checks){
+  const groups = {
+    hardware: [],
+    services: [],
+    storage: [],
+    recovery: [],
+    system: [],
+  };
+  for (const check of checks || []) {
+    const name = String(check.name || '');
+    if (name === 'temperature' || name === 'ram' || name === 'cpu_load' || name === 'hardware_watchdog_present') {
+      groups.hardware.push(check);
+    } else if (name.endsWith('.service')) {
+      groups.services.push(check);
+    } else if (name === 'root_disk' || name === 'recordings_disk' || name === 'write_test') {
+      groups.storage.push(check);
+    } else if (name === 'network_module') {
+      groups.system.push(check);
+    } else {
+      groups.system.push(check);
+    }
+  }
+  return groups;
+}
+
+function renderSection(title, note, checks){
+  if (!checks || !checks.length) return '';
+  let html = `<section class="section"><h2>${escapeHtml(title)}</h2>`;
+  if (note) html += `<p class="section-note">${escapeHtml(note)}</p>`;
+  for (const c of checks) {
+    html += `<div class="card"><h3 class="${c.state}">${escapeHtml(c.name)}: ${escapeHtml(c.state)}</h3><p>${escapeHtml(c.message)}</p><pre>${escapeHtml(JSON.stringify(c.value, null, 2))}</pre></div>`;
+  }
+  html += `</section>`;
+  return html;
+}
+
 async function load(){
   const [statusResponse, updateResponse] = await Promise.all([
     fetch('/api/status'),
@@ -101,10 +140,12 @@ async function load(){
   let html = renderUpdateCard(updateStatus);
   html += renderRecoveryCard(s.recovery);
   html += renderStartupSummary(s.startup_summary);
+  const grouped = groupChecks(s.checks);
   html += `<div class="card"><h2 class="${s.state}">${s.state.toUpperCase()} - ${s.score}%</h2><p>${escapeHtml(s.time)}</p><p>Critical failed: ${escapeHtml(s.critical_failed)}</p></div>`;
-  for (const c of s.checks) {
-    html += `<div class="card"><h3 class="${c.state}">${escapeHtml(c.name)}: ${escapeHtml(c.state)}</h3><p>${escapeHtml(c.message)}</p><pre>${escapeHtml(JSON.stringify(c.value, null, 2))}</pre></div>`;
-  }
+  html += renderSection('Hardware', 'CPU, memory, temperature, and watchdog presence.', grouped.hardware);
+  html += renderSection('Services', 'systemd services that should stay healthy.', grouped.services);
+  html += renderSection('Storage', 'disk and writeability checks.', grouped.storage);
+  html += renderSection('System', 'other background checks and placeholder signals.', grouped.system);
   document.getElementById('app').innerHTML = html;
 }
 

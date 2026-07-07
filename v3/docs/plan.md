@@ -48,7 +48,8 @@ Goal: make the main status page easier to scan at a glance.
 
 What to improve:
 
-- explicit panels for hardware, services, storage, and recovery
+- update and recovery status visible at the top
+- explicit panels for hardware, services, storage, and system
 - clearer source labels
 - better failure summaries
 

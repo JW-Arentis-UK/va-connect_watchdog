@@ -16,6 +16,7 @@ Working plan:
 - [`docs/plan.md`](docs/plan.md)
 - [`docs/stage1_reboot_checklist.md`](docs/stage1_reboot_checklist.md)
 - [`docs/stage3_recovery.md`](docs/stage3_recovery.md)
+- [`docs/stage4_dashboard.md`](docs/stage4_dashboard.md)
 - [`scripts/stage1_reboot_check.sh`](scripts/stage1_reboot_check.sh)
 
 The web page now includes a watchdog update action that pulls the current branch and restarts the service in the background.
