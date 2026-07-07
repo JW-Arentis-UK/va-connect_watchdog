@@ -8,6 +8,7 @@ This stage makes the main page easier to scan at a glance.
 - keep update and recovery status visible
 - group checks into hardware, services, storage, and system
 - keep the hardware watchdog warning visible as a distinct signal
+- keep raw JSON out of normal operator views
 
 ## What the operator should see first
 
@@ -19,3 +20,10 @@ This stage makes the main page easier to scan at a glance.
 6. Service checks
 7. Storage checks
 
+## Appliance dashboard changes
+
+- the Overview page uses compact tiles instead of full-width debug cards
+- service health appears as a table
+- recent events are read from `events.jsonl`
+- raw status JSON is only shown under Diagnostics
+- `/api/status` remains unchanged
