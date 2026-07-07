@@ -19,8 +19,10 @@ HTML = """<!doctype html>
 <style>
 :root {
   --bg: #080b0f;
+  --sidebar: #05080c;
   --panel: #11161d;
   --panel-2: #151b23;
+  --input: #05080c;
   --line: #28313d;
   --text: #edf2f7;
   --muted: #9aa6b2;
@@ -31,10 +33,51 @@ HTML = """<!doctype html>
   --blue: #3b82f6;
   --scale: .75;
 }
+body[data-theme="light"] {
+  --bg: #eef3f8;
+  --sidebar: #dde7f1;
+  --panel: #ffffff;
+  --panel-2: #edf4fb;
+  --input: #ffffff;
+  --line: #c9d5e2;
+  --text: #182230;
+  --muted: #526173;
+  --green: #168a3a;
+  --amber: #a86700;
+  --orange: #b45309;
+  --red: #c6283a;
+  --blue: #1d64d8;
+}
+body[data-theme="steel"] {
+  --bg: #10151a;
+  --sidebar: #161d24;
+  --panel: #1e2730;
+  --panel-2: #25313b;
+  --input: #141b22;
+  --line: #3b4855;
+  --text: #f4f7f9;
+  --muted: #b4c0cb;
+  --blue: #38a3ff;
+}
+body[data-theme="sand"] {
+  --bg: #f2eadc;
+  --sidebar: #e0d2bb;
+  --panel: #fff9ef;
+  --panel-2: #f2e5cf;
+  --input: #fffaf0;
+  --line: #cbbda4;
+  --text: #261f17;
+  --muted: #6d604f;
+  --green: #2f7d32;
+  --amber: #9a6400;
+  --orange: #a34800;
+  --red: #b52222;
+  --blue: #1769aa;
+}
 * { box-sizing: border-box; }
 body { font-family: Arial, sans-serif; background: var(--bg); color: var(--text); margin:0; font-size:calc(14px * var(--scale)); }
 .shell { display:grid; grid-template-columns: calc(220px * var(--scale)) 1fr; min-height:100vh; }
-.sidebar { border-right:1px solid var(--line); background:#05080c; padding:calc(18px * var(--scale)) calc(14px * var(--scale)); display:flex; flex-direction:column; gap:calc(18px * var(--scale)); }
+.sidebar { border-right:1px solid var(--line); background:var(--sidebar); padding:calc(18px * var(--scale)) calc(14px * var(--scale)); display:flex; flex-direction:column; gap:calc(18px * var(--scale)); }
 .brand { font-size:calc(18px * var(--scale)); font-weight:700; line-height:1.25; }
 .nav { display:grid; gap:calc(6px * var(--scale)); }
 .nav button { width:100%; text-align:left; background:transparent; color:var(--muted); border:1px solid transparent; border-radius:6px; padding:calc(10px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-size:inherit; }
@@ -43,7 +86,7 @@ body { font-family: Arial, sans-serif; background: var(--bg); color: var(--text)
 .main { min-width:0; }
 .topbar { height:calc(58px * var(--scale)); border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; padding:0 calc(18px * var(--scale)); color:var(--muted); }
 .topbar-right { display:flex; gap:10px; align-items:center; }
-select { background:#05080c; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 8px; font-size:inherit; }
+select { background:var(--input); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 8px; font-size:inherit; }
 .content { padding:calc(18px * var(--scale)); max-width:calc(1360px * var(--scale)); margin:0 auto; }
 .grid { display:grid; gap:calc(12px * var(--scale)); }
 .top-grid { grid-template-columns: minmax(0, 1.6fr) minmax(300px, 0.9fr); }
@@ -75,7 +118,10 @@ th { color:var(--muted); font-weight:600; font-size:calc(12px * var(--scale)); }
 .donut span { width:calc(86px * var(--scale)); height:calc(86px * var(--scale)); display:grid; place-items:center; border-radius:50%; background:var(--panel); font-size:calc(26px * var(--scale)); font-weight:800; }
 .breakdown-row { display:flex; justify-content:space-between; gap:calc(12px * var(--scale)); margin:calc(8px * var(--scale)) 0; color:var(--muted); }
 .history-box { height:calc(160px * var(--scale)); border:1px solid var(--line); border-radius:6px; background:linear-gradient(180deg, rgba(54,209,95,.18), rgba(54,209,95,.04)); display:flex; align-items:center; justify-content:center; color:var(--muted); }
-pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale)); background:#05080c; border:1px solid var(--line); border-radius:6px; padding:calc(12px * var(--scale)); }
+pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale)); background:var(--input); border:1px solid var(--line); border-radius:6px; padding:calc(12px * var(--scale)); }
+.detail-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:calc(10px * var(--scale)); }
+.mini-card { border:1px solid var(--line); border-radius:6px; padding:calc(10px * var(--scale)); background:rgba(255,255,255,.03); min-width:0; }
+.muted { color:var(--muted); }
 .button-row { display:flex; gap:calc(8px * var(--scale)); flex-wrap:wrap; align-items:center; margin:calc(10px * var(--scale)) 0; }
 button.action { background:var(--blue); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; }
 button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:calc(7px * var(--scale)) calc(10px * var(--scale)); cursor:pointer; font-size:inherit; }
@@ -111,6 +157,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
     <header class="topbar">
       <div id="page-title">Overview</div>
       <div class="topbar-right">
+        <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="dark">Dark</option><option value="light">Light</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
         <label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label>
         <button class="ghost" onclick="load()">Refresh now</button>
         <div id="last-update">Last update: -</div>
@@ -130,6 +177,9 @@ let lastSystemInfo = {};
 let lastNetworkInfo = {};
 let lastSettings = {};
 let lastRetention = {};
+let lastHardwareInfo = {};
+let lastServiceInfo = {};
+let lastStorageInfo = {};
 let refreshTimer = null;
 
 function escapeHtml(value){
@@ -205,6 +255,18 @@ function initRefresh(){
   setRefreshInterval(saved);
 }
 
+function setTheme(value){
+  localStorage.setItem('va_watchdog_theme', value);
+  document.body.dataset.theme = value === 'dark' ? '' : value;
+}
+
+function initTheme(){
+  const saved = localStorage.getItem('va_watchdog_theme') || 'dark';
+  const select = document.getElementById('theme-select');
+  select.value = saved;
+  setTheme(saved);
+}
+
 function showPage(page){
   currentPage = page;
   buildNav();
@@ -245,7 +307,8 @@ function serviceRows(status){
   const services = (status.checks || []).filter(c => String(c.name || '').endsWith('.service'));
   return services.map(c => {
     const value = c.value || {};
-    return `<tr><td>${escapeHtml(c.name)}</td><td><span class="pill">${escapeHtml((value.active || c.state || '-').toUpperCase())}</span></td><td>-</td><td>-</td><td>${escapeHtml(value.restarts ?? '-')}</td><td>-</td></tr>`;
+    const live = (lastServiceInfo.services || []).find(item => item.name === c.name) || {};
+    return `<tr><td>${escapeHtml(c.name)}</td><td><span class="pill">${escapeHtml((value.active || c.state || '-').toUpperCase())}</span></td><td>${escapeHtml(live.cpu_percent ?? '-')}</td><td>${escapeHtml(live.memory_mb !== undefined ? `${live.memory_mb} MB` : '-')}</td><td>${escapeHtml(value.restarts ?? live.restarts ?? '-')}</td><td>${escapeHtml(live.uptime || '-')}</td></tr>`;
   }).join('');
 }
 
@@ -298,7 +361,7 @@ function renderServices(status){
 
 function renderSystemInfo(status){
   const rtc = lastSystemInfo.rtc || {};
-  return `<div class="card"><h2>System Information</h2><div class="label">Hostname</div><div class="value">${escapeHtml(lastSystemInfo.hostname || '-')}</div><div class="label">OS</div><div class="value">${escapeHtml(lastSystemInfo.os || '-')}</div><div class="label">Kernel</div><div class="value">${escapeHtml(lastSystemInfo.kernel || '-')}</div><div class="label">Uptime</div><div class="value">${escapeHtml(lastSystemInfo.uptime_seconds ? `${Math.round(lastSystemInfo.uptime_seconds)}s` : '-')}</div><div class="label">BIOS/RTC Clock</div><div class="value ${rtc.rtc0_present ? 'healthy' : 'warning'}">${rtc.rtc0_present ? 'RTC present' : 'RTC not confirmed'}</div></div>`;
+  return `<div class="card"><h2>System Information</h2><div class="detail-grid"><div><div class="label">Hostname</div><div class="value">${escapeHtml(lastSystemInfo.hostname || '-')}</div><div class="label">OS</div><div class="value">${escapeHtml(lastSystemInfo.os || '-')}</div><div class="label">Kernel</div><div class="value">${escapeHtml(lastSystemInfo.kernel || '-')}</div><div class="label">Architecture</div><div class="value">${escapeHtml(lastSystemInfo.architecture || '-')}</div></div><div><div class="label">Uptime</div><div class="value">${escapeHtml(lastSystemInfo.uptime_seconds ? `${Math.round(lastSystemInfo.uptime_seconds)}s` : '-')}</div><div class="label">Python</div><div class="value">${escapeHtml(lastSystemInfo.python || '-')}</div><div class="label">Timezone</div><div class="value">${escapeHtml((lastSystemInfo.timezone || []).join(' / ') || '-')}</div><div class="label">BIOS/RTC Clock</div><div class="value ${rtc.rtc0_present ? 'healthy' : 'warning'}">${rtc.rtc0_present ? 'RTC present' : 'RTC not confirmed'}</div></div></div><div class="label">Clock detail</div><pre>${escapeHtml(rtc.hwclock || rtc.timedatectl || 'Clock command output not available')}</pre></div>`;
 }
 
 function renderOverview(status, events){
@@ -322,7 +385,9 @@ function renderRetentionPage(){
 }
 
 function renderNetworkPage(){
-  return renderSimplePage('Network', `<div class="label">IP Addresses</div><div class="value">${escapeHtml(lastNetworkInfo.ip_addresses || '-')}</div><div class="label">Default Route</div><div class="value">${escapeHtml(lastNetworkInfo.default_route || '-')}</div><div class="label">Remote Access</div><div class="value">${escapeHtml((lastNetworkInfo.remote_access_services || []).join(', ') || 'TeamViewer placeholder')}</div>${placeholderList(['Gateway ping','Internet ping','DNS health','Local target checks','Forwarder reachability'])}`);
+  const pings = (lastNetworkInfo.pings || []).map(item => `<tr><td>${escapeHtml(item.target)}</td><td class="${item.ok ? 'healthy' : 'warning'}">${item.ok ? 'OK' : 'Failed'}</td><td>${escapeHtml(item.detail || '-')}</td></tr>`).join('');
+  const remote = (lastNetworkInfo.remote_access || []).map(item => `<tr><td>${escapeHtml(item.service)}</td><td class="${item.active ? 'healthy' : 'warning'}">${escapeHtml(item.state || '-')}</td><td>${escapeHtml(item.note || '')}</td></tr>`).join('');
+  return `<div class="grid lower-grid"><div class="card"><h2>Network</h2><div class="label">IP Addresses</div><div class="value">${escapeHtml(lastNetworkInfo.ip_addresses || '-')}</div><div class="label">Default Route</div><div class="value">${escapeHtml(lastNetworkInfo.default_route || '-')}</div><div class="label">DNS</div><pre>${escapeHtml(lastNetworkInfo.dns || '-')}</pre></div><div class="card"><h2>Connectivity</h2><table><thead><tr><th>Target</th><th>Status</th><th>Detail</th></tr></thead><tbody>${pings || '<tr><td colspan="3">No network targets configured</td></tr>'}</tbody></table><h3>Remote Access</h3><table><thead><tr><th>Service</th><th>Status</th><th>Note</th></tr></thead><tbody>${remote || '<tr><td>TeamViewer</td><td class="muted">Placeholder</td><td>Add/check service name when confirmed</td></tr>'}</tbody></table>${placeholderList(['Forwarder reachability','Gateway software web forwarding status','Local recorder/camera targets'])}</div></div>`;
 }
 
 function renderUpdatesPage(updateStatus){
@@ -333,12 +398,24 @@ function renderDiagnosticsPage(status, updateStatus){
   return renderSimplePage('Diagnostics', `<p>Advanced troubleshooting and support bundle tools. Raw JSON is intentionally kept here.</p>${placeholderList(['systemd status','journal tail','hardware probes','network command output','support bundle export'])}<h3>Raw status</h3><pre>${escapeHtml(JSON.stringify(status, null, 2))}</pre><h3>Update status</h3><pre>${escapeHtml(JSON.stringify(updateStatus, null, 2))}</pre>`);
 }
 
+function renderHardwarePage(grouped){
+  const cpu = lastHardwareInfo.cpu || {};
+  const memory = lastHardwareInfo.memory || {};
+  const block = lastHardwareInfo.block_devices || [];
+  return `<div class="grid metric-grid">${grouped.hardware.map(c => tile(c.name, c, c.value === true ? 'Present' : fmtValue(c.value), c.message)).join('')}</div><div class="grid lower-grid"><div class="card"><h2>CPU and Memory</h2><div class="label">CPU</div><div class="value">${escapeHtml(cpu.model || '-')}</div><div class="label">Cores</div><div class="value">${escapeHtml(cpu.cores || '-')}</div><div class="label">RAM Total</div><div class="value">${escapeHtml(memory.total_mb !== undefined ? `${memory.total_mb} MB` : '-')}</div><div class="label">RAM Available</div><div class="value">${escapeHtml(memory.available_mb !== undefined ? `${memory.available_mb} MB` : '-')}</div></div><div class="card"><h2>Detected Block Devices</h2><pre>${escapeHtml(block.join('\\n') || 'No block device detail available')}</pre>${placeholderList(['USB/controller/device inventory','More temperature sensors','Watchdog device discovery detail'])}</div></div>`;
+}
+
+function renderStoragePage(grouped){
+  const rows = (lastStorageInfo.volumes || []).map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.path)}</td><td>${escapeHtml(item.used_percent)}%</td><td>${escapeHtml(item.free_gb)} GB</td><td>${escapeHtml(item.warning_percent)}%</td><td>${escapeHtml(item.critical_percent)}%</td><td>${item.always_full_expected ? 'Yes' : 'No'}</td></tr>`).join('');
+  return `<div class="grid metric-grid">${grouped.storage.map(c => tile(c.name, c, c.value?.used_percent !== undefined ? fmtPercent(c.value.used_percent) : fmtValue(c.value), c.message)).join('')}</div><div class="card"><h2>Configured Storage Limits</h2><table><thead><tr><th>Name</th><th>Path</th><th>Used</th><th>Free</th><th>Warn</th><th>Critical</th><th>Full expected</th></tr></thead><tbody>${rows || '<tr><td colspan="7">No monitored paths configured</td></tr>'}</tbody></table>${placeholderList(['Editable warning/critical limits','Separate recordings drive detection','One-drive full-expected mode'])}</div>${renderRetentionPage()}`;
+}
+
 function renderPage(status, updateStatus, events){
   const grouped = groupChecks(status.checks || []);
   if (currentPage === 'Overview') return renderOverview(status, events);
-  if (currentPage === 'Hardware') return `<div class="grid metric-grid">${grouped.hardware.map(c => tile(c.name, c, c.value === true ? 'Present' : fmtValue(c.value), c.message)).join('')}</div>${renderSimplePage('Hardware roadmap', placeholderList(['More temperature sensors','CPU model and cores','RAM detail','Watchdog device discovery','USB/controller/device inventory']))}`;
+  if (currentPage === 'Hardware') return renderHardwarePage(grouped);
   if (currentPage === 'Services') return renderServices(status);
-  if (currentPage === 'Storage') return `<div class="grid metric-grid">${grouped.storage.map(c => tile(c.name, c, c.value?.used_percent !== undefined ? fmtPercent(c.value.used_percent) : fmtValue(c.value), c.message)).join('')}</div>${renderRetentionPage()}`;
+  if (currentPage === 'Storage') return renderStoragePage(grouped);
   if (currentPage === 'Network') return renderNetworkPage();
   if (currentPage === 'Recovery') return renderSimplePage('Recovery', `<p class="${escapeHtml(status.recovery?.state || 'unknown')}">${escapeHtml((status.recovery?.state || 'unknown').toUpperCase())}</p><p>${escapeHtml(status.recovery?.message || 'No recovery state available.')}</p>${placeholderList(['Enable/disable recovery','Restart service policy','Reboot grace period','Install/configure hardware watchdog','Last reboot reason'])}`);
   if (currentPage === 'Events') return renderSimplePage('Events', `<div class="button-row"><button class="action" onclick="exportEvents()">Export events JSON</button></div><div class="events">${renderEvents(events, 20)}</div>${placeholderList(['Severity filters','Search','CSV export','Clear/purge events'])}`);
@@ -350,7 +427,7 @@ function renderPage(status, updateStatus, events){
 }
 
 async function load(){
-  const [statusResponse, updateResponse, eventsResponse, configResponse, systemResponse, networkResponse, settingsResponse, retentionResponse] = await Promise.all([
+  const [statusResponse, updateResponse, eventsResponse, configResponse, systemResponse, networkResponse, settingsResponse, retentionResponse, hardwareResponse, servicesResponse, storageResponse] = await Promise.all([
     fetch('/api/status'),
     fetch('/api/update-status'),
     fetch('/api/events'),
@@ -359,6 +436,9 @@ async function load(){
     fetch('/api/network-info'),
     fetch('/api/settings-summary'),
     fetch('/api/retention'),
+    fetch('/api/hardware-info'),
+    fetch('/api/services-info'),
+    fetch('/api/storage-info'),
   ]);
   lastStatus = await statusResponse.json();
   lastUpdateStatus = await updateResponse.json();
@@ -368,6 +448,9 @@ async function load(){
   lastNetworkInfo = await networkResponse.json();
   lastSettings = await settingsResponse.json();
   lastRetention = await retentionResponse.json();
+  lastHardwareInfo = await hardwareResponse.json();
+  lastServiceInfo = await servicesResponse.json();
+  lastStorageInfo = await storageResponse.json();
   render();
 }
 
@@ -426,6 +509,7 @@ async function purgeAllData(){
   await load();
 }
 buildNav();
+initTheme();
 initRefresh();
 load();
 </script>
@@ -549,15 +633,199 @@ def start_web(cfg):
         }
 
     def network_info():
+        network_cfg = cfg.get("network", {})
+        targets = list(network_cfg.get("internet_hosts", [])) + list(network_cfg.get("local_targets", []))
+        pings = []
+        for target in targets[:8]:
+            result = _run(["ping", "-c", "1", "-W", "1", str(target)], timeout=3)
+            detail = ""
+            for line in result["stdout"].splitlines():
+                if "time=" in line or "packet loss" in line:
+                    detail = line.strip()
+                    break
+            pings.append({"target": target, "ok": result["ok"], "detail": detail or result["stderr"]})
+        remote_access = []
+        for service in network_cfg.get("remote_access_services", []):
+            state = _run(["systemctl", "is-active", str(service)], timeout=3)
+            remote_access.append({
+                "service": service,
+                "active": state["stdout"] == "active",
+                "state": state["stdout"] or state["stderr"] or "unknown",
+                "note": "TeamViewer/remote support service placeholder" if "teamviewer" in str(service).lower() else "",
+            })
         return {
             "ip_addresses": _run(["hostname", "-I"])["stdout"],
             "default_route": _run(["ip", "route", "show", "default"])["stdout"],
             "dns": Path("/etc/resolv.conf").read_text(encoding="utf-8", errors="ignore") if Path("/etc/resolv.conf").exists() else "",
-            "configured_internet_hosts": cfg.get("network", {}).get("internet_hosts", []),
-            "configured_local_targets": cfg.get("network", {}).get("local_targets", []),
-            "remote_access_services": cfg.get("network", {}).get("remote_access_services", []),
+            "configured_internet_hosts": network_cfg.get("internet_hosts", []),
+            "configured_local_targets": network_cfg.get("local_targets", []),
+            "remote_access_services": network_cfg.get("remote_access_services", []),
+            "remote_access": remote_access,
+            "pings": pings,
             "listening_port": cfg.get("web", {}).get("port", 9110),
         }
+
+    def _kv_output(command):
+        result = _run(command)
+        out = {}
+        for line in result["stdout"].splitlines():
+            if ":" in line:
+                key, value = line.split(":", 1)
+                out[key.strip()] = value.strip()
+        return out
+
+    def hardware_info():
+        cpu = _kv_output(["lscpu"])
+        memory = {}
+        free = _run(["free", "-m"])
+        for line in free["stdout"].splitlines():
+            if line.startswith("Mem:"):
+                parts = line.split()
+                if len(parts) >= 7:
+                    memory = {
+                        "total_mb": int(parts[1]),
+                        "used_mb": int(parts[2]),
+                        "free_mb": int(parts[3]),
+                        "available_mb": int(parts[6]),
+                    }
+        block_devices = _run(["lsblk", "-o", "NAME,MODEL,SIZE,TYPE,MOUNTPOINT", "-n"])["stdout"].splitlines()
+        watchdog_devices = sorted(str(path) for path in Path("/dev").glob("watchdog*"))
+        return {
+            "cpu": {
+                "model": cpu.get("Model name", ""),
+                "cores": cpu.get("CPU(s)", ""),
+                "vendor": cpu.get("Vendor ID", ""),
+                "architecture": cpu.get("Architecture", ""),
+            },
+            "memory": memory,
+            "block_devices": block_devices,
+            "watchdog_devices": watchdog_devices,
+        }
+
+    def _df_path(path, label="", warning=0, critical=0, full_expected=False):
+        result = _run(["df", "-P", "-B1", str(path)])
+        lines = result["stdout"].splitlines()
+        if len(lines) < 2:
+            return {
+                "name": label or str(path),
+                "path": str(path),
+                "error": result["stderr"] or result["stdout"] or "df unavailable",
+                "warning_percent": warning,
+                "critical_percent": critical,
+                "always_full_expected": full_expected,
+            }
+        parts = lines[-1].split()
+        total = int(parts[1])
+        used = int(parts[2])
+        available = int(parts[3])
+        used_percent = round((used / max(1, total)) * 100, 1)
+        return {
+            "name": label or str(path),
+            "path": str(path),
+            "filesystem": parts[0],
+            "mountpoint": parts[-1],
+            "used_percent": used_percent,
+            "free_gb": round(available / 1024 / 1024 / 1024, 1),
+            "total_gb": round(total / 1024 / 1024 / 1024, 1),
+            "warning_percent": warning,
+            "critical_percent": critical,
+            "always_full_expected": full_expected,
+        }
+
+    def storage_info():
+        storage_cfg = cfg.get("storage", {})
+        thresholds = cfg.get("thresholds", {})
+        monitored = storage_cfg.get("monitored_paths") or [
+            {
+                "name": "Root Disk",
+                "path": storage_cfg.get("root_path", "/"),
+                "warning_percent": thresholds.get("root_disk_warning_percent", 80),
+                "critical_percent": thresholds.get("root_disk_critical_percent", 95),
+                "always_full_expected": False,
+            },
+            {
+                "name": "Recordings Disk",
+                "path": storage_cfg.get("recordings_path", "/home/vsuser/recordings"),
+                "warning_percent": thresholds.get("recordings_disk_warning_percent", 85),
+                "critical_percent": thresholds.get("recordings_disk_critical_percent", 95),
+                "always_full_expected": False,
+            },
+        ]
+        volumes = []
+        seen = set()
+        for item in monitored:
+            path = item.get("path", "/")
+            key = (item.get("name", path), path)
+            if key in seen:
+                continue
+            seen.add(key)
+            volumes.append(_df_path(
+                path,
+                label=item.get("name", path),
+                warning=item.get("warning_percent", 0),
+                critical=item.get("critical_percent", 0),
+                full_expected=bool(item.get("always_full_expected", False)),
+            ))
+        return {
+            "volumes": volumes,
+            "write_test_path": storage_cfg.get("write_test_path"),
+            "retention": retention_status(),
+        }
+
+    def _format_duration(seconds):
+        if seconds is None:
+            return ""
+        seconds = max(0, int(seconds))
+        days, remainder = divmod(seconds, 86400)
+        hours, remainder = divmod(remainder, 3600)
+        minutes, _ = divmod(remainder, 60)
+        if days:
+            return f"{days}d {hours}h"
+        if hours:
+            return f"{hours}h {minutes}m"
+        return f"{minutes}m"
+
+    def service_info():
+        services = []
+        for item in cfg.get("services", []):
+            name = item.get("name", "")
+            props = _run([
+                "systemctl",
+                "show",
+                name,
+                "--property=ActiveState",
+                "--property=NRestarts",
+                "--property=MainPID",
+                "--property=ExecMainStartTimestampMonotonic",
+                "--value",
+            ])
+            values = props["stdout"].splitlines()
+            active = values[0] if len(values) > 0 else ""
+            restarts = values[1] if len(values) > 1 else ""
+            pid = values[2] if len(values) > 2 else "0"
+            start_mono = values[3] if len(values) > 3 else ""
+            ps = _run(["ps", "-p", pid, "-o", "%cpu=,rss=,etimes="]) if pid and pid != "0" else {"stdout": ""}
+            cpu_percent = "-"
+            memory_mb = None
+            uptime = ""
+            parts = ps["stdout"].split()
+            if len(parts) >= 3:
+                cpu_percent = parts[0]
+                memory_mb = round(int(parts[1]) / 1024, 1)
+                uptime = _format_duration(int(parts[2]))
+            services.append({
+                "name": name,
+                "active": active,
+                "restarts": restarts,
+                "main_pid": pid,
+                "cpu_percent": cpu_percent,
+                "memory_mb": memory_mb,
+                "uptime": uptime,
+                "critical": bool(item.get("critical", False)),
+                "restart": bool(item.get("restart", False)),
+                "start_monotonic": start_mono,
+            })
+        return {"services": services}
 
     def settings_summary():
         return {
@@ -649,6 +917,15 @@ def start_web(cfg):
                 return
             if self.path == "/api/events/export":
                 self._send_json({"events": recent_events(limit=200)})
+                return
+            if self.path == "/api/hardware-info":
+                self._send_json(hardware_info())
+                return
+            if self.path == "/api/services-info":
+                self._send_json(service_info())
+                return
+            if self.path == "/api/storage-info":
+                self._send_json(storage_info())
                 return
             self.send_response(404)
             self.end_headers()
