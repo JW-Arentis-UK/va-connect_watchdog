@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import platform
+import subprocess
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -39,6 +42,8 @@ body { font-family: Arial, sans-serif; background: var(--bg); color: var(--text)
 .side-status { margin-top:auto; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:calc(12px * var(--scale)); color:var(--muted); }
 .main { min-width:0; }
 .topbar { height:calc(58px * var(--scale)); border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; padding:0 calc(18px * var(--scale)); color:var(--muted); }
+.topbar-right { display:flex; gap:10px; align-items:center; }
+select { background:#05080c; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 8px; font-size:inherit; }
 .content { padding:calc(18px * var(--scale)); max-width:calc(1360px * var(--scale)); margin:0 auto; }
 .grid { display:grid; gap:calc(12px * var(--scale)); }
 .top-grid { grid-template-columns: minmax(0, 1.6fr) minmax(300px, 0.9fr); }
@@ -73,6 +78,7 @@ th { color:var(--muted); font-weight:600; font-size:calc(12px * var(--scale)); }
 pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale)); background:#05080c; border:1px solid var(--line); border-radius:6px; padding:calc(12px * var(--scale)); }
 .button-row { display:flex; gap:calc(8px * var(--scale)); flex-wrap:wrap; align-items:center; margin:calc(10px * var(--scale)) 0; }
 button.action { background:var(--blue); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; }
+button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:calc(7px * var(--scale)) calc(10px * var(--scale)); cursor:pointer; font-size:inherit; }
 button.action:disabled { opacity:.5; cursor:not-allowed; }
 .page { display:none; }
 .page.active { display:block; }
@@ -104,7 +110,11 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   <main class="main">
     <header class="topbar">
       <div id="page-title">Overview</div>
-      <div id="last-update">Last update: -</div>
+      <div class="topbar-right">
+        <label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label>
+        <button class="ghost" onclick="load()">Refresh now</button>
+        <div id="last-update">Last update: -</div>
+      </div>
     </header>
     <section class="content" id="app">Loading...</section>
   </main>
@@ -116,6 +126,11 @@ let lastStatus = null;
 let lastUpdateStatus = null;
 let lastEvents = [];
 let lastConfigSummary = {};
+let lastSystemInfo = {};
+let lastNetworkInfo = {};
+let lastSettings = {};
+let lastRetention = {};
+let refreshTimer = null;
 
 function escapeHtml(value){
   return String(value)
@@ -169,6 +184,25 @@ function fmtTime(value){
 function buildNav(){
   const nav = document.getElementById('nav');
   nav.innerHTML = PAGES.map(page => `<button class="${page === currentPage ? 'active' : ''}" onclick="showPage('${page}')">${escapeHtml(page)}</button>`).join('');
+}
+
+function setRefreshInterval(value){
+  localStorage.setItem('va_watchdog_refresh_ms', String(value));
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+  const ms = Number(value);
+  if (ms > 0) {
+    refreshTimer = setInterval(load, ms);
+  }
+}
+
+function initRefresh(){
+  const saved = localStorage.getItem('va_watchdog_refresh_ms') || '5000';
+  const select = document.getElementById('refresh-select');
+  select.value = saved;
+  setRefreshInterval(saved);
 }
 
 function showPage(page){
@@ -263,7 +297,8 @@ function renderServices(status){
 }
 
 function renderSystemInfo(status){
-  return `<div class="card"><h2>System Information</h2><div class="label">Status Time</div><div class="value">${escapeHtml(status.time || '-')}</div><div class="label">Critical Failed</div><div class="value">${escapeHtml(status.critical_failed)}</div><div class="label">Checks</div><div class="value">${escapeHtml((status.checks || []).length)}</div></div>`;
+  const rtc = lastSystemInfo.rtc || {};
+  return `<div class="card"><h2>System Information</h2><div class="label">Hostname</div><div class="value">${escapeHtml(lastSystemInfo.hostname || '-')}</div><div class="label">OS</div><div class="value">${escapeHtml(lastSystemInfo.os || '-')}</div><div class="label">Kernel</div><div class="value">${escapeHtml(lastSystemInfo.kernel || '-')}</div><div class="label">Uptime</div><div class="value">${escapeHtml(lastSystemInfo.uptime_seconds ? `${Math.round(lastSystemInfo.uptime_seconds)}s` : '-')}</div><div class="label">BIOS/RTC Clock</div><div class="value ${rtc.rtc0_present ? 'healthy' : 'warning'}">${rtc.rtc0_present ? 'RTC present' : 'RTC not confirmed'}</div></div>`;
 }
 
 function renderOverview(status, events){
@@ -274,33 +309,65 @@ function renderSimplePage(title, content){
   return `<div class="card"><h2>${escapeHtml(title)}</h2>${content}</div>`;
 }
 
+function placeholderList(items){
+  return `<ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
+}
+
+function renderSettingsPage(){
+  return renderSimplePage('Settings', `<p>Editable config will live here. Current settings summary:</p><pre>${escapeHtml(JSON.stringify(lastSettings, null, 2))}</pre>${placeholderList(['Poll interval editor','Storage warning and critical limits','Network targets','Recovery policy','Update branch and remote','Retention and max watchdog storage budget'])}`);
+}
+
+function renderRetentionPage(){
+  return `<div class="card"><h2>Watchdog Data Storage</h2><p>Used ${escapeHtml(lastRetention.used_mb ?? '-')} MB of ${escapeHtml(lastRetention.max_total_mb ?? '-')} MB (${escapeHtml(lastRetention.used_percent ?? '-')}%).</p><div class="button-row"><button class="action" onclick="purgeOldData()">Purge old data</button><button class="ghost" onclick="purgeAllData()">Purge all non-status data</button></div><pre>${escapeHtml(JSON.stringify(lastRetention, null, 2))}</pre></div>`;
+}
+
+function renderNetworkPage(){
+  return renderSimplePage('Network', `<div class="label">IP Addresses</div><div class="value">${escapeHtml(lastNetworkInfo.ip_addresses || '-')}</div><div class="label">Default Route</div><div class="value">${escapeHtml(lastNetworkInfo.default_route || '-')}</div><div class="label">Remote Access</div><div class="value">${escapeHtml((lastNetworkInfo.remote_access_services || []).join(', ') || 'TeamViewer placeholder')}</div>${placeholderList(['Gateway ping','Internet ping','DNS health','Local target checks','Forwarder reachability'])}`);
+}
+
+function renderUpdatesPage(updateStatus){
+  return renderSimplePage('Updates', `<p class="${statusClass(updateStatus.state)}">${escapeHtml((updateStatus.state || 'unknown').toUpperCase())}</p><p>${escapeHtml(updateStatus.message || '')}</p><div class="label">Branch</div><div class="value">${escapeHtml(updateStatus.branch || '-')}</div><div class="label">Commit</div><div class="value">${escapeHtml(updateStatus.commit || '-')}</div><div class="label">Updated</div><div class="value">${escapeHtml(updateStatus.updated_at || '-')}</div><div class="button-row"><button class="action" id="update-button" onclick="triggerUpdate()">Update watchdog now</button></div><p id="update-feedback"></p>${placeholderList(['Check for updates without applying','Show local and remote commit comparison','Show update log tail','Rollback placeholder'])}`);
+}
+
+function renderDiagnosticsPage(status, updateStatus){
+  return renderSimplePage('Diagnostics', `<p>Advanced troubleshooting and support bundle tools. Raw JSON is intentionally kept here.</p>${placeholderList(['systemd status','journal tail','hardware probes','network command output','support bundle export'])}<h3>Raw status</h3><pre>${escapeHtml(JSON.stringify(status, null, 2))}</pre><h3>Update status</h3><pre>${escapeHtml(JSON.stringify(updateStatus, null, 2))}</pre>`);
+}
+
 function renderPage(status, updateStatus, events){
   const grouped = groupChecks(status.checks || []);
   if (currentPage === 'Overview') return renderOverview(status, events);
-  if (currentPage === 'Hardware') return `<div class="grid metric-grid">${grouped.hardware.map(c => tile(c.name, c, c.value === true ? 'Present' : fmtValue(c.value), c.message)).join('')}</div>`;
+  if (currentPage === 'Hardware') return `<div class="grid metric-grid">${grouped.hardware.map(c => tile(c.name, c, c.value === true ? 'Present' : fmtValue(c.value), c.message)).join('')}</div>${renderSimplePage('Hardware roadmap', placeholderList(['More temperature sensors','CPU model and cores','RAM detail','Watchdog device discovery','USB/controller/device inventory']))}`;
   if (currentPage === 'Services') return renderServices(status);
-  if (currentPage === 'Storage') return `<div class="grid metric-grid">${grouped.storage.map(c => tile(c.name, c, c.value?.used_percent !== undefined ? fmtPercent(c.value.used_percent) : fmtValue(c.value), c.message)).join('')}</div>`;
-  if (currentPage === 'Network') return renderSimplePage('Network', grouped.system.map(c => `<p><strong>${escapeHtml(c.name)}</strong>: ${escapeHtml(c.message)}</p>`).join(''));
-  if (currentPage === 'Recovery') return renderSimplePage('Recovery', `<p class="${escapeHtml(status.recovery?.state || 'unknown')}">${escapeHtml((status.recovery?.state || 'unknown').toUpperCase())}</p><p>${escapeHtml(status.recovery?.message || 'No recovery state available.')}</p>`);
-  if (currentPage === 'Events') return renderSimplePage('Events', `<div class="events">${renderEvents(events, 20)}</div>`);
-  if (currentPage === 'History') return renderSimplePage('History', '<div class="history-box">Health history placeholder</div>');
-  if (currentPage === 'Settings') return renderSimplePage('Settings', '<p>Settings view placeholder.</p>');
-  if (currentPage === 'Updates') return renderSimplePage('Updates', `<p class="${statusClass(updateStatus.state)}">${escapeHtml((updateStatus.state || 'unknown').toUpperCase())}</p><p>${escapeHtml(updateStatus.message || '')}</p><div class="button-row"><button class="action" id="update-button" onclick="triggerUpdate()">Update watchdog now</button></div><p id="update-feedback"></p>`);
-  if (currentPage === 'Diagnostics') return renderSimplePage('Diagnostics', `<h3>Raw status</h3><pre>${escapeHtml(JSON.stringify(status, null, 2))}</pre><h3>Update status</h3><pre>${escapeHtml(JSON.stringify(updateStatus, null, 2))}</pre>`);
+  if (currentPage === 'Storage') return `<div class="grid metric-grid">${grouped.storage.map(c => tile(c.name, c, c.value?.used_percent !== undefined ? fmtPercent(c.value.used_percent) : fmtValue(c.value), c.message)).join('')}</div>${renderRetentionPage()}`;
+  if (currentPage === 'Network') return renderNetworkPage();
+  if (currentPage === 'Recovery') return renderSimplePage('Recovery', `<p class="${escapeHtml(status.recovery?.state || 'unknown')}">${escapeHtml((status.recovery?.state || 'unknown').toUpperCase())}</p><p>${escapeHtml(status.recovery?.message || 'No recovery state available.')}</p>${placeholderList(['Enable/disable recovery','Restart service policy','Reboot grace period','Install/configure hardware watchdog','Last reboot reason'])}`);
+  if (currentPage === 'Events') return renderSimplePage('Events', `<div class="button-row"><button class="action" onclick="exportEvents()">Export events JSON</button></div><div class="events">${renderEvents(events, 20)}</div>${placeholderList(['Severity filters','Search','CSV export','Clear/purge events'])}`);
+  if (currentPage === 'History') return renderSimplePage('History', '<div class="history-box">Health history placeholder</div>' + placeholderList(['Health score trend','CPU temp/load trend','RAM trend','Disk trend','Service failure timeline']));
+  if (currentPage === 'Settings') return renderSettingsPage();
+  if (currentPage === 'Updates') return renderUpdatesPage(updateStatus);
+  if (currentPage === 'Diagnostics') return renderDiagnosticsPage(status, updateStatus);
   return renderOverview(status, events);
 }
 
 async function load(){
-  const [statusResponse, updateResponse, eventsResponse, configResponse] = await Promise.all([
+  const [statusResponse, updateResponse, eventsResponse, configResponse, systemResponse, networkResponse, settingsResponse, retentionResponse] = await Promise.all([
     fetch('/api/status'),
     fetch('/api/update-status'),
     fetch('/api/events'),
     fetch('/api/config-summary'),
+    fetch('/api/system-info'),
+    fetch('/api/network-info'),
+    fetch('/api/settings-summary'),
+    fetch('/api/retention'),
   ]);
   lastStatus = await statusResponse.json();
   lastUpdateStatus = await updateResponse.json();
   lastEvents = await eventsResponse.json();
   lastConfigSummary = await configResponse.json();
+  lastSystemInfo = await systemResponse.json();
+  lastNetworkInfo = await networkResponse.json();
+  lastSettings = await settingsResponse.json();
+  lastRetention = await retentionResponse.json();
   render();
 }
 
@@ -333,9 +400,34 @@ async function triggerUpdate(){
     setTimeout(load, 3000);
   }
 }
+
+async function exportEvents(){
+  const response = await fetch('/api/events/export');
+  const payload = await response.json();
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'va-watchdog-events.json';
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function purgeOldData(){
+  if (!confirm('Purge watchdog data older than the configured retention window?')) return;
+  const days = lastRetention.events_retention_days || 30;
+  await fetch(`/api/purge?mode=old&older_than_days=${encodeURIComponent(days)}`, { method: 'POST' });
+  await load();
+}
+
+async function purgeAllData(){
+  if (!confirm('Purge all non-status watchdog data? This removes events and update logs.')) return;
+  await fetch('/api/purge?mode=all', { method: 'POST' });
+  await load();
+}
 buildNav();
+initRefresh();
 load();
-setInterval(load, 5000);
 </script>
 </body>
 </html>
@@ -348,6 +440,138 @@ def start_web(cfg):
 
     status_path = Path(cfg["status_path"])
     events_path = Path(cfg["events_path"])
+    data_dir = events_path.parent
+
+    def _run(command, timeout=5):
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+            return {
+                "ok": result.returncode == 0,
+                "stdout": result.stdout.strip(),
+                "stderr": result.stderr.strip(),
+                "returncode": result.returncode,
+            }
+        except Exception as exc:
+            return {"ok": False, "stdout": "", "stderr": str(exc), "returncode": None}
+
+    def _file_size(path):
+        try:
+            return path.stat().st_size if path.exists() else 0
+        except OSError:
+            return 0
+
+    def _data_files():
+        names = [
+            "status.json",
+            "events.jsonl",
+            "update-state.json",
+            "update.log",
+            "last-reboot-reason.json",
+            "history.jsonl",
+        ]
+        return [data_dir / name for name in names]
+
+    def _dir_size(path):
+        total = 0
+        if not path.exists():
+            return 0
+        for item in path.rglob("*"):
+            if item.is_file():
+                total += _file_size(item)
+        return total
+
+    def retention_status():
+        retention = cfg.get("retention", {})
+        max_mb = int(retention.get("max_total_mb", 100) or 100)
+        used_bytes = _dir_size(data_dir)
+        files = [
+            {
+                "path": str(path),
+                "size_bytes": _file_size(path),
+                "modified_unix": path.stat().st_mtime if path.exists() else None,
+            }
+            for path in _data_files()
+        ]
+        return {
+            "data_dir": str(data_dir),
+            "max_total_mb": max_mb,
+            "used_mb": round(used_bytes / 1024 / 1024, 2),
+            "used_percent": round((used_bytes / max(1, max_mb * 1024 * 1024)) * 100, 1),
+            "events_retention_days": retention.get("events_retention_days"),
+            "history_retention_days": retention.get("history_retention_days"),
+            "exports_retention_days": retention.get("exports_retention_days"),
+            "files": files,
+        }
+
+    def purge_data(mode="old", older_than_days=None):
+        cutoff = None
+        if older_than_days is not None:
+            cutoff = time.time() - max(0, int(older_than_days)) * 86400
+        removed = []
+        for path in _data_files():
+            if not path.exists() or path.name == "status.json":
+                continue
+            if mode == "all" or (cutoff is not None and path.stat().st_mtime < cutoff):
+                try:
+                    path.unlink()
+                    removed.append(str(path))
+                except OSError:
+                    pass
+        return {"removed": removed, "retention": retention_status()}
+
+    def rtc_status():
+        timedate = _run(["timedatectl"])
+        hwclock = _run(["hwclock", "--show"])
+        rtc_path = Path("/sys/class/rtc/rtc0")
+        return {
+            "timedatectl_available": timedate["ok"],
+            "timedatectl": timedate["stdout"] or timedate["stderr"],
+            "hwclock_available": hwclock["ok"],
+            "hwclock": hwclock["stdout"] or hwclock["stderr"],
+            "rtc0_present": rtc_path.exists(),
+        }
+
+    def system_info():
+        uptime_seconds = None
+        try:
+            uptime_seconds = float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
+        except Exception:
+            pass
+        return {
+            "hostname": platform.node(),
+            "os": platform.platform(),
+            "kernel": platform.release(),
+            "architecture": platform.machine(),
+            "python": platform.python_version(),
+            "uptime_seconds": uptime_seconds,
+            "timezone": time.tzname,
+            "rtc": rtc_status(),
+        }
+
+    def network_info():
+        return {
+            "ip_addresses": _run(["hostname", "-I"])["stdout"],
+            "default_route": _run(["ip", "route", "show", "default"])["stdout"],
+            "dns": Path("/etc/resolv.conf").read_text(encoding="utf-8", errors="ignore") if Path("/etc/resolv.conf").exists() else "",
+            "configured_internet_hosts": cfg.get("network", {}).get("internet_hosts", []),
+            "configured_local_targets": cfg.get("network", {}).get("local_targets", []),
+            "remote_access_services": cfg.get("network", {}).get("remote_access_services", []),
+            "listening_port": cfg.get("web", {}).get("port", 9110),
+        }
+
+    def settings_summary():
+        return {
+            "poll_interval_seconds": cfg.get("poll_interval_seconds"),
+            "web": cfg.get("web", {}),
+            "hardware_watchdog": cfg.get("hardware_watchdog", {}),
+            "storage": cfg.get("storage", {}),
+            "thresholds": cfg.get("thresholds", {}),
+            "services": cfg.get("services", []),
+            "network": cfg.get("network", {}),
+            "recovery": cfg.get("recovery", {}),
+            "retention": cfg.get("retention", {}),
+            "update": cfg.get("update", {}),
+        }
 
     def recent_events(limit=10):
         if not events_path.exists():
@@ -411,6 +635,21 @@ def start_web(cfg):
             if self.path == "/api/config-summary":
                 self._send_json(config_summary())
                 return
+            if self.path == "/api/system-info":
+                self._send_json(system_info())
+                return
+            if self.path == "/api/network-info":
+                self._send_json(network_info())
+                return
+            if self.path == "/api/settings-summary":
+                self._send_json(settings_summary())
+                return
+            if self.path == "/api/retention":
+                self._send_json(retention_status())
+                return
+            if self.path == "/api/events/export":
+                self._send_json({"events": recent_events(limit=200)})
+                return
             self.send_response(404)
             self.end_headers()
 
@@ -419,6 +658,23 @@ def start_web(cfg):
                 result = launch_update_job(cfg)
                 status = 200 if result.get("ok") else 500
                 self._send_json(result, status=status)
+                return
+            if self.path.startswith("/api/purge"):
+                query = self.path.split("?", 1)[1] if "?" in self.path else ""
+                mode = "old"
+                older_than_days = None
+                for part in query.split("&"):
+                    if not part:
+                        continue
+                    key, _, value = part.partition("=")
+                    if key == "mode":
+                        mode = value
+                    elif key == "older_than_days":
+                        try:
+                            older_than_days = int(value)
+                        except ValueError:
+                            older_than_days = None
+                self._send_json(purge_data(mode=mode, older_than_days=older_than_days))
                 return
             self._send_json({"error": "not found"}, status=404)
 

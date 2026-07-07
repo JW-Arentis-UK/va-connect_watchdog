@@ -37,7 +37,23 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "storage": {
         "root_path": "/",
         "recordings_path": "/home/vsuser/recordings",
-        "write_test_path": "/tmp"
+        "write_test_path": "/tmp",
+        "monitored_paths": [
+            {
+                "name": "Root Disk",
+                "path": "/",
+                "warning_percent": 80,
+                "critical_percent": 95,
+                "always_full_expected": False
+            },
+            {
+                "name": "Recordings Disk",
+                "path": "/home/vsuser/recordings",
+                "warning_percent": 85,
+                "critical_percent": 95,
+                "always_full_expected": False
+            }
+        ]
     },
     "recovery": {
         "enabled": False,
@@ -53,6 +69,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "branch": "",
         "state_path": "/var/lib/va-watchdog/update-state.json",
         "log_path": "/var/lib/va-watchdog/update.log"
+    },
+    "network": {
+        "internet_hosts": ["1.1.1.1", "8.8.8.8"],
+        "local_targets": [],
+        "remote_access_services": ["teamviewerd"]
+    },
+    "retention": {
+        "max_total_mb": 100,
+        "events_retention_days": 30,
+        "history_retention_days": 30,
+        "exports_retention_days": 14
     }
 }
 

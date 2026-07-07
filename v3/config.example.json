@@ -10,10 +10,45 @@
     "device": "/dev/watchdog0",
     "feed_interval_seconds": 10
   },
+  "retention": {
+    "max_total_mb": 100,
+    "events_retention_days": 30,
+    "history_retention_days": 30,
+    "exports_retention_days": 14
+  },
   "recovery": {
     "enabled": false,
     "restart_failed_services": false,
+    "restart_noncritical_services": false,
+    "max_restart_attempts": 3,
+    "critical_grace_seconds": 60,
     "allow_reboot": false
+  },
+  "network": {
+    "internet_hosts": ["1.1.1.1", "8.8.8.8"],
+    "local_targets": [],
+    "remote_access_services": ["teamviewerd"]
+  },
+  "storage": {
+    "root_path": "/",
+    "recordings_path": "/home/vsuser/recordings",
+    "write_test_path": "/tmp",
+    "monitored_paths": [
+      {
+        "name": "Root Disk",
+        "path": "/",
+        "warning_percent": 80,
+        "critical_percent": 95,
+        "always_full_expected": false
+      },
+      {
+        "name": "Recordings Disk",
+        "path": "/home/vsuser/recordings",
+        "warning_percent": 85,
+        "critical_percent": 95,
+        "always_full_expected": false
+      }
+    ]
   },
   "services": [
     {
