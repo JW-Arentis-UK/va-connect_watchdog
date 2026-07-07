@@ -8,6 +8,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "poll_interval_seconds": 5,
     "status_path": "/var/lib/va-watchdog/status.json",
     "events_path": "/var/lib/va-watchdog/events.jsonl",
+    "history_path": "/var/lib/va-watchdog/history.jsonl",
     "last_reboot_reason_path": "/var/lib/va-watchdog/last-reboot-reason.json",
     "web": {
         "enabled": True,
@@ -79,6 +80,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_total_mb": 100,
         "events_retention_days": 30,
         "history_retention_days": 30,
+        "history_sample_seconds": 60,
+        "history_max_rows": 50000,
         "exports_retention_days": 14
     }
 }

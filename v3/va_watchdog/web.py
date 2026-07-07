@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 
+from .history import history_path, read_history
 from .update import launch_update_job, load_update_status
 
 HTML = """<!doctype html>
@@ -86,7 +87,7 @@ body { font-family: Arial, sans-serif; background: var(--bg); color: var(--text)
 .main { min-width:0; }
 .topbar { height:calc(58px * var(--scale)); border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; padding:0 calc(18px * var(--scale)); color:var(--muted); }
 .topbar-right { display:flex; gap:10px; align-items:center; }
-select { background:var(--input); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 8px; font-size:inherit; }
+select, input { background:var(--input); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 8px; font-size:inherit; }
 .content { padding:calc(18px * var(--scale)); max-width:calc(1360px * var(--scale)); margin:0 auto; }
 .grid { display:grid; gap:calc(12px * var(--scale)); }
 .top-grid { grid-template-columns: minmax(0, 1.6fr) minmax(300px, 0.9fr); }
@@ -122,6 +123,11 @@ pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale))
 .detail-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:calc(10px * var(--scale)); }
 .mini-card { border:1px solid var(--line); border-radius:6px; padding:calc(10px * var(--scale)); background:rgba(255,255,255,.03); min-width:0; }
 .muted { color:var(--muted); }
+.toolbar { display:flex; flex-wrap:wrap; gap:calc(8px * var(--scale)); align-items:center; margin-bottom:calc(10px * var(--scale)); }
+.chart { width:100%; height:calc(180px * var(--scale)); border:1px solid var(--line); border-radius:6px; background:rgba(54,209,95,.08); }
+.chart text { fill:var(--muted); font-size:10px; }
+.chart polyline { fill:none; stroke:var(--green); stroke-width:2; }
+.chart .grid-line { stroke:var(--line); stroke-width:1; }
 .button-row { display:flex; gap:calc(8px * var(--scale)); flex-wrap:wrap; align-items:center; margin:calc(10px * var(--scale)) 0; }
 button.action { background:var(--blue); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; }
 button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:calc(7px * var(--scale)) calc(10px * var(--scale)); cursor:pointer; font-size:inherit; }
@@ -180,7 +186,12 @@ let lastRetention = {};
 let lastHardwareInfo = {};
 let lastServiceInfo = {};
 let lastStorageInfo = {};
+let lastHistory = [];
+let lastUpdateLog = {};
+let lastDiagnostics = {};
 let refreshTimer = null;
+let eventLevelFilter = 'all';
+let eventSearch = '';
 
 function escapeHtml(value){
   return String(value)
@@ -318,6 +329,42 @@ function renderEvents(events, limit=8){
   return rows.map(event => `<div class="event"><div class="event-time">${escapeHtml(fmtTime(event.time))}</div><div><span class="${statusClass(event.level)}">${escapeHtml((event.level || 'info').toUpperCase())}</span> ${escapeHtml(event.message || '')}</div></div>`).join('');
 }
 
+function filteredEvents(limit=50){
+  return (lastEvents || []).filter(event => {
+    const levelOk = eventLevelFilter === 'all' || String(event.level || '').toLowerCase() === eventLevelFilter;
+    const text = `${event.source || ''} ${event.message || ''}`.toLowerCase();
+    return levelOk && (!eventSearch || text.includes(eventSearch));
+  }).slice(0, limit);
+}
+
+function setEventLevel(value){
+  eventLevelFilter = value;
+  render();
+}
+
+function setEventSearch(value){
+  eventSearch = String(value || '').toLowerCase();
+  render();
+}
+
+function renderHistoryChart(rows, key='score'){
+  const points = (rows || []).filter(row => row[key] !== null && row[key] !== undefined).slice(-120);
+  if (!points.length) return '<div class="history-box">No history captured yet</div>';
+  const width = 640;
+  const height = 180;
+  const pad = 24;
+  const values = points.map(row => Number(row[key]));
+  const min = Math.min(0, Math.min(...values));
+  const max = Math.max(100, Math.max(...values));
+  const span = Math.max(1, max - min);
+  const coords = values.map((value, index) => {
+    const x = pad + (index / Math.max(1, values.length - 1)) * (width - pad * 2);
+    const y = height - pad - ((value - min) / span) * (height - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  return `<svg class="chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none"><line class="grid-line" x1="${pad}" y1="${pad}" x2="${width - pad}" y2="${pad}"></line><line class="grid-line" x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}"></line><text x="4" y="${pad + 4}">${escapeHtml(max)}</text><text x="4" y="${height - pad}">${escapeHtml(min)}</text><polyline points="${coords}"></polyline></svg>`;
+}
+
 function renderGatewaySummary(status){
   const state = displayState(status);
   const recovery = status.recovery || {};
@@ -391,11 +438,11 @@ function renderNetworkPage(){
 }
 
 function renderUpdatesPage(updateStatus){
-  return renderSimplePage('Updates', `<p class="${statusClass(updateStatus.state)}">${escapeHtml((updateStatus.state || 'unknown').toUpperCase())}</p><p>${escapeHtml(updateStatus.message || '')}</p><div class="label">Branch</div><div class="value">${escapeHtml(updateStatus.branch || '-')}</div><div class="label">Commit</div><div class="value">${escapeHtml(updateStatus.commit || '-')}</div><div class="label">Updated</div><div class="value">${escapeHtml(updateStatus.updated_at || '-')}</div><div class="button-row"><button class="action" id="update-button" onclick="triggerUpdate()">Update watchdog now</button></div><p id="update-feedback"></p>${placeholderList(['Check for updates without applying','Show local and remote commit comparison','Show update log tail','Rollback placeholder'])}`);
+  return renderSimplePage('Updates', `<p class="${statusClass(updateStatus.state)}">${escapeHtml((updateStatus.state || 'unknown').toUpperCase())}</p><p>${escapeHtml(updateStatus.message || '')}</p><div class="detail-grid"><div><div class="label">Branch</div><div class="value">${escapeHtml(updateStatus.branch || '-')}</div><div class="label">Commit</div><div class="value">${escapeHtml(updateStatus.commit || '-')}</div><div class="label">Updated</div><div class="value">${escapeHtml(updateStatus.updated_at || '-')}</div></div><div><div class="label">Log file</div><div class="value">${escapeHtml(lastUpdateLog.path || '-')}</div><div class="label">Last log update</div><div class="value">${escapeHtml(lastUpdateLog.modified_unix ? new Date(lastUpdateLog.modified_unix * 1000).toLocaleString() : '-')}</div></div></div><div class="button-row"><button class="action" id="update-button" onclick="triggerUpdate()">Update watchdog now</button><button class="ghost" onclick="load()">Refresh update status</button></div><p id="update-feedback"></p><h3>Update Log Tail</h3><pre>${escapeHtml(lastUpdateLog.tail || 'No update log yet')}</pre>${placeholderList(['Check for updates without applying','Show local and remote commit comparison','Rollback placeholder'])}`);
 }
 
 function renderDiagnosticsPage(status, updateStatus){
-  return renderSimplePage('Diagnostics', `<p>Advanced troubleshooting and support bundle tools. Raw JSON is intentionally kept here.</p>${placeholderList(['systemd status','journal tail','hardware probes','network command output','support bundle export'])}<h3>Raw status</h3><pre>${escapeHtml(JSON.stringify(status, null, 2))}</pre><h3>Update status</h3><pre>${escapeHtml(JSON.stringify(updateStatus, null, 2))}</pre>`);
+  return renderSimplePage('Diagnostics', `<p>Advanced troubleshooting and support bundle tools. Raw JSON is intentionally kept here.</p><div class="detail-grid"><div><h3>Watchdog Service</h3><pre>${escapeHtml(lastDiagnostics.service_status || 'Not available')}</pre></div><div><h3>Journal Tail</h3><pre>${escapeHtml(lastDiagnostics.journal_tail || 'Not available')}</pre></div></div>${placeholderList(['Hardware probes detail','Network command output bundle','Support bundle export file'])}<h3>Raw status</h3><pre>${escapeHtml(JSON.stringify(status, null, 2))}</pre><h3>Update status</h3><pre>${escapeHtml(JSON.stringify(updateStatus, null, 2))}</pre>`);
 }
 
 function renderHardwarePage(grouped){
@@ -410,6 +457,16 @@ function renderStoragePage(grouped){
   return `<div class="grid metric-grid">${grouped.storage.map(c => tile(c.name, c, c.value?.used_percent !== undefined ? fmtPercent(c.value.used_percent) : fmtValue(c.value), c.message)).join('')}</div><div class="card"><h2>Configured Storage Limits</h2><table><thead><tr><th>Name</th><th>Path</th><th>Used</th><th>Free</th><th>Warn</th><th>Critical</th><th>Full expected</th></tr></thead><tbody>${rows || '<tr><td colspan="7">No monitored paths configured</td></tr>'}</tbody></table>${placeholderList(['Editable warning/critical limits','Separate recordings drive detection','One-drive full-expected mode'])}</div>${renderRetentionPage()}`;
 }
 
+function renderEventsPage(){
+  const events = filteredEvents(50);
+  return renderSimplePage('Events', `<div class="toolbar"><label>Level <select id="event-level-filter" onchange="setEventLevel(this.value)"><option value="all" ${eventLevelFilter === 'all' ? 'selected' : ''}>All</option><option value="critical" ${eventLevelFilter === 'critical' ? 'selected' : ''}>Critical</option><option value="degraded" ${eventLevelFilter === 'degraded' ? 'selected' : ''}>Degraded</option><option value="warning" ${eventLevelFilter === 'warning' ? 'selected' : ''}>Warning</option><option value="info" ${eventLevelFilter === 'info' ? 'selected' : ''}>Info</option><option value="healthy" ${eventLevelFilter === 'healthy' ? 'selected' : ''}>Healthy</option></select></label><label>Search <input id="event-search" value="${escapeHtml(eventSearch)}" oninput="setEventSearch(this.value)" placeholder="service, storage, watchdog"></label><button class="action" onclick="exportEvents()">Export JSON</button><button class="ghost" onclick="exportEventsCsv()">Export CSV</button></div><div class="events">${renderEvents(events, 50)}</div>${placeholderList(['Date range filter','Clear/purge events with confirmation'])}`);
+}
+
+function renderHistoryPage(){
+  const latest = (lastHistory || []).slice(-1)[0] || {};
+  return renderSimplePage('History', `<div class="detail-grid"><div><h3>Health Score</h3>${renderHistoryChart(lastHistory, 'score')}</div><div><h3>Recent Snapshot</h3><div class="label">Samples</div><div class="value">${escapeHtml((lastHistory || []).length)}</div><div class="label">Latest score</div><div class="value">${escapeHtml(latest.score ?? '-')}%</div><div class="label">Latest RAM</div><div class="value">${escapeHtml(latest.ram ?? '-')}%</div><div class="label">Latest CPU temp</div><div class="value">${escapeHtml(latest.temperature ?? '-')}</div><div class="label">Latest root disk</div><div class="value">${escapeHtml(latest.root_disk ?? '-')}%</div></div></div>${placeholderList(['Selectable time ranges','CPU temp/load trend','RAM trend','Disk trend','Service failure timeline'])}`);
+}
+
 function renderPage(status, updateStatus, events){
   const grouped = groupChecks(status.checks || []);
   if (currentPage === 'Overview') return renderOverview(status, events);
@@ -418,8 +475,8 @@ function renderPage(status, updateStatus, events){
   if (currentPage === 'Storage') return renderStoragePage(grouped);
   if (currentPage === 'Network') return renderNetworkPage();
   if (currentPage === 'Recovery') return renderSimplePage('Recovery', `<p class="${escapeHtml(status.recovery?.state || 'unknown')}">${escapeHtml((status.recovery?.state || 'unknown').toUpperCase())}</p><p>${escapeHtml(status.recovery?.message || 'No recovery state available.')}</p>${placeholderList(['Enable/disable recovery','Restart service policy','Reboot grace period','Install/configure hardware watchdog','Last reboot reason'])}`);
-  if (currentPage === 'Events') return renderSimplePage('Events', `<div class="button-row"><button class="action" onclick="exportEvents()">Export events JSON</button></div><div class="events">${renderEvents(events, 20)}</div>${placeholderList(['Severity filters','Search','CSV export','Clear/purge events'])}`);
-  if (currentPage === 'History') return renderSimplePage('History', '<div class="history-box">Health history placeholder</div>' + placeholderList(['Health score trend','CPU temp/load trend','RAM trend','Disk trend','Service failure timeline']));
+  if (currentPage === 'Events') return renderEventsPage();
+  if (currentPage === 'History') return renderHistoryPage();
   if (currentPage === 'Settings') return renderSettingsPage();
   if (currentPage === 'Updates') return renderUpdatesPage(updateStatus);
   if (currentPage === 'Diagnostics') return renderDiagnosticsPage(status, updateStatus);
@@ -427,7 +484,7 @@ function renderPage(status, updateStatus, events){
 }
 
 async function load(){
-  const [statusResponse, updateResponse, eventsResponse, configResponse, systemResponse, networkResponse, settingsResponse, retentionResponse, hardwareResponse, servicesResponse, storageResponse] = await Promise.all([
+  const [statusResponse, updateResponse, eventsResponse, configResponse, systemResponse, networkResponse, settingsResponse, retentionResponse, hardwareResponse, servicesResponse, storageResponse, historyResponse, updateLogResponse, diagnosticsResponse] = await Promise.all([
     fetch('/api/status'),
     fetch('/api/update-status'),
     fetch('/api/events'),
@@ -439,6 +496,9 @@ async function load(){
     fetch('/api/hardware-info'),
     fetch('/api/services-info'),
     fetch('/api/storage-info'),
+    fetch('/api/history'),
+    fetch('/api/update-log'),
+    fetch('/api/diagnostics'),
   ]);
   lastStatus = await statusResponse.json();
   lastUpdateStatus = await updateResponse.json();
@@ -451,6 +511,9 @@ async function load(){
   lastHardwareInfo = await hardwareResponse.json();
   lastServiceInfo = await servicesResponse.json();
   lastStorageInfo = await storageResponse.json();
+  lastHistory = await historyResponse.json();
+  lastUpdateLog = await updateLogResponse.json();
+  lastDiagnostics = await diagnosticsResponse.json();
   render();
 }
 
@@ -492,6 +555,17 @@ async function exportEvents(){
   const link = document.createElement('a');
   link.href = url;
   link.download = 'va-watchdog-events.json';
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function exportEventsCsv(){
+  const response = await fetch('/api/events/export.csv');
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'va-watchdog-events.csv';
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -553,7 +627,11 @@ def start_web(cfg):
             "last-reboot-reason.json",
             "history.jsonl",
         ]
-        return [data_dir / name for name in names]
+        files = [data_dir / name for name in names]
+        custom_history = history_path(cfg)
+        if custom_history not in files:
+            files.append(custom_history)
+        return files
 
     def _dir_size(path):
         total = 0
@@ -583,6 +661,8 @@ def start_web(cfg):
             "used_percent": round((used_bytes / max(1, max_mb * 1024 * 1024)) * 100, 1),
             "events_retention_days": retention.get("events_retention_days"),
             "history_retention_days": retention.get("history_retention_days"),
+            "history_sample_seconds": retention.get("history_sample_seconds"),
+            "history_max_rows": retention.get("history_max_rows"),
             "exports_retention_days": retention.get("exports_retention_days"),
             "files": files,
         }
@@ -854,6 +934,46 @@ def start_web(cfg):
                 events.append(payload)
         return list(reversed(events))[:limit]
 
+    def events_csv(limit=200):
+        rows = recent_events(limit=limit)
+        lines = ["time,level,source,message"]
+        for event in rows:
+            values = [
+                event.get("time", ""),
+                event.get("level", ""),
+                event.get("source", ""),
+                event.get("message", ""),
+            ]
+            lines.append(",".join(_csv_cell(value) for value in values))
+        return "\n".join(lines) + "\n"
+
+    def _csv_cell(value):
+        text = str(value).replace('"', '""')
+        if any(ch in text for ch in [",", '"', "\n", "\r"]):
+            return f'"{text}"'
+        return text
+
+    def tail_file(path, lines=80):
+        target = Path(path)
+        if not target.exists():
+            return {"path": str(target), "tail": "", "modified_unix": None}
+        content = target.read_text(encoding="utf-8", errors="ignore").splitlines()[-lines:]
+        return {
+            "path": str(target),
+            "tail": "\n".join(content),
+            "modified_unix": target.stat().st_mtime,
+            "size_bytes": target.stat().st_size,
+        }
+
+    def diagnostics_summary():
+        service_status = _run(["systemctl", "status", "va-watchdog", "--no-pager"], timeout=5)
+        journal = _run(["journalctl", "-u", "va-watchdog", "-n", "80", "--no-pager"], timeout=5)
+        return {
+            "service_status": service_status["stdout"] or service_status["stderr"],
+            "journal_tail": journal["stdout"] or journal["stderr"],
+            "generated_at_unix": time.time(),
+        }
+
     def config_summary():
         hardware = cfg.get("hardware_watchdog", {})
         return {
@@ -875,6 +995,14 @@ def start_web(cfg):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _send_text(self, body, content_type="text/plain", status=200):
+            data = body.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
 
         def do_GET(self):
             if self.path == "/" or self.path.startswith("/index"):
@@ -917,6 +1045,18 @@ def start_web(cfg):
                 return
             if self.path == "/api/events/export":
                 self._send_json({"events": recent_events(limit=200)})
+                return
+            if self.path == "/api/events/export.csv":
+                self._send_text(events_csv(limit=200), content_type="text/csv")
+                return
+            if self.path == "/api/history":
+                self._send_json(read_history(cfg, limit=288))
+                return
+            if self.path == "/api/update-log":
+                self._send_json(tail_file(cfg.get("update", {}).get("log_path") or data_dir / "update.log"))
+                return
+            if self.path == "/api/diagnostics":
+                self._send_json(diagnostics_summary())
                 return
             if self.path == "/api/hardware-info":
                 self._send_json(hardware_info())

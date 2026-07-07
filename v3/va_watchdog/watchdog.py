@@ -8,6 +8,7 @@ from pathlib import Path
 from .config import load_config
 from .events import EventLog
 from .health import collect_health
+from .history import append_history
 from .recovery import RecoveryEngine
 from .watchdog_device import HardwareWatchdog
 from .web import start_web
@@ -48,6 +49,7 @@ def main():
         status["startup_summary"],
     )
     atomic_write_json(cfg["status_path"], status)
+    append_history(cfg, status)
     start_web(cfg)
 
     while True:
@@ -63,6 +65,7 @@ def main():
             }
             status["recovery"] = recovery.summary()
             atomic_write_json(cfg["status_path"], status)
+            append_history(cfg, status)
         except Exception as e:
             event_log.add("critical", "watchdog", f"Main loop error: {e}")
         time.sleep(int(cfg["poll_interval_seconds"]))
