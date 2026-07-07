@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 
+from .config import active_config_path, deep_merge, load_raw_config, save_raw_config
 from .history import history_path, read_history
 from .update import launch_update_job, load_update_status
 
@@ -87,7 +88,9 @@ body { font-family: Arial, sans-serif; background: var(--bg); color: var(--text)
 .main { min-width:0; }
 .topbar { height:calc(58px * var(--scale)); border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; padding:0 calc(18px * var(--scale)); color:var(--muted); }
 .topbar-right { display:flex; gap:10px; align-items:center; }
-select, input { background:var(--input); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 8px; font-size:inherit; }
+select, input, textarea { background:var(--input); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 8px; font-size:inherit; max-width:100%; }
+textarea { width:100%; min-height:calc(70px * var(--scale)); resize:vertical; }
+label { display:block; margin:calc(6px * var(--scale)) 0; }
 .content { padding:calc(18px * var(--scale)); max-width:calc(1360px * var(--scale)); margin:0 auto; }
 .grid { display:grid; gap:calc(12px * var(--scale)); }
 .top-grid { grid-template-columns: minmax(0, 1.6fr) minmax(300px, 0.9fr); }
@@ -424,7 +427,13 @@ function placeholderList(items){
 }
 
 function renderSettingsPage(){
-  return renderSimplePage('Settings', `<p>Editable config will live here. Current settings summary:</p><pre>${escapeHtml(JSON.stringify(lastSettings, null, 2))}</pre>${placeholderList(['Poll interval editor','Storage warning and critical limits','Network targets','Recovery policy','Update branch and remote','Retention and max watchdog storage budget'])}`);
+  const t = lastSettings.thresholds || {};
+  const r = lastSettings.retention || {};
+  const n = lastSettings.network || {};
+  const u = lastSettings.update || {};
+  const h = lastSettings.hardware_watchdog || {};
+  const rec = lastSettings.recovery || {};
+  return renderSimplePage('Settings', `<p>Edit common watchdog settings. A backup is made before saving to disk.</p><div class="detail-grid"><div class="mini-card"><h3>Polling and History</h3><label class="label">Poll interval seconds</label><input id="set-poll" type="number" min="2" max="300" value="${escapeHtml(lastSettings.poll_interval_seconds ?? 5)}"><label class="label">History sample seconds</label><input id="set-history-sample" type="number" min="10" max="3600" value="${escapeHtml(r.history_sample_seconds ?? 60)}"><label class="label">History retention days</label><input id="set-history-days" type="number" min="1" max="365" value="${escapeHtml(r.history_retention_days ?? 30)}"><label class="label">Max watchdog storage MB</label><input id="set-max-mb" type="number" min="10" max="4096" value="${escapeHtml(r.max_total_mb ?? 100)}"></div><div class="mini-card"><h3>Storage Thresholds</h3><label class="label">Root warn %</label><input id="set-root-warn" type="number" min="1" max="100" value="${escapeHtml(t.root_disk_warning_percent ?? 80)}"><label class="label">Root critical %</label><input id="set-root-critical" type="number" min="1" max="100" value="${escapeHtml(t.root_disk_critical_percent ?? 95)}"><label class="label">Recordings warn %</label><input id="set-rec-warn" type="number" min="1" max="100" value="${escapeHtml(t.recordings_disk_warning_percent ?? 85)}"><label class="label">Recordings critical %</label><input id="set-rec-critical" type="number" min="1" max="100" value="${escapeHtml(t.recordings_disk_critical_percent ?? 95)}"></div><div class="mini-card"><h3>Network</h3><label class="label">Internet hosts, one per line</label><textarea id="set-internet-hosts">${escapeHtml((n.internet_hosts || []).join('\\n'))}</textarea><label class="label">Local targets, one per line</label><textarea id="set-local-targets">${escapeHtml((n.local_targets || []).join('\\n'))}</textarea><label class="label">Remote access services, one per line</label><textarea id="set-remote-services">${escapeHtml((n.remote_access_services || []).join('\\n'))}</textarea></div><div class="mini-card"><h3>Updates and Recovery</h3><label class="label">Update remote</label><input id="set-update-remote" value="${escapeHtml(u.remote || 'origin')}"><label class="label">Update branch</label><input id="set-update-branch" value="${escapeHtml(u.branch || '')}" placeholder="blank = current branch"><label><input id="set-hw-enabled" type="checkbox" ${h.enabled ? 'checked' : ''}> Enable hardware watchdog feed</label><label><input id="set-recovery-enabled" type="checkbox" ${rec.enabled ? 'checked' : ''}> Enable recovery engine</label><label><input id="set-restart-services" type="checkbox" ${rec.restart_failed_services ? 'checked' : ''}> Restart failed critical services</label><label><input id="set-allow-reboot" type="checkbox" ${rec.allow_reboot ? 'checked' : ''}> Allow reboot on persistent critical failure</label></div></div><div class="button-row"><button class="action" onclick="saveSettings()">Save settings</button><button class="ghost" onclick="load()">Reload from service</button></div><p id="settings-feedback"></p><h3>Current config summary</h3><pre>${escapeHtml(JSON.stringify(lastSettings, null, 2))}</pre>${placeholderList(['Service list editor','Install/reconfigure watchdog from Recovery page','Full raw config editor with validation'])}`);
 }
 
 function renderRetentionPage(){
@@ -568,6 +577,73 @@ async function exportEventsCsv(){
   link.download = 'va-watchdog-events.csv';
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function linesFromTextarea(id){
+  return String(document.getElementById(id)?.value || '')
+    .split(/\r?\n/)
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function numberValue(id){
+  return Number(document.getElementById(id)?.value);
+}
+
+async function saveSettings(){
+  const feedback = document.getElementById('settings-feedback');
+  const allowReboot = !!document.getElementById('set-allow-reboot')?.checked;
+  if (allowReboot && !confirm('Allowing automatic reboot can restart the gateway if critical checks remain failed. Continue?')) {
+    return;
+  }
+  const payload = {
+    poll_interval_seconds: numberValue('set-poll'),
+    thresholds: {
+      root_disk_warning_percent: numberValue('set-root-warn'),
+      root_disk_critical_percent: numberValue('set-root-critical'),
+      recordings_disk_warning_percent: numberValue('set-rec-warn'),
+      recordings_disk_critical_percent: numberValue('set-rec-critical'),
+    },
+    retention: {
+      max_total_mb: numberValue('set-max-mb'),
+      history_sample_seconds: numberValue('set-history-sample'),
+      history_retention_days: numberValue('set-history-days'),
+    },
+    network: {
+      internet_hosts: linesFromTextarea('set-internet-hosts'),
+      local_targets: linesFromTextarea('set-local-targets'),
+      remote_access_services: linesFromTextarea('set-remote-services'),
+    },
+    update: {
+      remote: String(document.getElementById('set-update-remote')?.value || 'origin').trim(),
+      branch: String(document.getElementById('set-update-branch')?.value || '').trim(),
+    },
+    hardware_watchdog: {
+      enabled: !!document.getElementById('set-hw-enabled')?.checked,
+    },
+    recovery: {
+      enabled: !!document.getElementById('set-recovery-enabled')?.checked,
+      restart_failed_services: !!document.getElementById('set-restart-services')?.checked,
+      allow_reboot: allowReboot,
+    },
+  };
+  feedback.textContent = 'Saving settings...';
+  try {
+    const response = await fetch('/api/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      feedback.textContent = result.error || 'Settings save failed.';
+      return;
+    }
+    feedback.textContent = `Saved to ${result.path}. Backup created if a config already existed.`;
+    await load();
+  } catch (error) {
+    feedback.textContent = `Settings save failed: ${error}`;
+  }
 }
 
 async function purgeOldData(){
@@ -909,6 +985,7 @@ def start_web(cfg):
 
     def settings_summary():
         return {
+            "config_path": str(active_config_path()),
             "poll_interval_seconds": cfg.get("poll_interval_seconds"),
             "web": cfg.get("web", {}),
             "hardware_watchdog": cfg.get("hardware_watchdog", {}),
@@ -919,6 +996,84 @@ def start_web(cfg):
             "recovery": cfg.get("recovery", {}),
             "retention": cfg.get("retention", {}),
             "update": cfg.get("update", {}),
+        }
+
+    def _int_range(payload, name, minimum, maximum):
+        try:
+            value = int(payload[name])
+        except Exception as exc:
+            raise ValueError(f"{name} must be a number") from exc
+        if value < minimum or value > maximum:
+            raise ValueError(f"{name} must be between {minimum} and {maximum}")
+        return value
+
+    def _string_list(value, name):
+        if not isinstance(value, list):
+            raise ValueError(f"{name} must be a list")
+        cleaned = []
+        for item in value:
+            text = str(item).strip()
+            if text:
+                cleaned.append(text)
+        return cleaned[:50]
+
+    def apply_settings(payload):
+        if not isinstance(payload, dict):
+            raise ValueError("settings payload must be an object")
+        thresholds = payload.get("thresholds", {})
+        retention = payload.get("retention", {})
+        network = payload.get("network", {})
+        update = payload.get("update", {})
+        hardware = payload.get("hardware_watchdog", {})
+        recovery = payload.get("recovery", {})
+
+        updates = {
+            "poll_interval_seconds": _int_range(payload, "poll_interval_seconds", 2, 300),
+            "thresholds": {
+                "root_disk_warning_percent": _int_range(thresholds, "root_disk_warning_percent", 1, 100),
+                "root_disk_critical_percent": _int_range(thresholds, "root_disk_critical_percent", 1, 100),
+                "recordings_disk_warning_percent": _int_range(thresholds, "recordings_disk_warning_percent", 1, 100),
+                "recordings_disk_critical_percent": _int_range(thresholds, "recordings_disk_critical_percent", 1, 100),
+            },
+            "retention": {
+                "max_total_mb": _int_range(retention, "max_total_mb", 10, 4096),
+                "history_sample_seconds": _int_range(retention, "history_sample_seconds", 10, 3600),
+                "history_retention_days": _int_range(retention, "history_retention_days", 1, 365),
+            },
+            "network": {
+                "internet_hosts": _string_list(network.get("internet_hosts", []), "internet_hosts"),
+                "local_targets": _string_list(network.get("local_targets", []), "local_targets"),
+                "remote_access_services": _string_list(network.get("remote_access_services", []), "remote_access_services"),
+            },
+            "update": {
+                "remote": str(update.get("remote", "origin")).strip() or "origin",
+                "branch": str(update.get("branch", "")).strip(),
+            },
+            "hardware_watchdog": {
+                "enabled": bool(hardware.get("enabled", False)),
+            },
+            "recovery": {
+                "enabled": bool(recovery.get("enabled", False)),
+                "restart_failed_services": bool(recovery.get("restart_failed_services", False)),
+                "allow_reboot": bool(recovery.get("allow_reboot", False)),
+            },
+        }
+        if updates["thresholds"]["root_disk_warning_percent"] >= updates["thresholds"]["root_disk_critical_percent"]:
+            raise ValueError("root disk warning must be lower than critical")
+        if updates["thresholds"]["recordings_disk_warning_percent"] >= updates["thresholds"]["recordings_disk_critical_percent"]:
+            raise ValueError("recordings disk warning must be lower than critical")
+
+        raw = load_raw_config()
+        merged_raw = deep_merge(raw, updates)
+        saved_path = save_raw_config(merged_raw)
+        live_cfg = deep_merge(cfg, updates)
+        cfg.clear()
+        cfg.update(live_cfg)
+        return {
+            "ok": True,
+            "path": str(saved_path),
+            "settings": settings_summary(),
+            "restart_required": False,
         }
 
     def recent_events(limit=10):
@@ -1075,6 +1230,15 @@ def start_web(cfg):
                 result = launch_update_job(cfg)
                 status = 200 if result.get("ok") else 500
                 self._send_json(result, status=status)
+                return
+            if self.path == "/api/settings":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else "{}"
+                    payload = json.loads(raw_body)
+                    self._send_json(apply_settings(payload))
+                except Exception as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=400)
                 return
             if self.path.startswith("/api/purge"):
                 query = self.path.split("?", 1)[1] if "?" in self.path else ""

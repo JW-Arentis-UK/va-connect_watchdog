@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -108,3 +110,28 @@ def load_config() -> Dict[str, Any]:
                 cfg = deep_merge(cfg, json.load(f))
             break
     return cfg
+
+def active_config_path() -> Path:
+    for path in CONFIG_PATHS:
+        if path.exists():
+            return path
+    return CONFIG_PATHS[0]
+
+def load_raw_config() -> Dict[str, Any]:
+    path = active_config_path()
+    if path.exists():
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+            return payload if isinstance(payload, dict) else {}
+    return {}
+
+def save_raw_config(payload: Dict[str, Any]) -> Path:
+    path = active_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        shutil.copy2(path, path.with_name(f"{path.name}.{stamp}.bak"))
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(path)
+    return path
