@@ -1146,6 +1146,7 @@ def start_web(cfg):
             watchdog = info.get("watchdog", {})
             modules = watchdog.get("modules", {})
             wdctl = watchdog.get("wdctl", {})
+            legacy = watchdog.get("legacy_daemon", {})
             wdt = watchdog_test_summary()
             systemd_wdt = systemd_watchdog_info()
             return (
@@ -1169,10 +1170,11 @@ def start_web(cfg):
                 f"<div class=\"label\">intel_pmc_bxt loaded</div><div class=\"value {'healthy' if modules.get('intel_pmc_bxt') else 'warning'}\">{escape('Yes' if modules.get('intel_pmc_bxt') else 'No')}</div>"
                 f"<div class=\"label\">wdctl identity</div><div class=\"value {escape(str(wdctl.get('state', 'unknown')))}\">{escape(str(wdctl.get('identity', '-')))}</div>"
                 f"<div class=\"label\">wdctl timeout</div><div class=\"value\">{escape(str(wdctl.get('timeout', '-')))}</div>"
+                f"<div class=\"label\">Legacy watchdog.service</div><div class=\"value {'warning' if legacy.get('active') == 'active' else 'healthy'}\">{escape(str(legacy.get('active', '-')).upper())} / {escape(str(legacy.get('enabled', '-')).upper())}</div>"
                 f"<div class=\"label\">wdctl raw output</div><pre>{escape(str(wdctl.get('raw', 'wdctl not available or watchdog not present')))}</pre>"
                 f"<div class=\"label\">Last setup log</div><pre>{escape(str(watchdog.get('setup_log', 'No setup log yet')))}</pre>"
                 f"<div class=\"label\">Last full probe</div><pre>{escape(str(watchdog.get('probe_log', 'No hardware probe log yet')))}</pre>"
-                "<p class=\"muted\">For POC-451VTC, the expected hardware watchdog is Intel TCO. Use the button below to load and persist the driver. Feeding stays disabled until you explicitly enable it in Settings/config.</p>"
+                "<p class=\"muted\">For POC-451VTC, the expected hardware watchdog is Intel TCO. Use the button below to load and persist the driver. Feeding stays disabled until you explicitly enable it in Settings/config. If the legacy watchdog.service is active, disable it before letting VA-Connect own /dev/watchdog0.</p>"
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/itco-watchdog-install-confirm\">Install/load Intel TCO watchdog</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run full watchdog probe</a></div>"
                 "<pre>cd /opt/va-connect-watchdog-v3\nsudo ./v3/scripts/setup_itco_watchdog.sh</pre>"
                 "</div>"
@@ -2659,8 +2661,17 @@ def start_web(cfg):
             "device": device,
             "modules": modules,
             "wdctl": wdctl,
+            "legacy_daemon": legacy_watchdog_daemon_info(),
             "setup_log": itco_setup_status().get("last_log", ""),
             "probe_log": watchdog_probe_status().get("last_log", ""),
+        }
+
+    def legacy_watchdog_daemon_info():
+        active = _run(["systemctl", "is-active", "watchdog"], timeout=3)
+        enabled = _run(["systemctl", "is-enabled", "watchdog"], timeout=3)
+        return {
+            "active": active["stdout"] or active["stderr"] or "unknown",
+            "enabled": enabled["stdout"] or enabled["stderr"] or "unknown",
         }
 
     def _df_path(path, label="", warning=0, critical=0, full_expected=False):

@@ -30,6 +30,10 @@ echo "Watchdog devices:"
 ls -l /dev/watchdog* 2>/dev/null || true
 
 echo
+echo "Legacy watchdog daemon:"
+systemctl status watchdog --no-pager || true
+
+echo
 if command -v wdctl >/dev/null 2>&1 && [ -e /dev/watchdog0 ]; then
   echo "wdctl /dev/watchdog0:"
   sudo wdctl /dev/watchdog0 || true
@@ -43,6 +47,7 @@ dmesg | grep -Ei 'watchdog|tco' | tail -40 || true
 
 echo
 echo "Next step if /dev/watchdog0 is present and wdctl reports iTCO_wdt:"
+echo "  sudo systemctl disable --now watchdog"
 echo "  edit /etc/va-watchdog/config.json"
 echo "  set hardware_watchdog.enabled to true"
 echo "  keep hardware_watchdog.device as /dev/watchdog0"
