@@ -4,6 +4,7 @@ import json
 import platform
 import subprocess
 import time
+from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -173,10 +174,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
       </div>
     </header>
     <section class="content" id="app">
-      <div class="card">
-        <h2>Loading Watchdog Dashboard</h2>
-        <p>If this gateway browser cannot run the advanced dashboard, a compatibility view will appear here.</p>
-      </div>
+      __BASIC_DASHBOARD__
     </section>
   </main>
 </div>
@@ -770,6 +768,58 @@ def start_web(cfg):
     events_path = Path(cfg["events_path"])
     data_dir = events_path.parent
 
+    def status_snapshot():
+        try:
+            payload = json.loads(status_path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except Exception as exc:
+            return {
+                "time": "",
+                "score": "-",
+                "critical_failed": True,
+                "checks": [],
+                "error": str(exc),
+            }
+
+    def basic_dashboard_html():
+        status = status_snapshot()
+        critical = bool(status.get("critical_failed", False))
+        state = "critical" if critical else "healthy"
+        word = "CRITICAL" if critical else "HEALTHY"
+        rows = []
+        for check in status.get("checks", []) or []:
+            if not isinstance(check, dict):
+                continue
+            check_state = str(check.get("state", "unknown"))
+            rows.append(
+                "<tr>"
+                f"<td>{escape(str(check.get('name', '-')))}</td>"
+                f"<td class=\"{escape(check_state)}\">{escape(check_state.upper())}</td>"
+                f"<td>{escape(str(check.get('message', '')))}</td>"
+                "</tr>"
+            )
+        if not rows:
+            rows.append("<tr><td colspan=\"3\">No checks available yet.</td></tr>")
+        error_html = ""
+        if status.get("error"):
+            error_html = f"<p class=\"critical\">{escape(str(status.get('error')))}</p>"
+        return (
+            "<div class=\"card\">"
+            "<h2>VA-Connect Watchdog V3</h2>"
+            "<p class=\"muted\">Server-rendered safe view. The full dashboard will load automatically if this browser supports it.</p>"
+            f"<div class=\"status-word {state}\">{word}</div>"
+            f"<div class=\"score\">{escape(str(status.get('score', '-')))}%</div>"
+            f"<div class=\"label\">Last status</div><div class=\"value\">{escape(str(status.get('time', '-')))}</div>"
+            f"{error_html}"
+            "</div>"
+            "<div class=\"card\"><h2>Checks</h2>"
+            "<table><thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table></div>"
+        )
+
+    def html_page():
+        return HTML.replace("__BASIC_DASHBOARD__", basic_dashboard_html())
+
     def _run(command, timeout=5):
         try:
             result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
@@ -1254,11 +1304,13 @@ def start_web(cfg):
             self.wfile.write(data)
 
         def do_GET(self):
-            if self.path == "/" or self.path.startswith("/index"):
+            if self.path == "/" or self.path.startswith("/index") or self.path.startswith("/basic"):
+                body = html_page().encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
-                self.wfile.write(HTML.encode("utf-8"))
+                self.wfile.write(body)
                 return
             if self.path == "/api/status":
                 try:
