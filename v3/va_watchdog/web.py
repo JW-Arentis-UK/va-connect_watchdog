@@ -242,6 +242,7 @@ let lastStorageInfo = {};
 let lastHistory = [];
 let lastUpdateLog = {};
 let lastDiagnostics = {};
+let lastVersion = {};
 let refreshTimer = null;
 let eventLevelFilter = 'all';
 let eventSearch = '';
@@ -461,7 +462,7 @@ function renderServices(status){
 
 function renderSystemInfo(status){
   const rtc = lastSystemInfo.rtc || {};
-  return `<div class="card"><h2>System Information</h2><div class="detail-grid"><div><div class="label">Hostname</div><div class="value">${escapeHtml(lastSystemInfo.hostname || '-')}</div><div class="label">OS</div><div class="value">${escapeHtml(lastSystemInfo.os || '-')}</div><div class="label">Kernel</div><div class="value">${escapeHtml(lastSystemInfo.kernel || '-')}</div><div class="label">Architecture</div><div class="value">${escapeHtml(lastSystemInfo.architecture || '-')}</div></div><div><div class="label">Uptime</div><div class="value">${escapeHtml(lastSystemInfo.uptime_seconds ? `${Math.round(lastSystemInfo.uptime_seconds)}s` : '-')}</div><div class="label">Python</div><div class="value">${escapeHtml(lastSystemInfo.python || '-')}</div><div class="label">Timezone</div><div class="value">${escapeHtml((lastSystemInfo.timezone || []).join(' / ') || '-')}</div><div class="label">BIOS/RTC Clock</div><div class="value ${rtc.rtc0_present ? 'healthy' : 'warning'}">${rtc.rtc0_present ? 'RTC present' : 'RTC not confirmed'}</div></div></div><div class="label">Clock detail</div><pre>${escapeHtml(rtc.hwclock || rtc.timedatectl || 'Clock command output not available')}</pre></div>`;
+  return `<div class="card"><h2>System Information</h2><div class="detail-grid"><div><div class="label">Hostname</div><div class="value">${escapeHtml(lastSystemInfo.hostname || '-')}</div><div class="label">OS</div><div class="value">${escapeHtml(lastSystemInfo.os || '-')}</div><div class="label">Kernel</div><div class="value">${escapeHtml(lastSystemInfo.kernel || '-')}</div><div class="label">Architecture</div><div class="value">${escapeHtml(lastSystemInfo.architecture || '-')}</div><div class="label">Build</div><div class="value">${escapeHtml(lastVersion.branch || '-')} / ${escapeHtml(lastVersion.commit || '-')}</div></div><div><div class="label">Uptime</div><div class="value">${escapeHtml(lastSystemInfo.uptime_seconds ? `${Math.round(lastSystemInfo.uptime_seconds)}s` : '-')}</div><div class="label">Python</div><div class="value">${escapeHtml(lastSystemInfo.python || '-')}</div><div class="label">Timezone</div><div class="value">${escapeHtml((lastSystemInfo.timezone || []).join(' / ') || '-')}</div><div class="label">BIOS/RTC Clock</div><div class="value ${rtc.rtc0_present ? 'healthy' : 'warning'}">${rtc.rtc0_present ? 'RTC present' : 'RTC not confirmed'}</div><div class="label">Config</div><div class="value">${escapeHtml(lastVersion.config_path || '-')}</div></div></div><div class="label">Clock detail</div><pre>${escapeHtml(rtc.hwclock || rtc.timedatectl || 'Clock command output not available')}</pre></div>`;
 }
 
 function renderOverview(status, events){
@@ -553,6 +554,7 @@ async function load(){
     fetchJson('/api/system-info', lastSystemInfo || {}),
     fetchJson('/api/settings-summary', lastSettings || {}),
     fetchJson('/api/retention', lastRetention || {}),
+    fetchJson('/api/version', lastVersion || {}),
   ]);
   if (core[0].status === 'fulfilled') lastUpdateStatus = core[0].value;
   if (core[1].status === 'fulfilled') lastEvents = core[1].value;
@@ -560,6 +562,7 @@ async function load(){
   if (core[3].status === 'fulfilled') lastSystemInfo = core[3].value;
   if (core[4].status === 'fulfilled') lastSettings = core[4].value;
   if (core[5].status === 'fulfilled') lastRetention = core[5].value;
+  if (core[6].status === 'fulfilled') lastVersion = core[6].value;
 
   const pageFetches = [];
   if (currentPage === 'Overview' || currentPage === 'Services') {
@@ -768,6 +771,38 @@ def start_web(cfg):
     events_path = Path(cfg["events_path"])
     data_dir = events_path.parent
 
+    def _quick_run(command, cwd=None, timeout=3):
+        try:
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            return result.stdout.strip() or result.stderr.strip()
+        except Exception as exc:
+            return str(exc)
+
+    def repo_root():
+        return Path(__file__).resolve().parents[1]
+
+    def version_info():
+        root = repo_root()
+        commit = _quick_run(["git", "rev-parse", "--short", "HEAD"], cwd=root)
+        branch = _quick_run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=root)
+        remote = _quick_run(["git", "config", "--get", "remote.origin.url"], cwd=root)
+        return {
+            "name": "VA-Connect Watchdog V3",
+            "branch": branch,
+            "commit": commit,
+            "remote": remote,
+            "repo_root": str(root),
+            "config_path": str(active_config_path()),
+            "data_dir": str(data_dir),
+        }
+
     def status_snapshot():
         try:
             payload = json.loads(status_path.read_text(encoding="utf-8"))
@@ -783,6 +818,7 @@ def start_web(cfg):
 
     def basic_dashboard_html():
         status = status_snapshot()
+        version = version_info()
         critical = bool(status.get("critical_failed", False))
         state = "critical" if critical else "healthy"
         word = "CRITICAL" if critical else "HEALTHY"
@@ -810,6 +846,8 @@ def start_web(cfg):
             f"<div class=\"status-word {state}\">{word}</div>"
             f"<div class=\"score\">{escape(str(status.get('score', '-')))}%</div>"
             f"<div class=\"label\">Last status</div><div class=\"value\">{escape(str(status.get('time', '-')))}</div>"
+            f"<div class=\"label\">Build</div><div class=\"value\">{escape(str(version.get('branch', '-')))} / {escape(str(version.get('commit', '-')))}</div>"
+            f"<div class=\"label\">Config</div><div class=\"value\">{escape(str(version.get('config_path', '-')))}</div>"
             f"{error_html}"
             "</div>"
             "<div class=\"card\"><h2>Checks</h2>"
@@ -1283,6 +1321,17 @@ def start_web(cfg):
             }
         }
 
+    def healthz():
+        status = status_snapshot()
+        return {
+            "ok": "error" not in status,
+            "state": status.get("state"),
+            "score": status.get("score"),
+            "critical_failed": bool(status.get("critical_failed", False)),
+            "status_time": status.get("time"),
+            "version": version_info(),
+        }
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             return
@@ -1331,6 +1380,12 @@ def start_web(cfg):
                 return
             if self.path == "/api/config-summary":
                 self._send_json(config_summary())
+                return
+            if self.path == "/api/version":
+                self._send_json(version_info())
+                return
+            if self.path == "/api/healthz":
+                self._send_json(healthz())
                 return
             if self.path == "/api/system-info":
                 self._send_json(system_info())
