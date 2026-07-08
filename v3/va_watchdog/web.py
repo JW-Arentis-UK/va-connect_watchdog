@@ -135,6 +135,7 @@ pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale))
 .button-row { display:flex; gap:calc(8px * var(--scale)); flex-wrap:wrap; align-items:center; margin:calc(10px * var(--scale)) 0; }
 button.action { background:var(--blue); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; }
 button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:calc(7px * var(--scale)) calc(10px * var(--scale)); cursor:pointer; font-size:inherit; }
+form.inline { display:inline-block; margin:0; }
 button.action:disabled { opacity:.5; cursor:not-allowed; }
 .page { display:none; }
 .page.active { display:block; }
@@ -170,6 +171,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
         <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="dark">Dark</option><option value="light">Light</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
         <label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label>
         <button class="ghost" onclick="load()">Refresh now</button>
+        <form class="inline" method="get" action="/"><button class="ghost" type="submit">Reload page</button></form>
         <div id="last-update">Last update: -</div>
       </div>
     </header>
@@ -843,6 +845,7 @@ def start_web(cfg):
             "<div class=\"card\">"
             "<h2>VA-Connect Watchdog V3</h2>"
             "<p class=\"muted\">Server-rendered safe view. The full dashboard will load automatically if this browser supports it.</p>"
+            "<form class=\"inline\" method=\"get\" action=\"/\"><button class=\"action\" type=\"submit\">Refresh dashboard</button></form>"
             f"<div class=\"status-word {state}\">{word}</div>"
             f"<div class=\"score\">{escape(str(status.get('score', '-')))}%</div>"
             f"<div class=\"label\">Last status</div><div class=\"value\">{escape(str(status.get('time', '-')))}</div>"
