@@ -54,6 +54,15 @@ http://<gateway-ip>:9110/
 ```
 
 Hardware watchdog is disabled by default. Enable only after testing:
+For POC-451VTC / Intel Atom x6425E gateways, first expose the Intel TCO watchdog:
+
+```bash
+cd /opt/va-connect-watchdog-v3
+sudo ./v3/scripts/setup_itco_watchdog.sh
+```
+
+Only enable feeding after `/dev/watchdog0` exists and `wdctl /dev/watchdog0` reports `iTCO_wdt`:
+
 ```json
 "hardware_watchdog": {
   "enabled": true,

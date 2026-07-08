@@ -1143,6 +1143,9 @@ def start_web(cfg):
             memory = info.get("memory", {})
             block_devices = info.get("block_devices", [])
             watchdog_devices = info.get("watchdog_devices", [])
+            watchdog = info.get("watchdog", {})
+            modules = watchdog.get("modules", {})
+            wdctl = watchdog.get("wdctl", {})
             wdt = watchdog_test_summary()
             systemd_wdt = systemd_watchdog_info()
             return (
@@ -1159,6 +1162,17 @@ def start_web(cfg):
                 f"<div class=\"label\">Watchdog devices</div><div class=\"value\">{escape(', '.join(watchdog_devices) if watchdog_devices else 'None detected')}</div>"
                 f"<div class=\"label\">Block devices</div><pre>{escape(chr(10).join(block_devices) if block_devices else 'No block device details available')}</pre>"
                 "</div></div>"
+                "<div class=\"card\"><h2>Intel TCO Watchdog</h2>"
+                f"<div class=\"label\">Expected driver</div><div class=\"value\">iTCO_wdt with iTCO_vendor_support</div>"
+                f"<div class=\"label\">iTCO_wdt loaded</div><div class=\"value {'healthy' if modules.get('iTCO_wdt') else 'warning'}\">{escape('Yes' if modules.get('iTCO_wdt') else 'No')}</div>"
+                f"<div class=\"label\">iTCO_vendor_support loaded</div><div class=\"value {'healthy' if modules.get('iTCO_vendor_support') else 'warning'}\">{escape('Yes' if modules.get('iTCO_vendor_support') else 'No')}</div>"
+                f"<div class=\"label\">intel_pmc_bxt loaded</div><div class=\"value {'healthy' if modules.get('intel_pmc_bxt') else 'warning'}\">{escape('Yes' if modules.get('intel_pmc_bxt') else 'No')}</div>"
+                f"<div class=\"label\">wdctl identity</div><div class=\"value {escape(str(wdctl.get('state', 'unknown')))}\">{escape(str(wdctl.get('identity', '-')))}</div>"
+                f"<div class=\"label\">wdctl timeout</div><div class=\"value\">{escape(str(wdctl.get('timeout', '-')))}</div>"
+                f"<div class=\"label\">wdctl raw output</div><pre>{escape(str(wdctl.get('raw', 'wdctl not available or watchdog not present')))}</pre>"
+                "<p class=\"muted\">For POC-451VTC, the expected hardware watchdog is Intel TCO. Run the setup script below, then reboot or reload the service after verifying /dev/watchdog0.</p>"
+                "<pre>cd /opt/va-connect-watchdog-v3\nsudo ./v3/scripts/setup_itco_watchdog.sh</pre>"
+                "</div>"
                 "<div class=\"card\"><h2>Watchdog Protection Layers</h2>"
                 f"<div class=\"label\">Hardware reboot watchdog</div><div class=\"value {escape(str(wdt.get('device_state', 'unknown')))}\">{escape(str(wdt.get('device_message', '-')).upper())}</div>"
                 "<p class=\"muted\">This layer can reboot the gateway if the whole system stops responding, but only when the OS exposes a watchdog device such as /dev/watchdog0.</p>"
@@ -1169,7 +1183,11 @@ def start_web(cfg):
                 "</div>"
                 "<div class=\"card\"><h2>Hardware Watchdog Test</h2>"
                 f"<div class=\"label\">Device</div><div class=\"value {escape(str(wdt.get('device_state', 'unknown')))}\">{escape(str(wdt.get('device', '-')))} - {escape(str(wdt.get('device_message', '-')))}</div>"
+                f"<div class=\"label\">Driver identity</div><div class=\"value\">{escape(str(wdt.get('driver_identity', '-')))}</div>"
+                f"<div class=\"label\">Timeout</div><div class=\"value\">{escape(str(wdt.get('driver_timeout', '-')))}</div>"
                 f"<div class=\"label\">Configured feed</div><div class=\"value {'healthy' if wdt.get('feed_enabled') else 'warning'}\">{escape('Enabled' if wdt.get('feed_enabled') else 'Disabled')}</div>"
+                f"<div class=\"label\">Opened by VA-Connect</div><div class=\"value {'healthy' if wdt.get('opened') else 'warning'}\">{escape('Yes' if wdt.get('opened') else 'No')}</div>"
+                f"<div class=\"label\">Feed count</div><div class=\"value\">{escape(str(wdt.get('feed_count', 0)))}</div>"
                 f"<div class=\"label\">Last feed</div><div class=\"value {escape(str(wdt.get('feed_state', 'unknown')))}\">{escape(str(wdt.get('last_feed_message', '-')))}</div>"
                 f"<div class=\"label\">Last safe test</div><div class=\"value\">{escape(str(wdt.get('last_test_message', 'No test recorded yet')))}</div>"
                 "<p class=\"muted\">Double-knock test: first click arms the test, second click confirms it. This safe test does not stop feeding the watchdog or intentionally reboot the gateway.</p>"
@@ -1974,6 +1992,8 @@ def start_web(cfg):
         feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
         device = str(hw_cfg.get("device", "/dev/watchdog0"))
         device_exists = Path(device).exists()
+        driver = watchdog_driver_info(sorted(str(path) for path in Path("/dev").glob("watchdog*")))
+        wdctl = driver.get("wdctl", {})
         last_feed = feed.get("last_feed_unix")
         feed_interval = int(hw_cfg.get("feed_interval_seconds", 10) or 10)
         stale_after = max(feed_interval * 3, int(cfg.get("poll_interval_seconds", 5) or 5) * 3, 30)
@@ -2006,7 +2026,11 @@ def start_web(cfg):
             "device": device,
             "device_state": "healthy" if device_exists else "warning",
             "device_message": "present" if device_exists else "not present",
+            "driver_identity": wdctl.get("identity", "-"),
+            "driver_timeout": wdctl.get("timeout", "-"),
             "feed_enabled": feed_enabled,
+            "opened": bool(feed.get("opened")),
+            "feed_count": feed.get("feed_count", 0),
             "feed_state": feed_state,
             "last_feed_message": last_feed_message,
             "last_test_message": last_test_message,
@@ -2464,6 +2488,45 @@ def start_web(cfg):
             "memory": memory,
             "block_devices": block_devices,
             "watchdog_devices": watchdog_devices,
+            "watchdog": watchdog_driver_info(watchdog_devices),
+        }
+
+    def watchdog_driver_info(watchdog_devices):
+        modules = {
+            "iTCO_wdt": False,
+            "iTCO_vendor_support": False,
+            "intel_pmc_bxt": False,
+        }
+        proc_modules = Path("/proc/modules")
+        if proc_modules.exists():
+            text = proc_modules.read_text(encoding="utf-8", errors="ignore")
+            for name in modules:
+                modules[name] = any(line.startswith(name + " ") for line in text.splitlines())
+        device = "/dev/watchdog0" if "/dev/watchdog0" in watchdog_devices else (watchdog_devices[0] if watchdog_devices else "/dev/watchdog0")
+        wdctl = {
+            "device": device,
+            "state": "warning",
+            "identity": "-",
+            "timeout": "-",
+            "raw": "",
+        }
+        if Path(device).exists():
+            result = _run(["wdctl", device], timeout=4)
+            raw = result["stdout"] or result["stderr"]
+            wdctl["raw"] = raw
+            if result["ok"]:
+                wdctl["state"] = "healthy"
+            for line in raw.splitlines():
+                if "Identity:" in line:
+                    wdctl["identity"] = line.split("Identity:", 1)[1].strip()
+                elif "Timeout:" in line:
+                    wdctl["timeout"] = line.split("Timeout:", 1)[1].strip()
+        return {
+            "expected_driver": "iTCO_wdt",
+            "expected_identity": "iTCO_wdt [version 6]",
+            "device": device,
+            "modules": modules,
+            "wdctl": wdctl,
         }
 
     def _df_path(path, label="", warning=0, critical=0, full_expected=False):

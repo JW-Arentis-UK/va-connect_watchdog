@@ -11,6 +11,8 @@ class HardwareWatchdog:
         self.event_log = event_log
         self.handle = None
         self.last_feed = None
+        self.feed_count = 0
+        self.opened = False
 
     def open(self):
         if not self.enabled:
@@ -20,6 +22,7 @@ class HardwareWatchdog:
             return
         try:
             self.handle = open(self.device, "wb", buffering=0)
+            self.opened = True
             self.event_log.add("info", "hardware_watchdog", f"Opened {self.device}")
         except Exception as e:
             self.event_log.add("critical", "hardware_watchdog", f"Failed to open {self.device}: {e}")
@@ -35,6 +38,7 @@ class HardwareWatchdog:
             try:
                 self.handle.write(b"\0")
                 self.last_feed = now
+                self.feed_count += 1
                 return True
             except Exception as e:
                 self.event_log.add("critical", "hardware_watchdog", f"Feed failed: {e}")

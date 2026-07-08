@@ -40,7 +40,10 @@ def main():
     status, checks = collect_health(cfg)
     status["hardware_watchdog_feed"] = {
         "enabled": hw.enabled,
+        "device": hw.device,
+        "opened": hw.opened,
         "last_feed_unix": hw.last_feed,
+        "feed_count": hw.feed_count,
         "fed_this_cycle": False
     }
     status["recovery"] = recovery.summary()
@@ -63,7 +66,10 @@ def main():
             fed = hw.feed_if_due(not status["critical_failed"])
             status["hardware_watchdog_feed"] = {
                 "enabled": hw.enabled,
+                "device": hw.device,
+                "opened": hw.opened,
                 "last_feed_unix": hw.last_feed,
+                "feed_count": hw.feed_count,
                 "fed_this_cycle": fed
             }
             status["recovery"] = recovery.summary()
