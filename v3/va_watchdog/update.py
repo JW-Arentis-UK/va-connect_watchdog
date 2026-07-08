@@ -58,6 +58,7 @@ def launch_update_job(cfg: dict[str, Any]) -> dict[str, Any]:
     update_cfg = cfg.get("update", {})
     remote = str(update_cfg.get("remote", "origin")).strip() or "origin"
     branch = str(update_cfg.get("branch", "")).strip()
+    before_commit = _git_value(["git", "-C", str(_repo_root()), "rev-parse", "--short", "HEAD"])
 
     cmd = ["/bin/bash", str(script)]
     if branch:
@@ -83,10 +84,22 @@ def launch_update_job(cfg: dict[str, Any]) -> dict[str, Any]:
             "message": f"Update could not be started: {exc}",
             "command": cmd,
             "log_path": str(log_path),
+            "before_commit": before_commit,
+            "branch": branch or _git_value(["git", "-C", str(_repo_root()), "rev-parse", "--abbrev-ref", "HEAD"]),
         }
     return {
         "ok": True,
         "message": "Update started in the background.",
         "command": cmd,
         "log_path": str(log_path),
+        "before_commit": before_commit,
+        "branch": branch or _git_value(["git", "-C", str(_repo_root()), "rev-parse", "--abbrev-ref", "HEAD"]),
     }
+
+
+def _git_value(command: list[str]) -> str:
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=5, check=False)
+        return result.stdout.strip()
+    except Exception:
+        return ""

@@ -102,6 +102,7 @@ label { display:block; margin:calc(6px * var(--scale)) 0; }
 .card h2, .card h3, .tile h3 { margin:0 0 calc(10px * var(--scale)); font-size:calc(16px * var(--scale)); }
 .summary-card { display:grid; grid-template-columns: calc(130px * var(--scale)) 1fr 1fr; gap:calc(18px * var(--scale)); align-items:center; }
 .score { font-size:calc(38px * var(--scale)); font-weight:800; margin:calc(6px * var(--scale)) 0; }
+.build-badge { display:inline-block; font-size:calc(18px * var(--scale)); font-weight:800; border:1px solid var(--line); border-radius:8px; padding:calc(8px * var(--scale)) calc(10px * var(--scale)); margin:calc(6px * var(--scale)) 0; background:rgba(59,130,246,.16); color:var(--text); }
 .status-word { font-size:calc(22px * var(--scale)); font-weight:800; }
 .healthy { color:var(--green); }
 .warning { color:var(--amber); }
@@ -963,7 +964,9 @@ def start_web(cfg):
             "<div>"
             "<div class=\"label\">Gateway</div><div class=\"value\">POC-451VTC</div>"
             f"<div class=\"label\">Last status</div><div class=\"value\">{escape(str(status.get('time', '-')))}</div>"
-            f"<div class=\"label\">Build</div><div class=\"value\">{escape(str(version.get('branch', '-')))} / {escape(str(version.get('commit', '-')))}</div>"
+            "<div class=\"label\">Current version</div>"
+            f"<div class=\"build-badge\">{escape(str(version.get('commit', '-')))}</div>"
+            f"<div class=\"value\">{escape(str(version.get('branch', '-')))}</div>"
             "</div>"
             "<div>"
             f"<div class=\"label\">Config</div><div class=\"value\">{escape(str(version.get('config_path', '-')))}</div>"
@@ -1020,12 +1023,20 @@ def start_web(cfg):
 
     def update_started_html(result):
         status_class = "healthy" if result.get("ok") else "critical"
+        current_version = version_info()
+        before_commit = result.get("before_commit") or current_version.get("commit", "-")
+        target_branch = result.get("branch") or current_version.get("branch", "-")
         return HTML.replace(
             "__BASIC_DASHBOARD__",
             (
+                "<meta http-equiv=\"refresh\" content=\"20;url=/\">"
                 "<div class=\"card\">"
                 "<h2>Watchdog Update</h2>"
+                "<p class=\"muted\">This page will return to the dashboard automatically in 20 seconds.</p>"
                 f"<p class=\"{status_class}\">{escape(str(result.get('message', 'Update request sent.')))}</p>"
+                f"<div class=\"label\">Version before update</div><div class=\"build-badge\">{escape(str(before_commit))}</div>"
+                f"<div class=\"label\">Target branch</div><div class=\"value\">{escape(str(target_branch))}</div>"
+                f"<div class=\"label\">Current served version</div><div class=\"value\">{escape(str(current_version.get('branch', '-')))} / {escape(str(current_version.get('commit', '-')))}</div>"
                 f"<div class=\"label\">Command</div><div class=\"value\">{escape(str(result.get('command', '-')))}</div>"
                 f"<div class=\"label\">Log</div><div class=\"value\">{escape(str(result.get('log_path', '-')))}</div>"
                 "<p class=\"muted\">If the update succeeds, the watchdog service will restart. Wait 10-20 seconds, then reload the dashboard.</p>"
