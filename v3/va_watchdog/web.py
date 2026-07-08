@@ -182,6 +182,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
 </div>
 <script>
 (function(){
+  var refreshTimer = null;
   function esc(value){
     return String(value === null || value === undefined ? '' : value)
       .replace(/&/g, '&amp;')
@@ -207,6 +208,8 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   }
   function renderBasic(status){
     var app = document.getElementById('app');
+    var lastUpdate = document.getElementById('last-update');
+    var sideState = document.getElementById('side-state');
     var state = status.critical_failed ? 'critical' : 'healthy';
     var checks = status.checks || [];
     var rows = '';
@@ -214,6 +217,11 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
       rows += '<tr><td>' + esc(checks[i].name) + '</td><td class="' + esc(checks[i].state) + '">' + esc(String(checks[i].state || '').toUpperCase()) + '</td><td>' + esc(checks[i].message || '') + '</td></tr>';
     }
     app.innerHTML = '<div class="card"><h2>Compatibility Dashboard</h2><p>This browser is using the simpler view. The watchdog service is still running.</p><div class="status-word ' + state + '">' + (status.critical_failed ? 'CRITICAL' : 'HEALTHY') + '</div><div class="score">' + esc(status.score) + '%</div><div class="label">Last status</div><div class="value">' + esc(status.time || '-') + '</div></div><div class="card"><h2>Checks</h2><table><thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    if (lastUpdate) lastUpdate.textContent = 'Last update: ' + (status.time || '-');
+    if (sideState) {
+      sideState.textContent = status.critical_failed ? 'CRITICAL' : 'HEALTHY';
+      sideState.className = 'value ' + state;
+    }
   }
   window.vaWatchdogCompatibilityLoad = function(){
     request('/api/status', function(error, status){
@@ -224,7 +232,25 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
       renderBasic(status);
     });
   };
+  window.load = window.vaWatchdogCompatibilityLoad;
+  window.reloadPage = function(){
+    window.location.reload();
+  };
+  window.setRefreshInterval = function(value){
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+      refreshTimer = null;
+    }
+    var ms = Number(value);
+    if (ms > 0) {
+      refreshTimer = setInterval(window.vaWatchdogCompatibilityLoad, ms);
+    }
+  };
+  window.setTheme = function(value){
+    document.body.setAttribute('data-theme', value === 'dark' ? '' : value);
+  };
   window.vaWatchdogCompatibilityLoad();
+  window.setRefreshInterval('5000');
 }());
 </script>
 <script type="module">
@@ -1368,7 +1394,8 @@ def start_web(cfg):
             self.wfile.write(data)
 
         def do_GET(self):
-            if self.path in ("/", "/?") or self.path.startswith("/index") or self.path.startswith("/basic"):
+            route_path = self.path.split("?", 1)[0]
+            if route_path == "/" or route_path.startswith("/index") or route_path.startswith("/basic"):
                 body = html_page().encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
@@ -1377,7 +1404,7 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            if self.path == "/api/status":
+            if route_path == "/api/status":
                 try:
                     body = status_path.read_text(encoding="utf-8")
                     self.send_response(200)
@@ -1389,55 +1416,55 @@ def start_web(cfg):
                 except Exception as e:
                     self._send_json({"error": str(e)}, status=503)
                 return
-            if self.path == "/api/update-status":
+            if route_path == "/api/update-status":
                 self._send_json(load_update_status(cfg))
                 return
-            if self.path == "/api/events":
+            if route_path == "/api/events":
                 self._send_json(recent_events())
                 return
-            if self.path == "/api/config-summary":
+            if route_path == "/api/config-summary":
                 self._send_json(config_summary())
                 return
-            if self.path == "/api/version":
+            if route_path == "/api/version":
                 self._send_json(version_info())
                 return
-            if self.path == "/api/healthz":
+            if route_path == "/api/healthz":
                 self._send_json(healthz())
                 return
-            if self.path == "/api/system-info":
+            if route_path == "/api/system-info":
                 self._send_json(system_info())
                 return
-            if self.path == "/api/network-info":
+            if route_path == "/api/network-info":
                 self._send_json(network_info())
                 return
-            if self.path == "/api/settings-summary":
+            if route_path == "/api/settings-summary":
                 self._send_json(settings_summary())
                 return
-            if self.path == "/api/retention":
+            if route_path == "/api/retention":
                 self._send_json(retention_status())
                 return
-            if self.path == "/api/events/export":
+            if route_path == "/api/events/export":
                 self._send_json({"events": recent_events(limit=200)})
                 return
-            if self.path == "/api/events/export.csv":
+            if route_path == "/api/events/export.csv":
                 self._send_text(events_csv(limit=200), content_type="text/csv")
                 return
-            if self.path == "/api/history":
+            if route_path == "/api/history":
                 self._send_json(read_history(cfg, limit=288))
                 return
-            if self.path == "/api/update-log":
+            if route_path == "/api/update-log":
                 self._send_json(tail_file(cfg.get("update", {}).get("log_path") or data_dir / "update.log"))
                 return
-            if self.path == "/api/diagnostics":
+            if route_path == "/api/diagnostics":
                 self._send_json(diagnostics_summary())
                 return
-            if self.path == "/api/hardware-info":
+            if route_path == "/api/hardware-info":
                 self._send_json(hardware_info())
                 return
-            if self.path == "/api/services-info":
+            if route_path == "/api/services-info":
                 self._send_json(service_info())
                 return
-            if self.path == "/api/storage-info":
+            if route_path == "/api/storage-info":
                 self._send_json(storage_info())
                 return
             self.send_response(404)
