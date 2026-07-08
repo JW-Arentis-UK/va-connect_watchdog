@@ -1233,12 +1233,26 @@ def start_web(cfg):
         def recovery_page():
             recovery = status.get("recovery", {}) if isinstance(status.get("recovery", {}), dict) else {}
             cfg_recovery = cfg.get("recovery", {})
+            install = install_status()
+            reboot = last_reboot_reason()
+            service_rows = []
+            for item in cfg.get("services", []):
+                service_rows.append(
+                    "<tr>"
+                    f"<td>{escape(str(item.get('name', '-')))}</td>"
+                    f"<td>{'Yes' if item.get('critical') else 'No'}</td>"
+                    f"<td>{'Yes' if item.get('restart') else 'No'}</td>"
+                    "</tr>"
+                )
+            if not service_rows:
+                service_rows.append("<tr><td colspan=\"3\">No monitored services configured.</td></tr>")
             return (
                 "<div class=\"grid lower-grid\">"
                 "<div class=\"card\"><h2>Recovery Status</h2>"
                 f"<div class=\"label\">Current state</div><div class=\"value {escape(str(recovery.get('state', 'unknown')))}\">{escape(str(recovery.get('state', 'unknown')).upper())}</div>"
                 f"<div class=\"label\">Message</div><div class=\"value\">{escape(str(recovery.get('message', '-')))}</div>"
                 f"<div class=\"label\">Updated</div><div class=\"value\">{escape(str(recovery.get('updated_at', '-')))}</div>"
+                f"<div class=\"label\">Last reboot reason</div><pre>{escape(json.dumps(reboot, indent=2) if reboot else 'No watchdog reboot reason recorded.')}</pre>"
                 "</div>"
                 "<div class=\"card\"><h2>Recovery Configuration</h2>"
                 f"<div class=\"label\">Enabled</div><div class=\"value\">{escape(str(cfg_recovery.get('enabled', False)))}</div>"
@@ -1246,7 +1260,24 @@ def start_web(cfg):
                 f"<div class=\"label\">Restart non-critical services</div><div class=\"value\">{escape(str(cfg_recovery.get('restart_noncritical_services', False)))}</div>"
                 f"<div class=\"label\">Allow reboot</div><div class=\"value\">{escape(str(cfg_recovery.get('allow_reboot', False)))}</div>"
                 f"<div class=\"label\">Critical grace seconds</div><div class=\"value\">{escape(str(cfg_recovery.get('critical_grace_seconds', '-')))}</div>"
-                "<p class=\"muted\">Recovery action buttons will be added after confirmation rules are final.</p>"
+                "<a class=\"ghost\" href=\"/settings\">Edit recovery settings</a>"
+                "</div></div>"
+                "<div class=\"grid lower-grid\">"
+                "<div class=\"card\"><h2>Install and Service</h2>"
+                f"<div class=\"label\">Service unit</div><div class=\"value {escape(str(install.get('unit_state', 'unknown')))}\">{escape(str(install.get('unit_path', '-')))}</div>"
+                f"<div class=\"label\">Service active</div><div class=\"value {escape(str(install.get('active', 'unknown')))}\">{escape(str(install.get('active', '-')).upper())}</div>"
+                f"<div class=\"label\">Service enabled</div><div class=\"value\">{escape(str(install.get('enabled', '-')).upper())}</div>"
+                f"<div class=\"label\">Install path</div><div class=\"value\">{escape(str(install.get('install_path', '-')))}</div>"
+                f"<div class=\"label\">Config path</div><div class=\"value\">{escape(str(active_config_path()))}</div>"
+                f"<div class=\"label\">Data directory</div><div class=\"value\">{escape(str(data_dir))}</div>"
+                f"<div class=\"label\">Install log</div><div class=\"value\">{escape(str(install.get('log_path', '-')))}</div>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/recovery-install-confirm\">Reinstall/reconfigure watchdog service</a><a class=\"ghost\" href=\"/diagnostics\">Open diagnostics</a></div>"
+                "<p class=\"muted\">Reinstall copies the systemd unit, reloads systemd, enables the service, and restarts va-watchdog. It does not remove config or data.</p>"
+                "</div>"
+                "<div class=\"card\"><h2>Recovery Policy Matrix</h2>"
+                "<table><thead><tr><th>Service</th><th>Critical</th><th>Restart allowed</th></tr></thead>"
+                f"<tbody>{''.join(service_rows)}</tbody></table>"
+                "<p class=\"muted\">Service restart controls are deliberately kept in Settings/Recovery policy first; manual per-service restart buttons can be added once the field rules are confirmed.</p>"
                 "</div></div>"
             )
 
@@ -1470,6 +1501,45 @@ def start_web(cfg):
             .replace("__PAGE_TITLE__", "Storage")
         )
 
+    def recovery_install_confirm_html():
+        install = install_status()
+        body = (
+            "<div class=\"card\">"
+            "<h2>Confirm Watchdog Reinstall</h2>"
+            "<p class=\"warning\">This will reconfigure the VA-Connect Watchdog service and restart va-watchdog.</p>"
+            "<p class=\"muted\">It runs v3/scripts/install.sh from the current repository. Existing config and watchdog data are kept.</p>"
+            f"<div class=\"label\">Install path</div><div class=\"value\">{escape(str(install.get('install_path', '-')))}</div>"
+            f"<div class=\"label\">Unit path</div><div class=\"value\">{escape(str(install.get('unit_path', '-')))}</div>"
+            f"<div class=\"label\">Log path</div><div class=\"value\">{escape(str(install.get('log_path', '-')))}</div>"
+            "<form class=\"inline\" method=\"post\" action=\"/recovery-install-now\"><button class=\"action\" type=\"submit\">Confirm reinstall/reconfigure</button></form> "
+            "<a class=\"ghost\" href=\"/recovery\">Cancel</a>"
+            "</div>"
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Recovery"))
+            .replace("__PAGE_TITLE__", "Recovery")
+        )
+
+    def recovery_install_started_html(result):
+        status_class = "healthy" if result.get("ok") else "critical"
+        body = (
+            "<meta http-equiv=\"refresh\" content=\"20;url=/recovery\">"
+            "<div class=\"card\">"
+            "<h2>Watchdog Reinstall</h2>"
+            f"<p class=\"{status_class}\">{escape(str(result.get('message', 'Install request sent.')))}</p>"
+            "<p class=\"muted\">This page will return to Recovery automatically in 20 seconds. The watchdog service may restart during this time.</p>"
+            f"<div class=\"label\">Command</div><div class=\"value\">{escape(str(result.get('command', '-')))}</div>"
+            f"<div class=\"label\">Log</div><div class=\"value\">{escape(str(result.get('log_path', '-')))}</div>"
+            "<a class=\"ghost\" href=\"/recovery\">Back to Recovery</a>"
+            "</div>"
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Recovery"))
+            .replace("__PAGE_TITLE__", "Recovery")
+        )
+
     def settings_payload_from_form(form):
         def first(name, default=""):
             return form.get(name, [default])[0]
@@ -1575,6 +1645,53 @@ def start_web(cfg):
             return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(value)))
         except (TypeError, ValueError, OSError):
             return "-"
+
+    def install_status():
+        root = repo_root()
+        unit_path = Path("/etc/systemd/system/va-watchdog.service")
+        active = _run(["systemctl", "is-active", "va-watchdog"], timeout=3)
+        enabled = _run(["systemctl", "is-enabled", "va-watchdog"], timeout=3)
+        log_path = Path(cfg.get("update", {}).get("log_path") or data_dir / "update.log").with_name("install.log")
+        return {
+            "install_path": str(root.parent),
+            "repo_root": str(root),
+            "install_script": str(root / "scripts" / "install.sh"),
+            "unit_path": str(unit_path),
+            "unit_state": "healthy" if unit_path.exists() else "warning",
+            "active": active["stdout"] or active["stderr"] or "unknown",
+            "enabled": enabled["stdout"] or enabled["stderr"] or "unknown",
+            "log_path": str(log_path),
+            "last_log": tail_file(log_path).get("tail", ""),
+        }
+
+    def last_reboot_reason():
+        path = Path(cfg.get("last_reboot_reason_path") or data_dir / "last-reboot-reason.json")
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {"value": payload}
+        except Exception as exc:
+            return {"error": str(exc), "path": str(path)}
+
+    def launch_recovery_install():
+        install = install_status()
+        script = Path(install["install_script"])
+        log_path = Path(install["log_path"])
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        if not script.exists():
+            return {"ok": False, "message": f"Install script not found: {script}", "log_path": str(log_path)}
+        command = f"sleep 2; cd {repo_root()!s}; /bin/bash scripts/install.sh >> {log_path!s} 2>&1"
+        try:
+            subprocess.Popen(["/bin/bash", "-lc", command], start_new_session=True)
+        except Exception as exc:
+            return {"ok": False, "message": f"Could not start install: {exc}", "command": command, "log_path": str(log_path)}
+        return {
+            "ok": True,
+            "message": "Watchdog reinstall/reconfigure started in the background.",
+            "command": command,
+            "log_path": str(log_path),
+        }
 
     def rtc_status():
         timedate = _run(["timedatectl"])
@@ -1940,9 +2057,11 @@ def start_web(cfg):
     def diagnostics_summary():
         service_status = _run(["systemctl", "status", "va-watchdog", "--no-pager"], timeout=5)
         journal = _run(["journalctl", "-u", "va-watchdog", "-n", "80", "--no-pager"], timeout=5)
+        install = install_status()
         return {
             "service_status": service_status["stdout"] or service_status["stderr"],
             "journal_tail": journal["stdout"] or journal["stderr"],
+            "install_status": install,
             "generated_at_unix": time.time(),
         }
 
@@ -2015,6 +2134,15 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if route_path == "/recovery-install-confirm":
+                body = recovery_install_confirm_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path == "/api/status":
                 try:
                     body = status_path.read_text(encoding="utf-8")
@@ -2078,6 +2206,9 @@ def start_web(cfg):
             if route_path == "/api/storage-info":
                 self._send_json(storage_info())
                 return
+            if route_path == "/api/install-status":
+                self._send_json(install_status())
+                return
             self.send_response(404)
             self.end_headers()
 
@@ -2130,6 +2261,16 @@ def start_web(cfg):
                 result = purge_data(mode="all")
                 body = storage_purge_result_html(result, "all").encode("utf-8")
                 self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/recovery-install-now":
+                result = launch_recovery_install()
+                body = recovery_install_started_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 500)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()
