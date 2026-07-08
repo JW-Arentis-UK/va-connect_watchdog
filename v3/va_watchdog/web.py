@@ -83,8 +83,8 @@ body { font-family: Arial, sans-serif; background: var(--bg); color: var(--text)
 .sidebar { border-right:1px solid var(--line); background:var(--sidebar); padding:calc(18px * var(--scale)) calc(14px * var(--scale)); display:flex; flex-direction:column; gap:calc(18px * var(--scale)); }
 .brand { font-size:calc(18px * var(--scale)); font-weight:700; line-height:1.25; }
 .nav { display:grid; gap:calc(6px * var(--scale)); }
-.nav button { width:100%; text-align:left; background:transparent; color:var(--muted); border:1px solid transparent; border-radius:6px; padding:calc(10px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-size:inherit; }
-.nav button.active { color:var(--text); background:#0f2d59; border-color:#235a9e; }
+.nav button, .nav a { width:100%; text-align:left; background:transparent; color:var(--muted); border:1px solid transparent; border-radius:6px; padding:calc(10px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-size:inherit; text-decoration:none; display:block; }
+.nav button.active, .nav a.active { color:var(--text); background:#0f2d59; border-color:#235a9e; }
 .side-status { margin-top:auto; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:calc(12px * var(--scale)); color:var(--muted); }
 .main { min-width:0; }
 .topbar { height:calc(58px * var(--scale)); border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; padding:0 calc(18px * var(--scale)); color:var(--muted); }
@@ -157,7 +157,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
 <div class="shell">
   <aside class="sidebar">
     <div class="brand">VA-Connect<br>Watchdog V3</div>
-    <nav class="nav" id="nav"></nav>
+    <nav class="nav" id="nav">__SERVER_NAV__</nav>
     <div class="side-status">
       <div>Watchdog</div>
       <div id="side-state" class="value">Loading</div>
@@ -167,7 +167,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   </aside>
   <main class="main">
     <header class="topbar">
-      <div id="page-title">Overview</div>
+      <div id="page-title">__PAGE_TITLE__</div>
       <div class="topbar-right">
         <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="dark">Dark</option><option value="light">Light</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
         <span class="advanced-only"><label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label></span>
@@ -844,6 +844,36 @@ def start_web(cfg):
             "data_dir": str(data_dir),
         }
 
+    server_pages = [
+        ("Overview", "/"),
+        ("Hardware", "/hardware"),
+        ("Services", "/services"),
+        ("Storage", "/storage"),
+        ("Network", "/network"),
+        ("Recovery", "/recovery"),
+        ("Events", "/events"),
+        ("History", "/history"),
+        ("Settings", "/settings"),
+        ("Updates", "/updates"),
+        ("Diagnostics", "/diagnostics"),
+    ]
+
+    def page_name_for_path(route_path):
+        if route_path in ("", "/"):
+            return "Overview"
+        cleaned = route_path.strip("/").lower()
+        for name, path in server_pages:
+            if cleaned == path.strip("/").lower():
+                return name
+        return "Overview"
+
+    def server_nav_html(current_page):
+        links = []
+        for name, path in server_pages:
+            active = "active" if name == current_page else ""
+            links.append(f"<a class=\"{active}\" href=\"{escape(path)}\">{escape(name)}</a>")
+        return "".join(links)
+
     def status_snapshot():
         try:
             payload = json.loads(status_path.read_text(encoding="utf-8"))
@@ -857,7 +887,7 @@ def start_web(cfg):
                 "error": str(exc),
             }
 
-    def basic_dashboard_html():
+    def basic_dashboard_html(page="Overview"):
         status = status_snapshot()
         version = version_info()
         update_status = load_update_status(cfg)
@@ -897,6 +927,18 @@ def start_web(cfg):
                 "</div>"
             )
 
+        def metric_tiles():
+            return (
+                "<div class=\"grid metric-grid\">"
+                + tile("CPU Temp", check_value("temperature", "-"), check_message("temperature", ""), check_state("temperature", "healthy"))
+                + tile("CPU Load", f"{escape(str(check_value('cpu_load', '-')))}%", check_message("cpu_load", ""), check_state("cpu_load", "healthy"))
+                + tile("RAM", f"{escape(str(check_value('ram', '-')))}%", check_message("ram", ""), check_state("ram", "healthy"))
+                + tile("Root Disk", disk_used("root_disk"), disk_free("root_disk"), check_state("root_disk", "healthy"))
+                + tile("Recordings Disk", disk_used("recordings_disk"), disk_free("recordings_disk"), check_state("recordings_disk", "healthy"))
+                + tile("Hardware WDT", "Present" if check_value("hardware_watchdog_present", False) else "Not present", check_message("hardware_watchdog_present", ""), check_state("hardware_watchdog_present", "warning"))
+                + "</div>"
+            )
+
         def service_rows():
             rows = []
             for check in checks:
@@ -919,6 +961,28 @@ def start_web(cfg):
                 rows.append("<tr><td colspan=\"6\">No configured services found.</td></tr>")
             return "".join(rows)
 
+        def all_checks_table(title="All Checks", selected=None):
+            table_rows = []
+            for check in checks:
+                name = str(check.get("name", ""))
+                if selected and name not in selected and not any(name.endswith(suffix) for suffix in selected):
+                    continue
+                row_state = str(check.get("state", "unknown"))
+                table_rows.append(
+                    "<tr>"
+                    f"<td>{escape(name or '-')}</td>"
+                    f"<td class=\"{escape(row_state)}\">{escape(row_state.upper())}</td>"
+                    f"<td>{escape(str(check.get('message', '')))}</td>"
+                    "</tr>"
+                )
+            if not table_rows:
+                table_rows.append("<tr><td colspan=\"3\">No matching checks available.</td></tr>")
+            return (
+                f"<div class=\"card\"><h2>{escape(title)}</h2>"
+                "<table><thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>"
+                f"<tbody>{''.join(table_rows)}</tbody></table></div>"
+            )
+
         def event_rows(limit=8):
             events = recent_events(limit=limit)
             rows = []
@@ -933,27 +997,44 @@ def start_web(cfg):
                 rows.append("<div class=\"event\"><div class=\"event-time\">-</div><div>No events yet</div></div>")
             return "".join(rows)
 
-        rows = []
-        for check in checks:
-            if not isinstance(check, dict):
-                continue
-            row_state = str(check.get("state", "unknown"))
-            rows.append(
-                "<tr>"
-                f"<td>{escape(str(check.get('name', '-')))}</td>"
-                f"<td class=\"{escape(row_state)}\">{escape(row_state.upper())}</td>"
-                f"<td>{escape(str(check.get('message', '')))}</td>"
-                "</tr>"
+        def services_card():
+            return (
+                "<div class=\"card\"><h2>Services</h2><table><thead><tr><th>Service</th><th>Status</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th></tr></thead>"
+                f"<tbody>{service_rows()}</tbody></table></div>"
             )
-        if not rows:
-            rows.append("<tr><td colspan=\"3\">No checks available yet.</td></tr>")
+
+        def updates_card():
+            return (
+                "<div class=\"card\"><h2>Updates</h2>"
+                "<p class=\"healthy\">Web update enabled</p>"
+                f"<div class=\"label\">State</div><div class=\"value {escape(str(update_status.get('state', 'unknown')))}\">{escape(str(update_status.get('state', 'unknown')).upper())}</div>"
+                f"<div class=\"label\">Message</div><div class=\"value\">{escape(str(update_status.get('message', '-')))}</div>"
+                f"<div class=\"label\">Branch</div><div class=\"value\">{escape(str(update_status.get('branch', '-')))}</div>"
+                f"<div class=\"label\">Commit</div><div class=\"value\">{escape(str(update_status.get('commit', '-')))}</div>"
+                f"<div class=\"label\">Updated</div><div class=\"value\">{escape(str(update_status.get('updated_at', '-')))}</div>"
+                "<form class=\"inline\" method=\"post\" action=\"/update-now\"><button class=\"action\" type=\"submit\">Update watchdog now</button></form>"
+                "<p class=\"muted\">The watchdog service may restart after an update. This page returns automatically after the update request.</p>"
+                "</div>"
+            )
+
+        def settings_card():
+            return (
+                "<div class=\"card\"><h2>Settings</h2>"
+                f"<div class=\"label\">Config path</div><div class=\"value\">{escape(str(active_config_path()))}</div>"
+                f"<div class=\"label\">Poll interval</div><div class=\"value\">{escape(str(cfg.get('poll_interval_seconds', '-')))} seconds</div>"
+                f"<div class=\"label\">Web port</div><div class=\"value\">{escape(str(cfg.get('web', {}).get('port', '-')))}</div>"
+                f"<div class=\"label\">Max watchdog storage</div><div class=\"value\">{escape(str(cfg.get('retention', {}).get('max_total_mb', '-')))} MB</div>"
+                "<p class=\"muted\">Editable server-rendered settings are planned. Advanced settings remain available through config.json.</p>"
+                "</div>"
+            )
+
         error_html = ""
         if status.get("error"):
             error_html = f"<p class=\"critical\">{escape(str(status.get('error')))}</p>"
         issue_pill = "<span class=\"pill\">No critical issues</span>"
         if critical:
             issue_pill = "<span class=\"pill critical\">Critical issue</span>"
-        return (
+        overview_html = (
             "<div class=\"grid top-grid\">"
             "<div class=\"card summary-card\">"
             "<div>"
@@ -982,18 +1063,10 @@ def start_web(cfg):
             "<div class=\"breakdown-row\"><span>Total checks</span><strong>" + escape(str(len(checks))) + "</strong></div>"
             "<div class=\"breakdown-row\"><span>Mode</span><strong>Compatibility</strong></div>"
             "</div></div>"
-            "<div class=\"grid metric-grid\">"
-            + tile("CPU Temp", check_value("temperature", "-"), check_message("temperature", ""), check_state("temperature", "healthy"))
-            + tile("CPU Load", f"{escape(str(check_value('cpu_load', '-')))}%", check_message("cpu_load", ""), check_state("cpu_load", "healthy"))
-            + tile("RAM", f"{escape(str(check_value('ram', '-')))}%", check_message("ram", ""), check_state("ram", "healthy"))
-            + tile("Root Disk", disk_used("root_disk"), disk_free("root_disk"), check_state("root_disk", "healthy"))
-            + tile("Recordings Disk", disk_used("recordings_disk"), disk_free("recordings_disk"), check_state("recordings_disk", "healthy"))
-            + tile("Hardware WDT", "Present" if check_value("hardware_watchdog_present", False) else "Not present", check_message("hardware_watchdog_present", ""), check_state("hardware_watchdog_present", "warning"))
-            + "</div>"
-            "<div class=\"grid lower-grid\">"
-            "<div class=\"card\"><h2>Services</h2><table><thead><tr><th>Service</th><th>Status</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th></tr></thead>"
-            f"<tbody>{service_rows()}</tbody></table></div>"
-            f"<div class=\"card\"><h2>Recent Events</h2><div class=\"events\">{event_rows()}</div></div>"
+            + metric_tiles()
+            + "<div class=\"grid lower-grid\">"
+            + services_card()
+            + f"<div class=\"card\"><h2>Recent Events</h2><div class=\"events\">{event_rows()}</div></div>"
             "</div>"
             "<div class=\"grid bottom-grid\">"
             "<div class=\"card\"><h2>System Information</h2>"
@@ -1001,34 +1074,52 @@ def start_web(cfg):
             f"<div class=\"label\">Remote</div><div class=\"value\">{escape(str(version.get('remote', '-')))}</div>"
             "<div class=\"label\">Dashboard</div><div class=\"value\">Server-rendered compatibility appliance view</div>"
             "</div>"
-            "<div class=\"card\"><h2>Updates</h2>"
-            "<p class=\"healthy\">Web update enabled</p>"
-            f"<div class=\"label\">State</div><div class=\"value {escape(str(update_status.get('state', 'unknown')))}\">{escape(str(update_status.get('state', 'unknown')).upper())}</div>"
-            f"<div class=\"label\">Message</div><div class=\"value\">{escape(str(update_status.get('message', '-')))}</div>"
-            f"<div class=\"label\">Branch</div><div class=\"value\">{escape(str(update_status.get('branch', '-')))}</div>"
-            f"<div class=\"label\">Commit</div><div class=\"value\">{escape(str(update_status.get('commit', '-')))}</div>"
-            f"<div class=\"label\">Updated</div><div class=\"value\">{escape(str(update_status.get('updated_at', '-')))}</div>"
-            "<form class=\"inline\" method=\"post\" action=\"/update-now\"><button class=\"action\" type=\"submit\">Update watchdog now</button></form>"
-            "<p class=\"muted\">The watchdog service may restart after an update. Reload this page after 10-20 seconds.</p>"
-            "</div></div>"
-            "<div class=\"card\"><h2>Next Sections</h2>"
+            + updates_card()
+            + "</div>"
+            + "<div class=\"card\"><h2>Next Sections</h2>"
             "<ul><li>Hardware details placeholder</li><li>Storage settings placeholder</li><li>Network details placeholder</li><li>Recovery controls placeholder</li><li>History graph placeholder</li></ul>"
             "</div>"
-            "<div class=\"card\"><h2>All Checks</h2><table><thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>"
-            f"<tbody>{''.join(rows)}</tbody></table></div>"
+            + all_checks_table()
         )
 
-    def html_page():
-        return HTML.replace("__BASIC_DASHBOARD__", basic_dashboard_html())
+        if page == "Overview":
+            return overview_html
+        if page == "Hardware":
+            return metric_tiles() + all_checks_table("Hardware Checks", {"temperature", "ram", "cpu_load", "hardware_watchdog_present"})
+        if page == "Services":
+            return services_card()
+        if page == "Storage":
+            return metric_tiles() + all_checks_table("Storage Checks", {"root_disk", "recordings_disk", "write_test"})
+        if page == "Network":
+            return all_checks_table("Network Checks", {"network_module"}) + "<div class=\"card\"><h2>Network Details</h2><p class=\"muted\">Gateway/local target checks will be expanded here.</p></div>"
+        if page == "Recovery":
+            return "<div class=\"card\"><h2>Recovery</h2><p class=\"muted\">Recovery controls placeholder.</p></div>"
+        if page == "Events":
+            return f"<div class=\"card\"><h2>Events</h2><div class=\"events\">{event_rows(limit=20)}</div></div>"
+        if page == "History":
+            return "<div class=\"card\"><h2>History</h2><div class=\"history-box\">Health history graph placeholder</div></div>"
+        if page == "Settings":
+            return settings_card()
+        if page == "Updates":
+            return updates_card()
+        if page == "Diagnostics":
+            return all_checks_table("Diagnostics") + "<div class=\"card\"><h2>Raw Status</h2><pre>" + escape(json.dumps(status, indent=2)) + "</pre></div>"
+        return overview_html
+
+    def html_page(route_path="/"):
+        page = page_name_for_path(route_path)
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", basic_dashboard_html(page))
+            .replace("__SERVER_NAV__", server_nav_html(page))
+            .replace("__PAGE_TITLE__", page)
+        )
 
     def update_started_html(result):
         status_class = "healthy" if result.get("ok") else "critical"
         current_version = version_info()
         before_commit = result.get("before_commit") or current_version.get("commit", "-")
         target_branch = result.get("branch") or current_version.get("branch", "-")
-        return HTML.replace(
-            "__BASIC_DASHBOARD__",
-            (
+        body = (
                 "<meta http-equiv=\"refresh\" content=\"20;url=/\">"
                 "<div class=\"card\">"
                 "<h2>Watchdog Update</h2>"
@@ -1042,7 +1133,11 @@ def start_web(cfg):
                 "<p class=\"muted\">If the update succeeds, the watchdog service will restart. Wait 10-20 seconds, then reload the dashboard.</p>"
                 "<form class=\"inline\" method=\"get\" action=\"/\"><button class=\"action\" type=\"submit\">Back to dashboard</button></form>"
                 "</div>"
-            ),
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Updates"))
+            .replace("__PAGE_TITLE__", "Updates")
         )
 
     def _run(command, timeout=5):
@@ -1548,8 +1643,9 @@ def start_web(cfg):
 
         def do_GET(self):
             route_path = self.path.split("?", 1)[0]
-            if route_path == "/" or route_path.startswith("/index") or route_path.startswith("/basic"):
-                body = html_page().encode("utf-8")
+            server_paths = {path for _, path in server_pages}
+            if route_path in server_paths or route_path.startswith("/index") or route_path.startswith("/basic"):
+                body = html_page(route_path).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
