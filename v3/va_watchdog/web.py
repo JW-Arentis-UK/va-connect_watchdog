@@ -12,6 +12,8 @@ from urllib.parse import parse_qs
 
 from .config import active_config_path, deep_merge, load_raw_config, save_raw_config
 from .history import history_path, read_history
+from .retention import purge_data as retention_purge_data
+from .retention import retention_status as retention_status_for_cfg
 from .update import launch_update_job, load_update_status
 
 HTML = """<!doctype html>
@@ -1150,6 +1152,18 @@ def start_web(cfg):
             if not volume_rows:
                 volume_rows.append("<tr><td colspan=\"7\">No configured storage volumes.</td></tr>")
             retention = info.get("retention", {})
+            file_rows = []
+            for item in retention.get("files", []):
+                file_rows.append(
+                    "<tr>"
+                    f"<td>{escape(str(item.get('path', '-')))}</td>"
+                    f"<td>{escape(human_size(item.get('size_bytes', 0)))}</td>"
+                    f"<td>{escape(unix_time(item.get('modified_unix')))}</td>"
+                    "</tr>"
+                )
+            if not file_rows:
+                file_rows.append("<tr><td colspan=\"3\">No watchdog data files found.</td></tr>")
+            default_days = retention.get("events_retention_days") or 30
             return (
                 metric_tiles()
                 + "<div class=\"card\"><h2>Configured Storage Limits</h2>"
@@ -1160,6 +1174,20 @@ def start_web(cfg):
                 f"<div class=\"label\">Used</div><div class=\"value\">{escape(str(retention.get('used_mb', '-')))} MB / {escape(str(retention.get('max_total_mb', '-')))} MB</div>"
                 f"<div class=\"label\">Events retention</div><div class=\"value\">{escape(str(retention.get('events_retention_days', '-')))} days</div>"
                 f"<div class=\"label\">History retention</div><div class=\"value\">{escape(str(retention.get('history_retention_days', '-')))} days</div>"
+                f"<div class=\"label\">Auto-purge rule</div><div class=\"value\">Self-purge old watchdog data when usage exceeds {escape(str(retention.get('max_total_mb', '-')))} MB.</div>"
+                "<div class=\"button-row\">"
+                "<form class=\"inline\" method=\"post\" action=\"/storage-purge-old\">"
+                f"<label class=\"label\">Older than days</label><input name=\"older_than_days\" type=\"number\" min=\"0\" max=\"3650\" value=\"{escape(str(default_days))}\"> "
+                "<button class=\"action\" type=\"submit\">Purge old data</button>"
+                "</form>"
+                "<a class=\"ghost\" href=\"/storage-purge-confirm\">Purge all non-status data</a>"
+                "<a class=\"ghost\" href=\"/settings\">Edit retention settings</a>"
+                "</div>"
+                "<p class=\"muted\">Purge never removes the live status file, so /api/status remains available.</p>"
+                "</div>"
+                "<div class=\"card\"><h2>Watchdog Data Files</h2>"
+                "<table><thead><tr><th>File</th><th>Size</th><th>Modified</th></tr></thead>"
+                f"<tbody>{''.join(file_rows)}</tbody></table>"
                 "</div>"
             )
 
@@ -1392,6 +1420,56 @@ def start_web(cfg):
             .replace("__PAGE_TITLE__", "Settings")
         )
 
+    def storage_purge_confirm_html():
+        body = (
+            "<div class=\"card\">"
+            "<h2>Confirm Storage Purge</h2>"
+            "<p class=\"warning\">This will remove all non-status watchdog data files.</p>"
+            "<p class=\"muted\">It removes events, history, update state/logs, and reboot reason files. It does not remove status.json, config files, or recordings.</p>"
+            "<form class=\"inline\" method=\"post\" action=\"/storage-purge-all\"><button class=\"action\" type=\"submit\">Confirm purge all non-status data</button></form> "
+            "<a class=\"ghost\" href=\"/storage\">Cancel</a>"
+            "</div>"
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Storage"))
+            .replace("__PAGE_TITLE__", "Storage")
+        )
+
+    def storage_purge_result_html(result, mode):
+        removed = result.get("removed", [])
+        rows = []
+        for item in removed:
+            if isinstance(item, dict):
+                rows.append(
+                    "<tr>"
+                    f"<td>{escape(str(item.get('path', '-')))}</td>"
+                    f"<td>{escape(human_size(item.get('size_bytes', 0)))}</td>"
+                    "</tr>"
+                )
+            else:
+                rows.append(f"<tr><td>{escape(str(item))}</td><td>-</td></tr>")
+        if not rows:
+            rows.append("<tr><td colspan=\"2\">No files matched the purge rule.</td></tr>")
+        retention = result.get("retention", {})
+        body = (
+            "<meta http-equiv=\"refresh\" content=\"8;url=/storage\">"
+            "<div class=\"card\">"
+            f"<h2>Storage Purge {'Complete' if mode != 'all' else 'Complete'}</h2>"
+            "<p class=\"healthy\">Purge command finished.</p>"
+            f"<div class=\"label\">Used after purge</div><div class=\"value\">{escape(str(retention.get('used_mb', '-')))} MB / {escape(str(retention.get('max_total_mb', '-')))} MB</div>"
+            "<table><thead><tr><th>Removed file</th><th>Size</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+            "<p class=\"muted\">This page will return to Storage automatically in 8 seconds.</p>"
+            "<a class=\"ghost\" href=\"/storage\">Back to Storage</a>"
+            "</div>"
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Storage"))
+            .replace("__PAGE_TITLE__", "Storage")
+        )
+
     def settings_payload_from_form(form):
         def first(name, default=""):
             return form.get(name, [default])[0]
@@ -1474,45 +1552,29 @@ def start_web(cfg):
         return total
 
     def retention_status():
-        retention = cfg.get("retention", {})
-        max_mb = int(retention.get("max_total_mb", 100) or 100)
-        used_bytes = _dir_size(data_dir)
-        files = [
-            {
-                "path": str(path),
-                "size_bytes": _file_size(path),
-                "modified_unix": path.stat().st_mtime if path.exists() else None,
-            }
-            for path in _data_files()
-        ]
-        return {
-            "data_dir": str(data_dir),
-            "max_total_mb": max_mb,
-            "used_mb": round(used_bytes / 1024 / 1024, 2),
-            "used_percent": round((used_bytes / max(1, max_mb * 1024 * 1024)) * 100, 1),
-            "events_retention_days": retention.get("events_retention_days"),
-            "history_retention_days": retention.get("history_retention_days"),
-            "history_sample_seconds": retention.get("history_sample_seconds"),
-            "history_max_rows": retention.get("history_max_rows"),
-            "exports_retention_days": retention.get("exports_retention_days"),
-            "files": files,
-        }
+        return retention_status_for_cfg(cfg)
 
     def purge_data(mode="old", older_than_days=None):
-        cutoff = None
-        if older_than_days is not None:
-            cutoff = time.time() - max(0, int(older_than_days)) * 86400
-        removed = []
-        for path in _data_files():
-            if not path.exists() or path.name == "status.json":
-                continue
-            if mode == "all" or (cutoff is not None and path.stat().st_mtime < cutoff):
-                try:
-                    path.unlink()
-                    removed.append(str(path))
-                except OSError:
-                    pass
-        return {"removed": removed, "retention": retention_status()}
+        return retention_purge_data(cfg, mode=mode, older_than_days=older_than_days)
+
+    def human_size(size_bytes):
+        try:
+            size = float(size_bytes or 0)
+        except (TypeError, ValueError):
+            size = 0
+        units = ["B", "KB", "MB", "GB"]
+        for unit in units:
+            if size < 1024 or unit == units[-1]:
+                return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+            size /= 1024
+
+    def unix_time(value):
+        if not value:
+            return "-"
+        try:
+            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(value)))
+        except (TypeError, ValueError, OSError):
+            return "-"
 
     def rtc_status():
         timedate = _run(["timedatectl"])
@@ -1944,6 +2006,15 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if route_path == "/storage-purge-confirm":
+                body = storage_purge_confirm_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path == "/api/status":
                 try:
                     body = status_path.read_text(encoding="utf-8")
@@ -2032,6 +2103,33 @@ def start_web(cfg):
                     result = {"ok": False, "error": str(exc)}
                 body = settings_saved_html(result).encode("utf-8")
                 self.send_response(200 if result.get("ok") else 400)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/storage-purge-old":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    older_than_days = int(form.get("older_than_days", ["30"])[0] or 30)
+                    result = purge_data(mode="old", older_than_days=older_than_days)
+                except Exception as exc:
+                    result = {"removed": [], "retention": retention_status(), "error": str(exc)}
+                body = storage_purge_result_html(result, "old").encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/storage-purge-all":
+                result = purge_data(mode="all")
+                body = storage_purge_result_html(result, "all").encode("utf-8")
+                self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()

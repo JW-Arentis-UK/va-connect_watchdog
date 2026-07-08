@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+import time
+from pathlib import Path
+from typing import Any
+
+from .history import history_path
+
+
+def data_dir(cfg: dict[str, Any]) -> Path:
+    return Path(cfg["events_path"]).parent
+
+
+def data_files(cfg: dict[str, Any]) -> list[Path]:
+    base = data_dir(cfg)
+    files = [
+        base / "status.json",
+        base / "events.jsonl",
+        base / "update-state.json",
+        base / "update.log",
+        base / "last-reboot-reason.json",
+        base / "history.jsonl",
+    ]
+    custom_history = history_path(cfg)
+    if custom_history not in files:
+        files.append(custom_history)
+    return files
+
+
+def file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size if path.exists() else 0
+    except OSError:
+        return 0
+
+
+def dir_size(path: Path) -> int:
+    total = 0
+    if not path.exists():
+        return 0
+    for item in path.rglob("*"):
+        if item.is_file():
+            total += file_size(item)
+    return total
+
+
+def retention_status(cfg: dict[str, Any]) -> dict[str, Any]:
+    retention = cfg.get("retention", {})
+    max_mb = int(retention.get("max_total_mb", 100) or 100)
+    used_bytes = dir_size(data_dir(cfg))
+    files = []
+    for path in data_files(cfg):
+        modified = None
+        if path.exists():
+            try:
+                modified = path.stat().st_mtime
+            except OSError:
+                modified = None
+        files.append(
+            {
+                "path": str(path),
+                "size_bytes": file_size(path),
+                "modified_unix": modified,
+            }
+        )
+    return {
+        "data_dir": str(data_dir(cfg)),
+        "max_total_mb": max_mb,
+        "used_mb": round(used_bytes / 1024 / 1024, 2),
+        "used_percent": round((used_bytes / max(1, max_mb * 1024 * 1024)) * 100, 1),
+        "events_retention_days": retention.get("events_retention_days"),
+        "history_retention_days": retention.get("history_retention_days"),
+        "history_sample_seconds": retention.get("history_sample_seconds"),
+        "history_max_rows": retention.get("history_max_rows"),
+        "exports_retention_days": retention.get("exports_retention_days"),
+        "files": files,
+    }
+
+
+def purge_data(cfg: dict[str, Any], mode: str = "old", older_than_days: int | None = None) -> dict[str, Any]:
+    cutoff = None
+    if older_than_days is not None:
+        cutoff = time.time() - max(0, int(older_than_days)) * 86400
+    removed = []
+    for path in data_files(cfg):
+        if not path.exists() or path.name == "status.json":
+            continue
+        if mode == "all" or (cutoff is not None and path.stat().st_mtime < cutoff):
+            try:
+                size = file_size(path)
+                path.unlink()
+                removed.append({"path": str(path), "size_bytes": size})
+            except OSError:
+                pass
+    return {"removed": removed, "retention": retention_status(cfg)}
+
+
+def enforce_retention(cfg: dict[str, Any]) -> dict[str, Any]:
+    retention = cfg.get("retention", {})
+    max_mb = int(retention.get("max_total_mb", 100) or 100)
+    if max_mb <= 0:
+        return {"ok": True, "actions": [], "retention": retention_status(cfg)}
+
+    status = retention_status(cfg)
+    max_bytes = max_mb * 1024 * 1024
+    if dir_size(data_dir(cfg)) <= max_bytes:
+        return {"ok": True, "actions": [], "retention": status}
+
+    days = min(
+        int(retention.get("events_retention_days", 30) or 30),
+        int(retention.get("history_retention_days", 30) or 30),
+    )
+    result = purge_data(cfg, mode="old", older_than_days=days)
+    actions = []
+    if result["removed"]:
+        actions.append({"action": "purge_old", "older_than_days": days, "removed": result["removed"]})
+
+    if dir_size(data_dir(cfg)) > max_bytes:
+        candidates = []
+        for path in data_files(cfg):
+            if path.exists() and path.name != "status.json":
+                try:
+                    candidates.append((path.stat().st_mtime, path))
+                except OSError:
+                    continue
+        for _, path in sorted(candidates):
+            if dir_size(data_dir(cfg)) <= max_bytes:
+                break
+            try:
+                size = file_size(path)
+                path.unlink()
+                actions.append({"action": "remove_oldest", "path": str(path), "size_bytes": size})
+            except OSError:
+                continue
+
+    return {"ok": True, "actions": actions, "over_budget": dir_size(data_dir(cfg)) > max_bytes, "retention": retention_status(cfg)}

@@ -10,6 +10,7 @@ from .events import EventLog
 from .health import collect_health
 from .history import append_history
 from .recovery import RecoveryEngine
+from .retention import enforce_retention
 from .watchdog_device import HardwareWatchdog
 from .web import start_web
 
@@ -66,6 +67,9 @@ def main():
             status["recovery"] = recovery.summary()
             atomic_write_json(cfg["status_path"], status)
             append_history(cfg, status)
+            retention_result = enforce_retention(cfg)
+            if retention_result.get("actions"):
+                event_log.add("warning", "retention", "Watchdog data retention purge completed", retention_result)
         except Exception as e:
             event_log.add("critical", "watchdog", f"Main loop error: {e}")
         time.sleep(int(cfg["poll_interval_seconds"]))
