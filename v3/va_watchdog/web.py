@@ -1144,6 +1144,7 @@ def start_web(cfg):
             block_devices = info.get("block_devices", [])
             watchdog_devices = info.get("watchdog_devices", [])
             wdt = watchdog_test_summary()
+            systemd_wdt = systemd_watchdog_info()
             return (
                 metric_tiles()
                 + "<div class=\"grid lower-grid\">"
@@ -1158,6 +1159,14 @@ def start_web(cfg):
                 f"<div class=\"label\">Watchdog devices</div><div class=\"value\">{escape(', '.join(watchdog_devices) if watchdog_devices else 'None detected')}</div>"
                 f"<div class=\"label\">Block devices</div><pre>{escape(chr(10).join(block_devices) if block_devices else 'No block device details available')}</pre>"
                 "</div></div>"
+                "<div class=\"card\"><h2>Watchdog Protection Layers</h2>"
+                f"<div class=\"label\">Hardware reboot watchdog</div><div class=\"value {escape(str(wdt.get('device_state', 'unknown')))}\">{escape(str(wdt.get('device_message', '-')).upper())}</div>"
+                "<p class=\"muted\">This layer can reboot the gateway if the whole system stops responding, but only when the OS exposes a watchdog device such as /dev/watchdog0.</p>"
+                f"<div class=\"label\">Systemd service watchdog</div><div class=\"value {escape(str(systemd_wdt.get('state', 'unknown')))}\">{escape(str(systemd_wdt.get('message', '-')))}</div>"
+                f"<div class=\"label\">WatchdogSec</div><div class=\"value\">{escape(str(systemd_wdt.get('watchdog_sec', '-')))}</div>"
+                f"<div class=\"label\">Service manager status</div><div class=\"value\">{escape(str(systemd_wdt.get('status_text', '-')))}</div>"
+                "<p class=\"muted\">This layer restarts va-watchdog if the Python process hangs. It does not reboot the gateway, but it is the correct fallback when hardware watchdog is not present.</p>"
+                "</div>"
                 "<div class=\"card\"><h2>Hardware Watchdog Test</h2>"
                 f"<div class=\"label\">Device</div><div class=\"value {escape(str(wdt.get('device_state', 'unknown')))}\">{escape(str(wdt.get('device', '-')))} - {escape(str(wdt.get('device_message', '-')))}</div>"
                 f"<div class=\"label\">Configured feed</div><div class=\"value {'healthy' if wdt.get('feed_enabled') else 'warning'}\">{escape('Enabled' if wdt.get('feed_enabled') else 'Disabled')}</div>"
@@ -2003,6 +2012,43 @@ def start_web(cfg):
             "last_test_message": last_test_message,
         }
 
+    def systemd_watchdog_info():
+        props = _run([
+            "systemctl",
+            "show",
+            "va-watchdog",
+            "-p",
+            "WatchdogUSec",
+            "-p",
+            "WatchdogTimestamp",
+            "-p",
+            "StatusText",
+            "-p",
+            "Type",
+        ], timeout=3)
+        values = {}
+        for line in props["stdout"].splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                values[key] = value
+        usec = int(values.get("WatchdogUSec", "0") or 0)
+        watchdog_sec = round(usec / 1000000, 1) if usec else 0
+        if watchdog_sec:
+            state = "healthy"
+            message = "Enabled"
+        else:
+            state = "warning"
+            message = "Not enabled in installed systemd unit yet"
+        return {
+            "state": state,
+            "message": message,
+            "watchdog_sec": f"{watchdog_sec}s" if watchdog_sec else "0s",
+            "timestamp": values.get("WatchdogTimestamp", ""),
+            "status_text": values.get("StatusText", ""),
+            "type": values.get("Type", ""),
+            "raw": values,
+        }
+
     def arm_watchdog_test():
         now = time.time()
         token = secrets.token_urlsafe(18)
@@ -2076,12 +2122,23 @@ def start_web(cfg):
             "message": "No critical checks blocking feed" if not critical_failed else "Critical health is currently blocking feed",
         })
 
-        ok = all(check.get("state") == "healthy" for check in checks)
+        systemd_wdt = systemd_watchdog_info()
+        checks.append({
+            "name": "systemd_watchdog_fallback",
+            "state": systemd_wdt.get("state", "unknown"),
+            "message": f"{systemd_wdt.get('message', '-')}; WatchdogSec {systemd_wdt.get('watchdog_sec', '-')}",
+        })
+
+        hardware_ok = device_exists and feed_enabled and any(check.get("name") == "feed_freshness" and check.get("state") == "healthy" for check in checks)
+        fallback_ok = systemd_wdt.get("state") == "healthy"
+        ok = (hardware_ok or fallback_ok) and not critical_failed
         result = {
             "ok": ok,
             "message": "Safe watchdog test passed" if ok else "Safe watchdog test completed with warnings",
             "tested_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
             "checks": checks,
+            "hardware_ok": hardware_ok,
+            "systemd_fallback_ok": fallback_ok,
         }
         state["last_result"] = result
         state.pop("armed", None)

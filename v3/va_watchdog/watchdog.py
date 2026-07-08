@@ -11,6 +11,7 @@ from .health import collect_health
 from .history import append_history
 from .recovery import RecoveryEngine
 from .retention import enforce_retention
+from .systemd_notify import notify as systemd_notify
 from .watchdog_device import HardwareWatchdog
 from .web import start_web
 
@@ -52,6 +53,7 @@ def main():
     atomic_write_json(cfg["status_path"], status)
     append_history(cfg, status)
     start_web(cfg)
+    systemd_notify("READY=1\nSTATUS=VA-Connect Watchdog V3 running")
 
     while True:
         try:
@@ -70,8 +72,10 @@ def main():
             retention_result = enforce_retention(cfg)
             if retention_result.get("actions"):
                 event_log.add("warning", "retention", "Watchdog data retention purge completed", retention_result)
+            systemd_notify("WATCHDOG=1\nSTATUS=VA-Connect Watchdog V3 healthy loop")
         except Exception as e:
             event_log.add("critical", "watchdog", f"Main loop error: {e}")
+            systemd_notify(f"STATUS=VA-Connect Watchdog V3 loop error: {e}")
         time.sleep(int(cfg["poll_interval_seconds"]))
 
 if __name__ == "__main__":
