@@ -19,6 +19,7 @@ def data_files(cfg: dict[str, Any]) -> list[Path]:
         base / "update-state.json",
         base / "update.log",
         base / "last-reboot-reason.json",
+        base / "watchdog-test.json",
         base / "history.jsonl",
     ]
     custom_history = history_path(cfg)

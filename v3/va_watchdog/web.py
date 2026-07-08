@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import platform
+import secrets
 import socket
 import subprocess
 import time
@@ -1142,6 +1143,7 @@ def start_web(cfg):
             memory = info.get("memory", {})
             block_devices = info.get("block_devices", [])
             watchdog_devices = info.get("watchdog_devices", [])
+            wdt = watchdog_test_summary()
             return (
                 metric_tiles()
                 + "<div class=\"grid lower-grid\">"
@@ -1156,6 +1158,15 @@ def start_web(cfg):
                 f"<div class=\"label\">Watchdog devices</div><div class=\"value\">{escape(', '.join(watchdog_devices) if watchdog_devices else 'None detected')}</div>"
                 f"<div class=\"label\">Block devices</div><pre>{escape(chr(10).join(block_devices) if block_devices else 'No block device details available')}</pre>"
                 "</div></div>"
+                "<div class=\"card\"><h2>Hardware Watchdog Test</h2>"
+                f"<div class=\"label\">Device</div><div class=\"value {escape(str(wdt.get('device_state', 'unknown')))}\">{escape(str(wdt.get('device', '-')))} - {escape(str(wdt.get('device_message', '-')))}</div>"
+                f"<div class=\"label\">Configured feed</div><div class=\"value {'healthy' if wdt.get('feed_enabled') else 'warning'}\">{escape('Enabled' if wdt.get('feed_enabled') else 'Disabled')}</div>"
+                f"<div class=\"label\">Last feed</div><div class=\"value {escape(str(wdt.get('feed_state', 'unknown')))}\">{escape(str(wdt.get('last_feed_message', '-')))}</div>"
+                f"<div class=\"label\">Last safe test</div><div class=\"value\">{escape(str(wdt.get('last_test_message', 'No test recorded yet')))}</div>"
+                "<p class=\"muted\">Double-knock test: first click arms the test, second click confirms it. This safe test does not stop feeding the watchdog or intentionally reboot the gateway.</p>"
+                "<form class=\"inline\" method=\"post\" action=\"/watchdog-test-arm\"><button class=\"action\" type=\"submit\">Arm safe watchdog test</button></form>"
+                "<p class=\"muted\">A full trip test would deliberately stop feeding the hardware watchdog and may reboot the gateway. That is not enabled here yet.</p>"
+                "</div>"
             )
 
         def storage_page():
@@ -1758,6 +1769,60 @@ def start_web(cfg):
             .replace("__PAGE_TITLE__", "Services")
         )
 
+    def watchdog_test_armed_html(result):
+        body = (
+            "<meta http-equiv=\"refresh\" content=\"45;url=/hardware\">"
+            "<div class=\"card\">"
+            "<h2>Safe Watchdog Test Armed</h2>"
+            "<p class=\"warning\">Second knock required.</p>"
+            "<p class=\"muted\">This test is armed for 45 seconds. Confirming will verify watchdog config, device presence, and recent feed state. It will not intentionally reboot the gateway.</p>"
+            f"<div class=\"label\">Armed at</div><div class=\"value\">{escape(str(result.get('armed_at', '-')))}</div>"
+            "<form class=\"inline\" method=\"post\" action=\"/watchdog-test-run\">"
+            f"<input type=\"hidden\" name=\"token\" value=\"{escape(str(result.get('token', '')))}\">"
+            "<button class=\"action\" type=\"submit\">Second knock: run safe test</button>"
+            "</form> "
+            "<a class=\"ghost\" href=\"/hardware\">Cancel</a>"
+            "</div>"
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Hardware"))
+            .replace("__PAGE_TITLE__", "Hardware")
+        )
+
+    def watchdog_test_result_html(result):
+        ok = bool(result.get("ok"))
+        checks = result.get("checks", [])
+        rows = []
+        for check in checks:
+            state = str(check.get("state", "unknown"))
+            rows.append(
+                "<tr>"
+                f"<td>{escape(str(check.get('name', '-')))}</td>"
+                f"<td class=\"{escape(state)}\">{escape(state.upper())}</td>"
+                f"<td>{escape(str(check.get('message', '-')))}</td>"
+                "</tr>"
+            )
+        if not rows:
+            rows.append("<tr><td colspan=\"3\">No checks were run.</td></tr>")
+        body = (
+            "<meta http-equiv=\"refresh\" content=\"12;url=/hardware\">"
+            "<div class=\"card\">"
+            "<h2>Safe Watchdog Test Result</h2>"
+            f"<p class=\"{'healthy' if ok else 'warning'}\">{escape(str(result.get('message', 'Test complete')))}</p>"
+            f"<div class=\"label\">Test time</div><div class=\"value\">{escape(str(result.get('tested_at', '-')))}</div>"
+            "<table><thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+            "<p class=\"muted\">This page will return to Hardware automatically in 12 seconds.</p>"
+            "<a class=\"ghost\" href=\"/hardware\">Back to Hardware</a>"
+            "</div>"
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Hardware"))
+            .replace("__PAGE_TITLE__", "Hardware")
+        )
+
     def settings_payload_from_form(form):
         def first(name, default=""):
             return form.get(name, [default])[0]
@@ -1863,6 +1928,166 @@ def start_web(cfg):
             return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(value)))
         except (TypeError, ValueError, OSError):
             return "-"
+
+    def watchdog_test_path():
+        return data_dir / "watchdog-test.json"
+
+    def write_watchdog_test_state(payload):
+        path = watchdog_test_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    def read_watchdog_test_state():
+        path = watchdog_test_path()
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    def append_web_event(level, source, message, data=None):
+        event = {
+            "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "level": level,
+            "source": source,
+            "message": message,
+            "data": data or {},
+        }
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        with events_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event) + "\n")
+
+    def watchdog_test_summary():
+        status = status_snapshot()
+        hw_cfg = cfg.get("hardware_watchdog", {})
+        feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
+        device = str(hw_cfg.get("device", "/dev/watchdog0"))
+        device_exists = Path(device).exists()
+        last_feed = feed.get("last_feed_unix")
+        feed_interval = int(hw_cfg.get("feed_interval_seconds", 10) or 10)
+        stale_after = max(feed_interval * 3, int(cfg.get("poll_interval_seconds", 5) or 5) * 3, 30)
+        age = None
+        if last_feed:
+            try:
+                age = max(0, time.time() - float(last_feed))
+            except (TypeError, ValueError):
+                age = None
+        feed_enabled = bool(feed.get("enabled") or hw_cfg.get("enabled"))
+        if not feed_enabled:
+            feed_state = "warning"
+            last_feed_message = "Feed disabled in config/status"
+        elif age is None:
+            feed_state = "warning"
+            last_feed_message = "No feed timestamp recorded yet"
+        elif age <= stale_after:
+            feed_state = "healthy"
+            last_feed_message = f"Last feed {round(age, 1)}s ago"
+        else:
+            feed_state = "warning"
+            last_feed_message = f"Last feed stale: {round(age, 1)}s ago"
+
+        state = read_watchdog_test_state()
+        last = state.get("last_result", {})
+        last_test_message = ""
+        if last:
+            last_test_message = f"{last.get('tested_at', '-')} - {last.get('message', '-')}"
+        return {
+            "device": device,
+            "device_state": "healthy" if device_exists else "warning",
+            "device_message": "present" if device_exists else "not present",
+            "feed_enabled": feed_enabled,
+            "feed_state": feed_state,
+            "last_feed_message": last_feed_message,
+            "last_test_message": last_test_message,
+        }
+
+    def arm_watchdog_test():
+        now = time.time()
+        token = secrets.token_urlsafe(18)
+        state = read_watchdog_test_state()
+        state["armed"] = {
+            "token": token,
+            "armed_at_unix": now,
+            "expires_at_unix": now + 45,
+            "armed_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
+        }
+        write_watchdog_test_state(state)
+        append_web_event("info", "watchdog_test", "Safe watchdog test armed", {"expires_at_unix": now + 45})
+        return {"token": token, "armed_at": state["armed"]["armed_at"], "expires_at_unix": now + 45}
+
+    def run_watchdog_test(token):
+        now = time.time()
+        state = read_watchdog_test_state()
+        armed = state.get("armed", {}) if isinstance(state.get("armed", {}), dict) else {}
+        if not token or token != armed.get("token"):
+            return {"ok": False, "message": "Second knock failed: test token did not match.", "tested_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)), "checks": []}
+        if now > float(armed.get("expires_at_unix", 0) or 0):
+            return {"ok": False, "message": "Second knock expired. Arm the test again.", "tested_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)), "checks": []}
+
+        status = status_snapshot()
+        hw_cfg = cfg.get("hardware_watchdog", {})
+        feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
+        device = str(hw_cfg.get("device", "/dev/watchdog0"))
+        feed_interval = int(hw_cfg.get("feed_interval_seconds", 10) or 10)
+        stale_after = max(feed_interval * 3, int(cfg.get("poll_interval_seconds", 5) or 5) * 3, 30)
+        checks = []
+
+        device_exists = Path(device).exists()
+        checks.append({
+            "name": "device_present",
+            "state": "healthy" if device_exists else "warning",
+            "message": f"{device} present" if device_exists else f"{device} not present",
+        })
+
+        feed_enabled = bool(feed.get("enabled") or hw_cfg.get("enabled"))
+        checks.append({
+            "name": "feed_enabled",
+            "state": "healthy" if feed_enabled else "warning",
+            "message": "Hardware watchdog feed enabled" if feed_enabled else "Hardware watchdog feed disabled",
+        })
+
+        last_feed = feed.get("last_feed_unix")
+        age = None
+        if last_feed:
+            try:
+                age = max(0, now - float(last_feed))
+            except (TypeError, ValueError):
+                age = None
+        if not feed_enabled:
+            feed_state = "warning"
+            feed_message = "Feed disabled; no live feed expected"
+        elif age is None:
+            feed_state = "warning"
+            feed_message = "No feed timestamp recorded"
+        elif age <= stale_after:
+            feed_state = "healthy"
+            feed_message = f"Feed is recent: {round(age, 1)}s old"
+        else:
+            feed_state = "warning"
+            feed_message = f"Feed is stale: {round(age, 1)}s old"
+        checks.append({"name": "feed_freshness", "state": feed_state, "message": feed_message})
+
+        critical_failed = bool(status.get("critical_failed", False))
+        checks.append({
+            "name": "health_allows_feed",
+            "state": "healthy" if not critical_failed else "warning",
+            "message": "No critical checks blocking feed" if not critical_failed else "Critical health is currently blocking feed",
+        })
+
+        ok = all(check.get("state") == "healthy" for check in checks)
+        result = {
+            "ok": ok,
+            "message": "Safe watchdog test passed" if ok else "Safe watchdog test completed with warnings",
+            "tested_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
+            "checks": checks,
+        }
+        state["last_result"] = result
+        state.pop("armed", None)
+        write_watchdog_test_state(state)
+        append_web_event("healthy" if ok else "warning", "watchdog_test", result["message"], result)
+        return result
 
     def numeric_values(rows, key):
         values = []
@@ -2780,6 +3005,33 @@ def start_web(cfg):
                 except Exception as exc:
                     result = {"ok": False, "service": "", "message": str(exc), "returncode": None, "output": ""}
                 body = service_restart_result_html(result).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/watchdog-test-arm":
+                result = arm_watchdog_test()
+                body = watchdog_test_armed_html(result).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/watchdog-test-run":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    token = form.get("token", [""])[0]
+                    result = run_watchdog_test(token)
+                except Exception as exc:
+                    result = {"ok": False, "message": str(exc), "tested_at": "", "checks": []}
+                body = watchdog_test_result_html(result).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
