@@ -869,15 +869,84 @@ def start_web(cfg):
         critical = bool(status.get("critical_failed", False))
         state = "critical" if critical else "healthy"
         word = "CRITICAL" if critical else "HEALTHY"
+        checks = [check for check in status.get("checks", []) or [] if isinstance(check, dict)]
+        check_map = {str(check.get("name", "")): check for check in checks}
+
+        def check_value(name, default="-"):
+            return check_map.get(name, {}).get("value", default)
+
+        def check_message(name, default=""):
+            return check_map.get(name, {}).get("message", default)
+
+        def check_state(name, default="unknown"):
+            return str(check_map.get(name, {}).get("state", default))
+
+        def disk_used(name):
+            value = check_value(name, {})
+            if isinstance(value, dict):
+                return f"{escape(str(value.get('used_percent', '-')))}%"
+            return "-"
+
+        def disk_free(name):
+            value = check_value(name, {})
+            if isinstance(value, dict):
+                return f"{escape(str(value.get('free_gb', '-')))} GB free"
+            return escape(str(check_message(name, "")))
+
+        def tile(title, value, detail, tile_state="healthy"):
+            return (
+                "<div class=\"tile\">"
+                f"<h3>{escape(str(title))}</h3>"
+                f"<div class=\"tile-value {escape(str(tile_state))}\">{escape(str(value))}</div>"
+                f"<div class=\"tile-detail\">{escape(str(detail))}</div>"
+                "</div>"
+            )
+
+        def service_rows():
+            rows = []
+            for check in checks:
+                name = str(check.get("name", ""))
+                if not name.endswith(".service"):
+                    continue
+                value = check.get("value", {})
+                restarts = value.get("restarts", "-") if isinstance(value, dict) else "-"
+                active = value.get("active", check.get("state", "-")) if isinstance(value, dict) else check.get("state", "-")
+                rows.append(
+                    "<tr>"
+                    f"<td>{escape(name)}</td>"
+                    f"<td class=\"{escape(str(check.get('state', 'unknown')))}\">{escape(str(active).upper())}</td>"
+                    "<td>-</td><td>-</td>"
+                    f"<td>{escape(str(restarts))}</td>"
+                    "<td>-</td>"
+                    "</tr>"
+                )
+            if not rows:
+                rows.append("<tr><td colspan=\"6\">No configured services found.</td></tr>")
+            return "".join(rows)
+
+        def event_rows(limit=8):
+            events = recent_events(limit=limit)
+            rows = []
+            for event in events:
+                rows.append(
+                    "<div class=\"event\">"
+                    f"<div class=\"event-time\">{escape(str(event.get('time', '-')))}</div>"
+                    f"<div><span class=\"{escape(str(event.get('level', 'info')))}\">{escape(str(event.get('level', 'info')).upper())}</span> {escape(str(event.get('message', '')))}</div>"
+                    "</div>"
+                )
+            if not rows:
+                rows.append("<div class=\"event\"><div class=\"event-time\">-</div><div>No events yet</div></div>")
+            return "".join(rows)
+
         rows = []
-        for check in status.get("checks", []) or []:
+        for check in checks:
             if not isinstance(check, dict):
                 continue
-            check_state = str(check.get("state", "unknown"))
+            row_state = str(check.get("state", "unknown"))
             rows.append(
                 "<tr>"
                 f"<td>{escape(str(check.get('name', '-')))}</td>"
-                f"<td class=\"{escape(check_state)}\">{escape(check_state.upper())}</td>"
+                f"<td class=\"{escape(row_state)}\">{escape(row_state.upper())}</td>"
                 f"<td>{escape(str(check.get('message', '')))}</td>"
                 "</tr>"
             )
@@ -886,20 +955,58 @@ def start_web(cfg):
         error_html = ""
         if status.get("error"):
             error_html = f"<p class=\"critical\">{escape(str(status.get('error')))}</p>"
+        issue_pill = "<span class=\"pill\">No critical issues</span>"
+        if critical:
+            issue_pill = "<span class=\"pill critical\">Critical issue</span>"
         return (
-            "<div class=\"card\">"
-            "<h2>VA-Connect Watchdog V3</h2>"
-            "<p class=\"muted\">Server-rendered safe view. The full dashboard will load automatically if this browser supports it.</p>"
-            "<button class=\"action\" onclick=\"window.location.reload()\">Refresh dashboard</button>"
+            "<div class=\"grid top-grid\">"
+            "<div class=\"card summary-card\">"
+            "<div>"
             f"<div class=\"status-word {state}\">{word}</div>"
             f"<div class=\"score\">{escape(str(status.get('score', '-')))}%</div>"
+            f"{issue_pill}"
+            "</div>"
+            "<div>"
+            "<div class=\"label\">Gateway</div><div class=\"value\">POC-451VTC</div>"
             f"<div class=\"label\">Last status</div><div class=\"value\">{escape(str(status.get('time', '-')))}</div>"
             f"<div class=\"label\">Build</div><div class=\"value\">{escape(str(version.get('branch', '-')))} / {escape(str(version.get('commit', '-')))}</div>"
+            "</div>"
+            "<div>"
             f"<div class=\"label\">Config</div><div class=\"value\">{escape(str(version.get('config_path', '-')))}</div>"
+            f"<div class=\"label\">Data</div><div class=\"value\">{escape(str(version.get('data_dir', '-')))}</div>"
+            "<button class=\"action\" onclick=\"window.location.reload()\">Refresh dashboard</button>"
+            "</div>"
             f"{error_html}"
             "</div>"
-            "<div class=\"card\"><h2>Checks</h2>"
-            "<table><thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>"
+            "<div class=\"card\"><h2>Health Breakdown</h2>"
+            f"<div class=\"donut\" style=\"--score:{escape(str(status.get('score', 0)))}\"><span>{escape(str(status.get('score', '-')))}%</span></div>"
+            "<div class=\"breakdown-row\"><span>Critical failed</span><strong>" + escape(str(critical).lower()) + "</strong></div>"
+            "<div class=\"breakdown-row\"><span>Total checks</span><strong>" + escape(str(len(checks))) + "</strong></div>"
+            "<div class=\"breakdown-row\"><span>Mode</span><strong>Compatibility</strong></div>"
+            "</div></div>"
+            "<div class=\"grid metric-grid\">"
+            + tile("CPU Temp", check_value("temperature", "-"), check_message("temperature", ""), check_state("temperature", "healthy"))
+            + tile("CPU Load", f"{escape(str(check_value('cpu_load', '-')))}%", check_message("cpu_load", ""), check_state("cpu_load", "healthy"))
+            + tile("RAM", f"{escape(str(check_value('ram', '-')))}%", check_message("ram", ""), check_state("ram", "healthy"))
+            + tile("Root Disk", disk_used("root_disk"), disk_free("root_disk"), check_state("root_disk", "healthy"))
+            + tile("Recordings Disk", disk_used("recordings_disk"), disk_free("recordings_disk"), check_state("recordings_disk", "healthy"))
+            + tile("Hardware WDT", "Present" if check_value("hardware_watchdog_present", False) else "Not present", check_message("hardware_watchdog_present", ""), check_state("hardware_watchdog_present", "warning"))
+            + "</div>"
+            "<div class=\"grid lower-grid\">"
+            "<div class=\"card\"><h2>Services</h2><table><thead><tr><th>Service</th><th>Status</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th></tr></thead>"
+            f"<tbody>{service_rows()}</tbody></table></div>"
+            f"<div class=\"card\"><h2>Recent Events</h2><div class=\"events\">{event_rows()}</div></div>"
+            "</div>"
+            "<div class=\"grid bottom-grid\">"
+            "<div class=\"card\"><h2>System Information</h2>"
+            f"<div class=\"label\">Repository</div><div class=\"value\">{escape(str(version.get('repo_root', '-')))}</div>"
+            f"<div class=\"label\">Remote</div><div class=\"value\">{escape(str(version.get('remote', '-')))}</div>"
+            "<div class=\"label\">Dashboard</div><div class=\"value\">Server-rendered compatibility appliance view</div>"
+            "</div>"
+            "<div class=\"card\"><h2>Next Sections</h2>"
+            "<ul><li>Hardware details placeholder</li><li>Storage settings placeholder</li><li>Network details placeholder</li><li>Recovery controls placeholder</li><li>History graph placeholder</li></ul>"
+            "</div></div>"
+            "<div class=\"card\"><h2>All Checks</h2><table><thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table></div>"
         )
 
