@@ -1170,7 +1170,9 @@ def start_web(cfg):
                 f"<div class=\"label\">wdctl identity</div><div class=\"value {escape(str(wdctl.get('state', 'unknown')))}\">{escape(str(wdctl.get('identity', '-')))}</div>"
                 f"<div class=\"label\">wdctl timeout</div><div class=\"value\">{escape(str(wdctl.get('timeout', '-')))}</div>"
                 f"<div class=\"label\">wdctl raw output</div><pre>{escape(str(wdctl.get('raw', 'wdctl not available or watchdog not present')))}</pre>"
-                "<p class=\"muted\">For POC-451VTC, the expected hardware watchdog is Intel TCO. Run the setup script below, then reboot or reload the service after verifying /dev/watchdog0.</p>"
+                f"<div class=\"label\">Last setup log</div><pre>{escape(str(watchdog.get('setup_log', 'No setup log yet')))}</pre>"
+                "<p class=\"muted\">For POC-451VTC, the expected hardware watchdog is Intel TCO. Use the button below to load and persist the driver. Feeding stays disabled until you explicitly enable it in Settings/config.</p>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/itco-watchdog-install-confirm\">Install/load Intel TCO watchdog</a></div>"
                 "<pre>cd /opt/va-connect-watchdog-v3\nsudo ./v3/scripts/setup_itco_watchdog.sh</pre>"
                 "</div>"
                 "<div class=\"card\"><h2>Watchdog Protection Layers</h2>"
@@ -1697,6 +1699,44 @@ def start_web(cfg):
             HTML.replace("__BASIC_DASHBOARD__", body)
             .replace("__SERVER_NAV__", server_nav_html("Recovery"))
             .replace("__PAGE_TITLE__", "Recovery")
+        )
+
+    def itco_install_confirm_html():
+        body = (
+            "<div class=\"card\">"
+            "<h2>Confirm Intel TCO Watchdog Setup</h2>"
+            "<p class=\"warning\">This will load the Intel TCO watchdog kernel driver and persist it across reboot.</p>"
+            "<p class=\"muted\">It runs v3/scripts/setup_itco_watchdog.sh. It does not enable VA-Connect hardware feeding and does not intentionally reboot the gateway.</p>"
+            "<div class=\"label\">Expected driver</div><div class=\"value\">iTCO_wdt</div>"
+            "<div class=\"label\">Expected device after success</div><div class=\"value\">/dev/watchdog0</div>"
+            "<div class=\"label\">Expected identity</div><div class=\"value\">iTCO_wdt [version 6]</div>"
+            "<form class=\"inline\" method=\"post\" action=\"/itco-watchdog-install-now\"><button class=\"action\" type=\"submit\">Confirm install/load Intel TCO</button></form> "
+            "<a class=\"ghost\" href=\"/hardware\">Cancel</a>"
+            "</div>"
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Hardware"))
+            .replace("__PAGE_TITLE__", "Hardware")
+        )
+
+    def itco_install_started_html(result):
+        status_class = "healthy" if result.get("ok") else "critical"
+        body = (
+            "<meta http-equiv=\"refresh\" content=\"20;url=/hardware\">"
+            "<div class=\"card\">"
+            "<h2>Intel TCO Watchdog Setup</h2>"
+            f"<p class=\"{status_class}\">{escape(str(result.get('message', 'Setup request sent.')))}</p>"
+            "<p class=\"muted\">This page will return to Hardware automatically in 20 seconds. Reload Hardware after that to see module/device status.</p>"
+            f"<div class=\"label\">Command</div><div class=\"value\">{escape(str(result.get('command', '-')))}</div>"
+            f"<div class=\"label\">Log</div><div class=\"value\">{escape(str(result.get('log_path', '-')))}</div>"
+            "<a class=\"ghost\" href=\"/hardware\">Back to Hardware</a>"
+            "</div>"
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Hardware"))
+            .replace("__PAGE_TITLE__", "Hardware")
         )
 
     def service_detail_html(name):
@@ -2312,6 +2352,34 @@ def start_web(cfg):
             "log_path": str(log_path),
         }
 
+    def itco_setup_status():
+        log_path = data_dir / "itco-watchdog-setup.log"
+        return {
+            "script": str(repo_root() / "scripts" / "setup_itco_watchdog.sh"),
+            "log_path": str(log_path),
+            "last_log": tail_file(log_path, lines=80).get("tail", ""),
+        }
+
+    def launch_itco_setup():
+        status = itco_setup_status()
+        script = Path(status["script"])
+        log_path = Path(status["log_path"])
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        if not script.exists():
+            return {"ok": False, "message": f"Intel TCO setup script not found: {script}", "log_path": str(log_path)}
+        command = f"cd {repo_root()!s}; /bin/bash scripts/setup_itco_watchdog.sh >> {log_path!s} 2>&1"
+        try:
+            subprocess.Popen(["/bin/bash", "-lc", command], start_new_session=True)
+        except Exception as exc:
+            return {"ok": False, "message": f"Could not start Intel TCO setup: {exc}", "command": command, "log_path": str(log_path)}
+        append_web_event("info", "hardware_watchdog", "Intel TCO watchdog setup started", {"log_path": str(log_path)})
+        return {
+            "ok": True,
+            "message": "Intel TCO watchdog setup started in the background.",
+            "command": command,
+            "log_path": str(log_path),
+        }
+
     def rtc_status():
         timedate = _run(["timedatectl"])
         hwclock = _run(["hwclock", "--show"])
@@ -2527,6 +2595,7 @@ def start_web(cfg):
             "device": device,
             "modules": modules,
             "wdctl": wdctl,
+            "setup_log": itco_setup_status().get("last_log", ""),
         }
 
     def _df_path(path, label="", warning=0, critical=0, full_expected=False):
@@ -2958,6 +3027,15 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if route_path == "/itco-watchdog-install-confirm":
+                body = itco_install_confirm_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path.startswith("/service-restart-confirm/"):
                 name = unquote(route_path.rsplit("/", 1)[-1])
                 body = service_restart_confirm_html(name).encode("utf-8")
@@ -3108,6 +3186,16 @@ def start_web(cfg):
             if route_path == "/recovery-install-now":
                 result = launch_recovery_install()
                 body = recovery_install_started_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 500)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/itco-watchdog-install-now":
+                result = launch_itco_setup()
+                body = itco_install_started_html(result).encode("utf-8")
                 self.send_response(200 if result.get("ok") else 500)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
