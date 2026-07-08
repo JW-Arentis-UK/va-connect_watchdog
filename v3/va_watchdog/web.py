@@ -1351,24 +1351,72 @@ def start_web(cfg):
             )
 
         def history_page():
+            samples = read_history(cfg, limit=288)
+            summary = history_summary(samples)
+            retention = cfg.get("retention", {})
+            latest = samples[-1] if samples else {}
+            state_rows = []
+            for state, count in summary.get("state_counts", {}).items():
+                state_rows.append(
+                    "<tr>"
+                    f"<td class=\"{escape(str(state))}\">{escape(str(state).upper())}</td>"
+                    f"<td>{escape(str(count))}</td>"
+                    "</tr>"
+                )
+            if not state_rows:
+                state_rows.append("<tr><td colspan=\"2\">No states recorded.</td></tr>")
             rows = []
-            for item in read_history(cfg, limit=24):
+            for item in samples[-48:]:
                 rows.append(
                     "<tr>"
                     f"<td>{escape(str(item.get('time', '-')))}</td>"
                     f"<td class=\"{escape(str(item.get('state', 'unknown')))}\">{escape(str(item.get('state', 'unknown')).upper())}</td>"
                     f"<td>{escape(str(item.get('score', '-')))}%</td>"
                     f"<td>{escape(str(item.get('temperature', '-')))}</td>"
+                    f"<td>{escape(str(item.get('cpu_load', '-')))}%</td>"
                     f"<td>{escape(str(item.get('ram', '-')))}%</td>"
                     f"<td>{escape(str(item.get('root_disk', '-')))}%</td>"
+                    f"<td>{escape(str(item.get('recordings_disk', '-')))}%</td>"
                     "</tr>"
                 )
             if not rows:
-                rows.append("<tr><td colspan=\"6\">No history samples have been captured yet.</td></tr>")
+                rows.append("<tr><td colspan=\"8\">No history samples have been captured yet.</td></tr>")
             return (
-                "<div class=\"card\"><h2>History</h2>"
-                "<p class=\"muted\">Recent health samples. Graphing will be added after the table is stable.</p>"
-                "<table><thead><tr><th>Time</th><th>State</th><th>Score</th><th>Temp</th><th>RAM</th><th>Root Disk</th></tr></thead>"
+                "<div class=\"grid metric-grid\">"
+                f"<div class=\"tile\"><h3>Samples</h3><div class=\"tile-value\">{escape(str(summary.get('samples', 0)))}</div><div class=\"tile-detail\">Stored history rows</div></div>"
+                f"<div class=\"tile\"><h3>Latest Score</h3><div class=\"tile-value {'healthy' if not latest.get('critical_failed') else 'critical'}\">{escape(str(latest.get('score', '-')))}%</div><div class=\"tile-detail\">{escape(str(latest.get('time', '-')))}</div></div>"
+                f"<div class=\"tile\"><h3>Average Score</h3><div class=\"tile-value\">{escape(str(summary.get('avg_score', '-')))}%</div><div class=\"tile-detail\">Recent retained window</div></div>"
+                f"<div class=\"tile\"><h3>Lowest Score</h3><div class=\"tile-value {'warning' if summary.get('min_score') not in ('-', None) and float(summary.get('min_score')) < 95 else 'healthy'}\">{escape(str(summary.get('min_score', '-')))}%</div><div class=\"tile-detail\">Worst recorded score</div></div>"
+                f"<div class=\"tile\"><h3>Critical Samples</h3><div class=\"tile-value {'critical' if summary.get('critical_count', 0) else 'healthy'}\">{escape(str(summary.get('critical_count', 0)))}</div><div class=\"tile-detail\">critical_failed true</div></div>"
+                f"<div class=\"tile\"><h3>Retention</h3><div class=\"tile-value\">{escape(str(retention.get('history_retention_days', '-')))}d</div><div class=\"tile-detail\">sample every {escape(str(retention.get('history_sample_seconds', '-')))}s</div></div>"
+                "</div>"
+                "<div class=\"grid lower-grid\">"
+                "<div class=\"card\"><h2>Health Score Trend</h2>"
+                f"{history_chart(samples, 'score', 0, 100, '%')}"
+                "</div>"
+                "<div class=\"card\"><h2>CPU/RAM Trend</h2>"
+                f"{multi_history_chart(samples, [('cpu_load', 'CPU load'), ('ram', 'RAM')], 0, 100, '%')}"
+                "</div></div>"
+                "<div class=\"grid lower-grid\">"
+                "<div class=\"card\"><h2>Temperature Trend</h2>"
+                f"{history_chart(samples, 'temperature', 0, 100, 'C')}"
+                "</div>"
+                "<div class=\"card\"><h2>Disk Usage Trend</h2>"
+                f"{multi_history_chart(samples, [('root_disk', 'Root'), ('recordings_disk', 'Recordings')], 0, 100, '%')}"
+                "</div></div>"
+                "<div class=\"grid lower-grid\">"
+                "<div class=\"card\"><h2>State Counts</h2>"
+                "<table><thead><tr><th>State</th><th>Samples</th></tr></thead>"
+                f"<tbody>{''.join(state_rows)}</tbody></table>"
+                "</div>"
+                "<div class=\"card\"><h2>History Storage</h2>"
+                f"<div class=\"label\">History file</div><div class=\"value\">{escape(str(history_path(cfg)))}</div>"
+                f"<div class=\"label\">Max rows</div><div class=\"value\">{escape(str(retention.get('history_max_rows', '-')))}</div>"
+                f"<div class=\"label\">Time range</div><div class=\"value\">{escape(str(summary.get('first_time', '-')))} to {escape(str(summary.get('last_time', '-')))}</div>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/api/history\">Export JSON</a><a class=\"ghost\" href=\"/api/history/export.csv\">Export CSV</a></div>"
+                "</div></div>"
+                "<div class=\"card\"><h2>Recent Samples</h2>"
+                "<table><thead><tr><th>Time</th><th>State</th><th>Score</th><th>Temp</th><th>CPU</th><th>RAM</th><th>Root Disk</th><th>Recordings Disk</th></tr></thead>"
                 f"<tbody>{''.join(rows)}</tbody></table></div>"
             )
 
@@ -1438,8 +1486,12 @@ def start_web(cfg):
             + updates_card()
             + "</div>"
             + "<div class=\"card\"><h2>Next Sections</h2>"
-            "<ul><li>Hardware details placeholder</li><li>Storage settings placeholder</li><li>Network details placeholder</li><li>Recovery controls placeholder</li><li>History graph placeholder</li></ul>"
+            "<ul><li>Hardware deep probes</li><li>Settings service/path editor</li><li>Diagnostics support bundle</li></ul>"
             "</div>"
+            + "<div class=\"card\"><h2>Health History</h2>"
+            + history_chart(read_history(cfg, limit=60), "score", 0, 100, "%")
+            + "<a class=\"ghost\" href=\"/history\">Open History</a>"
+            + "</div>"
             + all_checks_table()
         )
 
@@ -1811,6 +1863,101 @@ def start_web(cfg):
             return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(value)))
         except (TypeError, ValueError, OSError):
             return "-"
+
+    def numeric_values(rows, key):
+        values = []
+        for row in rows:
+            try:
+                value = row.get(key)
+                if value is None or value == "":
+                    continue
+                values.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        return values
+
+    def history_summary(rows):
+        scores = numeric_values(rows, "score")
+        state_counts = {}
+        critical_count = 0
+        for row in rows:
+            state = str(row.get("display_state") or row.get("state") or "unknown")
+            state_counts[state] = state_counts.get(state, 0) + 1
+            if row.get("critical_failed"):
+                critical_count += 1
+        return {
+            "samples": len(rows),
+            "avg_score": round(sum(scores) / len(scores), 1) if scores else "-",
+            "min_score": round(min(scores), 1) if scores else "-",
+            "max_score": round(max(scores), 1) if scores else "-",
+            "critical_count": critical_count,
+            "state_counts": state_counts,
+            "first_time": rows[0].get("time") if rows else "-",
+            "last_time": rows[-1].get("time") if rows else "-",
+        }
+
+    def history_chart(rows, key, min_value=0, max_value=100, suffix=""):
+        return multi_history_chart(rows, [(key, key)], min_value, max_value, suffix)
+
+    def multi_history_chart(rows, series, min_value=0, max_value=100, suffix=""):
+        width = 640
+        height = 190
+        pad_left = 42
+        pad_right = 14
+        pad_top = 18
+        pad_bottom = 32
+        plot_w = width - pad_left - pad_right
+        plot_h = height - pad_top - pad_bottom
+        clean_rows = rows[-160:]
+        if not clean_rows:
+            return "<div class=\"history-box\">No history captured yet</div>"
+
+        span = max(1, float(max_value) - float(min_value))
+        colors = ["var(--green)", "var(--blue)", "var(--amber)", "var(--orange)"]
+        paths = []
+        legend = []
+        for index, (key, label) in enumerate(series):
+            points = []
+            usable = []
+            for row_index, row in enumerate(clean_rows):
+                try:
+                    value = row.get(key)
+                    if value is None or value == "":
+                        continue
+                    usable.append((row_index, float(value)))
+                except (TypeError, ValueError):
+                    continue
+            if not usable:
+                continue
+            for row_index, value in usable:
+                x = pad_left + (row_index / max(1, len(clean_rows) - 1)) * plot_w
+                clamped = min(float(max_value), max(float(min_value), value))
+                y = pad_top + (1 - ((clamped - float(min_value)) / span)) * plot_h
+                points.append(f"{x:.1f},{y:.1f}")
+            color = colors[index % len(colors)]
+            paths.append(f"<polyline points=\"{' '.join(points)}\" style=\"stroke:{color}\"></polyline>")
+            latest = usable[-1][1]
+            legend.append(f"<span style=\"color:{color}\">{escape(str(label))}: {escape(str(round(latest, 1)))}{escape(suffix)}</span>")
+        if not paths:
+            return "<div class=\"history-box\">No numeric history for this metric yet</div>"
+
+        first_label = str(clean_rows[0].get("time", ""))[:16].replace("T", " ")
+        last_label = str(clean_rows[-1].get("time", ""))[:16].replace("T", " ")
+        return (
+            "<div class=\"toolbar\">"
+            + " ".join(legend)
+            + "</div>"
+            f"<svg class=\"chart\" viewBox=\"0 0 {width} {height}\" preserveAspectRatio=\"none\">"
+            f"<line class=\"grid-line\" x1=\"{pad_left}\" y1=\"{pad_top}\" x2=\"{width - pad_right}\" y2=\"{pad_top}\"></line>"
+            f"<line class=\"grid-line\" x1=\"{pad_left}\" y1=\"{pad_top + plot_h / 2}\" x2=\"{width - pad_right}\" y2=\"{pad_top + plot_h / 2}\"></line>"
+            f"<line class=\"grid-line\" x1=\"{pad_left}\" y1=\"{pad_top + plot_h}\" x2=\"{width - pad_right}\" y2=\"{pad_top + plot_h}\"></line>"
+            f"<text x=\"4\" y=\"{pad_top + 4}\">{escape(str(max_value))}{escape(suffix)}</text>"
+            f"<text x=\"4\" y=\"{pad_top + plot_h + 4}\">{escape(str(min_value))}{escape(suffix)}</text>"
+            f"<text x=\"{pad_left}\" y=\"{height - 8}\">{escape(first_label)}</text>"
+            f"<text x=\"{width - 190}\" y=\"{height - 8}\">{escape(last_label)}</text>"
+            + "".join(paths)
+            + "</svg>"
+        )
 
     def install_status():
         root = repo_root()
@@ -2340,6 +2487,25 @@ def start_web(cfg):
             lines.append(",".join(_csv_cell(value) for value in values))
         return "\n".join(lines) + "\n"
 
+    def history_csv(limit=1000):
+        rows = read_history(cfg, limit=limit)
+        columns = [
+            "time",
+            "state",
+            "display_state",
+            "score",
+            "critical_failed",
+            "temperature",
+            "cpu_load",
+            "ram",
+            "root_disk",
+            "recordings_disk",
+        ]
+        lines = [",".join(columns)]
+        for row in rows:
+            lines.append(",".join(_csv_cell(row.get(column, "")) for column in columns))
+        return "\n".join(lines) + "\n"
+
     def _csv_cell(value):
         text = str(value).replace('"', '""')
         if any(ch in text for ch in [",", '"', "\n", "\r"]):
@@ -2514,6 +2680,9 @@ def start_web(cfg):
                 return
             if route_path == "/api/history":
                 self._send_json(read_history(cfg, limit=288))
+                return
+            if route_path == "/api/history/export.csv":
+                self._send_text(history_csv(limit=1000), content_type="text/csv")
                 return
             if route_path == "/api/update-log":
                 self._send_json(tail_file(cfg.get("update", {}).get("log_path") or data_dir / "update.log"))
