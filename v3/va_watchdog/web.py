@@ -493,37 +493,67 @@ function renderPage(status, updateStatus, events){
 }
 
 async function load(){
-  const [statusResponse, updateResponse, eventsResponse, configResponse, systemResponse, networkResponse, settingsResponse, retentionResponse, hardwareResponse, servicesResponse, storageResponse, historyResponse, updateLogResponse, diagnosticsResponse] = await Promise.all([
-    fetch('/api/status'),
-    fetch('/api/update-status'),
-    fetch('/api/events'),
-    fetch('/api/config-summary'),
-    fetch('/api/system-info'),
-    fetch('/api/network-info'),
-    fetch('/api/settings-summary'),
-    fetch('/api/retention'),
-    fetch('/api/hardware-info'),
-    fetch('/api/services-info'),
-    fetch('/api/storage-info'),
-    fetch('/api/history'),
-    fetch('/api/update-log'),
-    fetch('/api/diagnostics'),
-  ]);
-  lastStatus = await statusResponse.json();
-  lastUpdateStatus = await updateResponse.json();
-  lastEvents = await eventsResponse.json();
-  lastConfigSummary = await configResponse.json();
-  lastSystemInfo = await systemResponse.json();
-  lastNetworkInfo = await networkResponse.json();
-  lastSettings = await settingsResponse.json();
-  lastRetention = await retentionResponse.json();
-  lastHardwareInfo = await hardwareResponse.json();
-  lastServiceInfo = await servicesResponse.json();
-  lastStorageInfo = await storageResponse.json();
-  lastHistory = await historyResponse.json();
-  lastUpdateLog = await updateLogResponse.json();
-  lastDiagnostics = await diagnosticsResponse.json();
+  lastStatus = await fetchJson('/api/status', lastStatus || {});
   render();
+
+  const core = await Promise.allSettled([
+    fetchJson('/api/update-status', lastUpdateStatus || {}),
+    fetchJson('/api/events', lastEvents || []),
+    fetchJson('/api/config-summary', lastConfigSummary || {}),
+    fetchJson('/api/system-info', lastSystemInfo || {}),
+    fetchJson('/api/settings-summary', lastSettings || {}),
+    fetchJson('/api/retention', lastRetention || {}),
+  ]);
+  if (core[0].status === 'fulfilled') lastUpdateStatus = core[0].value;
+  if (core[1].status === 'fulfilled') lastEvents = core[1].value;
+  if (core[2].status === 'fulfilled') lastConfigSummary = core[2].value;
+  if (core[3].status === 'fulfilled') lastSystemInfo = core[3].value;
+  if (core[4].status === 'fulfilled') lastSettings = core[4].value;
+  if (core[5].status === 'fulfilled') lastRetention = core[5].value;
+
+  const pageFetches = [];
+  if (currentPage === 'Overview' || currentPage === 'Services') {
+    pageFetches.push(fetchJson('/api/services-info', lastServiceInfo || {}).then(value => { lastServiceInfo = value; }));
+  }
+  if (currentPage === 'Hardware') {
+    pageFetches.push(fetchJson('/api/hardware-info', lastHardwareInfo || {}).then(value => { lastHardwareInfo = value; }));
+  }
+  if (currentPage === 'Storage') {
+    pageFetches.push(fetchJson('/api/storage-info', lastStorageInfo || {}).then(value => { lastStorageInfo = value; }));
+  }
+  if (currentPage === 'Network') {
+    pageFetches.push(fetchJson('/api/network-info', lastNetworkInfo || {}).then(value => { lastNetworkInfo = value; }));
+  }
+  if (currentPage === 'History') {
+    pageFetches.push(fetchJson('/api/history', lastHistory || []).then(value => { lastHistory = value; }));
+  }
+  if (currentPage === 'Updates') {
+    pageFetches.push(fetchJson('/api/update-log', lastUpdateLog || {}).then(value => { lastUpdateLog = value; }));
+  }
+  if (currentPage === 'Diagnostics') {
+    pageFetches.push(fetchJson('/api/diagnostics', lastDiagnostics || {}).then(value => { lastDiagnostics = value; }));
+  }
+  await Promise.allSettled(pageFetches);
+  render();
+}
+
+async function fetchJson(path, fallback){
+  try {
+    const response = await fetchWithTimeout(path, 4500);
+    if (!response.ok) return fallback;
+    return response.json();
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function fetchWithTimeout(path, timeoutMs){
+  if (typeof AbortController === 'undefined') {
+    return fetch(path);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(path, { signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
 function render(){
