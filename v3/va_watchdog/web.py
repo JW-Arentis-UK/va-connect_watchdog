@@ -1336,11 +1336,17 @@ def start_web(cfg):
         def log_message(self, fmt, *args):
             return
 
+        def _send_no_cache_headers(self):
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+
         def _send_json(self, payload, status=200):
             body = json.dumps(payload).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            self._send_no_cache_headers()
             self.end_headers()
             self.wfile.write(body)
 
@@ -1349,6 +1355,7 @@ def start_web(cfg):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
+            self._send_no_cache_headers()
             self.end_headers()
             self.wfile.write(data)
 
@@ -1358,6 +1365,7 @@ def start_web(cfg):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
                 self.end_headers()
                 self.wfile.write(body)
                 return
@@ -1367,6 +1375,7 @@ def start_web(cfg):
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body.encode("utf-8"))))
+                    self._send_no_cache_headers()
                     self.end_headers()
                     self.wfile.write(body.encode("utf-8"))
                 except Exception as e:
