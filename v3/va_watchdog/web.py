@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import platform
+import socket
 import subprocess
 import time
 from html import escape
@@ -1193,41 +1194,86 @@ def start_web(cfg):
 
         def network_page():
             info = network_info()
+            local_web = info.get("local_web", {})
+            interfaces = []
+            for item in info.get("interfaces", []):
+                interfaces.append(
+                    "<tr>"
+                    f"<td>{escape(str(item.get('name', '-')))}</td>"
+                    f"<td class=\"{'healthy' if str(item.get('state', '')).upper() in ('UP', 'UNKNOWN') else 'warning'}\">{escape(str(item.get('state', '-')))}</td>"
+                    f"<td>{escape(str(item.get('addresses', '-')))}</td>"
+                    "</tr>"
+                )
+            if not interfaces:
+                interfaces.append("<tr><td colspan=\"3\">No interface details available.</td></tr>")
             ping_rows = []
             for item in info.get("pings", []):
+                ping_state = "OK" if item.get("ping_ok") else "FAILED"
+                tcp_state = "N/A" if item.get("tcp_ok") is None else ("OK" if item.get("tcp_ok") else "FAILED")
+                row_ok = item.get("ok")
                 ping_rows.append(
                     "<tr>"
                     f"<td>{escape(str(item.get('target', '-')))}</td>"
-                    f"<td class=\"{'healthy' if item.get('ok') else 'warning'}\">{'OK' if item.get('ok') else 'FAILED'}</td>"
-                    f"<td>{escape(str(item.get('detail', '-')))}</td>"
+                    f"<td>{escape(str(item.get('host', '-')))}</td>"
+                    f"<td>{escape(str(item.get('port') or '-'))}</td>"
+                    f"<td class=\"{'healthy' if item.get('ping_ok') else 'warning'}\">{ping_state}</td>"
+                    f"<td class=\"{'healthy' if item.get('tcp_ok') else ('muted' if item.get('tcp_ok') is None else 'warning')}\">{tcp_state}</td>"
+                    f"<td class=\"{'healthy' if row_ok else 'warning'}\">{'OK' if row_ok else 'CHECK'}</td>"
+                    f"<td>{escape(str(item.get('tcp_detail') or item.get('detail') or '-'))}</td>"
                     "</tr>"
                 )
             if not ping_rows:
-                ping_rows.append("<tr><td colspan=\"3\">No network targets configured yet.</td></tr>")
+                ping_rows.append("<tr><td colspan=\"7\">No network targets configured yet. Add internet hosts/local targets in Settings.</td></tr>")
             remote_rows = []
             for item in info.get("remote_access", []):
                 remote_rows.append(
                     "<tr>"
                     f"<td>{escape(str(item.get('service', '-')))}</td>"
                     f"<td class=\"{'healthy' if item.get('active') else 'warning'}\">{escape(str(item.get('state', '-')).upper())}</td>"
-                    f"<td>{escape(str(item.get('note', '')))}</td>"
+                    f"<td>{escape(str(item.get('enabled', '-')).upper())}</td>"
+                    f"<td>{escape(str(item.get('detail') or item.get('note') or ''))}</td>"
                     "</tr>"
                 )
             if not remote_rows:
-                remote_rows.append("<tr><td colspan=\"3\">No remote access services configured.</td></tr>")
+                remote_rows.append("<tr><td colspan=\"4\">No remote access services configured. TeamViewer placeholder remains in Settings as teamviewerd.</td></tr>")
+            urls = "".join(f"<li>{escape(str(url))}</li>" for url in info.get("support_urls", []))
             return (
-                all_checks_table("Network Checks", {"network_module"})
-                + "<div class=\"grid lower-grid\">"
-                "<div class=\"card\"><h2>Network Details</h2>"
-                f"<div class=\"label\">IP addresses</div><div class=\"value\">{escape(str(info.get('ip_addresses', '-')))}</div>"
-                f"<div class=\"label\">Default route</div><pre>{escape(str(info.get('default_route', '-')))}</pre>"
-                f"<div class=\"label\">DNS</div><pre>{escape(str(info.get('dns', '-')))}</pre>"
+                "<div class=\"grid metric-grid\">"
+                f"<div class=\"tile\"><h3>Hostname</h3><div class=\"tile-value\">{escape(str(info.get('hostname', '-')))}</div><div class=\"tile-detail\">Gateway identity</div></div>"
+                f"<div class=\"tile\"><h3>IP Addresses</h3><div class=\"tile-value\">{escape(str(info.get('ip_addresses', '-') or '-'))}</div><div class=\"tile-detail\">hostname -I</div></div>"
+                f"<div class=\"tile\"><h3>Web Port</h3><div class=\"tile-value {'healthy' if local_web.get('ok') else 'warning'}\">{escape(str(info.get('listening_port', '-')))}</div><div class=\"tile-detail\">{escape(str(local_web.get('detail', '-')))}</div></div>"
+                f"<div class=\"tile\"><h3>Internet Targets</h3><div class=\"tile-value\">{escape(str(len(info.get('configured_internet_hosts', []))))}</div><div class=\"tile-detail\">Configured checks</div></div>"
+                f"<div class=\"tile\"><h3>Local Targets</h3><div class=\"tile-value\">{escape(str(len(info.get('configured_local_targets', []))))}</div><div class=\"tile-detail\">Camera/router/software checks</div></div>"
+                f"<div class=\"tile\"><h3>Remote Access</h3><div class=\"tile-value\">{escape(str(len(info.get('remote_access', []))))}</div><div class=\"tile-detail\">TeamViewer/support services</div></div>"
                 "</div>"
-                "<div class=\"card\"><h2>Connectivity</h2>"
-                "<table><thead><tr><th>Target</th><th>Status</th><th>Detail</th></tr></thead>"
-                f"<tbody>{''.join(ping_rows)}</tbody></table>"
-                "<h3>Remote Access</h3><table><thead><tr><th>Service</th><th>Status</th><th>Note</th></tr></thead>"
-                f"<tbody>{''.join(remote_rows)}</tbody></table></div></div>"
+                "<div class=\"grid lower-grid\">"
+                "<div class=\"card\"><h2>Interfaces</h2>"
+                "<table><thead><tr><th>Name</th><th>State</th><th>Addresses</th></tr></thead>"
+                f"<tbody>{''.join(interfaces)}</tbody></table>"
+                f"<div class=\"label\">Default route</div><pre>{escape(str(info.get('default_route', '-')))}</pre>"
+                "</div>"
+                "<div class=\"card\"><h2>Support URLs</h2>"
+                f"<ul>{urls}</ul>"
+                "<p class=\"muted\">Use the gateway IP URL remotely. Some forwarders only accept the port at the end, so keep the format as http://IP:9110/.</p>"
+                f"<div class=\"label\">DNS</div><pre>{escape(str(info.get('dns', '-')))}</pre>"
+                "</div></div>"
+                "<div class=\"card\"><h2>Connectivity Checks</h2>"
+                "<table><thead><tr><th>Target</th><th>Host</th><th>Port</th><th>Ping</th><th>TCP</th><th>Overall</th><th>Detail</th></tr></thead>"
+                f"<tbody>{''.join(ping_rows)}</tbody></table></div>"
+                "<div class=\"grid lower-grid\">"
+                "<div class=\"card\"><h2>Remote Access Services</h2>"
+                "<table><thead><tr><th>Service</th><th>Status</th><th>Enabled</th><th>Detail</th></tr></thead>"
+                f"<tbody>{''.join(remote_rows)}</tbody></table>"
+                "<p class=\"muted\">TeamViewer or other support tooling can be tracked here by adding the systemd service name in Settings.</p>"
+                "</div>"
+                "<div class=\"card\"><h2>Routes and Neighbours</h2>"
+                f"<div class=\"label\">Route table</div><pre>{escape(str(info.get('route_table', '-')))}</pre>"
+                f"<div class=\"label\">LAN neighbours</div><pre>{escape(str(info.get('neighbours', '-')))}</pre>"
+                "</div></div>"
+                "<div class=\"card\"><h2>Listening TCP Sockets</h2>"
+                f"<pre>{escape(str(info.get('listening_sockets', 'ss output not available')))}</pre>"
+                "</div>"
+                + all_checks_table("Network Checks", {"network_module"})
             )
 
         def recovery_page():
@@ -1727,33 +1773,112 @@ def start_web(cfg):
         targets = list(network_cfg.get("internet_hosts", [])) + list(network_cfg.get("local_targets", []))
         pings = []
         for target in targets[:8]:
-            result = _run(["ping", "-c", "1", "-W", "1", str(target)], timeout=3)
+            parsed = parse_network_target(str(target))
+            result = _run(["ping", "-c", "1", "-W", "1", parsed["host"]], timeout=3)
             detail = ""
             for line in result["stdout"].splitlines():
                 if "time=" in line or "packet loss" in line:
                     detail = line.strip()
                     break
-            pings.append({"target": target, "ok": result["ok"], "detail": detail or result["stderr"]})
+            tcp = tcp_check(parsed["host"], parsed["port"]) if parsed["port"] else None
+            pings.append({
+                "target": target,
+                "host": parsed["host"],
+                "port": parsed["port"],
+                "ping_ok": result["ok"],
+                "tcp_ok": tcp.get("ok") if tcp else None,
+                "ok": result["ok"] if tcp is None else bool(tcp.get("ok")),
+                "detail": detail or result["stderr"] or result["stdout"],
+                "tcp_detail": tcp.get("detail") if tcp else "",
+            })
         remote_access = []
         for service in network_cfg.get("remote_access_services", []):
             state = _run(["systemctl", "is-active", str(service)], timeout=3)
+            enabled = _run(["systemctl", "is-enabled", str(service)], timeout=3)
+            status = _run(["systemctl", "show", str(service), "-p", "SubState", "-p", "ActiveEnterTimestamp", "--value"], timeout=3)
             remote_access.append({
                 "service": service,
                 "active": state["stdout"] == "active",
                 "state": state["stdout"] or state["stderr"] or "unknown",
+                "enabled": enabled["stdout"] or enabled["stderr"] or "unknown",
+                "detail": status["stdout"] or status["stderr"],
                 "note": "TeamViewer/remote support service placeholder" if "teamviewer" in str(service).lower() else "",
             })
+        web_port = int(cfg.get("web", {}).get("port", 9110))
+        local_web = tcp_check("127.0.0.1", web_port)
+        route_table = _run(["ip", "route", "show"])["stdout"]
+        interfaces = interface_info()
+        dns_text = resolv_conf()
         return {
             "ip_addresses": _run(["hostname", "-I"])["stdout"],
+            "hostname": platform.node(),
             "default_route": _run(["ip", "route", "show", "default"])["stdout"],
-            "dns": Path("/etc/resolv.conf").read_text(encoding="utf-8", errors="ignore") if Path("/etc/resolv.conf").exists() else "",
+            "route_table": route_table,
+            "interfaces": interfaces,
+            "neighbours": _run(["ip", "neigh", "show"])["stdout"],
+            "dns": dns_text,
             "configured_internet_hosts": network_cfg.get("internet_hosts", []),
             "configured_local_targets": network_cfg.get("local_targets", []),
             "remote_access_services": network_cfg.get("remote_access_services", []),
             "remote_access": remote_access,
             "pings": pings,
-            "listening_port": cfg.get("web", {}).get("port", 9110),
+            "listening_port": web_port,
+            "local_web": local_web,
+            "listening_sockets": _run(["ss", "-ltnp"], timeout=3)["stdout"],
+            "support_urls": [
+                f"http://127.0.0.1:{web_port}/",
+                f"http://<gateway-ip>:{web_port}/",
+            ],
         }
+
+    def resolv_conf():
+        path = Path("/etc/resolv.conf")
+        if path.exists():
+            return path.read_text(encoding="utf-8", errors="ignore")
+        return _run(["resolvectl", "dns"], timeout=3)["stdout"]
+
+    def parse_network_target(target):
+        text = target.strip()
+        port = None
+        host = text
+        if "://" in text:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(text)
+            host = parsed.hostname or text
+            port = parsed.port
+            if port is None and parsed.scheme == "http":
+                port = 80
+            elif port is None and parsed.scheme == "https":
+                port = 443
+        elif ":" in text and text.count(":") == 1:
+            maybe_host, maybe_port = text.rsplit(":", 1)
+            if maybe_port.isdigit():
+                host = maybe_host
+                port = int(maybe_port)
+        return {"host": host, "port": port}
+
+    def tcp_check(host, port, timeout=1.5):
+        try:
+            with socket.create_connection((str(host), int(port)), timeout=timeout):
+                return {"ok": True, "detail": f"TCP {host}:{port} connected"}
+        except Exception as exc:
+            return {"ok": False, "detail": f"TCP {host}:{port} failed: {exc}"}
+
+    def interface_info():
+        brief = _run(["ip", "-brief", "addr"], timeout=3)["stdout"]
+        rows = []
+        for line in brief.splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                rows.append({
+                    "name": parts[0],
+                    "state": parts[1],
+                    "addresses": " ".join(parts[2:]) if len(parts) > 2 else "",
+                })
+        if rows:
+            return rows
+        return [{"name": "-", "state": "unknown", "addresses": brief or "Interface details unavailable"}]
 
     def _kv_output(command):
         result = _run(command)
