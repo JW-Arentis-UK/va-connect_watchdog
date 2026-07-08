@@ -999,6 +999,7 @@ def start_web(cfg):
             "<div class=\"label\">Dashboard</div><div class=\"value\">Server-rendered compatibility appliance view</div>"
             "</div>"
             "<div class=\"card\"><h2>Updates</h2>"
+            "<p class=\"healthy\">Web update enabled</p>"
             f"<div class=\"label\">State</div><div class=\"value {escape(str(update_status.get('state', 'unknown')))}\">{escape(str(update_status.get('state', 'unknown')).upper())}</div>"
             f"<div class=\"label\">Message</div><div class=\"value\">{escape(str(update_status.get('message', '-')))}</div>"
             f"<div class=\"label\">Branch</div><div class=\"value\">{escape(str(update_status.get('branch', '-')))}</div>"
