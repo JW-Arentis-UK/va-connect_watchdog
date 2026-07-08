@@ -171,7 +171,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
         <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="dark">Dark</option><option value="light">Light</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
         <label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label>
         <button class="ghost" onclick="load()">Refresh now</button>
-        <form class="inline" method="get" action="/"><button class="ghost" type="submit">Reload page</button></form>
+        <button class="ghost" onclick="reloadPage()">Reload page</button>
         <div id="last-update">Last update: -</div>
       </div>
     </header>
@@ -325,6 +325,10 @@ function initRefresh(){
 function setTheme(value){
   localStorage.setItem('va_watchdog_theme', value);
   document.body.dataset.theme = value === 'dark' ? '' : value;
+}
+
+function reloadPage(){
+  window.location.reload();
 }
 
 function initTheme(){
@@ -745,6 +749,7 @@ async function purgeAllData(){
 }
 window.setRefreshInterval = setRefreshInterval;
 window.setTheme = setTheme;
+window.reloadPage = reloadPage;
 window.showPage = showPage;
 window.load = load;
 window.triggerUpdate = triggerUpdate;
@@ -845,7 +850,7 @@ def start_web(cfg):
             "<div class=\"card\">"
             "<h2>VA-Connect Watchdog V3</h2>"
             "<p class=\"muted\">Server-rendered safe view. The full dashboard will load automatically if this browser supports it.</p>"
-            "<form class=\"inline\" method=\"get\" action=\"/\"><button class=\"action\" type=\"submit\">Refresh dashboard</button></form>"
+            "<button class=\"action\" onclick=\"window.location.reload()\">Refresh dashboard</button>"
             f"<div class=\"status-word {state}\">{word}</div>"
             f"<div class=\"score\">{escape(str(status.get('score', '-')))}%</div>"
             f"<div class=\"label\">Last status</div><div class=\"value\">{escape(str(status.get('time', '-')))}</div>"
@@ -1363,7 +1368,7 @@ def start_web(cfg):
             self.wfile.write(data)
 
         def do_GET(self):
-            if self.path == "/" or self.path.startswith("/index") or self.path.startswith("/basic"):
+            if self.path in ("/", "/?") or self.path.startswith("/index") or self.path.startswith("/basic"):
                 body = html_page().encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
