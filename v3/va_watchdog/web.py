@@ -1171,8 +1171,9 @@ def start_web(cfg):
                 f"<div class=\"label\">wdctl timeout</div><div class=\"value\">{escape(str(wdctl.get('timeout', '-')))}</div>"
                 f"<div class=\"label\">wdctl raw output</div><pre>{escape(str(wdctl.get('raw', 'wdctl not available or watchdog not present')))}</pre>"
                 f"<div class=\"label\">Last setup log</div><pre>{escape(str(watchdog.get('setup_log', 'No setup log yet')))}</pre>"
+                f"<div class=\"label\">Last full probe</div><pre>{escape(str(watchdog.get('probe_log', 'No hardware probe log yet')))}</pre>"
                 "<p class=\"muted\">For POC-451VTC, the expected hardware watchdog is Intel TCO. Use the button below to load and persist the driver. Feeding stays disabled until you explicitly enable it in Settings/config.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/itco-watchdog-install-confirm\">Install/load Intel TCO watchdog</a></div>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/itco-watchdog-install-confirm\">Install/load Intel TCO watchdog</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run full watchdog probe</a></div>"
                 "<pre>cd /opt/va-connect-watchdog-v3\nsudo ./v3/scripts/setup_itco_watchdog.sh</pre>"
                 "</div>"
                 "<div class=\"card\"><h2>Watchdog Protection Layers</h2>"
@@ -1728,6 +1729,41 @@ def start_web(cfg):
             "<h2>Intel TCO Watchdog Setup</h2>"
             f"<p class=\"{status_class}\">{escape(str(result.get('message', 'Setup request sent.')))}</p>"
             "<p class=\"muted\">This page will return to Hardware automatically in 20 seconds. Reload Hardware after that to see module/device status.</p>"
+            f"<div class=\"label\">Command</div><div class=\"value\">{escape(str(result.get('command', '-')))}</div>"
+            f"<div class=\"label\">Log</div><div class=\"value\">{escape(str(result.get('log_path', '-')))}</div>"
+            "<a class=\"ghost\" href=\"/hardware\">Back to Hardware</a>"
+            "</div>"
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Hardware"))
+            .replace("__PAGE_TITLE__", "Hardware")
+        )
+
+    def watchdog_probe_confirm_html():
+        body = (
+            "<div class=\"card\">"
+            "<h2>Confirm Full Watchdog Hardware Probe</h2>"
+            "<p class=\"warning\">This will run the full Intel TCO/watchdog diagnostic command set on the gateway.</p>"
+            "<p class=\"muted\">It includes sudo modprobe iTCO_wdt, wdctl /dev/watchdog0, dmesg checks, systemd checks, and module/autoload checks. It does not enable VA-Connect hardware feeding.</p>"
+            "<form class=\"inline\" method=\"post\" action=\"/watchdog-hardware-probe-now\"><button class=\"action\" type=\"submit\">Run full watchdog probe</button></form> "
+            "<a class=\"ghost\" href=\"/hardware\">Cancel</a>"
+            "</div>"
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Hardware"))
+            .replace("__PAGE_TITLE__", "Hardware")
+        )
+
+    def watchdog_probe_started_html(result):
+        status_class = "healthy" if result.get("ok") else "critical"
+        body = (
+            "<meta http-equiv=\"refresh\" content=\"20;url=/hardware\">"
+            "<div class=\"card\">"
+            "<h2>Watchdog Hardware Probe</h2>"
+            f"<p class=\"{status_class}\">{escape(str(result.get('message', 'Probe request sent.')))}</p>"
+            "<p class=\"muted\">This page will return to Hardware automatically in 20 seconds. Reload Hardware to see the full probe log.</p>"
             f"<div class=\"label\">Command</div><div class=\"value\">{escape(str(result.get('command', '-')))}</div>"
             f"<div class=\"label\">Log</div><div class=\"value\">{escape(str(result.get('log_path', '-')))}</div>"
             "<a class=\"ghost\" href=\"/hardware\">Back to Hardware</a>"
@@ -2360,6 +2396,14 @@ def start_web(cfg):
             "last_log": tail_file(log_path, lines=80).get("tail", ""),
         }
 
+    def watchdog_probe_status():
+        log_path = data_dir / "watchdog-hardware-probe.log"
+        return {
+            "script": str(repo_root() / "scripts" / "probe_watchdog_hardware.sh"),
+            "log_path": str(log_path),
+            "last_log": tail_file(log_path, lines=200).get("tail", ""),
+        }
+
     def launch_itco_setup():
         status = itco_setup_status()
         script = Path(status["script"])
@@ -2376,6 +2420,26 @@ def start_web(cfg):
         return {
             "ok": True,
             "message": "Intel TCO watchdog setup started in the background.",
+            "command": command,
+            "log_path": str(log_path),
+        }
+
+    def launch_watchdog_probe():
+        status = watchdog_probe_status()
+        script = Path(status["script"])
+        log_path = Path(status["log_path"])
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        if not script.exists():
+            return {"ok": False, "message": f"Watchdog probe script not found: {script}", "log_path": str(log_path)}
+        command = f"cd {repo_root()!s}; /bin/bash scripts/probe_watchdog_hardware.sh > {log_path!s} 2>&1"
+        try:
+            subprocess.Popen(["/bin/bash", "-lc", command], start_new_session=True)
+        except Exception as exc:
+            return {"ok": False, "message": f"Could not start watchdog probe: {exc}", "command": command, "log_path": str(log_path)}
+        append_web_event("info", "hardware_watchdog", "Full watchdog hardware probe started", {"log_path": str(log_path)})
+        return {
+            "ok": True,
+            "message": "Full watchdog hardware probe started in the background.",
             "command": command,
             "log_path": str(log_path),
         }
@@ -2596,6 +2660,7 @@ def start_web(cfg):
             "modules": modules,
             "wdctl": wdctl,
             "setup_log": itco_setup_status().get("last_log", ""),
+            "probe_log": watchdog_probe_status().get("last_log", ""),
         }
 
     def _df_path(path, label="", warning=0, critical=0, full_expected=False):
@@ -3036,6 +3101,15 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if route_path == "/watchdog-hardware-probe-confirm":
+                body = watchdog_probe_confirm_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path.startswith("/service-restart-confirm/"):
                 name = unquote(route_path.rsplit("/", 1)[-1])
                 body = service_restart_confirm_html(name).encode("utf-8")
@@ -3196,6 +3270,16 @@ def start_web(cfg):
             if route_path == "/itco-watchdog-install-now":
                 result = launch_itco_setup()
                 body = itco_install_started_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 500)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/watchdog-hardware-probe-now":
+                result = launch_watchdog_probe()
+                body = watchdog_probe_started_html(result).encode("utf-8")
                 self.send_response(200 if result.get("ok") else 500)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
