@@ -8,6 +8,7 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
+from urllib.parse import parse_qs
 
 from .config import active_config_path, deep_merge, load_raw_config, save_raw_config
 from .history import history_path, read_history
@@ -1069,13 +1070,43 @@ def start_web(cfg):
             )
 
         def settings_card():
+            thresholds = cfg.get("thresholds", {})
+            retention = cfg.get("retention", {})
+            network = cfg.get("network", {})
+            update = cfg.get("update", {})
+            recovery = cfg.get("recovery", {})
             return (
                 "<div class=\"card\"><h2>Settings</h2>"
                 f"<div class=\"label\">Config path</div><div class=\"value\">{escape(str(active_config_path()))}</div>"
-                f"<div class=\"label\">Poll interval</div><div class=\"value\">{escape(str(cfg.get('poll_interval_seconds', '-')))} seconds</div>"
-                f"<div class=\"label\">Web port</div><div class=\"value\">{escape(str(cfg.get('web', {}).get('port', '-')))}</div>"
-                f"<div class=\"label\">Max watchdog storage</div><div class=\"value\">{escape(str(cfg.get('retention', {}).get('max_total_mb', '-')))} MB</div>"
-                "<p class=\"muted\">Editable server-rendered settings are planned. Advanced settings remain available through config.json.</p>"
+                "<p class=\"muted\">Saving creates a config backup and applies safe settings immediately.</p>"
+                "<form method=\"post\" action=\"/settings-save\">"
+                "<div class=\"detail-grid\">"
+                "<div class=\"mini-card\"><h3>Polling and Retention</h3>"
+                f"<label class=\"label\">Poll interval seconds</label><input name=\"poll_interval_seconds\" type=\"number\" min=\"2\" max=\"300\" value=\"{escape(str(cfg.get('poll_interval_seconds', 5)))}\">"
+                f"<label class=\"label\">History sample seconds</label><input name=\"history_sample_seconds\" type=\"number\" min=\"10\" max=\"3600\" value=\"{escape(str(retention.get('history_sample_seconds', 60)))}\">"
+                f"<label class=\"label\">History retention days</label><input name=\"history_retention_days\" type=\"number\" min=\"1\" max=\"365\" value=\"{escape(str(retention.get('history_retention_days', 30)))}\">"
+                f"<label class=\"label\">Max watchdog storage MB</label><input name=\"max_total_mb\" type=\"number\" min=\"10\" max=\"4096\" value=\"{escape(str(retention.get('max_total_mb', 100)))}\">"
+                "</div>"
+                "<div class=\"mini-card\"><h3>Storage Thresholds</h3>"
+                f"<label class=\"label\">Root warn %</label><input name=\"root_disk_warning_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('root_disk_warning_percent', 80)))}\">"
+                f"<label class=\"label\">Root critical %</label><input name=\"root_disk_critical_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('root_disk_critical_percent', 95)))}\">"
+                f"<label class=\"label\">Recordings warn %</label><input name=\"recordings_disk_warning_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('recordings_disk_warning_percent', 85)))}\">"
+                f"<label class=\"label\">Recordings critical %</label><input name=\"recordings_disk_critical_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('recordings_disk_critical_percent', 95)))}\">"
+                "</div>"
+                "<div class=\"mini-card\"><h3>Network</h3>"
+                f"<label class=\"label\">Internet hosts, one per line</label><textarea name=\"internet_hosts\">{escape(chr(10).join(network.get('internet_hosts', [])))}</textarea>"
+                f"<label class=\"label\">Local targets, one per line</label><textarea name=\"local_targets\">{escape(chr(10).join(network.get('local_targets', [])))}</textarea>"
+                f"<label class=\"label\">Remote access services, one per line</label><textarea name=\"remote_access_services\">{escape(chr(10).join(network.get('remote_access_services', [])))}</textarea>"
+                "</div>"
+                "<div class=\"mini-card\"><h3>Updates and Recovery</h3>"
+                f"<label class=\"label\">Update remote</label><input name=\"update_remote\" value=\"{escape(str(update.get('remote', 'origin')))}\">"
+                f"<label class=\"label\">Update branch</label><input name=\"update_branch\" value=\"{escape(str(update.get('branch', '')))}\" placeholder=\"blank = current branch\">"
+                f"<label><input name=\"recovery_enabled\" type=\"checkbox\" {'checked' if recovery.get('enabled') else ''}> Enable recovery engine</label>"
+                f"<label><input name=\"restart_failed_services\" type=\"checkbox\" {'checked' if recovery.get('restart_failed_services') else ''}> Restart failed critical services</label>"
+                f"<label><input name=\"allow_reboot\" type=\"checkbox\" {'checked' if recovery.get('allow_reboot') else ''}> Allow reboot on persistent critical failure</label>"
+                "</div></div>"
+                "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Save settings</button><a class=\"ghost\" href=\"/settings\">Cancel</a></div>"
+                "</form>"
                 "</div>"
             )
 
@@ -1341,6 +1372,64 @@ def start_web(cfg):
             .replace("__SERVER_NAV__", server_nav_html("Updates"))
             .replace("__PAGE_TITLE__", "Updates")
         )
+
+    def settings_saved_html(result):
+        ok = bool(result.get("ok"))
+        status_class = "healthy" if ok else "critical"
+        message = f"Settings saved to {result.get('path', '-')}" if ok else result.get("error", "Settings save failed")
+        body = (
+            "<meta http-equiv=\"refresh\" content=\"8;url=/settings\">"
+            "<div class=\"card\">"
+            "<h2>Settings</h2>"
+            f"<p class=\"{status_class}\">{escape(str(message))}</p>"
+            "<p class=\"muted\">This page will return to Settings automatically in 8 seconds.</p>"
+            "<a class=\"ghost\" href=\"/settings\">Back to Settings</a>"
+            "</div>"
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Settings"))
+            .replace("__PAGE_TITLE__", "Settings")
+        )
+
+    def settings_payload_from_form(form):
+        def first(name, default=""):
+            return form.get(name, [default])[0]
+
+        def lines(name):
+            return [line.strip() for line in first(name).splitlines() if line.strip()]
+
+        return {
+            "poll_interval_seconds": first("poll_interval_seconds", "5"),
+            "thresholds": {
+                "root_disk_warning_percent": first("root_disk_warning_percent", "80"),
+                "root_disk_critical_percent": first("root_disk_critical_percent", "95"),
+                "recordings_disk_warning_percent": first("recordings_disk_warning_percent", "85"),
+                "recordings_disk_critical_percent": first("recordings_disk_critical_percent", "95"),
+            },
+            "retention": {
+                "max_total_mb": first("max_total_mb", "100"),
+                "history_sample_seconds": first("history_sample_seconds", "60"),
+                "history_retention_days": first("history_retention_days", "30"),
+            },
+            "network": {
+                "internet_hosts": lines("internet_hosts"),
+                "local_targets": lines("local_targets"),
+                "remote_access_services": lines("remote_access_services"),
+            },
+            "update": {
+                "remote": first("update_remote", "origin"),
+                "branch": first("update_branch", ""),
+            },
+            "hardware_watchdog": {
+                "enabled": bool(cfg.get("hardware_watchdog", {}).get("enabled", False)),
+            },
+            "recovery": {
+                "enabled": "recovery_enabled" in form,
+                "restart_failed_services": "restart_failed_services" in form,
+                "allow_reboot": "allow_reboot" in form,
+            },
+        }
 
     def _run(command, timeout=5):
         try:
@@ -1927,6 +2016,22 @@ def start_web(cfg):
                 result = launch_update_job(cfg)
                 body = update_started_html(result).encode("utf-8")
                 self.send_response(200 if result.get("ok") else 500)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/settings-save":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    result = apply_settings(settings_payload_from_form(form))
+                except Exception as exc:
+                    result = {"ok": False, "error": str(exc)}
+                body = settings_saved_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 400)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()
