@@ -207,16 +207,9 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
     xhr.send();
   }
   function renderBasic(status){
-    var app = document.getElementById('app');
     var lastUpdate = document.getElementById('last-update');
     var sideState = document.getElementById('side-state');
     var state = status.critical_failed ? 'critical' : 'healthy';
-    var checks = status.checks || [];
-    var rows = '';
-    for (var i = 0; i < checks.length; i++) {
-      rows += '<tr><td>' + esc(checks[i].name) + '</td><td class="' + esc(checks[i].state) + '">' + esc(String(checks[i].state || '').toUpperCase()) + '</td><td>' + esc(checks[i].message || '') + '</td></tr>';
-    }
-    app.innerHTML = '<div class="card"><h2>Compatibility Dashboard</h2><p>This browser is using the simpler view. The watchdog service is still running.</p><div class="status-word ' + state + '">' + (status.critical_failed ? 'CRITICAL' : 'HEALTHY') + '</div><div class="score">' + esc(status.score) + '%</div><div class="label">Last status</div><div class="value">' + esc(status.time || '-') + '</div></div><div class="card"><h2>Checks</h2><table><thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
     if (lastUpdate) lastUpdate.textContent = 'Last update: ' + (status.time || '-');
     if (sideState) {
       sideState.textContent = status.critical_failed ? 'CRITICAL' : 'HEALTHY';
