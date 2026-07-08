@@ -172,10 +172,62 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
         <div id="last-update">Last update: -</div>
       </div>
     </header>
-    <section class="content" id="app">Loading...</section>
+    <section class="content" id="app">
+      <div class="card">
+        <h2>Loading Watchdog Dashboard</h2>
+        <p>If this gateway browser cannot run the advanced dashboard, a compatibility view will appear here.</p>
+      </div>
+    </section>
   </main>
 </div>
 <script>
+(function(){
+  function esc(value){
+    return String(value === null || value === undefined ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+  function request(path, done){
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', path, true);
+    xhr.onreadystatechange = function(){
+      if (xhr.readyState === 4) {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { done(null, JSON.parse(xhr.responseText)); }
+          catch (e) { done(e); }
+        } else {
+          done(new Error('HTTP ' + xhr.status));
+        }
+      }
+    };
+    xhr.send();
+  }
+  function renderBasic(status){
+    var app = document.getElementById('app');
+    var state = status.critical_failed ? 'critical' : 'healthy';
+    var checks = status.checks || [];
+    var rows = '';
+    for (var i = 0; i < checks.length; i++) {
+      rows += '<tr><td>' + esc(checks[i].name) + '</td><td class="' + esc(checks[i].state) + '">' + esc(String(checks[i].state || '').toUpperCase()) + '</td><td>' + esc(checks[i].message || '') + '</td></tr>';
+    }
+    app.innerHTML = '<div class="card"><h2>Compatibility Dashboard</h2><p>This browser is using the simpler view. The watchdog service is still running.</p><div class="status-word ' + state + '">' + (status.critical_failed ? 'CRITICAL' : 'HEALTHY') + '</div><div class="score">' + esc(status.score) + '%</div><div class="label">Last status</div><div class="value">' + esc(status.time || '-') + '</div></div><div class="card"><h2>Checks</h2><table><thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+  }
+  window.vaWatchdogCompatibilityLoad = function(){
+    request('/api/status', function(error, status){
+      if (error) {
+        document.getElementById('app').innerHTML = '<div class="card"><h2>Dashboard Load Error</h2><p>Could not read /api/status: ' + esc(error.message || error) + '</p></div>';
+        return;
+      }
+      renderBasic(status);
+    });
+  };
+  window.vaWatchdogCompatibilityLoad();
+}());
+</script>
+<script type="module">
 const PAGES = ['Overview','Hardware','Services','Storage','Network','Recovery','Events','History','Settings','Updates','Diagnostics'];
 let currentPage = 'Overview';
 let lastStatus = null;
@@ -688,6 +740,18 @@ async function purgeAllData(){
   await fetch('/api/purge?mode=all', { method: 'POST' });
   await load();
 }
+window.setRefreshInterval = setRefreshInterval;
+window.setTheme = setTheme;
+window.showPage = showPage;
+window.load = load;
+window.triggerUpdate = triggerUpdate;
+window.exportEvents = exportEvents;
+window.exportEventsCsv = exportEventsCsv;
+window.setEventLevel = setEventLevel;
+window.setEventSearch = setEventSearch;
+window.saveSettings = saveSettings;
+window.purgeOldData = purgeOldData;
+window.purgeAllData = purgeAllData;
 buildNav();
 initTheme();
 initRefresh();
