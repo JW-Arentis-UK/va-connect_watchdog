@@ -1149,6 +1149,16 @@ def start_web(cfg):
             legacy = watchdog.get("legacy_daemon", {})
             wdt = watchdog_test_summary()
             systemd_wdt = systemd_watchdog_info()
+            wizard = hardware_watchdog_wizard_state(watchdog, systemd_wdt)
+            prereq_rows = []
+            for item in wizard.get("checks", []):
+                prereq_rows.append(
+                    "<tr>"
+                    f"<td>{escape(str(item.get('name', '-')))}</td>"
+                    f"<td class=\"{escape(str(item.get('state', 'unknown')))}\">{escape(str(item.get('state', 'unknown')).upper())}</td>"
+                    f"<td>{escape(str(item.get('message', '-')))}</td>"
+                    "</tr>"
+                )
             return (
                 metric_tiles()
                 + "<div class=\"grid lower-grid\">"
@@ -1177,6 +1187,18 @@ def start_web(cfg):
                 "<p class=\"muted\">For POC-451VTC, the expected hardware watchdog is Intel TCO. Use the button below to load and persist the driver. Feeding stays disabled until you explicitly enable it in Settings/config. If the legacy watchdog.service is active, disable it before letting VA-Connect own /dev/watchdog0.</p>"
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/itco-watchdog-install-confirm\">Install/load Intel TCO watchdog</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run full watchdog probe</a></div>"
                 "<pre>cd /opt/va-connect-watchdog-v3\nsudo ./v3/scripts/setup_itco_watchdog.sh</pre>"
+                "</div>"
+                "<div class=\"card\"><h2>Hardware Watchdog Enable Wizard</h2>"
+                "<p class=\"muted\">This wizard prevents two processes from fighting over /dev/watchdog0 and only enables VA-Connect feeding when the driver/device checks pass.</p>"
+                f"<div class=\"label\">Wizard state</div><div class=\"value {escape(str(wizard.get('state', 'unknown')))}\">{escape(str(wizard.get('message', '-')))}</div>"
+                "<table><thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>"
+                f"<tbody>{''.join(prereq_rows)}</tbody></table>"
+                "<div class=\"button-row\">"
+                "<a class=\"ghost\" href=\"/itco-watchdog-install-confirm\">1. Install/load driver</a>"
+                "<a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">2. Disable legacy watchdog.service</a>"
+                "<a class=\"ghost\" href=\"/hardware-watchdog-enable-confirm\">3. Enable VA-Connect hardware feeding</a>"
+                "</div>"
+                "<p class=\"muted\">The enable step writes /etc/va-watchdog/config.json and restarts va-watchdog. It does not perform a destructive trip/reboot test.</p>"
                 "</div>"
                 "<div class=\"card\"><h2>Watchdog Protection Layers</h2>"
                 f"<div class=\"label\">Hardware reboot watchdog</div><div class=\"value {escape(str(wdt.get('device_state', 'unknown')))}\">{escape(str(wdt.get('device_message', '-')).upper())}</div>"
@@ -1768,6 +1790,71 @@ def start_web(cfg):
             "<p class=\"muted\">This page will return to Hardware automatically in 20 seconds. Reload Hardware to see the full probe log.</p>"
             f"<div class=\"label\">Command</div><div class=\"value\">{escape(str(result.get('command', '-')))}</div>"
             f"<div class=\"label\">Log</div><div class=\"value\">{escape(str(result.get('log_path', '-')))}</div>"
+            "<a class=\"ghost\" href=\"/hardware\">Back to Hardware</a>"
+            "</div>"
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Hardware"))
+            .replace("__PAGE_TITLE__", "Hardware")
+        )
+
+    def legacy_watchdog_disable_confirm_html():
+        legacy = legacy_watchdog_daemon_info()
+        body = (
+            "<div class=\"card\">"
+            "<h2>Confirm Disable Legacy Watchdog Daemon</h2>"
+            "<p class=\"warning\">This will stop and disable Ubuntu's watchdog.service.</p>"
+            "<p class=\"muted\">Do this before VA-Connect owns /dev/watchdog0. The systemd watchdog fallback for va-watchdog remains separate.</p>"
+            f"<div class=\"label\">Current watchdog.service</div><div class=\"value\">{escape(str(legacy.get('active', '-')))} / {escape(str(legacy.get('enabled', '-')))}</div>"
+            "<form class=\"inline\" method=\"post\" action=\"/watchdog-legacy-disable-now\"><button class=\"action\" type=\"submit\">Disable legacy watchdog.service</button></form> "
+            "<a class=\"ghost\" href=\"/hardware\">Cancel</a>"
+            "</div>"
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Hardware"))
+            .replace("__PAGE_TITLE__", "Hardware")
+        )
+
+    def hardware_watchdog_enable_confirm_html():
+        info = hardware_info()
+        watchdog = info.get("watchdog", {})
+        systemd_wdt = systemd_watchdog_info()
+        wizard = hardware_watchdog_wizard_state(watchdog, systemd_wdt)
+        body = (
+            "<div class=\"card\">"
+            "<h2>Confirm VA-Connect Hardware Watchdog Feeding</h2>"
+            f"<p class=\"{escape(str(wizard.get('state', 'warning')))}\">{escape(str(wizard.get('message', '-')))}</p>"
+            "<p class=\"muted\">This writes hardware_watchdog.enabled=true, device=/dev/watchdog0, feed_interval_seconds=10, then restarts va-watchdog in the background.</p>"
+            f"<div class=\"label\">Driver identity</div><div class=\"value\">{escape(str(watchdog.get('wdctl', {}).get('identity', '-')))}</div>"
+            f"<div class=\"label\">Timeout</div><div class=\"value\">{escape(str(watchdog.get('wdctl', {}).get('timeout', '-')))}</div>"
+            f"<div class=\"label\">Legacy watchdog.service</div><div class=\"value\">{escape(str(watchdog.get('legacy_daemon', {}).get('active', '-')))} / {escape(str(watchdog.get('legacy_daemon', {}).get('enabled', '-')))}</div>"
+            f"<div class=\"label\">Prerequisites</div><pre>{escape(json.dumps(wizard.get('checks', []), indent=2))}</pre>"
+        )
+        if wizard.get("ready"):
+            body += (
+                "<form class=\"inline\" method=\"post\" action=\"/hardware-watchdog-enable-now\"><button class=\"action\" type=\"submit\">Enable VA-Connect hardware feeding</button></form> "
+            )
+        else:
+            body += "<p class=\"warning\">Enable is blocked until all prerequisite checks are healthy.</p>"
+        body += "<a class=\"ghost\" href=\"/hardware\">Back to Hardware</a></div>"
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Hardware"))
+            .replace("__PAGE_TITLE__", "Hardware")
+        )
+
+    def hardware_action_result_html(result):
+        ok = bool(result.get("ok"))
+        body = (
+            "<meta http-equiv=\"refresh\" content=\"12;url=/hardware\">"
+            "<div class=\"card\">"
+            "<h2>Hardware Watchdog Action</h2>"
+            f"<p class=\"{'healthy' if ok else 'critical'}\">{escape(str(result.get('message', '-')))}</p>"
+            f"<div class=\"label\">Command</div><div class=\"value\">{escape(str(result.get('command', '-')))}</div>"
+            f"<div class=\"label\">Output</div><pre>{escape(str(result.get('output', '')))}</pre>"
+            "<p class=\"muted\">This page will return to Hardware automatically in 12 seconds.</p>"
             "<a class=\"ghost\" href=\"/hardware\">Back to Hardware</a>"
             "</div>"
         )
@@ -2446,6 +2533,59 @@ def start_web(cfg):
             "log_path": str(log_path),
         }
 
+    def disable_legacy_watchdog_daemon():
+        result = _run(["systemctl", "disable", "--now", "watchdog"], timeout=20)
+        output = "\n".join(part for part in [result.get("stdout", ""), result.get("stderr", "")] if part)
+        ok = bool(result.get("ok"))
+        append_web_event("info" if ok else "warning", "hardware_watchdog", "Legacy watchdog.service disable requested", {"ok": ok, "output": output})
+        return {
+            "ok": ok,
+            "message": "Legacy watchdog.service disabled" if ok else "Could not disable legacy watchdog.service",
+            "command": "systemctl disable --now watchdog",
+            "output": output,
+        }
+
+    def enable_va_hardware_watchdog():
+        info = hardware_info()
+        wizard = hardware_watchdog_wizard_state(info.get("watchdog", {}), systemd_watchdog_info())
+        if not wizard.get("ready"):
+            return {
+                "ok": False,
+                "message": "Hardware watchdog prerequisites are not healthy yet.",
+                "command": "",
+                "output": json.dumps(wizard.get("checks", []), indent=2),
+            }
+        updates = {
+            "hardware_watchdog": {
+                "enabled": True,
+                "device": "/dev/watchdog0",
+                "feed_interval_seconds": 10,
+            }
+        }
+        raw = load_raw_config()
+        merged_raw = deep_merge(raw, updates)
+        saved_path = save_raw_config(merged_raw)
+        live_cfg = deep_merge(cfg, updates)
+        cfg.clear()
+        cfg.update(live_cfg)
+        command = "sleep 2; systemctl restart va-watchdog"
+        try:
+            subprocess.Popen(["/bin/bash", "-lc", command], start_new_session=True)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "message": f"Config saved to {saved_path}, but service restart failed to start: {exc}",
+                "command": command,
+                "output": str(exc),
+            }
+        append_web_event("info", "hardware_watchdog", "VA-Connect hardware watchdog feeding enabled", {"config_path": str(saved_path)})
+        return {
+            "ok": True,
+            "message": f"Hardware watchdog feeding enabled. Config saved to {saved_path}; va-watchdog restart requested.",
+            "command": command,
+            "output": "hardware_watchdog.enabled=true, device=/dev/watchdog0, feed_interval_seconds=10",
+        }
+
     def rtc_status():
         timedate = _run(["timedatectl"])
         hwclock = _run(["hwclock", "--show"])
@@ -2672,6 +2812,53 @@ def start_web(cfg):
         return {
             "active": active["stdout"] or active["stderr"] or "unknown",
             "enabled": enabled["stdout"] or enabled["stderr"] or "unknown",
+        }
+
+    def hardware_watchdog_wizard_state(watchdog, systemd_wdt):
+        modules = watchdog.get("modules", {})
+        wdctl = watchdog.get("wdctl", {})
+        legacy = watchdog.get("legacy_daemon", {})
+        device = watchdog.get("device", "/dev/watchdog0")
+        identity = str(wdctl.get("identity", ""))
+        timeout = str(wdctl.get("timeout", ""))
+        checks = [
+            {
+                "name": "iTCO_wdt module",
+                "state": "healthy" if modules.get("iTCO_wdt") else "warning",
+                "message": "Loaded" if modules.get("iTCO_wdt") else "Not loaded",
+            },
+            {
+                "name": "Watchdog device",
+                "state": "healthy" if Path(device).exists() else "warning",
+                "message": f"{device} present" if Path(device).exists() else f"{device} missing",
+            },
+            {
+                "name": "wdctl identity",
+                "state": "healthy" if "iTCO_wdt" in identity else "warning",
+                "message": identity or "No iTCO_wdt identity yet",
+            },
+            {
+                "name": "wdctl timeout",
+                "state": "healthy" if "30" in timeout else "warning",
+                "message": timeout or "No timeout reported yet",
+            },
+            {
+                "name": "legacy watchdog.service",
+                "state": "healthy" if legacy.get("active") != "active" else "warning",
+                "message": f"{legacy.get('active', '-')}/{legacy.get('enabled', '-')}",
+            },
+            {
+                "name": "systemd watchdog fallback",
+                "state": "healthy" if systemd_wdt.get("state") == "healthy" else "warning",
+                "message": f"{systemd_wdt.get('message', '-')}; {systemd_wdt.get('watchdog_sec', '-')}",
+            },
+        ]
+        ready = all(item["state"] == "healthy" for item in checks)
+        return {
+            "ready": ready,
+            "state": "healthy" if ready else "warning",
+            "message": "Ready to enable VA-Connect hardware feeding" if ready else "Not ready to enable hardware feeding yet",
+            "checks": checks,
         }
 
     def _df_path(path, label="", warning=0, critical=0, full_expected=False):
@@ -3121,6 +3308,24 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if route_path == "/watchdog-legacy-disable-confirm":
+                body = legacy_watchdog_disable_confirm_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/hardware-watchdog-enable-confirm":
+                body = hardware_watchdog_enable_confirm_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path.startswith("/service-restart-confirm/"):
                 name = unquote(route_path.rsplit("/", 1)[-1])
                 body = service_restart_confirm_html(name).encode("utf-8")
@@ -3292,6 +3497,26 @@ def start_web(cfg):
                 result = launch_watchdog_probe()
                 body = watchdog_probe_started_html(result).encode("utf-8")
                 self.send_response(200 if result.get("ok") else 500)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/watchdog-legacy-disable-now":
+                result = disable_legacy_watchdog_daemon()
+                body = hardware_action_result_html(result).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/hardware-watchdog-enable-now":
+                result = enable_va_hardware_watchdog()
+                body = hardware_action_result_html(result).encode("utf-8")
+                self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()
