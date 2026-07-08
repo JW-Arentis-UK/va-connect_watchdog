@@ -120,6 +120,12 @@ th { color:var(--muted); font-weight:600; font-size:calc(12px * var(--scale)); }
 .events { display:grid; gap:calc(8px * var(--scale)); }
 .event { display:grid; grid-template-columns: calc(82px * var(--scale)) 1fr; gap:calc(8px * var(--scale)); border-top:1px solid var(--line); padding-top:calc(8px * var(--scale)); }
 .event-time { color:var(--muted); font-size:calc(12px * var(--scale)); }
+.event-card { border:1px solid var(--line); border-radius:6px; padding:calc(10px * var(--scale)); background:rgba(255,255,255,.025); }
+.event-card .event-head { display:flex; justify-content:space-between; gap:calc(10px * var(--scale)); align-items:center; margin-bottom:calc(6px * var(--scale)); }
+.event-source { color:var(--muted); font-size:calc(12px * var(--scale)); }
+.event-message { font-weight:700; }
+.event-data { margin-top:calc(6px * var(--scale)); max-height:calc(130px * var(--scale)); }
+.count-grid { display:grid; grid-template-columns: repeat(5, minmax(calc(90px * var(--scale)), 1fr)); gap:calc(8px * var(--scale)); margin-bottom:calc(10px * var(--scale)); }
 .donut { width:calc(140px * var(--scale)); height:calc(140px * var(--scale)); border-radius:50%; display:grid; place-items:center; margin:calc(4px * var(--scale)) auto; background:conic-gradient(var(--green) calc(var(--score) * 1%), #26313d 0); }
 .donut span { width:calc(86px * var(--scale)); height:calc(86px * var(--scale)); display:grid; place-items:center; border-radius:50%; background:var(--panel); font-size:calc(26px * var(--scale)); font-weight:800; }
 .breakdown-row { display:flex; justify-content:space-between; gap:calc(12px * var(--scale)); margin:calc(8px * var(--scale)) 0; color:var(--muted); }
@@ -135,7 +141,7 @@ pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale))
 .chart .grid-line { stroke:var(--line); stroke-width:1; }
 .button-row { display:flex; gap:calc(8px * var(--scale)); flex-wrap:wrap; align-items:center; margin:calc(10px * var(--scale)) 0; }
 button.action { background:var(--blue); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; }
-button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:calc(7px * var(--scale)) calc(10px * var(--scale)); cursor:pointer; font-size:inherit; }
+button.ghost, a.ghost { background:transparent; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:calc(7px * var(--scale)) calc(10px * var(--scale)); cursor:pointer; font-size:inherit; text-decoration:none; display:inline-block; }
 form.inline { display:inline-block; margin:0; }
 button.action:disabled { opacity:.5; cursor:not-allowed; }
 .page { display:none; }
@@ -988,14 +994,59 @@ def start_web(cfg):
             rows = []
             for event in events:
                 rows.append(
-                    "<div class=\"event\">"
-                    f"<div class=\"event-time\">{escape(str(event.get('time', '-')))}</div>"
-                    f"<div><span class=\"{escape(str(event.get('level', 'info')))}\">{escape(str(event.get('level', 'info')).upper())}</span> {escape(str(event.get('message', '')))}</div>"
+                    "<div class=\"event-card\">"
+                    "<div class=\"event-head\">"
+                    f"<span class=\"{escape(str(event.get('level', 'info')))}\">{escape(str(event.get('level', 'info')).upper())}</span>"
+                    f"<span class=\"event-time\">{escape(str(event.get('time', '-')))}</span>"
+                    "</div>"
+                    f"<div class=\"event-message\">{escape(str(event.get('message', '')))}</div>"
+                    f"<div class=\"event-source\">Source: {escape(str(event.get('source', '-')))}</div>"
                     "</div>"
                 )
             if not rows:
                 rows.append("<div class=\"event\"><div class=\"event-time\">-</div><div>No events yet</div></div>")
             return "".join(rows)
+
+        def events_page(limit=50):
+            events = recent_events(limit=limit)
+            counts = {}
+            for event in events:
+                level = str(event.get("level", "info")).lower()
+                counts[level] = counts.get(level, 0) + 1
+            count_cards = []
+            for level in ["critical", "warning", "degraded", "info", "healthy"]:
+                count_cards.append(
+                    "<div class=\"mini-card\">"
+                    f"<div class=\"label\">{escape(level.upper())}</div>"
+                    f"<div class=\"tile-value {escape(level)}\">{escape(str(counts.get(level, 0)))}</div>"
+                    "</div>"
+                )
+            event_cards = []
+            for event in events:
+                data_html = ""
+                data = event.get("data")
+                if data:
+                    data_html = f"<pre class=\"event-data\">{escape(json.dumps(data, indent=2))}</pre>"
+                event_cards.append(
+                    "<div class=\"event-card\">"
+                    "<div class=\"event-head\">"
+                    f"<span class=\"{escape(str(event.get('level', 'info')))}\">{escape(str(event.get('level', 'info')).upper())}</span>"
+                    f"<span class=\"event-time\">{escape(str(event.get('time', '-')))}</span>"
+                    "</div>"
+                    f"<div class=\"event-message\">{escape(str(event.get('message', '')))}</div>"
+                    f"<div class=\"event-source\">Source: {escape(str(event.get('source', '-')))}</div>"
+                    f"{data_html}"
+                    "</div>"
+                )
+            if not event_cards:
+                event_cards.append("<div class=\"event-card\">No events yet.</div>")
+            return (
+                "<div class=\"card\"><h2>Events</h2>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/api/events/export\">Export JSON</a><a class=\"ghost\" href=\"/api/events/export.csv\">Export CSV</a></div>"
+                f"<div class=\"count-grid\">{''.join(count_cards)}</div>"
+                f"<div class=\"events\">{''.join(event_cards)}</div>"
+                "</div>"
+            )
 
         def services_card():
             return (
@@ -1026,6 +1077,45 @@ def start_web(cfg):
                 f"<div class=\"label\">Max watchdog storage</div><div class=\"value\">{escape(str(cfg.get('retention', {}).get('max_total_mb', '-')))} MB</div>"
                 "<p class=\"muted\">Editable server-rendered settings are planned. Advanced settings remain available through config.json.</p>"
                 "</div>"
+            )
+
+        def history_page():
+            rows = []
+            for item in read_history(cfg, limit=24):
+                rows.append(
+                    "<tr>"
+                    f"<td>{escape(str(item.get('time', '-')))}</td>"
+                    f"<td class=\"{escape(str(item.get('state', 'unknown')))}\">{escape(str(item.get('state', 'unknown')).upper())}</td>"
+                    f"<td>{escape(str(item.get('score', '-')))}%</td>"
+                    f"<td>{escape(str(item.get('temperature', '-')))}</td>"
+                    f"<td>{escape(str(item.get('ram', '-')))}%</td>"
+                    f"<td>{escape(str(item.get('root_disk', '-')))}%</td>"
+                    "</tr>"
+                )
+            if not rows:
+                rows.append("<tr><td colspan=\"6\">No history samples have been captured yet.</td></tr>")
+            return (
+                "<div class=\"card\"><h2>History</h2>"
+                "<p class=\"muted\">Recent health samples. Graphing will be added after the table is stable.</p>"
+                "<table><thead><tr><th>Time</th><th>State</th><th>Score</th><th>Temp</th><th>RAM</th><th>Root Disk</th></tr></thead>"
+                f"<tbody>{''.join(rows)}</tbody></table></div>"
+            )
+
+        def diagnostics_page():
+            service_status = _run(["systemctl", "is-active", "va-watchdog"], timeout=3)
+            service_enabled = _run(["systemctl", "is-enabled", "va-watchdog"], timeout=3)
+            return (
+                "<div class=\"grid lower-grid\">"
+                "<div class=\"card\"><h2>Diagnostics</h2>"
+                f"<div class=\"label\">Service active</div><div class=\"value {escape(str(service_status.get('stdout', 'unknown')))}\">{escape(str(service_status.get('stdout') or service_status.get('stderr') or 'unknown'))}</div>"
+                f"<div class=\"label\">Service enabled</div><div class=\"value\">{escape(str(service_enabled.get('stdout') or service_enabled.get('stderr') or 'unknown'))}</div>"
+                f"<div class=\"label\">Status path</div><div class=\"value\">{escape(str(status_path))}</div>"
+                f"<div class=\"label\">Events path</div><div class=\"value\">{escape(str(events_path))}</div>"
+                "</div>"
+                "<div class=\"card\"><h2>Useful Commands</h2>"
+                "<pre>systemctl status va-watchdog\njournalctl -u va-watchdog -n 80 --no-pager\nwget -qO- http://127.0.0.1:9110/api/healthz\nwget -qO- http://127.0.0.1:9110/api/version</pre>"
+                "</div></div>"
+                + all_checks_table("Diagnostics Checks")
             )
 
         error_html = ""
@@ -1095,15 +1185,15 @@ def start_web(cfg):
         if page == "Recovery":
             return "<div class=\"card\"><h2>Recovery</h2><p class=\"muted\">Recovery controls placeholder.</p></div>"
         if page == "Events":
-            return f"<div class=\"card\"><h2>Events</h2><div class=\"events\">{event_rows(limit=20)}</div></div>"
+            return events_page(limit=50)
         if page == "History":
-            return "<div class=\"card\"><h2>History</h2><div class=\"history-box\">Health history graph placeholder</div></div>"
+            return history_page()
         if page == "Settings":
             return settings_card()
         if page == "Updates":
             return updates_card()
         if page == "Diagnostics":
-            return all_checks_table("Diagnostics") + "<div class=\"card\"><h2>Raw Status</h2><pre>" + escape(json.dumps(status, indent=2)) + "</pre></div>"
+            return diagnostics_page() + "<div class=\"card\"><h2>Raw Status</h2><pre>" + escape(json.dumps(status, indent=2)) + "</pre></div>"
         return overview_html
 
     def html_page(route_path="/"):
