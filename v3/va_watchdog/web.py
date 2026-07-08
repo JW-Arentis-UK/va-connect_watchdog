@@ -1079,6 +1079,118 @@ def start_web(cfg):
                 "</div>"
             )
 
+        def hardware_page():
+            info = hardware_info()
+            cpu = info.get("cpu", {})
+            memory = info.get("memory", {})
+            block_devices = info.get("block_devices", [])
+            watchdog_devices = info.get("watchdog_devices", [])
+            return (
+                metric_tiles()
+                + "<div class=\"grid lower-grid\">"
+                "<div class=\"card\"><h2>CPU and Memory</h2>"
+                f"<div class=\"label\">CPU model</div><div class=\"value\">{escape(str(cpu.get('model', '-')))}</div>"
+                f"<div class=\"label\">CPU cores</div><div class=\"value\">{escape(str(cpu.get('cores', '-')))}</div>"
+                f"<div class=\"label\">Architecture</div><div class=\"value\">{escape(str(cpu.get('architecture', '-')))}</div>"
+                f"<div class=\"label\">RAM total</div><div class=\"value\">{escape(str(memory.get('total_mb', '-')))} MB</div>"
+                f"<div class=\"label\">RAM available</div><div class=\"value\">{escape(str(memory.get('available_mb', '-')))} MB</div>"
+                "</div>"
+                "<div class=\"card\"><h2>Detected Devices</h2>"
+                f"<div class=\"label\">Watchdog devices</div><div class=\"value\">{escape(', '.join(watchdog_devices) if watchdog_devices else 'None detected')}</div>"
+                f"<div class=\"label\">Block devices</div><pre>{escape(chr(10).join(block_devices) if block_devices else 'No block device details available')}</pre>"
+                "</div></div>"
+            )
+
+        def storage_page():
+            info = storage_info()
+            volume_rows = []
+            for volume in info.get("volumes", []):
+                volume_rows.append(
+                    "<tr>"
+                    f"<td>{escape(str(volume.get('name', '-')))}</td>"
+                    f"<td>{escape(str(volume.get('path', '-')))}</td>"
+                    f"<td>{escape(str(volume.get('used_percent', '-')))}%</td>"
+                    f"<td>{escape(str(volume.get('free_gb', '-')))} GB</td>"
+                    f"<td>{escape(str(volume.get('warning_percent', '-')))}%</td>"
+                    f"<td>{escape(str(volume.get('critical_percent', '-')))}%</td>"
+                    f"<td>{'Yes' if volume.get('always_full_expected') else 'No'}</td>"
+                    "</tr>"
+                )
+            if not volume_rows:
+                volume_rows.append("<tr><td colspan=\"7\">No configured storage volumes.</td></tr>")
+            retention = info.get("retention", {})
+            return (
+                metric_tiles()
+                + "<div class=\"card\"><h2>Configured Storage Limits</h2>"
+                "<table><thead><tr><th>Name</th><th>Path</th><th>Used</th><th>Free</th><th>Warn</th><th>Critical</th><th>Full expected</th></tr></thead>"
+                f"<tbody>{''.join(volume_rows)}</tbody></table></div>"
+                "<div class=\"card\"><h2>Watchdog Data Storage</h2>"
+                f"<div class=\"label\">Data directory</div><div class=\"value\">{escape(str(retention.get('data_dir', '-')))}</div>"
+                f"<div class=\"label\">Used</div><div class=\"value\">{escape(str(retention.get('used_mb', '-')))} MB / {escape(str(retention.get('max_total_mb', '-')))} MB</div>"
+                f"<div class=\"label\">Events retention</div><div class=\"value\">{escape(str(retention.get('events_retention_days', '-')))} days</div>"
+                f"<div class=\"label\">History retention</div><div class=\"value\">{escape(str(retention.get('history_retention_days', '-')))} days</div>"
+                "</div>"
+            )
+
+        def network_page():
+            info = network_info()
+            ping_rows = []
+            for item in info.get("pings", []):
+                ping_rows.append(
+                    "<tr>"
+                    f"<td>{escape(str(item.get('target', '-')))}</td>"
+                    f"<td class=\"{'healthy' if item.get('ok') else 'warning'}\">{'OK' if item.get('ok') else 'FAILED'}</td>"
+                    f"<td>{escape(str(item.get('detail', '-')))}</td>"
+                    "</tr>"
+                )
+            if not ping_rows:
+                ping_rows.append("<tr><td colspan=\"3\">No network targets configured yet.</td></tr>")
+            remote_rows = []
+            for item in info.get("remote_access", []):
+                remote_rows.append(
+                    "<tr>"
+                    f"<td>{escape(str(item.get('service', '-')))}</td>"
+                    f"<td class=\"{'healthy' if item.get('active') else 'warning'}\">{escape(str(item.get('state', '-')).upper())}</td>"
+                    f"<td>{escape(str(item.get('note', '')))}</td>"
+                    "</tr>"
+                )
+            if not remote_rows:
+                remote_rows.append("<tr><td colspan=\"3\">No remote access services configured.</td></tr>")
+            return (
+                all_checks_table("Network Checks", {"network_module"})
+                + "<div class=\"grid lower-grid\">"
+                "<div class=\"card\"><h2>Network Details</h2>"
+                f"<div class=\"label\">IP addresses</div><div class=\"value\">{escape(str(info.get('ip_addresses', '-')))}</div>"
+                f"<div class=\"label\">Default route</div><pre>{escape(str(info.get('default_route', '-')))}</pre>"
+                f"<div class=\"label\">DNS</div><pre>{escape(str(info.get('dns', '-')))}</pre>"
+                "</div>"
+                "<div class=\"card\"><h2>Connectivity</h2>"
+                "<table><thead><tr><th>Target</th><th>Status</th><th>Detail</th></tr></thead>"
+                f"<tbody>{''.join(ping_rows)}</tbody></table>"
+                "<h3>Remote Access</h3><table><thead><tr><th>Service</th><th>Status</th><th>Note</th></tr></thead>"
+                f"<tbody>{''.join(remote_rows)}</tbody></table></div></div>"
+            )
+
+        def recovery_page():
+            recovery = status.get("recovery", {}) if isinstance(status.get("recovery", {}), dict) else {}
+            cfg_recovery = cfg.get("recovery", {})
+            return (
+                "<div class=\"grid lower-grid\">"
+                "<div class=\"card\"><h2>Recovery Status</h2>"
+                f"<div class=\"label\">Current state</div><div class=\"value {escape(str(recovery.get('state', 'unknown')))}\">{escape(str(recovery.get('state', 'unknown')).upper())}</div>"
+                f"<div class=\"label\">Message</div><div class=\"value\">{escape(str(recovery.get('message', '-')))}</div>"
+                f"<div class=\"label\">Updated</div><div class=\"value\">{escape(str(recovery.get('updated_at', '-')))}</div>"
+                "</div>"
+                "<div class=\"card\"><h2>Recovery Configuration</h2>"
+                f"<div class=\"label\">Enabled</div><div class=\"value\">{escape(str(cfg_recovery.get('enabled', False)))}</div>"
+                f"<div class=\"label\">Restart failed services</div><div class=\"value\">{escape(str(cfg_recovery.get('restart_failed_services', False)))}</div>"
+                f"<div class=\"label\">Restart non-critical services</div><div class=\"value\">{escape(str(cfg_recovery.get('restart_noncritical_services', False)))}</div>"
+                f"<div class=\"label\">Allow reboot</div><div class=\"value\">{escape(str(cfg_recovery.get('allow_reboot', False)))}</div>"
+                f"<div class=\"label\">Critical grace seconds</div><div class=\"value\">{escape(str(cfg_recovery.get('critical_grace_seconds', '-')))}</div>"
+                "<p class=\"muted\">Recovery action buttons will be added after confirmation rules are final.</p>"
+                "</div></div>"
+            )
+
         def history_page():
             rows = []
             for item in read_history(cfg, limit=24):
@@ -1175,15 +1287,15 @@ def start_web(cfg):
         if page == "Overview":
             return overview_html
         if page == "Hardware":
-            return metric_tiles() + all_checks_table("Hardware Checks", {"temperature", "ram", "cpu_load", "hardware_watchdog_present"})
+            return hardware_page()
         if page == "Services":
             return services_card()
         if page == "Storage":
-            return metric_tiles() + all_checks_table("Storage Checks", {"root_disk", "recordings_disk", "write_test"})
+            return storage_page()
         if page == "Network":
-            return all_checks_table("Network Checks", {"network_module"}) + "<div class=\"card\"><h2>Network Details</h2><p class=\"muted\">Gateway/local target checks will be expanded here.</p></div>"
+            return network_page()
         if page == "Recovery":
-            return "<div class=\"card\"><h2>Recovery</h2><p class=\"muted\">Recovery controls placeholder.</p></div>"
+            return recovery_page()
         if page == "Events":
             return events_page(limit=50)
         if page == "History":
