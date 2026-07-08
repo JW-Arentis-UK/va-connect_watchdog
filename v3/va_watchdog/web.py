@@ -9,7 +9,7 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote, unquote
 
 from .config import active_config_path, deep_merge, load_raw_config, save_raw_config
 from .history import history_path, read_history
@@ -1053,9 +1053,32 @@ def start_web(cfg):
             )
 
         def services_card():
+            live = service_info().get("services", [])
+            rows = []
+            for svc in live:
+                name = str(svc.get("name", ""))
+                active = str(svc.get("active", "unknown"))
+                rows.append(
+                    "<tr>"
+                    f"<td>{escape(name)}</td>"
+                    f"<td class=\"{'healthy' if active == 'active' else 'critical' if svc.get('critical') else 'warning'}\">{escape(active.upper())}</td>"
+                    f"<td>{escape(str(svc.get('sub_state', '-')))}</td>"
+                    f"<td>{escape(str(svc.get('unit_file_state', '-')))}</td>"
+                    f"<td>{escape(str(svc.get('cpu_percent', '-')))}</td>"
+                    f"<td>{escape(str(svc.get('memory_mb', '-')))} MB</td>"
+                    f"<td>{escape(str(svc.get('restarts', '-')))}</td>"
+                    f"<td>{escape(str(svc.get('uptime', '-')))}</td>"
+                    f"<td>{'Yes' if svc.get('critical') else 'No'}</td>"
+                    f"<td><a class=\"ghost\" href=\"/service/{quote(name)}\">Details</a> <a class=\"ghost\" href=\"/service-restart-confirm/{quote(name)}\">Restart</a></td>"
+                    "</tr>"
+                )
+            if not rows:
+                rows.append("<tr><td colspan=\"10\">No configured services found.</td></tr>")
             return (
-                "<div class=\"card\"><h2>Services</h2><table><thead><tr><th>Service</th><th>Status</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th></tr></thead>"
-                f"<tbody>{service_rows()}</tbody></table></div>"
+                "<div class=\"card\"><h2>Services</h2>"
+                "<p class=\"muted\">Configured services monitored by the watchdog. Restart actions are manual and require confirmation.</p>"
+                "<table><thead><tr><th>Service</th><th>Active</th><th>Substate</th><th>Enabled</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th><th>Critical</th><th>Actions</th></tr></thead>"
+                f"<tbody>{''.join(rows)}</tbody></table></div>"
             )
 
         def updates_card():
@@ -1586,6 +1609,103 @@ def start_web(cfg):
             .replace("__PAGE_TITLE__", "Recovery")
         )
 
+    def service_detail_html(name):
+        detail = service_detail(name)
+        if not detail.get("ok"):
+            body = (
+                "<div class=\"card\">"
+                "<h2>Service Detail</h2>"
+                f"<p class=\"critical\">{escape(str(detail.get('error', 'Service not found')))}</p>"
+                "<a class=\"ghost\" href=\"/services\">Back to Services</a>"
+                "</div>"
+            )
+        else:
+            svc = detail.get("service", {})
+            body = (
+                "<div class=\"grid lower-grid\">"
+                "<div class=\"card\"><h2>Service Detail</h2>"
+                f"<div class=\"label\">Name</div><div class=\"value\">{escape(str(svc.get('name', '-')))}</div>"
+                f"<div class=\"label\">Description</div><div class=\"value\">{escape(str(svc.get('description', '-')))}</div>"
+                f"<div class=\"label\">Active</div><div class=\"value {'healthy' if svc.get('active') == 'active' else 'critical' if svc.get('critical') else 'warning'}\">{escape(str(svc.get('active', '-')).upper())}</div>"
+                f"<div class=\"label\">Substate</div><div class=\"value\">{escape(str(svc.get('sub_state', '-')))}</div>"
+                f"<div class=\"label\">Enabled</div><div class=\"value\">{escape(str(svc.get('unit_file_state', '-')))}</div>"
+                f"<div class=\"label\">Main PID</div><div class=\"value\">{escape(str(svc.get('main_pid', '-')))}</div>"
+                f"<div class=\"label\">Uptime</div><div class=\"value\">{escape(str(svc.get('uptime', '-')))}</div>"
+                f"<div class=\"label\">Critical</div><div class=\"value\">{'Yes' if svc.get('critical') else 'No'}</div>"
+                f"<div class=\"label\">Restart allowed by policy</div><div class=\"value\">{'Yes' if svc.get('restart') else 'No'}</div>"
+                "<div class=\"button-row\">"
+                f"<a class=\"ghost\" href=\"/service-restart-confirm/{quote(str(svc.get('name', '')))}\">Restart service</a>"
+                "<a class=\"ghost\" href=\"/services\">Back to Services</a>"
+                "</div>"
+                "</div>"
+                "<div class=\"card\"><h2>Systemd Properties</h2>"
+                f"<pre>{escape(json.dumps(svc.get('properties', {}), indent=2))}</pre>"
+                "</div></div>"
+                "<div class=\"card\"><h2>systemctl status</h2>"
+                f"<pre>{escape(str(detail.get('status', '')))}</pre>"
+                "</div>"
+                "<div class=\"card\"><h2>Recent Journal</h2>"
+                f"<pre>{escape(str(detail.get('journal', '')))}</pre>"
+                "</div>"
+            )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Services"))
+            .replace("__PAGE_TITLE__", "Services")
+        )
+
+    def service_restart_confirm_html(name):
+        detail = service_detail(name)
+        if not detail.get("ok"):
+            body = (
+                "<div class=\"card\">"
+                "<h2>Restart Service</h2>"
+                f"<p class=\"critical\">{escape(str(detail.get('error', 'Service not found')))}</p>"
+                "<a class=\"ghost\" href=\"/services\">Back to Services</a>"
+                "</div>"
+            )
+        else:
+            svc = detail.get("service", {})
+            body = (
+                "<div class=\"card\">"
+                "<h2>Confirm Service Restart</h2>"
+                f"<p class=\"warning\">Restart {escape(str(svc.get('name', '-')))}?</p>"
+                "<p class=\"muted\">This runs systemctl restart for a configured watchdog service only. It may briefly interrupt gateway operation.</p>"
+                f"<div class=\"label\">Current state</div><div class=\"value\">{escape(str(svc.get('active', '-')))} / {escape(str(svc.get('sub_state', '-')))}</div>"
+                f"<div class=\"label\">Policy critical</div><div class=\"value\">{'Yes' if svc.get('critical') else 'No'}</div>"
+                "<form class=\"inline\" method=\"post\" action=\"/service-restart-now\">"
+                f"<input type=\"hidden\" name=\"service\" value=\"{escape(str(svc.get('name', '')))}\">"
+                "<button class=\"action\" type=\"submit\">Confirm restart</button>"
+                "</form> "
+                "<a class=\"ghost\" href=\"/services\">Cancel</a>"
+                "</div>"
+            )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Services"))
+            .replace("__PAGE_TITLE__", "Services")
+        )
+
+    def service_restart_result_html(result):
+        ok = bool(result.get("ok"))
+        body = (
+            "<meta http-equiv=\"refresh\" content=\"8;url=/services\">"
+            "<div class=\"card\">"
+            "<h2>Service Restart</h2>"
+            f"<p class=\"{'healthy' if ok else 'critical'}\">{escape(str(result.get('message', 'Restart finished.')))}</p>"
+            f"<div class=\"label\">Service</div><div class=\"value\">{escape(str(result.get('service', '-')))}</div>"
+            f"<div class=\"label\">Return code</div><div class=\"value\">{escape(str(result.get('returncode', '-')))}</div>"
+            f"<div class=\"label\">Output</div><pre>{escape(str(result.get('output', '')))}</pre>"
+            "<p class=\"muted\">This page will return to Services automatically in 8 seconds.</p>"
+            "<a class=\"ghost\" href=\"/services\">Back to Services</a>"
+            "</div>"
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Services"))
+            .replace("__PAGE_TITLE__", "Services")
+        )
+
     def settings_payload_from_form(form):
         def first(name, default=""):
             return form.get(name, [default])[0]
@@ -2000,47 +2120,106 @@ def start_web(cfg):
             return f"{hours}h {minutes}m"
         return f"{minutes}m"
 
+    def configured_service(name):
+        for item in cfg.get("services", []):
+            if item.get("name") == name:
+                return item
+        return None
+
+    def systemctl_show(name, properties=None):
+        command = ["systemctl", "show", name]
+        if properties:
+            for prop in properties:
+                command.append(f"--property={prop}")
+        result = _run(command, timeout=5)
+        values = {}
+        for line in result["stdout"].splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                values[key] = value
+        return values
+
+    def service_snapshot(item):
+        name = item.get("name", "")
+        props = systemctl_show(name, [
+            "Description",
+            "LoadState",
+            "ActiveState",
+            "SubState",
+            "UnitFileState",
+            "NRestarts",
+            "MainPID",
+            "ActiveEnterTimestamp",
+            "ExecMainStartTimestamp",
+            "ExecMainStatus",
+            "Result",
+            "FragmentPath",
+        ])
+        active = props.get("ActiveState", "unknown")
+        pid = props.get("MainPID", "0")
+        ps = _run(["ps", "-p", pid, "-o", "%cpu=,rss=,etimes="]) if pid and pid != "0" else {"stdout": ""}
+        cpu_percent = "-"
+        memory_mb = "-"
+        uptime = "-"
+        parts = ps["stdout"].split()
+        if len(parts) >= 3:
+            cpu_percent = parts[0]
+            memory_mb = round(int(parts[1]) / 1024, 1)
+            uptime = _format_duration(int(parts[2]))
+        return {
+            "name": name,
+            "description": props.get("Description", ""),
+            "load_state": props.get("LoadState", ""),
+            "active": active,
+            "sub_state": props.get("SubState", ""),
+            "unit_file_state": props.get("UnitFileState", ""),
+            "restarts": props.get("NRestarts", ""),
+            "main_pid": pid,
+            "cpu_percent": cpu_percent,
+            "memory_mb": memory_mb,
+            "uptime": uptime,
+            "active_since": props.get("ActiveEnterTimestamp", ""),
+            "exec_started": props.get("ExecMainStartTimestamp", ""),
+            "exec_status": props.get("ExecMainStatus", ""),
+            "result": props.get("Result", ""),
+            "fragment_path": props.get("FragmentPath", ""),
+            "critical": bool(item.get("critical", False)),
+            "restart": bool(item.get("restart", False)),
+            "properties": props,
+        }
+
     def service_info():
         services = []
         for item in cfg.get("services", []):
-            name = item.get("name", "")
-            props = _run([
-                "systemctl",
-                "show",
-                name,
-                "--property=ActiveState",
-                "--property=NRestarts",
-                "--property=MainPID",
-                "--property=ExecMainStartTimestampMonotonic",
-                "--value",
-            ])
-            values = props["stdout"].splitlines()
-            active = values[0] if len(values) > 0 else ""
-            restarts = values[1] if len(values) > 1 else ""
-            pid = values[2] if len(values) > 2 else "0"
-            start_mono = values[3] if len(values) > 3 else ""
-            ps = _run(["ps", "-p", pid, "-o", "%cpu=,rss=,etimes="]) if pid and pid != "0" else {"stdout": ""}
-            cpu_percent = "-"
-            memory_mb = None
-            uptime = ""
-            parts = ps["stdout"].split()
-            if len(parts) >= 3:
-                cpu_percent = parts[0]
-                memory_mb = round(int(parts[1]) / 1024, 1)
-                uptime = _format_duration(int(parts[2]))
-            services.append({
-                "name": name,
-                "active": active,
-                "restarts": restarts,
-                "main_pid": pid,
-                "cpu_percent": cpu_percent,
-                "memory_mb": memory_mb,
-                "uptime": uptime,
-                "critical": bool(item.get("critical", False)),
-                "restart": bool(item.get("restart", False)),
-                "start_monotonic": start_mono,
-            })
+            services.append(service_snapshot(item))
         return {"services": services}
+
+    def service_detail(name):
+        item = configured_service(name)
+        if not item:
+            return {"ok": False, "error": f"{name} is not in watchdog service config"}
+        status = _run(["systemctl", "status", name, "--no-pager", "-l"], timeout=5)
+        journal = _run(["journalctl", "-u", name, "-n", "80", "--no-pager"], timeout=5)
+        return {
+            "ok": True,
+            "service": service_snapshot(item),
+            "status": status["stdout"] or status["stderr"],
+            "journal": journal["stdout"] or journal["stderr"],
+        }
+
+    def restart_configured_service(name):
+        item = configured_service(name)
+        if not item:
+            return {"ok": False, "service": name, "message": f"{name} is not configured for watchdog monitoring", "returncode": None, "output": ""}
+        result = _run(["systemctl", "restart", name], timeout=20)
+        output = "\n".join(part for part in [result.get("stdout", ""), result.get("stderr", "")] if part)
+        return {
+            "ok": bool(result.get("ok")),
+            "service": name,
+            "message": f"{name} restarted successfully" if result.get("ok") else f"{name} restart failed",
+            "returncode": result.get("returncode"),
+            "output": output,
+        }
 
     def settings_summary():
         return {
@@ -2268,6 +2447,26 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if route_path.startswith("/service-restart-confirm/"):
+                name = unquote(route_path.rsplit("/", 1)[-1])
+                body = service_restart_confirm_html(name).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path.startswith("/service/"):
+                name = unquote(route_path.rsplit("/", 1)[-1])
+                body = service_detail_html(name).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path == "/api/status":
                 try:
                     body = status_path.read_text(encoding="utf-8")
@@ -2396,6 +2595,23 @@ def start_web(cfg):
                 result = launch_recovery_install()
                 body = recovery_install_started_html(result).encode("utf-8")
                 self.send_response(200 if result.get("ok") else 500)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/service-restart-now":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    name = form.get("service", [""])[0]
+                    result = restart_configured_service(name)
+                except Exception as exc:
+                    result = {"ok": False, "service": "", "message": str(exc), "returncode": None, "output": ""}
+                body = service_restart_result_html(result).encode("utf-8")
+                self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()
