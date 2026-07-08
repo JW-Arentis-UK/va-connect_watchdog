@@ -169,8 +169,8 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
       <div id="page-title">Overview</div>
       <div class="topbar-right">
         <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="dark">Dark</option><option value="light">Light</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
-        <label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label>
-        <button class="ghost" onclick="load()">Refresh now</button>
+        <span class="advanced-only"><label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label></span>
+        <button class="ghost advanced-only" onclick="load()">Refresh now</button>
         <button class="ghost" onclick="reloadPage()">Reload page</button>
         <div id="last-update">Last update: -</div>
       </div>
@@ -223,6 +223,12 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
       sideState.className = 'value ' + state;
     }
   }
+  function hideAdvancedControls(){
+    var items = document.getElementsByClassName('advanced-only');
+    for (var i = 0; i < items.length; i++) {
+      items[i].style.display = 'none';
+    }
+  }
   window.vaWatchdogCompatibilityLoad = function(){
     request('/api/status', function(error, status){
       if (error) {
@@ -249,8 +255,8 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   window.setTheme = function(value){
     document.body.setAttribute('data-theme', value === 'dark' ? '' : value);
   };
+  hideAdvancedControls();
   window.vaWatchdogCompatibilityLoad();
-  window.setRefreshInterval('5000');
 }());
 </script>
 <script type="module">
@@ -346,6 +352,13 @@ function initRefresh(){
   const select = document.getElementById('refresh-select');
   select.value = saved;
   setRefreshInterval(saved);
+}
+
+function showAdvancedControls(){
+  const items = document.getElementsByClassName('advanced-only');
+  for (const item of items) {
+    item.style.display = '';
+  }
 }
 
 function setTheme(value){
@@ -787,6 +800,7 @@ window.saveSettings = saveSettings;
 window.purgeOldData = purgeOldData;
 window.purgeAllData = purgeAllData;
 buildNav();
+showAdvancedControls();
 initTheme();
 initRefresh();
 load();
