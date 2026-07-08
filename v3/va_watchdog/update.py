@@ -68,13 +68,22 @@ def launch_update_job(cfg: dict[str, Any]) -> dict[str, Any]:
     log_path = update_log_path(cfg)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_handle = log_path.open("a", encoding="utf-8")
-    subprocess.Popen(
-        cmd,
-        cwd=str(_repo_root()),
-        stdout=log_handle,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
+    try:
+        subprocess.Popen(
+            cmd,
+            cwd=str(_repo_root()),
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    except Exception as exc:
+        log_handle.close()
+        return {
+            "ok": False,
+            "message": f"Update could not be started: {exc}",
+            "command": cmd,
+            "log_path": str(log_path),
+        }
     return {
         "ok": True,
         "message": "Update started in the background.",

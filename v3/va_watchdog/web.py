@@ -859,6 +859,7 @@ def start_web(cfg):
     def basic_dashboard_html():
         status = status_snapshot()
         version = version_info()
+        update_status = load_update_status(cfg)
         critical = bool(status.get("critical_failed", False))
         state = "critical" if critical else "healthy"
         word = "CRITICAL" if critical else "HEALTHY"
@@ -968,6 +969,7 @@ def start_web(cfg):
             f"<div class=\"label\">Config</div><div class=\"value\">{escape(str(version.get('config_path', '-')))}</div>"
             f"<div class=\"label\">Data</div><div class=\"value\">{escape(str(version.get('data_dir', '-')))}</div>"
             "<button class=\"action\" onclick=\"window.location.reload()\">Refresh dashboard</button>"
+            "<form class=\"inline\" method=\"post\" action=\"/update-now\"><button class=\"ghost\" type=\"submit\">Update watchdog</button></form>"
             "</div>"
             f"{error_html}"
             "</div>"
@@ -996,15 +998,40 @@ def start_web(cfg):
             f"<div class=\"label\">Remote</div><div class=\"value\">{escape(str(version.get('remote', '-')))}</div>"
             "<div class=\"label\">Dashboard</div><div class=\"value\">Server-rendered compatibility appliance view</div>"
             "</div>"
+            "<div class=\"card\"><h2>Updates</h2>"
+            f"<div class=\"label\">State</div><div class=\"value {escape(str(update_status.get('state', 'unknown')))}\">{escape(str(update_status.get('state', 'unknown')).upper())}</div>"
+            f"<div class=\"label\">Message</div><div class=\"value\">{escape(str(update_status.get('message', '-')))}</div>"
+            f"<div class=\"label\">Branch</div><div class=\"value\">{escape(str(update_status.get('branch', '-')))}</div>"
+            f"<div class=\"label\">Commit</div><div class=\"value\">{escape(str(update_status.get('commit', '-')))}</div>"
+            f"<div class=\"label\">Updated</div><div class=\"value\">{escape(str(update_status.get('updated_at', '-')))}</div>"
+            "<form class=\"inline\" method=\"post\" action=\"/update-now\"><button class=\"action\" type=\"submit\">Update watchdog now</button></form>"
+            "<p class=\"muted\">The watchdog service may restart after an update. Reload this page after 10-20 seconds.</p>"
+            "</div></div>"
             "<div class=\"card\"><h2>Next Sections</h2>"
             "<ul><li>Hardware details placeholder</li><li>Storage settings placeholder</li><li>Network details placeholder</li><li>Recovery controls placeholder</li><li>History graph placeholder</li></ul>"
-            "</div></div>"
+            "</div>"
             "<div class=\"card\"><h2>All Checks</h2><table><thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table></div>"
         )
 
     def html_page():
         return HTML.replace("__BASIC_DASHBOARD__", basic_dashboard_html())
+
+    def update_started_html(result):
+        status_class = "healthy" if result.get("ok") else "critical"
+        return HTML.replace(
+            "__BASIC_DASHBOARD__",
+            (
+                "<div class=\"card\">"
+                "<h2>Watchdog Update</h2>"
+                f"<p class=\"{status_class}\">{escape(str(result.get('message', 'Update request sent.')))}</p>"
+                f"<div class=\"label\">Command</div><div class=\"value\">{escape(str(result.get('command', '-')))}</div>"
+                f"<div class=\"label\">Log</div><div class=\"value\">{escape(str(result.get('log_path', '-')))}</div>"
+                "<p class=\"muted\">If the update succeeds, the watchdog service will restart. Wait 10-20 seconds, then reload the dashboard.</p>"
+                "<form class=\"inline\" method=\"get\" action=\"/\"><button class=\"action\" type=\"submit\">Back to dashboard</button></form>"
+                "</div>"
+            ),
+        )
 
     def _run(command, timeout=5):
         try:
@@ -1585,6 +1612,17 @@ def start_web(cfg):
             self.end_headers()
 
         def do_POST(self):
+            route_path = self.path.split("?", 1)[0]
+            if route_path == "/update-now":
+                result = launch_update_job(cfg)
+                body = update_started_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 500)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path == "/api/update":
                 result = launch_update_job(cfg)
                 status = 200 if result.get("ok") else 500
