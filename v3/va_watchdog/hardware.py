@@ -2,21 +2,40 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 from .common import CheckResult
 
-def _read_first_temp():
-    paths = [
-        "/sys/class/thermal/thermal_zone0/temp",
-        "/sys/class/hwmon/hwmon0/temp1_input",
-        "/sys/class/hwmon/hwmon1/temp1_input",
-    ]
-    for p in paths:
+def _read_temperature():
+    """
+    Collect all plausible thermal sensor readings and use the hottest valid one.
+    Some gateway tools report the package/max sensor rather than the first zone,
+    which is closer to what the site software shows on this hardware.
+    """
+    paths = []
+    thermal_root = Path("/sys/class/thermal")
+    hwmon_root = Path("/sys/class/hwmon")
+    try:
+        if thermal_root.exists():
+            paths.extend(sorted(thermal_root.glob("thermal_zone*/temp")))
+        if hwmon_root.exists():
+            paths.extend(sorted(hwmon_root.glob("hwmon*/temp*_input")))
+    except Exception:
+        pass
+
+    readings = []
+    for path in paths:
         try:
-            with open(p, "r", encoding="utf-8") as f:
-                raw = f.read().strip()
-            return round(int(raw) / 1000, 1)
+            raw = path.read_text(encoding="utf-8").strip()
+            value = float(raw)
+            if value > 1000:
+                value = value / 1000.0
+            if -20.0 <= value <= 150.0:
+                readings.append(round(value, 1))
         except Exception:
-            pass
+            continue
+
+    if readings:
+        return max(readings)
     return None
 
 def _mem_percent():
@@ -48,7 +67,7 @@ def check_hardware(cfg):
     th = cfg["thresholds"]
     checks = []
 
-    temp = _read_first_temp()
+    temp = _read_temperature()
     if temp is None:
         checks.append(CheckResult("temperature", "unknown", "No temperature sensor found"))
     elif temp >= th["cpu_temp_critical_c"]:

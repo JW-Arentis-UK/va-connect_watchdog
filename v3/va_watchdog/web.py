@@ -5,6 +5,7 @@ import platform
 import secrets
 import socket
 import subprocess
+import re
 import time
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2256,7 +2257,29 @@ def start_web(cfg):
             if "=" in line:
                 key, value = line.split("=", 1)
                 values[key] = value
-        usec = int(values.get("WatchdogUSec", "0") or 0)
+        raw_usec = str(values.get("WatchdogUSec", "0") or "0").strip()
+        usec = 0
+        try:
+            usec = int(raw_usec)
+        except ValueError:
+            match = re.match(r"^\s*(\d+(?:\.\d+)?)([a-zA-Z]+)?\s*$", raw_usec)
+            if match:
+                amount = float(match.group(1))
+                unit = (match.group(2) or "us").lower()
+                factors = {
+                    "us": 1,
+                    "usec": 1,
+                    "ms": 1000,
+                    "msec": 1000,
+                    "s": 1000000,
+                    "sec": 1000000,
+                    "m": 60 * 1000000,
+                    "min": 60 * 1000000,
+                    "h": 3600 * 1000000,
+                    "hr": 3600 * 1000000,
+                }
+                if unit in factors:
+                    usec = int(amount * factors[unit])
         watchdog_sec = round(usec / 1000000, 1) if usec else 0
         if watchdog_sec:
             state = "healthy"
