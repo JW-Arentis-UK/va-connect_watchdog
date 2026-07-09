@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 from pathlib import Path
+import traceback
 
 from .config import load_config
 from .events import EventLog
@@ -21,6 +23,18 @@ def atomic_write_json(path: str, data):
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     tmp.replace(p)
+
+def write_startup_error_log():
+    payload = traceback.format_exc()
+    try:
+        sys.stderr.write(payload + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+    try:
+        Path("/tmp/va-watchdog-startup-error.log").write_text(payload + "\n", encoding="utf-8")
+    except Exception:
+        pass
 
 def main():
     cfg = load_config()
@@ -88,4 +102,8 @@ def main():
         time.sleep(int(cfg["poll_interval_seconds"]))
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        write_startup_error_log()
+        raise

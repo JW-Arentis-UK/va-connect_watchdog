@@ -10,7 +10,7 @@ import time
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Thread
+from threading import Thread, local
 from urllib.parse import parse_qs, quote, unquote
 
 from .config import active_config_path, deep_merge, load_raw_config, save_raw_config
