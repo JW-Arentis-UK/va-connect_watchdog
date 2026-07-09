@@ -35,11 +35,40 @@ else
 fi
 echo
 
-echo "== Step 4: reinstall/reload VA-Connect service =="
+echo "== Step 4: enable VA-Connect hardware watchdog config =="
+python3 - <<'PY'
+import json
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+
+path = Path("/etc/va-watchdog/config.json")
+path.parent.mkdir(parents=True, exist_ok=True)
+payload = {}
+if path.exists():
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    shutil.copy2(path, path.with_name(f"{path.name}.{stamp}.bak"))
+
+payload.setdefault("hardware_watchdog", {})
+payload["hardware_watchdog"].update({
+    "enabled": True,
+    "device": "/dev/watchdog0",
+    "feed_interval_seconds": 10,
+})
+
+tmp = path.with_suffix(path.suffix + ".tmp")
+tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+tmp.replace(path)
+print("Updated /etc/va-watchdog/config.json: hardware_watchdog.enabled=true")
+PY
+echo
+
+echo "== Step 5: reinstall/reload VA-Connect service =="
 /bin/bash "$APP_DIR/scripts/install.sh"
 echo
 
-echo "== Step 5: final service status =="
+echo "== Step 6: final service status =="
 systemctl status va-watchdog.service --no-pager || true
 echo
 echo "Finished: $(date -Is)"

@@ -1587,8 +1587,20 @@ def start_web(cfg):
 
     def html_page(route_path="/"):
         page = page_name_for_path(route_path)
+        try:
+            body = basic_dashboard_html(page)
+        except Exception as exc:
+            body = (
+                "<div class=\"card\">"
+                f"<h2>{escape(page)} Page Error</h2>"
+                "<p class=\"critical\">This page hit a runtime error while collecting live gateway details.</p>"
+                f"<pre>{escape(str(exc))}</pre>"
+                "<p class=\"muted\">The watchdog service can still be running even if this page failed. Use Diagnostics or /api/status to check health while this is investigated.</p>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/\">Overview</a><a class=\"ghost\" href=\"/diagnostics\">Diagnostics</a><a class=\"ghost\" href=\"/api/status\">Raw status</a></div>"
+                "</div>"
+            )
         return (
-            HTML.replace("__BASIC_DASHBOARD__", basic_dashboard_html(page))
+            HTML.replace("__BASIC_DASHBOARD__", body)
             .replace("__SERVER_NAV__", server_nav_html(page))
             .replace("__PAGE_TITLE__", page)
         )
@@ -2573,27 +2585,13 @@ def start_web(cfg):
         if not script.exists():
             return {"ok": False, "message": f"Hardware watchdog prepare script not found: {script}", "log_path": str(log_path)}
 
-        updates = {
-            "hardware_watchdog": {
-                "enabled": True,
-                "device": "/dev/watchdog0",
-                "feed_interval_seconds": 10,
-            }
-        }
-        raw = load_raw_config()
-        merged_raw = deep_merge(raw, updates)
-        saved_path = save_raw_config(merged_raw)
-        live_cfg = deep_merge(cfg, updates)
-        cfg.clear()
-        cfg.update(live_cfg)
-
         command = f"cd {repo_root()!s}; /bin/bash scripts/prepare_itco_watchdog.sh >> {log_path!s} 2>&1"
         try:
             subprocess.Popen(["/bin/bash", "-lc", command], start_new_session=True)
         except Exception as exc:
             return {
                 "ok": False,
-                "message": f"Config saved to {saved_path}, but prepare job could not start: {exc}",
+                "message": f"Prepare job could not start: {exc}",
                 "command": command,
                 "output": str(exc),
                 "log_path": str(log_path),
@@ -2602,11 +2600,11 @@ def start_web(cfg):
             "info",
             "hardware_watchdog",
             "Hardware watchdog automatic prepare started",
-            {"config_path": str(saved_path), "log_path": str(log_path)},
+            {"log_path": str(log_path)},
         )
         return {
             "ok": True,
-            "message": f"Hardware watchdog prepare started. Config saved to {saved_path}; va-watchdog will restart in the background.",
+            "message": "Hardware watchdog prepare started. The script will enable config after driver setup, then restart va-watchdog in the background.",
             "command": command,
             "output": "Automatic prepare: load Intel TCO, disable legacy watchdog.service, install/restart va-watchdog.",
             "log_path": str(log_path),
