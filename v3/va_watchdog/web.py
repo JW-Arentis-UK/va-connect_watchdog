@@ -385,10 +385,10 @@ function initTheme(){
   setTheme(saved);
 }
 
-function showPage(page){
+async function showPage(page){
   currentPage = page;
   buildNav();
-  render();
+  await load();
 }
 
 function groupChecks(checks){
