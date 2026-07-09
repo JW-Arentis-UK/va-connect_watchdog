@@ -259,6 +259,10 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
     }
   };
   window.setTheme = function(value){
+    try {
+      localStorage.setItem('va_watchdog_theme', value);
+    } catch (e) {}
+    document.cookie = 'va_watchdog_theme=' + encodeURIComponent(value) + '; path=/; max-age=31536000; samesite=lax';
     document.body.setAttribute('data-theme', value === 'dark' ? '' : value);
   };
   hideAdvancedControls();
@@ -2914,6 +2918,8 @@ def start_web(cfg):
                     }
         block_devices = _run(["lsblk", "-o", "NAME,MODEL,SIZE,TYPE,MOUNTPOINT", "-n"])["stdout"].splitlines()
         watchdog_devices = sorted(str(path) for path in Path("/dev").glob("watchdog*"))
+        watchdog_summary = watchdog_driver_info(watchdog_devices)
+        watchdog_summary["safe_test"] = watchdog_test_summary()
         return {
             "cpu": {
                 "model": cpu.get("Model name", ""),
@@ -2924,7 +2930,7 @@ def start_web(cfg):
             "memory": memory,
             "block_devices": block_devices,
             "watchdog_devices": watchdog_devices,
-            "watchdog": watchdog_driver_info(watchdog_devices),
+            "watchdog": watchdog_summary,
         }
 
     def watchdog_driver_info(watchdog_devices):
@@ -2965,7 +2971,6 @@ def start_web(cfg):
             "wdctl": wdctl,
             "legacy_daemon": legacy_watchdog_daemon_info(),
             "systemd_watchdog": systemd_watchdog_info(),
-            "safe_test": watchdog_test_summary(),
             "prepare_log": itco_prepare_status().get("last_log", ""),
             "setup_log": itco_setup_status().get("last_log", ""),
             "probe_log": watchdog_probe_status().get("last_log", ""),
