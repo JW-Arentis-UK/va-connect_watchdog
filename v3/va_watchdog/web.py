@@ -1182,23 +1182,24 @@ def start_web(cfg):
                 f"<div class=\"label\">wdctl timeout</div><div class=\"value\">{escape(str(wdctl.get('timeout', '-')))}</div>"
                 f"<div class=\"label\">Legacy watchdog.service</div><div class=\"value {'warning' if legacy.get('active') == 'active' else 'healthy'}\">{escape(str(legacy.get('active', '-')).upper())} / {escape(str(legacy.get('enabled', '-')).upper())}</div>"
                 f"<div class=\"label\">wdctl raw output</div><pre>{escape(str(wdctl.get('raw', 'wdctl not available or watchdog not present')))}</pre>"
+                f"<div class=\"label\">Last one-click prepare log</div><pre>{escape(str(watchdog.get('prepare_log', 'No prepare log yet')))}</pre>"
                 f"<div class=\"label\">Last setup log</div><pre>{escape(str(watchdog.get('setup_log', 'No setup log yet')))}</pre>"
                 f"<div class=\"label\">Last full probe</div><pre>{escape(str(watchdog.get('probe_log', 'No hardware probe log yet')))}</pre>"
-                "<p class=\"muted\">For POC-451VTC, the expected hardware watchdog is Intel TCO. Use the button below to load and persist the driver. Feeding stays disabled until you explicitly enable it in Settings/config. If the legacy watchdog.service is active, disable it before letting VA-Connect own /dev/watchdog0.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/itco-watchdog-install-confirm\">Install/load Intel TCO watchdog</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run full watchdog probe</a></div>"
-                "<pre>cd /opt/va-connect-watchdog-v3\nsudo ./v3/scripts/setup_itco_watchdog.sh</pre>"
+                "<p class=\"muted\">For POC-451VTC, the expected hardware watchdog is Intel TCO. The one-click prepare action loads and persists the driver, disables Ubuntu's legacy watchdog.service, enables VA-Connect feeding, reinstalls the systemd unit, and restarts va-watchdog in the background.</p>"
+                "<div class=\"button-row\"><a class=\"action\" href=\"/hardware-watchdog-prepare-confirm\">Prepare hardware watchdog automatically</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run full watchdog probe</a></div>"
                 "</div>"
                 "<div class=\"card\"><h2>Hardware Watchdog Enable Wizard</h2>"
-                "<p class=\"muted\">This wizard prevents two processes from fighting over /dev/watchdog0 and only enables VA-Connect feeding when the driver/device checks pass.</p>"
+                "<p class=\"muted\">Recommended path: use the single prepare button. The manual buttons below are kept for diagnostics if one step needs repeating.</p>"
                 f"<div class=\"label\">Wizard state</div><div class=\"value {escape(str(wizard.get('state', 'unknown')))}\">{escape(str(wizard.get('message', '-')))}</div>"
                 "<table><thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>"
                 f"<tbody>{''.join(prereq_rows)}</tbody></table>"
                 "<div class=\"button-row\">"
-                "<a class=\"ghost\" href=\"/itco-watchdog-install-confirm\">1. Install/load driver</a>"
-                "<a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">2. Disable legacy watchdog.service</a>"
-                "<a class=\"ghost\" href=\"/hardware-watchdog-enable-confirm\">3. Enable VA-Connect hardware feeding</a>"
+                "<a class=\"action\" href=\"/hardware-watchdog-prepare-confirm\">Prepare automatically</a>"
+                "<a class=\"ghost\" href=\"/itco-watchdog-install-confirm\">Advanced: install/load driver only</a>"
+                "<a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">Advanced: disable legacy only</a>"
+                "<a class=\"ghost\" href=\"/hardware-watchdog-enable-confirm\">Advanced: enable feed only</a>"
                 "</div>"
-                "<p class=\"muted\">The enable step writes /etc/va-watchdog/config.json and restarts va-watchdog. It does not perform a destructive trip/reboot test.</p>"
+                "<p class=\"muted\">The automatic prepare flow does not perform a destructive trip/reboot test.</p>"
                 "</div>"
                 "<div class=\"card\"><h2>Watchdog Protection Layers</h2>"
                 f"<div class=\"label\">Hardware reboot watchdog</div><div class=\"value {escape(str(wdt.get('device_state', 'unknown')))}\">{escape(str(wdt.get('device_message', '-')).upper())}</div>"
@@ -1736,6 +1737,29 @@ def start_web(cfg):
             "<div class=\"label\">Expected device after success</div><div class=\"value\">/dev/watchdog0</div>"
             "<div class=\"label\">Expected identity</div><div class=\"value\">iTCO_wdt [version 6]</div>"
             "<form class=\"inline\" method=\"post\" action=\"/itco-watchdog-install-now\"><button class=\"action\" type=\"submit\">Confirm install/load Intel TCO</button></form> "
+            "<a class=\"ghost\" href=\"/hardware\">Cancel</a>"
+            "</div>"
+        )
+        return (
+            HTML.replace("__BASIC_DASHBOARD__", body)
+            .replace("__SERVER_NAV__", server_nav_html("Hardware"))
+            .replace("__PAGE_TITLE__", "Hardware")
+        )
+
+    def hardware_watchdog_prepare_confirm_html():
+        info = hardware_info()
+        watchdog = info.get("watchdog", {})
+        legacy = watchdog.get("legacy_daemon", {})
+        body = (
+            "<div class=\"card\">"
+            "<h2>Prepare Hardware Watchdog Automatically</h2>"
+            "<p class=\"warning\">This is the recommended setup for POC-451VTC.</p>"
+            "<p class=\"muted\">It will load and persist Intel TCO, disable Ubuntu's legacy watchdog.service, write VA-Connect hardware watchdog settings, reinstall the va-watchdog systemd unit, and restart va-watchdog in the background.</p>"
+            "<div class=\"label\">Expected device</div><div class=\"value\">/dev/watchdog0</div>"
+            "<div class=\"label\">Expected driver</div><div class=\"value\">iTCO_wdt [version 6]</div>"
+            f"<div class=\"label\">Current legacy watchdog.service</div><div class=\"value\">{escape(str(legacy.get('active', '-')))} / {escape(str(legacy.get('enabled', '-')))}</div>"
+            "<p class=\"muted\">After confirming, wait about 30 seconds, then return to Hardware. The page may briefly disconnect while the service restarts.</p>"
+            "<form class=\"inline\" method=\"post\" action=\"/hardware-watchdog-prepare-now\"><button class=\"action\" type=\"submit\">Prepare hardware watchdog automatically</button></form> "
             "<a class=\"ghost\" href=\"/hardware\">Cancel</a>"
             "</div>"
         )
@@ -2493,6 +2517,14 @@ def start_web(cfg):
             "last_log": tail_file(log_path, lines=200).get("tail", ""),
         }
 
+    def itco_prepare_status():
+        log_path = data_dir / "itco-watchdog-prepare.log"
+        return {
+            "script": str(repo_root() / "scripts" / "prepare_itco_watchdog.sh"),
+            "log_path": str(log_path),
+            "last_log": tail_file(log_path, lines=120).get("tail", ""),
+        }
+
     def launch_itco_setup():
         status = itco_setup_status()
         script = Path(status["script"])
@@ -2530,6 +2562,53 @@ def start_web(cfg):
             "ok": True,
             "message": "Full watchdog hardware probe started in the background.",
             "command": command,
+            "log_path": str(log_path),
+        }
+
+    def launch_hardware_watchdog_prepare():
+        status = itco_prepare_status()
+        script = Path(status["script"])
+        log_path = Path(status["log_path"])
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        if not script.exists():
+            return {"ok": False, "message": f"Hardware watchdog prepare script not found: {script}", "log_path": str(log_path)}
+
+        updates = {
+            "hardware_watchdog": {
+                "enabled": True,
+                "device": "/dev/watchdog0",
+                "feed_interval_seconds": 10,
+            }
+        }
+        raw = load_raw_config()
+        merged_raw = deep_merge(raw, updates)
+        saved_path = save_raw_config(merged_raw)
+        live_cfg = deep_merge(cfg, updates)
+        cfg.clear()
+        cfg.update(live_cfg)
+
+        command = f"cd {repo_root()!s}; /bin/bash scripts/prepare_itco_watchdog.sh >> {log_path!s} 2>&1"
+        try:
+            subprocess.Popen(["/bin/bash", "-lc", command], start_new_session=True)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "message": f"Config saved to {saved_path}, but prepare job could not start: {exc}",
+                "command": command,
+                "output": str(exc),
+                "log_path": str(log_path),
+            }
+        append_web_event(
+            "info",
+            "hardware_watchdog",
+            "Hardware watchdog automatic prepare started",
+            {"config_path": str(saved_path), "log_path": str(log_path)},
+        )
+        return {
+            "ok": True,
+            "message": f"Hardware watchdog prepare started. Config saved to {saved_path}; va-watchdog will restart in the background.",
+            "command": command,
+            "output": "Automatic prepare: load Intel TCO, disable legacy watchdog.service, install/restart va-watchdog.",
             "log_path": str(log_path),
         }
 
@@ -2802,6 +2881,7 @@ def start_web(cfg):
             "modules": modules,
             "wdctl": wdctl,
             "legacy_daemon": legacy_watchdog_daemon_info(),
+            "prepare_log": itco_prepare_status().get("last_log", ""),
             "setup_log": itco_setup_status().get("last_log", ""),
             "probe_log": watchdog_probe_status().get("last_log", ""),
         }
@@ -3299,6 +3379,15 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if route_path == "/hardware-watchdog-prepare-confirm":
+                body = hardware_watchdog_prepare_confirm_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path == "/watchdog-hardware-probe-confirm":
                 body = watchdog_probe_confirm_html().encode("utf-8")
                 self.send_response(200)
@@ -3486,6 +3575,16 @@ def start_web(cfg):
             if route_path == "/itco-watchdog-install-now":
                 result = launch_itco_setup()
                 body = itco_install_started_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 500)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/hardware-watchdog-prepare-now":
+                result = launch_hardware_watchdog_prepare()
+                body = hardware_action_result_html(result).encode("utf-8")
                 self.send_response(200 if result.get("ok") else 500)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))

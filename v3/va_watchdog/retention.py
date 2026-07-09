@@ -20,6 +20,7 @@ def data_files(cfg: dict[str, Any]) -> list[Path]:
         base / "update.log",
         base / "last-reboot-reason.json",
         base / "watchdog-test.json",
+        base / "itco-watchdog-prepare.log",
         base / "itco-watchdog-setup.log",
         base / "watchdog-hardware-probe.log",
         base / "history.jsonl",
