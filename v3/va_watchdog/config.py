@@ -20,7 +20,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "hardware_watchdog": {
         "enabled": False,
         "device": "/dev/watchdog0",
-        "feed_interval_seconds": 10
+        "feed_interval_seconds": 10,
+        "timeout_seconds": 30
     },
     "thresholds": {
         "cpu_temp_warning_c": 75,

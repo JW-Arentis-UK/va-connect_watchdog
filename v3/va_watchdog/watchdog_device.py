@@ -3,12 +3,18 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+import array
+import fcntl
 
 class HardwareWatchdog:
-    def __init__(self, enabled: bool, device: str, feed_interval: int, event_log):
+    WDIOC_SETTIMEOUT = 0xC0045706
+    WDIOC_GETTIMEOUT = 0x80045707
+
+    def __init__(self, enabled: bool, device: str, feed_interval: int, event_log, timeout_seconds: int = 30):
         self.enabled = enabled
         self.device = device
         self.feed_interval = feed_interval
+        self.timeout_seconds = int(timeout_seconds or 30)
         self.event_log = event_log
         self.handle = None
         self.last_feed = None
@@ -25,10 +31,32 @@ class HardwareWatchdog:
             return
         try:
             self.handle = open(self.device, "wb", buffering=0)
+            self._apply_timeout()
             self.opened = True
             self.event_log.add("info", "hardware_watchdog", f"Opened {self.device}")
         except Exception as e:
             self.event_log.add("critical", "hardware_watchdog", f"Failed to open {self.device}: {e}")
+
+    def _apply_timeout(self):
+        if self.handle is None or self.timeout_seconds <= 0:
+            return
+        try:
+            timeout = array.array("i", [int(self.timeout_seconds)])
+            fcntl.ioctl(self.handle.fileno(), self.WDIOC_SETTIMEOUT, timeout, True)
+            self.timeout_seconds = int(timeout[0])
+            self.event_log.add("info", "hardware_watchdog", f"Set hardware watchdog timeout to {self.timeout_seconds}s")
+        except Exception as exc:
+            self.event_log.add("warning", "hardware_watchdog", f"Could not set watchdog timeout: {exc}")
+
+    def get_timeout(self):
+        if self.handle is None:
+            return self.timeout_seconds
+        try:
+            timeout = array.array("i", [0])
+            fcntl.ioctl(self.handle.fileno(), self.WDIOC_GETTIMEOUT, timeout, True)
+            return int(timeout[0])
+        except Exception:
+            return self.timeout_seconds
 
     def _try_load_itco(self):
         try:

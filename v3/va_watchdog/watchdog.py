@@ -31,7 +31,8 @@ def main():
         enabled=cfg["hardware_watchdog"]["enabled"],
         device=cfg["hardware_watchdog"]["device"],
         feed_interval=cfg["hardware_watchdog"]["feed_interval_seconds"],
-        event_log=event_log
+        event_log=event_log,
+        timeout_seconds=cfg["hardware_watchdog"].get("timeout_seconds", 30),
     )
 
     event_log.add("info", "watchdog", "VA-Connect Watchdog V3 starting")
@@ -44,6 +45,7 @@ def main():
         "opened": hw.opened,
         "last_feed_unix": hw.last_feed,
         "feed_count": hw.feed_count,
+        "timeout_seconds": hw.get_timeout(),
         "fed_this_cycle": False
     }
     status["recovery"] = recovery.summary()
@@ -70,6 +72,7 @@ def main():
                 "opened": hw.opened,
                 "last_feed_unix": hw.last_feed,
                 "feed_count": hw.feed_count,
+                "timeout_seconds": hw.get_timeout(),
                 "fed_this_cycle": fed
             }
             status["recovery"] = recovery.summary()
