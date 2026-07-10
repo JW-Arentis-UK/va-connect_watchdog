@@ -74,12 +74,11 @@ def confirm_trip_test(cfg: dict[str, Any], token: str, ack_risk: bool, confirm_p
     now = time.time()
     state = read_trip_test_state(cfg)
     armed = state.get("armed", {}) if isinstance(state.get("armed", {}), dict) else {}
-    token = str(token or "")
     confirm_phrase = str(confirm_phrase or "").strip().upper()
-    if not token or token != str(armed.get("token", "")):
+    if not armed.get("token"):
         return {
             "ok": False,
-            "message": "Trip test confirmation failed: token did not match.",
+            "message": "Trip test confirmation failed: arm the test first.",
             "tested_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
         }
     if now > float(armed.get("expires_at_unix", 0) or 0):
@@ -109,7 +108,7 @@ def confirm_trip_test(cfg: dict[str, Any], token: str, ack_risk: bool, confirm_p
     state["triggered_boot_id"] = boot_id
     result = {
         "ok": True,
-        "message": "Trip test armed watchdog feed pause for this boot. The gateway should reboot if the hardware watchdog is healthy.",
+        "message": "Trip test confirmed: watchdog feed paused for this boot. The gateway should reboot if the hardware watchdog is healthy.",
         "tested_at": state["triggered_at"],
         "triggered_boot_id": boot_id,
     }

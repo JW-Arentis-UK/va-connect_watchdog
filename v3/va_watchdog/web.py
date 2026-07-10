@@ -2094,28 +2094,29 @@ def start_web(cfg):
 
     def watchdog_trip_confirm_html():
         trip = trip_test_summary(cfg)
-        state = read_trip_test_state(cfg)
-        token = str(state.get("armed", {}).get("token", "")) if isinstance(state.get("armed", {}), dict) else ""
         armed = trip.get("armed", False)
-        body = (
-            "<div class=\"card\">"
-            "<h2>Confirm Deliberate Watchdog Trip Test</h2>"
-            "<p class=\"critical\">This can reboot the gateway if the hardware watchdog is healthy.</p>"
-            "<p class=\"muted\">Triple confirmation: arm the test, check the risk box, and type TRIP before you submit the final form.</p>"
-            f"<div class=\"label\">Current state</div><div class=\"value\">{escape('Armed' if armed else ('Triggered this boot' if trip.get('triggered') else ('Completed on previous boot' if trip.get('completed_previous_boot') else 'Not armed')))}</div>"
-            f"<div class=\"label\">Last result</div><div class=\"value\">{escape(str(trip.get('last_result_message', 'No trip test recorded yet')))}</div>"
-            "<form class=\"inline\" method=\"post\" action=\"/watchdog-trip-arm\">"
-            "<button class=\"action\" type=\"submit\">1. Arm trip test</button>"
-            "</form>"
-            "<form method=\"post\" action=\"/watchdog-trip-now\">"
-            f"<input type=\"hidden\" name=\"token\" value=\"{escape(token)}\">"
-            "<label><input type=\"checkbox\" name=\"ack_risk\" value=\"1\"> I understand this may reboot the gateway</label>"
-            "<label class=\"label\">Type TRIP to continue</label>"
-            "<input name=\"confirm_phrase\" autocomplete=\"off\" placeholder=\"TRIP\">"
-            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">3. Trigger watchdog trip</button><a class=\"ghost\" href=\"/watchdog\">Cancel</a></div>"
-            "</form>"
-            "</div>"
-        )
+        trigger_disabled = "" if armed else "disabled"
+        body_parts = [
+            "<div class=\"card\">",
+            "<h2>Confirm Deliberate Watchdog Trip Test</h2>",
+            "<p class=\"critical\">This can reboot the gateway if the hardware watchdog is healthy.</p>",
+            "<p class=\"muted\">Triple confirmation: arm the test, check the risk box, and type TRIP before you submit the final form.</p>",
+            f"<div class=\"label\">Current state</div><div class=\"value\">{escape('Armed' if armed else ('Triggered this boot' if trip.get('triggered') else ('Completed on previous boot' if trip.get('completed_previous_boot') else 'Not armed')))}</div>",
+            f"<div class=\"label\">Last result</div><div class=\"value\">{escape(str(trip.get('last_result_message', 'No trip test recorded yet')))}</div>",
+            "<form class=\"inline\" method=\"post\" action=\"/watchdog-trip-arm\">",
+            "<button class=\"action\" type=\"submit\">1. Arm trip test</button>",
+            "</form>",
+            "<form method=\"post\" action=\"/watchdog-trip-now\">",
+            "<label><input type=\"checkbox\" name=\"ack_risk\" value=\"1\"> I understand this may reboot the gateway</label>",
+            "<label class=\"label\">Type TRIP to continue</label>",
+            "<input name=\"confirm_phrase\" autocomplete=\"off\" placeholder=\"TRIP\">",
+            f"<div class=\"button-row\"><button class=\"action\" type=\"submit\" {trigger_disabled}>3. Trigger watchdog trip</button><a class=\"ghost\" href=\"/watchdog\">Cancel</a></div>",
+            "</form>",
+        ]
+        if not armed:
+            body_parts.append("<p class=\"warning\">Arm the trip test first to enable the final trigger button.</p>")
+        body_parts.append("</div>")
+        body = "".join(body_parts)
         if armed:
             body = body.replace(
                 "<button class=\"action\" type=\"submit\">1. Arm trip test</button>",
