@@ -17,6 +17,7 @@ from .config import active_config_path, deep_merge, load_raw_config, save_raw_co
 from .history import history_path, read_history
 from .retention import purge_data as retention_purge_data
 from .retention import retention_status as retention_status_for_cfg
+from .watchdog_test import arm_trip_test, confirm_trip_test, read_trip_test_state, trip_test_summary
 from .update import launch_update_job, load_update_status
 
 HTML = """<!doctype html>
@@ -506,7 +507,8 @@ function renderWatchdogPage(status){
   const timeout = Number(hwCfg.timeout_seconds || 30);
   const systemd = watchdog.systemd_watchdog || {};
   const safeTest = watchdog.safe_test || {};
-  return `${pageHelp('Watchdog')}<div class="grid top-grid"><div class="card"><h2>Watchdog Summary</h2><div class="label">Device</div><div class="value ${watchdog.wdctl?.state || 'warning'}">${escapeHtml(watchdog.wdctl?.device || '/dev/watchdog0')} / ${escapeHtml(watchdog.wdctl?.identity || 'not ready')}</div><div class="label">Timeout</div><div class="value">${escapeHtml(watchdog.wdctl?.timeout || `${timeout}s`)}</div><div class="label">Legacy watchdog.service</div><div class="value ${watchdog.legacy_daemon?.active === 'active' ? 'warning' : 'healthy'}">${escapeHtml(`${watchdog.legacy_daemon?.active || '-'} / ${watchdog.legacy_daemon?.enabled || '-'}`)}</div><div class="label">Systemd fallback</div><div class="value ${systemd.state || 'warning'}">${escapeHtml(systemd.message || 'Not enabled in installed systemd unit yet')} ${escapeHtml(systemd.watchdog_sec || '')}</div><div class="label">Last safe test</div><div class="value">${escapeHtml(safeTest.last_test_message || 'No test recorded yet')}</div></div><div class="card"><h2>What this does</h2><p class="muted">The hardware watchdog is the reboot safety net. The safe test only verifies the config and feed state. The timeout control gives the unit more time before a forced reboot if the gateway is busy or you need a little breathing room.</p><div class="button-row"><a class="ghost" href="/hardware">Hardware details</a><a class="ghost" href="/diagnostics">Diagnostics</a></div></div></div><div class="grid lower-grid"><div class="card"><h2>Safe Watchdog Test</h2><p class="muted">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-test-arm"><button class="action" type="submit">Arm safe test</button></form></div><div class="label">Feed enabled</div><div class="value">${lastStatus.hardware_watchdog_feed?.enabled ? 'Enabled' : 'Disabled'}</div><div class="label">Last feed</div><div class="value">${escapeHtml(lastStatus.hardware_watchdog_feed?.last_feed_unix ? new Date(lastStatus.hardware_watchdog_feed.last_feed_unix * 1000).toLocaleString() : 'Not recorded')}</div></div><div class="card"><h2>Extend Timeout</h2><p class="muted">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p><form method="post" action="/watchdog-timeout-set"><label class="label">Timeout seconds</label><select name="timeout_seconds"><option value="30" ${timeout === 30 ? 'selected' : ''}>30</option><option value="60" ${timeout === 60 ? 'selected' : ''}>60</option><option value="120" ${timeout === 120 ? 'selected' : ''}>120</option><option value="180" ${timeout === 180 ? 'selected' : ''}>180</option><option value="300" ${timeout === 300 ? 'selected' : ''}>300</option></select><div class="button-row"><button class="action" type="submit">Apply timeout</button></div></form><div class="label">Current config</div><pre>${escapeHtml(JSON.stringify(hwCfg, null, 2))}</pre></div></div><div class="card"><h2>Watchdog Tools</h2><div class="button-row"><a class="ghost" href="/hardware-watchdog-prepare-confirm">Prepare automatically</a><a class="ghost" href="/watchdog-legacy-disable-confirm">Disable legacy only</a><a class="ghost" href="/hardware-watchdog-enable-confirm">Enable feed only</a><a class="ghost" href="/watchdog-hardware-probe-confirm">Run probe</a></div></div>`;
+  const tripTest = watchdog.trip_test || {};
+  return `${pageHelp('Watchdog')}<div class="grid top-grid"><div class="card"><h2>Watchdog Summary</h2><div class="label">Device</div><div class="value ${watchdog.wdctl?.state || 'warning'}">${escapeHtml(watchdog.wdctl?.device || '/dev/watchdog0')} / ${escapeHtml(watchdog.wdctl?.identity || 'not ready')}</div><div class="label">Timeout</div><div class="value">${escapeHtml(watchdog.wdctl?.timeout || `${timeout}s`)}</div><div class="label">Legacy watchdog.service</div><div class="value ${watchdog.legacy_daemon?.active === 'active' ? 'warning' : 'healthy'}">${escapeHtml(`${watchdog.legacy_daemon?.active || '-'} / ${watchdog.legacy_daemon?.enabled || '-'}`)}</div><div class="label">Systemd fallback</div><div class="value ${systemd.state || 'warning'}">${escapeHtml(systemd.message || 'Not enabled in installed systemd unit yet')} ${escapeHtml(systemd.watchdog_sec || '')}</div><div class="label">Last safe test</div><div class="value">${escapeHtml(safeTest.last_test_message || 'No test recorded yet')}</div><div class="label">Trip test</div><div class="value ${tripTest.triggered ? 'warning' : tripTest.completed_previous_boot ? 'healthy' : 'idle'}">${escapeHtml(tripTest.triggered ? 'ACTIVE THIS BOOT' : (tripTest.completed_previous_boot ? 'COMPLETED ON PREVIOUS BOOT' : 'Not armed'))}</div></div><div class="card"><h2>What this does</h2><p class="muted">The hardware watchdog is the reboot safety net. The safe test only verifies the config and feed state. The deliberate trip test is the real watchdog exercise and can reboot the gateway, so it needs strong confirmation.</p><div class="button-row"><a class="ghost" href="/hardware">Hardware details</a><a class="ghost" href="/diagnostics">Diagnostics</a></div></div></div><div class="grid lower-grid"><div class="card"><h2>Safe Watchdog Test</h2><p class="muted">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-test-arm"><button class="action" type="submit">Arm safe test</button></form></div><div class="label">Feed enabled</div><div class="value">${lastStatus.hardware_watchdog_feed?.enabled ? 'Enabled' : 'Disabled'}</div><div class="label">Last feed</div><div class="value">${escapeHtml(lastStatus.hardware_watchdog_feed?.last_feed_unix ? new Date(lastStatus.hardware_watchdog_feed.last_feed_unix * 1000).toLocaleString() : 'Not recorded')}</div></div><div class="card"><h2>Deliberate Watchdog Trip Test</h2><p class="warning">This test intentionally stops hardware feeding for the current boot and may reboot the gateway if the watchdog is healthy.</p><p class="muted">Triple confirmation: arm the test, check the risk box, then type TRIP on the confirm page before you trigger it.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-trip-arm"><button class="action" type="submit">Arm trip test</button></form><a class="ghost" href="/watchdog-trip-confirm">Open confirm page</a></div><div class="label">State</div><div class="value ${tripTest.triggered ? 'warning' : tripTest.completed_previous_boot ? 'healthy' : 'idle'}">${escapeHtml(tripTest.triggered ? 'Triggered this boot' : (tripTest.completed_previous_boot ? 'Completed on previous boot' : (tripTest.armed ? 'Armed' : 'Not armed')))}</div><div class="label">Last result</div><div class="value">${escapeHtml(tripTest.last_result_message || 'No trip test recorded yet')}</div><div class="label">Armed at</div><div class="value">${escapeHtml(tripTest.armed_at || '-')}</div></div><div class="card"><h2>Extend Timeout</h2><p class="muted">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p><form method="post" action="/watchdog-timeout-set"><label class="label">Timeout seconds</label><select name="timeout_seconds"><option value="30" ${timeout === 30 ? 'selected' : ''}>30</option><option value="60" ${timeout === 60 ? 'selected' : ''}>60</option><option value="120" ${timeout === 120 ? 'selected' : ''}>120</option><option value="180" ${timeout === 180 ? 'selected' : ''}>180</option><option value="300" ${timeout === 300 ? 'selected' : ''}>300</option></select><div class="button-row"><button class="action" type="submit">Apply timeout</button></div></form><div class="label">Current config</div><pre>${escapeHtml(JSON.stringify(hwCfg, null, 2))}</pre></div></div><div class="card"><h2>Watchdog Tools</h2><div class="button-row"><a class="ghost" href="/hardware-watchdog-prepare-confirm">Prepare automatically</a><a class="ghost" href="/watchdog-legacy-disable-confirm">Disable legacy only</a><a class="ghost" href="/hardware-watchdog-enable-confirm">Enable feed only</a><a class="ghost" href="/watchdog-hardware-probe-confirm">Run probe</a></div></div>`;
 }
 
 function renderBreakdown(status){
@@ -1274,6 +1276,7 @@ def start_web(cfg):
             watchdog = info.get("watchdog", {})
             hw_cfg = cfg.get("hardware_watchdog", {})
             safe_test = watchdog.get("safe_test", {})
+            trip_test = watchdog.get("trip_test", trip_test_summary(cfg))
             systemd_wdt = watchdog.get("systemd_watchdog", systemd_watchdog_info())
             timeout = int(hw_cfg.get("timeout_seconds", 30) or 30)
             timeout_options = "".join(
@@ -1289,9 +1292,10 @@ def start_web(cfg):
                 f"<div class=\"label\">Legacy watchdog.service</div><div class=\"value {'warning' if watchdog.get('legacy_daemon', {}).get('active') == 'active' else 'healthy'}\">{escape(str(watchdog.get('legacy_daemon', {}).get('active', '-')).upper())} / {escape(str(watchdog.get('legacy_daemon', {}).get('enabled', '-')).upper())}</div>"
                 f"<div class=\"label\">Systemd fallback</div><div class=\"value {escape(str(systemd_wdt.get('state', 'unknown')))}\">{escape(str(systemd_wdt.get('message', '-')))} {escape(str(systemd_wdt.get('watchdog_sec', '-')))}</div>"
                 f"<div class=\"label\">Last safe test</div><div class=\"value\">{escape(str(safe_test.get('last_test_message', 'No test recorded yet')))}</div>"
+                f"<div class=\"label\">Trip test</div><div class=\"value {escape('warning' if trip_test.get('triggered') else ('healthy' if trip_test.get('completed_previous_boot') else 'idle'))}\">{escape('ACTIVE THIS BOOT' if trip_test.get('triggered') else ('COMPLETED ON PREVIOUS BOOT' if trip_test.get('completed_previous_boot') else 'Not armed'))}</div>"
                 "</div>"
                 "<div class=\"card\"><h2>What this does</h2>"
-                "<p class=\"muted\">The hardware watchdog is the reboot safety net. The safe test only verifies the config and feed state. The timeout control gives the unit more time before a forced reboot if the gateway is busy or you need a little breathing room.</p>"
+                "<p class=\"muted\">The hardware watchdog is the reboot safety net. The safe test only verifies the config and feed state. The deliberate trip test can force a reboot, so it uses a stronger confirmation flow.</p>"
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/hardware\">Hardware details</a><a class=\"ghost\" href=\"/diagnostics\">Diagnostics</a></div>"
                 "</div>"
                 "</div>"
@@ -1301,6 +1305,14 @@ def start_web(cfg):
                 "<div class=\"button-row\"><form class=\"inline\" method=\"post\" action=\"/watchdog-test-arm\"><button class=\"action\" type=\"submit\">Arm safe test</button></form></div>"
                 f"<div class=\"label\">Feed enabled</div><div class=\"value\">{'Enabled' if watchdog.get('safe_test', {}).get('feed_enabled') else 'Disabled'}</div>"
                 f"<div class=\"label\">Last feed</div><div class=\"value\">{escape(str(watchdog.get('safe_test', {}).get('last_feed_message', 'Not recorded')))}</div>"
+                "</div>"
+                "<div class=\"card\"><h2>Deliberate Watchdog Trip Test</h2>"
+                "<p class=\"warning\">This test intentionally stops hardware feeding for the current boot and may reboot the gateway if the watchdog is healthy.</p>"
+                "<p class=\"muted\">Triple confirmation: arm the test, check the risk box, and type TRIP on the confirm page before you trigger it.</p>"
+                "<div class=\"button-row\"><a class=\"action\" href=\"/watchdog-trip-confirm\">Open trip confirm page</a></div>"
+                f"<div class=\"label\">State</div><div class=\"value\">{escape('Triggered this boot' if trip_test.get('triggered') else ('Completed on previous boot' if trip_test.get('completed_previous_boot') else ('Armed' if trip_test.get('armed') else 'Not armed')))}</div>"
+                f"<div class=\"label\">Last result</div><div class=\"value\">{escape(str(trip_test.get('last_result_message', 'No trip test recorded yet')))}</div>"
+                f"<div class=\"label\">Armed at</div><div class=\"value\">{escape(str(trip_test.get('armed_at', '-')))}</div>"
                 "</div>"
                 "<div class=\"card\"><h2>Extend Timeout</h2>"
                 "<p class=\"muted\">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p>"
@@ -2076,6 +2088,65 @@ def start_web(cfg):
             f"<tbody>{''.join(rows)}</tbody></table>"
             "<p class=\"muted\">This page will return to Watchdog automatically in 12 seconds.</p>"
             "<a class=\"ghost\" href=\"/watchdog\">Back to Watchdog</a>"
+            "</div>"
+        )
+        return page_shell(body, "Watchdog")
+
+    def watchdog_trip_confirm_html():
+        trip = trip_test_summary(cfg)
+        state = read_trip_test_state(cfg)
+        token = str(state.get("armed", {}).get("token", "")) if isinstance(state.get("armed", {}), dict) else ""
+        armed = trip.get("armed", False)
+        body = (
+            "<div class=\"card\">"
+            "<h2>Confirm Deliberate Watchdog Trip Test</h2>"
+            "<p class=\"critical\">This can reboot the gateway if the hardware watchdog is healthy.</p>"
+            "<p class=\"muted\">Triple confirmation: arm the test, check the risk box, and type TRIP before you submit the final form.</p>"
+            f"<div class=\"label\">Current state</div><div class=\"value\">{escape('Armed' if armed else ('Triggered this boot' if trip.get('triggered') else ('Completed on previous boot' if trip.get('completed_previous_boot') else 'Not armed')))}</div>"
+            f"<div class=\"label\">Last result</div><div class=\"value\">{escape(str(trip.get('last_result_message', 'No trip test recorded yet')))}</div>"
+            "<form class=\"inline\" method=\"post\" action=\"/watchdog-trip-arm\">"
+            "<button class=\"action\" type=\"submit\">1. Arm trip test</button>"
+            "</form>"
+            "<form method=\"post\" action=\"/watchdog-trip-now\">"
+            f"<input type=\"hidden\" name=\"token\" value=\"{escape(token)}\">"
+            "<label><input type=\"checkbox\" name=\"ack_risk\" value=\"1\"> I understand this may reboot the gateway</label>"
+            "<label class=\"label\">Type TRIP to continue</label>"
+            "<input name=\"confirm_phrase\" autocomplete=\"off\" placeholder=\"TRIP\">"
+            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">3. Trigger watchdog trip</button><a class=\"ghost\" href=\"/watchdog\">Cancel</a></div>"
+            "</form>"
+            "</div>"
+        )
+        if armed:
+            body = body.replace(
+                "<button class=\"action\" type=\"submit\">1. Arm trip test</button>",
+                "<button class=\"action\" type=\"submit\" disabled>1. Arm trip test</button>"
+            )
+        return page_shell(body, "Watchdog")
+
+    def watchdog_trip_armed_html(result):
+        body = (
+            "<meta http-equiv=\"refresh\" content=\"300;url=/watchdog\">"
+            "<div class=\"card\">"
+            "<h2>Trip Test Armed</h2>"
+            "<p class=\"warning\">The next page requires a checkbox and a typed TRIP confirmation before the test can be triggered.</p>"
+            f"<div class=\"label\">Armed at</div><div class=\"value\">{escape(str(result.get('armed_at', '-')))}</div>"
+            f"<div class=\"label\">Expires</div><div class=\"value\">{escape(str(result.get('expires_at_unix', '-')))}</div>"
+            "<div class=\"button-row\"><a class=\"action\" href=\"/watchdog-trip-confirm\">Continue to confirm page</a><a class=\"ghost\" href=\"/watchdog\">Back to Watchdog</a></div>"
+            "</div>"
+        )
+        return page_shell(body, "Watchdog")
+
+    def watchdog_trip_result_html(result):
+        ok = bool(result.get("ok"))
+        body = (
+            "<meta http-equiv=\"refresh\" content=\"12;url=/watchdog\">"
+            "<div class=\"card\">"
+            "<h2>Deliberate Watchdog Trip Test</h2>"
+            f"<p class=\"{'critical' if ok else 'warning'}\">{escape(str(result.get('message', 'Trip test processed.')))}</p>"
+            f"<div class=\"label\">Test time</div><div class=\"value\">{escape(str(result.get('tested_at', '-')))}</div>"
+            f"<div class=\"label\">Boot ID</div><div class=\"value\">{escape(str(result.get('triggered_boot_id', '-')))}</div>"
+            "<p class=\"muted\">If the hardware watchdog is present and feeding was paused, the gateway should reboot soon. After it comes back, the test state will show as completed on the previous boot.</p>"
+            "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog\">Back to Watchdog</a></div>"
             "</div>"
         )
         return page_shell(body, "Watchdog")
@@ -2920,6 +2991,7 @@ def start_web(cfg):
         watchdog_devices = sorted(str(path) for path in Path("/dev").glob("watchdog*"))
         watchdog_summary = watchdog_driver_info(watchdog_devices)
         watchdog_summary["safe_test"] = watchdog_test_summary()
+        watchdog_summary["trip_test"] = trip_test_summary(cfg)
         return {
             "cpu": {
                 "model": cpu.get("Model name", ""),
@@ -3498,6 +3570,15 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if route_path == "/watchdog-trip-confirm":
+                body = watchdog_trip_confirm_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path == "/watchdog-legacy-disable-confirm":
                 body = legacy_watchdog_disable_confirm_html().encode("utf-8")
                 self.send_response(200)
@@ -3745,6 +3826,37 @@ def start_web(cfg):
                 result = arm_watchdog_test()
                 body = watchdog_test_armed_html(result).encode("utf-8")
                 self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/watchdog-trip-arm":
+                result = arm_trip_test(cfg)
+                append_web_event("warning", "watchdog_test", "Deliberate watchdog trip test armed", result)
+                body = watchdog_trip_armed_html(result).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/watchdog-trip-now":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    token = form.get("token", [""])[0]
+                    ack_risk = form.get("ack_risk", [""])[0] in {"1", "on", "true", "True", "yes"}
+                    confirm_phrase = form.get("confirm_phrase", [""])[0]
+                    result = confirm_trip_test(cfg, token, ack_risk, confirm_phrase)
+                except Exception as exc:
+                    result = {"ok": False, "message": str(exc), "tested_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), "triggered_boot_id": ""}
+                append_web_event("warning" if result.get("ok") else "critical", "watchdog_test", result.get("message", "Deliberate trip test processed"), result)
+                body = watchdog_trip_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 400)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()

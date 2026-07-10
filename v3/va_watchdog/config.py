@@ -23,6 +23,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "feed_interval_seconds": 10,
         "timeout_seconds": 30
     },
+    "trip_test_path": "/var/lib/va-watchdog/watchdog-trip-test.json",
     "thresholds": {
         "cpu_temp_warning_c": 75,
         "cpu_temp_critical_c": 90,

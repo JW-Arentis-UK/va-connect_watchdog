@@ -15,6 +15,7 @@ from .recovery import RecoveryEngine
 from .retention import enforce_retention
 from .systemd_notify import notify as systemd_notify
 from .watchdog_device import HardwareWatchdog
+from .watchdog_test import trip_test_active
 from .web import start_web
 
 def atomic_write_json(path: str, data):
@@ -40,6 +41,7 @@ def main():
     cfg = load_config()
     event_log = EventLog(cfg["events_path"])
     recovery = RecoveryEngine(cfg, event_log)
+    last_trip_active = False
 
     hw = HardwareWatchdog(
         enabled=cfg["hardware_watchdog"]["enabled"],
@@ -79,7 +81,16 @@ def main():
             status, checks = collect_health(cfg)
             event_log.add_state_changes(checks)
             recovery.process(checks)
-            fed = hw.feed_if_due(not status["critical_failed"])
+            trip_active, trip_summary = trip_test_active(cfg)
+            if trip_active and not last_trip_active:
+                event_log.add(
+                    "warning",
+                    "watchdog_test",
+                    "Deliberate watchdog trip test active; hardware feed paused for this boot",
+                    trip_summary,
+                )
+            feed_allowed = not status["critical_failed"] and not trip_active
+            fed = hw.feed_if_due(feed_allowed)
             status["hardware_watchdog_feed"] = {
                 "enabled": hw.enabled,
                 "device": hw.device,
@@ -87,7 +98,9 @@ def main():
                 "last_feed_unix": hw.last_feed,
                 "feed_count": hw.feed_count,
                 "timeout_seconds": hw.get_timeout(),
-                "fed_this_cycle": fed
+                "fed_this_cycle": fed,
+                "trip_test_active": trip_active,
+                "trip_test": trip_summary,
             }
             status["recovery"] = recovery.summary()
             atomic_write_json(cfg["status_path"], status)
@@ -96,6 +109,7 @@ def main():
             if retention_result.get("actions"):
                 event_log.add("warning", "retention", "Watchdog data retention purge completed", retention_result)
             systemd_notify("WATCHDOG=1\nSTATUS=VA-Connect Watchdog V3 healthy loop")
+            last_trip_active = trip_active
         except Exception as e:
             event_log.add("critical", "watchdog", f"Main loop error: {e}")
             systemd_notify(f"STATUS=VA-Connect Watchdog V3 loop error: {e}")
