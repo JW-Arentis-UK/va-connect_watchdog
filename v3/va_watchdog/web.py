@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import secrets
 import socket
@@ -504,11 +505,43 @@ function pageHelp(page){
 function renderWatchdogPage(status){
   const watchdog = lastHardwareInfo.watchdog || {};
   const hwCfg = lastSettings.hardware_watchdog || {};
+  const feed = status.hardware_watchdog_feed || {};
   const timeout = Number(hwCfg.timeout_seconds || 30);
   const systemd = watchdog.systemd_watchdog || {};
   const safeTest = watchdog.safe_test || {};
   const tripTest = watchdog.trip_test || {};
-  return `${pageHelp('Watchdog')}<div class="grid top-grid"><div class="card"><h2>Watchdog Summary</h2><div class="label">Device</div><div class="value ${watchdog.wdctl?.state || 'warning'}">${escapeHtml(watchdog.wdctl?.device || '/dev/watchdog0')} / ${escapeHtml(watchdog.wdctl?.identity || 'not ready')}</div><div class="label">Timeout</div><div class="value">${escapeHtml(watchdog.wdctl?.timeout || `${timeout}s`)}</div><div class="label">Legacy watchdog.service</div><div class="value ${watchdog.legacy_daemon?.active === 'active' ? 'warning' : 'healthy'}">${escapeHtml(`${watchdog.legacy_daemon?.active || '-'} / ${watchdog.legacy_daemon?.enabled || '-'}`)}</div><div class="label">Systemd fallback</div><div class="value ${systemd.state || 'warning'}">${escapeHtml(systemd.message || 'Not enabled in installed systemd unit yet')} ${escapeHtml(systemd.watchdog_sec || '')}</div><div class="label">Last safe test</div><div class="value">${escapeHtml(safeTest.last_test_message || 'No test recorded yet')}</div><div class="label">Trip test</div><div class="value ${tripTest.triggered ? 'warning' : tripTest.completed_previous_boot ? 'healthy' : 'idle'}">${escapeHtml(tripTest.triggered ? 'ACTIVE THIS BOOT' : (tripTest.completed_previous_boot ? 'COMPLETED ON PREVIOUS BOOT' : 'Not armed'))}</div></div><div class="card"><h2>What this does</h2><p class="muted">The hardware watchdog is the reboot safety net. The safe test only verifies the config and feed state. The deliberate trip test is the real watchdog exercise and can reboot the gateway, so it needs strong confirmation.</p><div class="button-row"><a class="ghost" href="/hardware">Hardware details</a><a class="ghost" href="/diagnostics">Diagnostics</a></div></div></div><div class="grid lower-grid"><div class="card"><h2>Safe Watchdog Test</h2><p class="muted">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-test-arm"><button class="action" type="submit">Arm safe test</button></form></div><div class="label">Feed enabled</div><div class="value">${lastStatus.hardware_watchdog_feed?.enabled ? 'Enabled' : 'Disabled'}</div><div class="label">Last feed</div><div class="value">${escapeHtml(lastStatus.hardware_watchdog_feed?.last_feed_unix ? new Date(lastStatus.hardware_watchdog_feed.last_feed_unix * 1000).toLocaleString() : 'Not recorded')}</div></div><div class="card"><h2>Deliberate Watchdog Trip Test</h2><p class="warning">This test intentionally stops hardware feeding for the current boot and may reboot the gateway if the watchdog is healthy.</p><p class="muted">Triple confirmation: arm the test, check the risk box, then type TRIP on the confirm page before you trigger it.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-trip-arm"><button class="action" type="submit">Arm trip test</button></form><a class="ghost" href="/watchdog-trip-confirm">Open confirm page</a></div><div class="label">State</div><div class="value ${tripTest.triggered ? 'warning' : tripTest.completed_previous_boot ? 'healthy' : 'idle'}">${escapeHtml(tripTest.triggered ? 'Triggered this boot' : (tripTest.completed_previous_boot ? 'Completed on previous boot' : (tripTest.armed ? 'Armed' : 'Not armed')))}</div><div class="label">Last result</div><div class="value">${escapeHtml(tripTest.last_result_message || 'No trip test recorded yet')}</div><div class="label">Armed at</div><div class="value">${escapeHtml(tripTest.armed_at || '-')}</div></div><div class="card"><h2>Extend Timeout</h2><p class="muted">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p><form method="post" action="/watchdog-timeout-set"><label class="label">Timeout seconds</label><select name="timeout_seconds"><option value="30" ${timeout === 30 ? 'selected' : ''}>30</option><option value="60" ${timeout === 60 ? 'selected' : ''}>60</option><option value="120" ${timeout === 120 ? 'selected' : ''}>120</option><option value="180" ${timeout === 180 ? 'selected' : ''}>180</option><option value="300" ${timeout === 300 ? 'selected' : ''}>300</option></select><div class="button-row"><button class="action" type="submit">Apply timeout</button></div></form><div class="label">Current config</div><pre>${escapeHtml(JSON.stringify(hwCfg, null, 2))}</pre></div></div><div class="card"><h2>Watchdog Tools</h2><div class="button-row"><a class="ghost" href="/hardware-watchdog-prepare-confirm">Prepare automatically</a><a class="ghost" href="/watchdog-legacy-disable-confirm">Disable legacy only</a><a class="ghost" href="/hardware-watchdog-enable-confirm">Enable feed only</a><a class="ghost" href="/watchdog-hardware-probe-confirm">Run probe</a></div></div>`;
+  const wdctl = watchdog.wdctl || {};
+  const modules = watchdog.modules || {};
+  const legacy = watchdog.legacy_daemon || {};
+  const units = legacy.units || [];
+  const legacyClean = units.length ? units.every(unit => unit.active !== 'active' && !['enabled', 'static'].includes(unit.enabled)) : legacy.active !== 'active' && !['enabled', 'static'].includes(legacy.enabled);
+  const lastFeed = feed.last_feed_unix ? `${Math.round((Date.now() / 1000) - Number(feed.last_feed_unix))}s ago` : 'No feed timestamp';
+  const feedRecent = !!feed.last_feed_unix && ((Date.now() / 1000) - Number(feed.last_feed_unix)) <= Math.max(Number(hwCfg.feed_interval_seconds || 10) * 3, 30);
+  const setupChecks = [
+    ['Intel TCO driver', modules.iTCO_wdt ? 'healthy' : 'warning', modules.iTCO_wdt ? 'Loaded' : 'Not loaded yet'],
+    ['Watchdog device', wdctl.device ? (wdctl.identity && wdctl.identity !== '-' ? 'healthy' : 'warning') : 'warning', `${wdctl.device || '/dev/watchdog0'} / ${wdctl.identity || 'not ready'}`],
+    ['Driver identity', String(wdctl.identity || '').includes('iTCO_wdt') ? 'healthy' : 'warning', wdctl.identity || 'No iTCO identity reported yet'],
+    ['Legacy daemon', legacyClean ? 'healthy' : 'critical', legacyClean ? 'Removed/disabled' : 'Another watchdog daemon may still own the device'],
+    ['V3 config', hwCfg.enabled ? 'healthy' : 'warning', `enabled=${!!hwCfg.enabled}, device=${hwCfg.device || '/dev/watchdog0'}`],
+    ['V3 device owner', feed.opened ? 'healthy' : 'warning', feed.opened ? 'V3 has opened the watchdog device' : (watchdog.owners?.summary || 'V3 has not opened the watchdog device')],
+    ['Live feed', feedRecent ? 'healthy' : 'warning', lastFeed],
+    ['V3 process watchdog', systemd.state || 'warning', `${systemd.message || '-'}; ${systemd.watchdog_sec || '-'}`],
+  ];
+  const ready = setupChecks.slice(0, 7).every(row => row[1] === 'healthy');
+  const checkRows = setupChecks.map(row => `<tr><td>${escapeHtml(row[0])}</td><td class="${escapeHtml(row[1])}">${escapeHtml(row[1].toUpperCase())}</td><td>${escapeHtml(row[2])}</td></tr>`).join('');
+  const configRows = [
+    ['Hardware feed', hwCfg.enabled ? 'Enabled' : 'Disabled'],
+    ['Device', hwCfg.device || '/dev/watchdog0'],
+    ['V3 opened device', feed.opened ? 'Yes' : 'No'],
+    ['Feed interval', `${hwCfg.feed_interval_seconds || 10} seconds`],
+    ['Configured timeout', `${timeout} seconds`],
+    ['Driver timeout', wdctl.timeout || '-'],
+    ['Device owner', watchdog.owners?.summary || '-'],
+    ['Legacy package', legacy.package_status || '-'],
+  ].map(row => `<tr><td>${escapeHtml(row[0])}</td><td>${escapeHtml(row[1])}</td></tr>`).join('');
+  const legacyRows = units.length ? units.map(unit => `<tr><td>${escapeHtml(unit.unit || '-')}</td><td>${escapeHtml(unit.active || '-')}</td><td>${escapeHtml(unit.enabled || '-')}</td></tr>`).join('') : '<tr><td colspan="3">No legacy watchdog units found.</td></tr>';
+  const tripAction = ready ? '<a class="action" href="/watchdog-trip-confirm">Open trip confirm page</a>' : '<button class="action" disabled>Open trip confirm page</button>';
+  return `${pageHelp('Watchdog')}<div class="grid lower-grid"><div class="card"><h2>Hardware Watchdog Setup</h2><p class="${ready ? 'healthy' : 'warning'}">${ready ? 'Hardware watchdog is ready and owned by V3' : 'Setup incomplete: run the one-click setup, then reload this page'}</p><table><thead><tr><th>Check</th><th>Status</th><th>Meaning</th></tr></thead><tbody>${checkRows}</tbody></table><div class="button-row"><a class="action" href="/hardware-watchdog-prepare-confirm">Run one-click setup and cleanup</a><a class="ghost" href="/watchdog-hardware-probe-confirm">Run full probe</a></div></div><div class="card"><h2>Current Configuration</h2><table><tbody>${configRows}</tbody></table><h3>Legacy Units</h3><table><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead><tbody>${legacyRows}</tbody></table></div></div><div class="grid lower-grid"><div class="card"><h2>Safe Watchdog Test</h2><p class="muted">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-test-arm"><button class="action" type="submit">Arm safe test</button></form></div><div class="label">Feed enabled</div><div class="value">${feed.enabled ? 'Enabled' : 'Disabled'}</div><div class="label">Last feed</div><div class="value">${escapeHtml(lastFeed)}</div></div><div class="card"><h2>Deliberate Watchdog Trip Test</h2><p class="warning">This stops V3 hardware feeding and may reboot the gateway.</p><p class="muted">Triple confirmation: arm the test, check the risk box, and type TRIP on the confirm page.</p><div class="button-row">${tripAction}</div>${ready ? '' : '<p class="warning">Trip test is blocked until setup is complete and V3 has a recent hardware feed.</p>'}<div class="label">State</div><div class="value">${escapeHtml(tripTest.triggered ? 'Triggered this boot' : (tripTest.completed_previous_boot ? 'Completed on previous boot' : (tripTest.armed ? 'Armed' : 'Not armed')))}</div><div class="label">Last result</div><div class="value">${escapeHtml(tripTest.last_result_message || 'No trip test recorded yet')}</div></div><div class="card"><h2>Extend Timeout</h2><p class="muted">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p><form method="post" action="/watchdog-timeout-set"><label class="label">Timeout seconds</label><select name="timeout_seconds"><option value="30" ${timeout === 30 ? 'selected' : ''}>30</option><option value="60" ${timeout === 60 ? 'selected' : ''}>60</option><option value="120" ${timeout === 120 ? 'selected' : ''}>120</option><option value="180" ${timeout === 180 ? 'selected' : ''}>180</option><option value="300" ${timeout === 300 ? 'selected' : ''}>300</option></select><div class="button-row"><button class="action" type="submit">Apply timeout</button></div></form><div class="label">Current config</div><pre>${escapeHtml(JSON.stringify(hwCfg, null, 2))}</pre></div></div><div class="card"><h2>Advanced Tools</h2><p class="muted">Use these only when the one-click setup cannot complete.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy only</a><a class="ghost" href="/hardware-watchdog-enable-confirm">Enable feed only</a><a class="ghost" href="/hardware">Hardware details</a><a class="ghost" href="/diagnostics">Diagnostics</a></div></div>`;
 }
 
 function renderBreakdown(status){
@@ -1278,25 +1311,76 @@ def start_web(cfg):
             safe_test = watchdog.get("safe_test", {})
             trip_test = watchdog.get("trip_test", trip_test_summary(cfg))
             systemd_wdt = watchdog.get("systemd_watchdog", systemd_watchdog_info())
+            setup = watchdog_setup_rows(watchdog, systemd_wdt)
+            setup_config = setup.get("config", {})
+            legacy = watchdog.get("legacy_daemon", {})
+            wdctl = watchdog.get("wdctl", {})
             timeout = int(hw_cfg.get("timeout_seconds", 30) or 30)
             timeout_options = "".join(
                 f"<option value=\"{value}\" {'selected' if timeout == value else ''}>{value}</option>"
                 for value in [30, 60, 120, 180, 300]
             )
+            check_rows = []
+            for row in setup.get("checks", []):
+                state = str(row.get("state", "unknown"))
+                check_rows.append(
+                    "<tr>"
+                    f"<td>{escape(str(row.get('name', '-')))}</td>"
+                    f"<td class=\"{escape(state)}\">{escape(state.upper())}</td>"
+                    f"<td>{escape(str(row.get('message', '-')))}</td>"
+                    "</tr>"
+                )
+            config_rows = [
+                ("Config file", setup_config.get("path", "-")),
+                ("Hardware feed", "Enabled" if setup_config.get("enabled") else "Disabled"),
+                ("Device", setup_config.get("device", "-")),
+                ("V3 opened device", "Yes" if setup_config.get("opened") else "No"),
+                ("Feed interval", f"{setup_config.get('feed_interval_seconds', '-')} seconds"),
+                ("Configured timeout", f"{setup_config.get('timeout_seconds', '-')} seconds"),
+                ("Driver identity", wdctl.get("identity", "-")),
+                ("Driver timeout", wdctl.get("timeout", "-")),
+                ("Device owner", watchdog.get("owners", {}).get("summary", "-")),
+                ("Legacy package", legacy.get("package_status", "-")),
+            ]
+            config_html = "".join(
+                "<tr>"
+                f"<td>{escape(str(label))}</td>"
+                f"<td>{escape(str(value))}</td>"
+                "</tr>"
+                for label, value in config_rows
+            )
+            legacy_rows = "".join(
+                "<tr>"
+                f"<td>{escape(str(unit.get('unit', '-')))}</td>"
+                f"<td>{escape(str(unit.get('active', '-')))}</td>"
+                f"<td>{escape(str(unit.get('enabled', '-')))}</td>"
+                "</tr>"
+                for unit in legacy.get("units", [])
+            )
+            if not legacy_rows:
+                legacy_rows = "<tr><td colspan=\"3\">No legacy watchdog units found.</td></tr>"
+            trip_ready = bool(setup.get("trip_ready"))
+            trip_action = (
+                "<a class=\"action\" href=\"/watchdog-trip-confirm\">Open trip confirm page</a>"
+                if trip_ready
+                else "<button class=\"action\" disabled>Open trip confirm page</button>"
+            )
+            trip_warning = "" if trip_ready else "<p class=\"warning\">Trip test is blocked until setup is complete and V3 has a recent hardware feed.</p>"
             return (
-                "<div class=\"grid top-grid\">"
-                "<div class=\"card\"><h2>Watchdog Summary</h2>"
-                f"<div class=\"label\">Device</div><div class=\"value {escape(str(watchdog.get('wdctl', {}).get('state', 'warning')))}\">{escape(str(watchdog.get('wdctl', {}).get('device', '/dev/watchdog0')))} / {escape(str(watchdog.get('wdctl', {}).get('identity', 'not ready')))}</div>"
-                f"<div class=\"label\">Configured timeout</div><div class=\"value\">{escape(str(timeout))} seconds</div>"
-                f"<div class=\"label\">Driver timeout</div><div class=\"value\">{escape(str(watchdog.get('wdctl', {}).get('timeout', '-')))}</div>"
-                f"<div class=\"label\">Legacy watchdog.service</div><div class=\"value {'warning' if watchdog.get('legacy_daemon', {}).get('active') == 'active' else 'healthy'}\">{escape(str(watchdog.get('legacy_daemon', {}).get('active', '-')).upper())} / {escape(str(watchdog.get('legacy_daemon', {}).get('enabled', '-')).upper())}</div>"
-                f"<div class=\"label\">Systemd fallback</div><div class=\"value {escape(str(systemd_wdt.get('state', 'unknown')))}\">{escape(str(systemd_wdt.get('message', '-')))} {escape(str(systemd_wdt.get('watchdog_sec', '-')))}</div>"
-                f"<div class=\"label\">Last safe test</div><div class=\"value\">{escape(str(safe_test.get('last_test_message', 'No test recorded yet')))}</div>"
-                f"<div class=\"label\">Trip test</div><div class=\"value {escape('warning' if trip_test.get('triggered') else ('healthy' if trip_test.get('completed_previous_boot') else 'idle'))}\">{escape('ACTIVE THIS BOOT' if trip_test.get('triggered') else ('COMPLETED ON PREVIOUS BOOT' if trip_test.get('completed_previous_boot') else 'Not armed'))}</div>"
+                "<div class=\"grid lower-grid\">"
+                "<div class=\"card\"><h2>Hardware Watchdog Setup</h2>"
+                f"<p class=\"{escape(str(setup.get('state', 'warning')))}\">{escape(str(setup.get('message', '-')))}</p>"
+                "<table><thead><tr><th>Check</th><th>Status</th><th>Meaning</th></tr></thead>"
+                f"<tbody>{''.join(check_rows)}</tbody></table>"
+                "<div class=\"button-row\"><a class=\"action\" href=\"/hardware-watchdog-prepare-confirm\">Run one-click setup and cleanup</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run full probe</a></div>"
                 "</div>"
-                "<div class=\"card\"><h2>What this does</h2>"
-                "<p class=\"muted\">The hardware watchdog is the reboot safety net. The safe test only verifies the config and feed state. The deliberate trip test can force a reboot, so it uses a stronger confirmation flow.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/hardware\">Hardware details</a><a class=\"ghost\" href=\"/diagnostics\">Diagnostics</a></div>"
+                "<div class=\"card\"><h2>Current Configuration</h2>"
+                "<table><tbody>"
+                f"{config_html}"
+                "</tbody></table>"
+                "<h3>Legacy Units</h3>"
+                "<table><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead>"
+                f"<tbody>{legacy_rows}</tbody></table>"
                 "</div>"
                 "</div>"
                 "<div class=\"grid lower-grid\">"
@@ -1309,7 +1393,8 @@ def start_web(cfg):
                 "<div class=\"card\"><h2>Deliberate Watchdog Trip Test</h2>"
                 "<p class=\"warning\">This test intentionally stops hardware feeding for the current boot and may reboot the gateway if the watchdog is healthy.</p>"
                 "<p class=\"muted\">Triple confirmation: arm the test, check the risk box, and type TRIP on the confirm page before you trigger it.</p>"
-                "<div class=\"button-row\"><a class=\"action\" href=\"/watchdog-trip-confirm\">Open trip confirm page</a></div>"
+                f"<div class=\"button-row\">{trip_action}</div>"
+                f"{trip_warning}"
                 f"<div class=\"label\">State</div><div class=\"value\">{escape('Triggered this boot' if trip_test.get('triggered') else ('Completed on previous boot' if trip_test.get('completed_previous_boot') else ('Armed' if trip_test.get('armed') else 'Not armed')))}</div>"
                 f"<div class=\"label\">Last result</div><div class=\"value\">{escape(str(trip_test.get('last_result_message', 'No trip test recorded yet')))}</div>"
                 f"<div class=\"label\">Armed at</div><div class=\"value\">{escape(str(trip_test.get('armed_at', '-')))}</div>"
@@ -1323,8 +1408,9 @@ def start_web(cfg):
                 f"<div class=\"label\">Current config</div><pre>{escape(json.dumps(hw_cfg, indent=2))}</pre>"
                 "</div>"
                 "</div>"
-                "<div class=\"card\"><h2>Watchdog Tools</h2>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/hardware-watchdog-prepare-confirm\">Prepare automatically</a><a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">Disable legacy only</a><a class=\"ghost\" href=\"/hardware-watchdog-enable-confirm\">Enable feed only</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run probe</a></div>"
+                "<div class=\"card\"><h2>Advanced Tools</h2>"
+                "<p class=\"muted\">Use these only when the one-click setup cannot complete. The normal route is the setup and cleanup button above.</p>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">Clean legacy only</a><a class=\"ghost\" href=\"/hardware-watchdog-enable-confirm\">Enable feed only</a><a class=\"ghost\" href=\"/hardware\">Hardware details</a><a class=\"ghost\" href=\"/diagnostics\">Diagnostics</a></div>"
                 "</div>"
             )
 
@@ -1836,16 +1922,29 @@ def start_web(cfg):
         info = hardware_info()
         watchdog = info.get("watchdog", {})
         legacy = watchdog.get("legacy_daemon", {})
+        systemd_wdt = watchdog.get("systemd_watchdog", systemd_watchdog_info())
+        setup = watchdog_setup_rows(watchdog, systemd_wdt)
+        check_rows = "".join(
+            "<tr>"
+            f"<td>{escape(str(item.get('name', '-')))}</td>"
+            f"<td class=\"{escape(str(item.get('state', 'unknown')))}\">{escape(str(item.get('state', 'unknown')).upper())}</td>"
+            f"<td>{escape(str(item.get('message', '-')))}</td>"
+            "</tr>"
+            for item in setup.get("checks", [])
+        )
         body = (
             "<div class=\"card\">"
-            "<h2>Prepare Hardware Watchdog Automatically</h2>"
-            "<p class=\"warning\">This is the recommended setup for POC-451VTC.</p>"
-            "<p class=\"muted\">It will load and persist Intel TCO, disable Ubuntu's legacy watchdog.service, write VA-Connect hardware watchdog settings, reinstall the va-watchdog systemd unit, and restart va-watchdog in the background.</p>"
+            "<h2>One-Click Hardware Watchdog Setup</h2>"
+            "<p class=\"warning\">This is the recommended setup and cleanup path for POC-451VTC.</p>"
+            "<p class=\"muted\">It will load and persist Intel TCO, stop/disable/mask/remove Ubuntu's legacy watchdog daemon if present, write VA-Connect hardware watchdog settings, reinstall the va-watchdog systemd unit, and restart va-watchdog in the background.</p>"
             "<div class=\"label\">Expected device</div><div class=\"value\">/dev/watchdog0</div>"
             "<div class=\"label\">Expected driver</div><div class=\"value\">iTCO_wdt [version 6]</div>"
             f"<div class=\"label\">Current legacy watchdog.service</div><div class=\"value\">{escape(str(legacy.get('active', '-')))} / {escape(str(legacy.get('enabled', '-')))}</div>"
+            f"<div class=\"label\">Legacy package</div><div class=\"value\">{escape(str(legacy.get('package_status', '-')))}</div>"
+            "<table><thead><tr><th>Check</th><th>Now</th><th>Meaning</th></tr></thead>"
+            f"<tbody>{check_rows}</tbody></table>"
             "<p class=\"muted\">After confirming, wait about 30 seconds, then return to Hardware. The page may briefly disconnect while the service restarts.</p>"
-            "<form class=\"inline\" method=\"post\" action=\"/hardware-watchdog-prepare-now\"><button class=\"action\" type=\"submit\">Prepare hardware watchdog automatically</button></form> "
+            "<form class=\"inline\" method=\"post\" action=\"/hardware-watchdog-prepare-now\"><button class=\"action\" type=\"submit\">Run setup and cleanup</button></form> "
             "<a class=\"ghost\" href=\"/hardware\">Cancel</a>"
             "</div>"
         )
@@ -1895,13 +1994,23 @@ def start_web(cfg):
 
     def legacy_watchdog_disable_confirm_html():
         legacy = legacy_watchdog_daemon_info()
+        unit_rows = "".join(
+            "<tr>"
+            f"<td>{escape(str(unit.get('unit', '-')))}</td>"
+            f"<td>{escape(str(unit.get('active', '-')))}</td>"
+            f"<td>{escape(str(unit.get('enabled', '-')))}</td>"
+            "</tr>"
+            for unit in legacy.get("units", [])
+        )
         body = (
             "<div class=\"card\">"
-            "<h2>Confirm Disable Legacy Watchdog Daemon</h2>"
-            "<p class=\"warning\">This will stop and disable Ubuntu's watchdog.service.</p>"
-            "<p class=\"muted\">Do this before VA-Connect owns /dev/watchdog0. The systemd watchdog fallback for va-watchdog remains separate.</p>"
-            f"<div class=\"label\">Current watchdog.service</div><div class=\"value\">{escape(str(legacy.get('active', '-')))} / {escape(str(legacy.get('enabled', '-')))}</div>"
-            "<form class=\"inline\" method=\"post\" action=\"/watchdog-legacy-disable-now\"><button class=\"action\" type=\"submit\">Disable legacy watchdog.service</button></form> "
+            "<h2>Confirm Legacy Watchdog Cleanup</h2>"
+            "<p class=\"warning\">This will stop, disable, mask, and remove Ubuntu's legacy watchdog daemon if it exists.</p>"
+            "<p class=\"muted\">This is separate from the V3 systemd process watchdog. It only removes other daemons that may compete for /dev/watchdog0.</p>"
+            f"<div class=\"label\">Package</div><div class=\"value\">{escape(str(legacy.get('package_status', '-')))}</div>"
+            "<table><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead>"
+            f"<tbody>{unit_rows}</tbody></table>"
+            "<form class=\"inline\" method=\"post\" action=\"/watchdog-legacy-disable-now\"><button class=\"action\" type=\"submit\">Clean legacy watchdog daemon</button></form> "
             "<a class=\"ghost\" href=\"/watchdog\">Cancel</a>"
             "</div>"
         )
@@ -1922,12 +2031,13 @@ def start_web(cfg):
             f"<div class=\"label\">Legacy watchdog.service</div><div class=\"value\">{escape(str(watchdog.get('legacy_daemon', {}).get('active', '-')))} / {escape(str(watchdog.get('legacy_daemon', {}).get('enabled', '-')))}</div>"
             f"<div class=\"label\">Prerequisites</div><pre>{escape(json.dumps(wizard.get('checks', []), indent=2))}</pre>"
         )
-        if wizard.get("ready"):
+        pre_enable_ready = all(item.get("state") == "healthy" for item in wizard.get("checks", [])[:4])
+        if pre_enable_ready:
             body += (
                 "<form class=\"inline\" method=\"post\" action=\"/hardware-watchdog-enable-now\"><button class=\"action\" type=\"submit\">Enable VA-Connect hardware feeding</button></form> "
             )
         else:
-            body += "<p class=\"warning\">Enable is blocked until all prerequisite checks are healthy.</p>"
+            body += "<p class=\"warning\">Enable is blocked until the driver, device, identity, and legacy cleanup checks are healthy.</p>"
         body += "<a class=\"ghost\" href=\"/watchdog\">Back to Watchdog</a></div>"
         return page_shell(body, "Watchdog")
 
@@ -1949,13 +2059,14 @@ def start_web(cfg):
     def watchdog_action_result_html(result):
         ok = bool(result.get("ok"))
         body = (
-            "<meta http-equiv=\"refresh\" content=\"12;url=/watchdog\">"
+            "<meta http-equiv=\"refresh\" content=\"20;url=/watchdog\">"
             "<div class=\"card\">"
             "<h2>Watchdog Action</h2>"
             f"<p class=\"{'healthy' if ok else 'critical'}\">{escape(str(result.get('message', '-')))}</p>"
             f"<div class=\"label\">Command</div><div class=\"value\">{escape(str(result.get('command', '-')))}</div>"
+            f"<div class=\"label\">Log</div><div class=\"value\">{escape(str(result.get('log_path', '-')))}</div>"
             f"<div class=\"label\">Output</div><pre>{escape(str(result.get('output', '')))}</pre>"
-            "<p class=\"muted\">This page will return to Watchdog automatically in 12 seconds.</p>"
+            "<p class=\"muted\">This page will return to Watchdog automatically in 20 seconds. Reload Watchdog after the service restarts to see the final owner/feed state.</p>"
             "<a class=\"ghost\" href=\"/watchdog\">Back to Watchdog</a>"
             "</div>"
         )
@@ -2094,13 +2205,18 @@ def start_web(cfg):
 
     def watchdog_trip_confirm_html():
         trip = trip_test_summary(cfg)
+        info = hardware_info()
+        watchdog = info.get("watchdog", {})
+        setup = watchdog_setup_rows(watchdog, watchdog.get("systemd_watchdog", systemd_watchdog_info()))
+        trip_ready = bool(setup.get("trip_ready"))
         armed = trip.get("armed", False)
-        trigger_disabled = "" if armed else "disabled"
+        trigger_disabled = "" if armed and trip_ready else "disabled"
         body_parts = [
             "<div class=\"card\">",
             "<h2>Confirm Deliberate Watchdog Trip Test</h2>",
             "<p class=\"critical\">This can reboot the gateway if the hardware watchdog is healthy.</p>",
             "<p class=\"muted\">Triple confirmation: arm the test, check the risk box, and type TRIP before you submit the final form.</p>",
+            f"<p class=\"{escape(str(setup.get('state', 'warning')))}\">{escape(str(setup.get('message', '-')))}</p>",
             f"<div class=\"label\">Current state</div><div class=\"value\">{escape('Armed' if armed else ('Triggered this boot' if trip.get('triggered') else ('Completed on previous boot' if trip.get('completed_previous_boot') else 'Not armed')))}</div>",
             f"<div class=\"label\">Last result</div><div class=\"value\">{escape(str(trip.get('last_result_message', 'No trip test recorded yet')))}</div>",
             "<form class=\"inline\" method=\"post\" action=\"/watchdog-trip-arm\">",
@@ -2115,9 +2231,11 @@ def start_web(cfg):
         ]
         if not armed:
             body_parts.append("<p class=\"warning\">Arm the trip test first to enable the final trigger button.</p>")
+        if not trip_ready:
+            body_parts.append("<p class=\"warning\">Trip test is blocked until V3 owns /dev/watchdog0 and has a recent hardware feed. Run one-click setup and reload Watchdog first.</p>")
         body_parts.append("</div>")
         body = "".join(body_parts)
-        if armed:
+        if armed or not trip_ready:
             body = body.replace(
                 "<button class=\"action\" type=\"submit\">1. Arm trip test</button>",
                 "<button class=\"action\" type=\"submit\" disabled>1. Arm trip test</button>"
@@ -2337,6 +2455,131 @@ def start_web(cfg):
             "feed_state": feed_state,
             "last_feed_message": last_feed_message,
             "last_test_message": last_test_message,
+        }
+
+    def watchdog_owner_info(device):
+        device_path = Path(str(device or "/dev/watchdog0"))
+        owners = []
+        if not device_path.exists():
+            return {"device": str(device_path), "owners": [], "summary": "Device not present"}
+        try:
+            target = os.path.realpath(str(device_path))
+        except OSError:
+            target = str(device_path)
+        for proc in Path("/proc").iterdir():
+            if not proc.name.isdigit():
+                continue
+            fd_dir = proc / "fd"
+            try:
+                fds = list(fd_dir.iterdir())
+            except OSError:
+                continue
+            matched = False
+            for fd in fds:
+                try:
+                    if os.path.realpath(str(fd)) == target:
+                        matched = True
+                        break
+                except OSError:
+                    continue
+            if not matched:
+                continue
+            try:
+                comm = (proc / "comm").read_text(encoding="utf-8", errors="ignore").strip()
+            except OSError:
+                comm = "-"
+            try:
+                raw_cmd = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", errors="ignore").strip()
+            except OSError:
+                raw_cmd = ""
+            owners.append({"pid": proc.name, "name": comm, "cmdline": raw_cmd or comm})
+        if owners:
+            summary = ", ".join(f"{item['name']}({item['pid']})" for item in owners)
+        else:
+            summary = "No process currently has the watchdog device open"
+        return {"device": str(device_path), "owners": owners, "summary": summary}
+
+    def legacy_clean(legacy):
+        units = legacy.get("units", [])
+        if units:
+            return all(unit.get("active") != "active" and unit.get("enabled") not in ("enabled", "static") for unit in units)
+        return legacy.get("active") != "active" and legacy.get("enabled") not in ("enabled", "static")
+
+    def watchdog_setup_rows(watchdog, systemd_wdt):
+        modules = watchdog.get("modules", {})
+        wdctl = watchdog.get("wdctl", {})
+        legacy = watchdog.get("legacy_daemon", {})
+        owner = watchdog.get("owners", {})
+        wdt = watchdog_test_summary()
+        hw_cfg = cfg.get("hardware_watchdog", {})
+        device = str(hw_cfg.get("device") or watchdog.get("device") or "/dev/watchdog0")
+        identity = str(wdctl.get("identity", ""))
+        feed_enabled = bool(hw_cfg.get("enabled"))
+        feed_opened = bool(wdt.get("opened"))
+        feed_recent = wdt.get("feed_state") == "healthy"
+        timeout = int(hw_cfg.get("timeout_seconds", 30) or 30)
+        feed_interval = int(hw_cfg.get("feed_interval_seconds", 10) or 10)
+        rows = [
+            {
+                "name": "Intel TCO driver",
+                "state": "healthy" if modules.get("iTCO_wdt") else "warning",
+                "message": "Loaded" if modules.get("iTCO_wdt") else "Not loaded yet",
+            },
+            {
+                "name": "Watchdog device",
+                "state": "healthy" if Path(device).exists() else "warning",
+                "message": f"{device} present" if Path(device).exists() else f"{device} missing",
+            },
+            {
+                "name": "Driver identity",
+                "state": "healthy" if "iTCO_wdt" in identity else "warning",
+                "message": identity or "No iTCO identity reported yet",
+            },
+            {
+                "name": "Legacy daemon",
+                "state": "healthy" if legacy_clean(legacy) else "critical",
+                "message": "Removed/disabled" if legacy_clean(legacy) else "Another watchdog daemon may still own the device",
+            },
+            {
+                "name": "V3 config",
+                "state": "healthy" if feed_enabled else "warning",
+                "message": f"enabled={feed_enabled}, device={device}, feed={feed_interval}s, timeout={timeout}s",
+            },
+            {
+                "name": "V3 device owner",
+                "state": "healthy" if feed_opened else "warning",
+                "message": "V3 has opened the watchdog device" if feed_opened else owner.get("summary", "V3 has not opened the watchdog device"),
+            },
+            {
+                "name": "Live feed",
+                "state": "healthy" if feed_recent else "warning",
+                "message": str(wdt.get("last_feed_message", "No feed status yet")),
+            },
+            {
+                "name": "V3 process watchdog",
+                "state": systemd_wdt.get("state", "unknown"),
+                "message": f"{systemd_wdt.get('message', '-')}; WatchdogSec {systemd_wdt.get('watchdog_sec', '-')}",
+            },
+        ]
+        required = rows[:7]
+        ready = all(row["state"] == "healthy" for row in required)
+        return {
+            "ready": ready,
+            "trip_ready": ready,
+            "state": "healthy" if ready else "warning",
+            "message": "Hardware watchdog is ready and owned by V3" if ready else "Setup incomplete: run the one-click setup, then reload this page",
+            "checks": rows,
+            "owner": owner,
+            "config": {
+                "path": str(active_config_path()),
+                "enabled": feed_enabled,
+                "device": device,
+                "feed_interval_seconds": feed_interval,
+                "timeout_seconds": timeout,
+                "opened": feed_opened,
+                "feed_count": wdt.get("feed_count", 0),
+                "last_feed": wdt.get("last_feed_message", "-"),
+            },
         }
 
     def systemd_watchdog_info():
@@ -2709,7 +2952,7 @@ def start_web(cfg):
         if not script.exists():
             return {"ok": False, "message": f"Hardware watchdog prepare script not found: {script}", "log_path": str(log_path)}
 
-        command = f"cd {repo_root()!s}; /bin/bash scripts/prepare_itco_watchdog.sh >> {log_path!s} 2>&1"
+        command = f"cd {repo_root()!s}; /bin/bash scripts/prepare_itco_watchdog.sh > {log_path!s} 2>&1"
         try:
             subprocess.Popen(["/bin/bash", "-lc", command], start_new_session=True)
         except Exception as exc:
@@ -2728,31 +2971,44 @@ def start_web(cfg):
         )
         return {
             "ok": True,
-            "message": "Hardware watchdog prepare started. The script will enable config after driver setup, then restart va-watchdog in the background.",
+            "message": "Hardware watchdog setup and legacy cleanup started. The script will restart va-watchdog in the background.",
             "command": command,
-            "output": "Automatic prepare: load Intel TCO, disable legacy watchdog.service, install/restart va-watchdog.",
+            "output": "Setup flow: load Intel TCO, remove legacy watchdog daemon, write V3 config, install/restart va-watchdog, verify /dev/watchdog0.",
             "log_path": str(log_path),
         }
 
     def disable_legacy_watchdog_daemon():
-        result = _run(["systemctl", "disable", "--now", "watchdog"], timeout=20)
+        command = (
+            "set +e; "
+            "for unit in watchdog.service wd_keepalive.service; do "
+            "systemctl stop \"$unit\"; systemctl disable \"$unit\"; systemctl mask \"$unit\"; "
+            "done; "
+            "if command -v dpkg-query >/dev/null 2>&1 && dpkg-query -W -f='${Status}' watchdog 2>/dev/null | grep -q 'install ok installed'; then "
+            "DEBIAN_FRONTEND=noninteractive apt-get purge -y watchdog; "
+            "else echo 'Ubuntu watchdog package is not installed.'; fi; "
+            "systemctl is-active watchdog.service; systemctl is-enabled watchdog.service; "
+            "systemctl is-active wd_keepalive.service; systemctl is-enabled wd_keepalive.service"
+        )
+        result = _run(["/bin/bash", "-lc", command], timeout=90)
         output = "\n".join(part for part in [result.get("stdout", ""), result.get("stderr", "")] if part)
-        ok = bool(result.get("ok"))
+        legacy = legacy_watchdog_daemon_info()
+        ok = legacy_clean(legacy)
         append_web_event("info" if ok else "warning", "hardware_watchdog", "Legacy watchdog.service disable requested", {"ok": ok, "output": output})
         return {
             "ok": ok,
-            "message": "Legacy watchdog.service disabled" if ok else "Could not disable legacy watchdog.service",
-            "command": "systemctl disable --now watchdog",
+            "message": "Legacy watchdog daemon cleaned up" if ok else "Legacy watchdog daemon cleanup needs attention",
+            "command": command,
             "output": output,
         }
 
     def enable_va_hardware_watchdog():
         info = hardware_info()
         wizard = hardware_watchdog_wizard_state(info.get("watchdog", {}), systemd_watchdog_info())
-        if not wizard.get("ready"):
+        pre_enable_ready = all(item.get("state") == "healthy" for item in wizard.get("checks", [])[:4])
+        if not pre_enable_ready:
             return {
                 "ok": False,
-                "message": "Hardware watchdog prerequisites are not healthy yet.",
+                "message": "Hardware watchdog prerequisites are not healthy yet. Run one-click setup first.",
                 "command": "",
                 "output": json.dumps(wizard.get("checks", []), indent=2),
             }
@@ -3042,6 +3298,7 @@ def start_web(cfg):
             "device": device,
             "modules": modules,
             "wdctl": wdctl,
+            "owners": watchdog_owner_info(device),
             "legacy_daemon": legacy_watchdog_daemon_info(),
             "systemd_watchdog": systemd_watchdog_info(),
             "prepare_log": itco_prepare_status().get("last_log", ""),
@@ -3050,59 +3307,28 @@ def start_web(cfg):
         }
 
     def legacy_watchdog_daemon_info():
-        active = _run(["systemctl", "is-active", "watchdog"], timeout=3)
-        enabled = _run(["systemctl", "is-enabled", "watchdog"], timeout=3)
+        units = []
+        for unit in ["watchdog.service", "wd_keepalive.service"]:
+            active = _run(["systemctl", "is-active", unit], timeout=3)
+            enabled = _run(["systemctl", "is-enabled", unit], timeout=3)
+            units.append({
+                "unit": unit,
+                "active": active["stdout"] or active["stderr"] or "unknown",
+                "enabled": enabled["stdout"] or enabled["stderr"] or "unknown",
+            })
+        package = _run(["dpkg-query", "-W", "-f=${Status}", "watchdog"], timeout=3)
+        package_status = package["stdout"] or package["stderr"] or "not installed"
+        main = units[0]
         return {
-            "active": active["stdout"] or active["stderr"] or "unknown",
-            "enabled": enabled["stdout"] or enabled["stderr"] or "unknown",
+            "active": main["active"],
+            "enabled": main["enabled"],
+            "units": units,
+            "package_status": package_status,
+            "package_installed": "install ok installed" in package_status,
         }
 
     def hardware_watchdog_wizard_state(watchdog, systemd_wdt):
-        modules = watchdog.get("modules", {})
-        wdctl = watchdog.get("wdctl", {})
-        legacy = watchdog.get("legacy_daemon", {})
-        device = watchdog.get("device", "/dev/watchdog0")
-        identity = str(wdctl.get("identity", ""))
-        timeout = str(wdctl.get("timeout", ""))
-        checks = [
-            {
-                "name": "iTCO_wdt module",
-                "state": "healthy" if modules.get("iTCO_wdt") else "warning",
-                "message": "Loaded" if modules.get("iTCO_wdt") else "Not loaded",
-            },
-            {
-                "name": "Watchdog device",
-                "state": "healthy" if Path(device).exists() else "warning",
-                "message": f"{device} present" if Path(device).exists() else f"{device} missing",
-            },
-            {
-                "name": "wdctl identity",
-                "state": "healthy" if "iTCO_wdt" in identity else "warning",
-                "message": identity or "No iTCO_wdt identity yet",
-            },
-            {
-                "name": "wdctl timeout",
-                "state": "healthy" if "30" in timeout else "warning",
-                "message": timeout or "No timeout reported yet",
-            },
-            {
-                "name": "legacy watchdog.service",
-                "state": "healthy" if legacy.get("active") != "active" else "warning",
-                "message": f"{legacy.get('active', '-')}/{legacy.get('enabled', '-')}",
-            },
-            {
-                "name": "systemd watchdog fallback",
-                "state": "healthy" if systemd_wdt.get("state") == "healthy" else "warning",
-                "message": f"{systemd_wdt.get('message', '-')}; {systemd_wdt.get('watchdog_sec', '-')}",
-            },
-        ]
-        ready = all(item["state"] == "healthy" for item in checks)
-        return {
-            "ready": ready,
-            "state": "healthy" if ready else "warning",
-            "message": "Ready to enable VA-Connect hardware feeding" if ready else "Not ready to enable hardware feeding yet",
-            "checks": checks,
-        }
+        return watchdog_setup_rows(watchdog, systemd_wdt)
 
     def _df_path(path, label="", warning=0, critical=0, full_expected=False):
         result = _run(["df", "-P", "-B1", str(path)])
@@ -3834,10 +4060,24 @@ def start_web(cfg):
                 self.wfile.write(body)
                 return
             if route_path == "/watchdog-trip-arm":
-                result = arm_trip_test(cfg)
-                append_web_event("warning", "watchdog_test", "Deliberate watchdog trip test armed", result)
-                body = watchdog_trip_armed_html(result).encode("utf-8")
-                self.send_response(200)
+                info = hardware_info()
+                watchdog = info.get("watchdog", {})
+                setup = watchdog_setup_rows(watchdog, watchdog.get("systemd_watchdog", systemd_watchdog_info()))
+                if not setup.get("trip_ready"):
+                    result = {
+                        "ok": False,
+                        "message": "Trip test blocked: V3 is not currently ready to trip the hardware watchdog. Run one-click setup and reload Watchdog first.",
+                        "tested_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+                        "triggered_boot_id": "",
+                    }
+                    append_web_event("warning", "watchdog_test", result["message"], setup)
+                    body = watchdog_trip_result_html(result).encode("utf-8")
+                    self.send_response(409)
+                else:
+                    result = arm_trip_test(cfg)
+                    append_web_event("warning", "watchdog_test", "Deliberate watchdog trip test armed", result)
+                    body = watchdog_trip_armed_html(result).encode("utf-8")
+                    self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()
@@ -3852,12 +4092,23 @@ def start_web(cfg):
                     token = form.get("token", [""])[0]
                     ack_risk = form.get("ack_risk", [""])[0] in {"1", "on", "true", "True", "yes"}
                     confirm_phrase = form.get("confirm_phrase", [""])[0]
-                    result = confirm_trip_test(cfg, token, ack_risk, confirm_phrase)
+                    info = hardware_info()
+                    watchdog = info.get("watchdog", {})
+                    setup = watchdog_setup_rows(watchdog, watchdog.get("systemd_watchdog", systemd_watchdog_info()))
+                    if not setup.get("trip_ready"):
+                        result = {
+                            "ok": False,
+                            "message": "Trip test blocked: V3 is not currently ready to trip the hardware watchdog. Run one-click setup and reload Watchdog first.",
+                            "tested_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+                            "triggered_boot_id": "",
+                        }
+                    else:
+                        result = confirm_trip_test(cfg, token, ack_risk, confirm_phrase)
                 except Exception as exc:
                     result = {"ok": False, "message": str(exc), "tested_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), "triggered_boot_id": ""}
                 append_web_event("warning" if result.get("ok") else "critical", "watchdog_test", result.get("message", "Deliberate trip test processed"), result)
                 body = watchdog_trip_result_html(result).encode("utf-8")
-                self.send_response(200 if result.get("ok") else 400)
+                self.send_response(200 if result.get("ok") else 409)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()
