@@ -128,6 +128,10 @@ label { display:block; margin:calc(6px * var(--scale)) 0; }
 table { width:100%; border-collapse:collapse; }
 th, td { padding:calc(9px * var(--scale)) calc(6px * var(--scale)); border-top:1px solid var(--line); text-align:left; white-space:nowrap; }
 th { color:var(--muted); font-weight:600; font-size:calc(12px * var(--scale)); }
+tr.selectable-row { cursor:pointer; }
+tr.selectable-row:hover { outline:2px solid var(--blue); outline-offset:-2px; }
+tr.selectable-row.selected { background:rgba(59,130,246,.18); }
+input[type="radio"] { width:18px; height:18px; }
 .events { display:grid; gap:calc(8px * var(--scale)); }
 .event { display:grid; grid-template-columns: calc(82px * var(--scale)) 1fr; gap:calc(8px * var(--scale)); border-top:1px solid var(--line); padding-top:calc(8px * var(--scale)); }
 .event-time { color:var(--muted); font-size:calc(12px * var(--scale)); }
@@ -1988,12 +1992,17 @@ def start_web(cfg):
         candidates = recording_storage_candidates(cfg)
         rows = []
         blank_rows = []
+        partition_options = []
+        blank_options = []
         for item in candidates:
             allowed = bool(item.get("allowed"))
             blank_allowed = bool(item.get("blank_prepare_allowed"))
+            device = str(item.get("device", ""))
+            row_class = "selectable-row" if allowed else ""
+            row_onclick = "onclick=\"selectStorageRadio(this, 'device')\"" if allowed else ""
             rows.append(
-                "<tr>"
-                f"<td><input type=\"radio\" name=\"device\" value=\"{escape(str(item.get('device', '')))}\" {'disabled' if not allowed else ''}></td>"
+                f"<tr class=\"{row_class}\" {row_onclick}>"
+                f"<td><label><input type=\"radio\" name=\"device\" value=\"{escape(device)}\" {'disabled' if not allowed else ''}> Select</label></td>"
                 f"<td>{escape(str(item.get('device', '-')))}</td>"
                 f"<td>{escape(str(item.get('model', '-')))}</td>"
                 f"<td>{escape(str(item.get('serial', '-')))}</td>"
@@ -2004,10 +2013,16 @@ def start_web(cfg):
                 f"<td class=\"{'healthy' if allowed else 'warning'}\">{escape('Selectable' if allowed else str(item.get('blocked_reason', 'Blocked')))}</td>"
                 "</tr>"
             )
+            if allowed:
+                partition_options.append(
+                    f"<option value=\"{escape(device)}\">{escape(device)} - {escape(str(item.get('model', '-') or '-'))} - {escape(str(item.get('size_gb', '-')))} GB</option>"
+                )
             if item.get("type") == "disk":
+                blank_row_class = "selectable-row" if blank_allowed else ""
+                blank_row_onclick = "onclick=\"selectStorageRadio(this, 'disk')\"" if blank_allowed else ""
                 blank_rows.append(
-                    "<tr>"
-                    f"<td><input type=\"radio\" name=\"disk\" value=\"{escape(str(item.get('device', '')))}\" {'disabled' if not blank_allowed else ''}></td>"
+                    f"<tr class=\"{blank_row_class}\" {blank_row_onclick}>"
+                    f"<td><label><input type=\"radio\" name=\"disk\" value=\"{escape(device)}\" {'disabled' if not blank_allowed else ''}> Select</label></td>"
                     f"<td>{escape(str(item.get('device', '-')))}</td>"
                     f"<td>{escape(str(item.get('model', '-')))}</td>"
                     f"<td>{escape(str(item.get('serial', '-')))}</td>"
@@ -2018,6 +2033,10 @@ def start_web(cfg):
                     f"<td class=\"{'healthy' if blank_allowed else 'warning'}\">{escape('Can prepare as blank recording disk' if blank_allowed else str(item.get('blank_prepare_reason', 'Blocked')))}</td>"
                     "</tr>"
                 )
+                if blank_allowed:
+                    blank_options.append(
+                        f"<option value=\"{escape(device)}\">{escape(device)} - {escape(str(item.get('model', '-') or '-'))} - {escape(str(item.get('size_gb', '-')))} GB</option>"
+                    )
         if not rows:
             rows.append("<tr><td colspan=\"9\">No block devices detected.</td></tr>")
         if not blank_rows:
@@ -2031,8 +2050,14 @@ def start_web(cfg):
             "<div class=\"label\">Intended fstab entry</div>"
             f"<pre>{escape(str(fstab_entry))}</pre>"
             f"<div class=\"label\">Current status</div><div class=\"value {escape(str(rec.get('status', 'unknown')))}\">{escape(str(rec.get('message', '-')))}</div>"
+            "<script>"
+            "function selectStorageRadio(row,name){var input=row.querySelector('input[type=radio][name='+name+']');if(!input||input.disabled){return;}input.checked=true;var rows=row.closest('tbody').querySelectorAll('tr');for(var i=0;i<rows.length;i++){rows[i].classList.remove('selected');}row.classList.add('selected');}"
+            "function selectStorageDropdown(select,name){var form=select.form;var inputs=form.querySelectorAll('input[type=radio][name='+name+']');for(var i=0;i<inputs.length;i++){if(inputs[i].value===select.value&&!inputs[i].disabled){inputs[i].checked=true;var row=inputs[i].closest('tr');if(row){selectStorageRadio(row,name);}break;}}}"
+            "</script>"
             "<h3>Use Existing ext4 Partition</h3>"
             "<form method=\"post\" action=\"/recording-storage-confirm\">"
+            "<label class=\"label\">Choose partition</label>"
+            f"<select onchange=\"selectStorageDropdown(this, 'device')\"><option value=\"\">Select partition...</option>{''.join(partition_options)}</select>"
             "<table><thead><tr><th>Select</th><th>Device</th><th>Model</th><th>Serial</th><th>Size</th><th>Filesystem</th><th>Label</th><th>Mountpoint</th><th>Safety</th></tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table>"
             "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Use selected partition</button><a class=\"ghost\" href=\"/storage\">Cancel</a></div>"
@@ -2042,6 +2067,8 @@ def start_web(cfg):
             "<h2>Prepare New Blank Recording Disk</h2>"
             "<p class=\"critical\">This path creates a new partition and ext4 filesystem. Use it only for a new/empty recording disk. Existing data on the selected disk will be erased after confirmation.</p>"
             "<form method=\"post\" action=\"/recording-storage-blank-confirm\">"
+            "<label class=\"label\">Choose blank disk</label>"
+            f"<select onchange=\"selectStorageDropdown(this, 'disk')\"><option value=\"\">Select blank disk...</option>{''.join(blank_options)}</select>"
             "<table><thead><tr><th>Select</th><th>Disk</th><th>Model</th><th>Serial</th><th>Size</th><th>Filesystem</th><th>Label</th><th>Mountpoint</th><th>Safety</th></tr></thead>"
             f"<tbody>{''.join(blank_rows)}</tbody></table>"
             "<div class=\"button-row\"><button class=\"danger\" type=\"submit\">Prepare selected blank disk</button><a class=\"ghost\" href=\"/storage\">Cancel</a></div>"
