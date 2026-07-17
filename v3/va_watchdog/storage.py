@@ -444,15 +444,18 @@ def recording_storage_candidates(cfg: dict[str, Any]) -> list[dict[str, Any]]:
             parent_real = str(parent)
         reasons = []
         blank_prepare_reasons = []
-        if row.get("type") != "part":
-            reasons.append("select a partition, not a whole disk")
+        row_type = row.get("type")
+        filesystem = row.get("fstype") or ""
+        existing_whole_disk_fs = row_type == "disk" and filesystem == "ext4" and not (row.get("children") or [])
+        if row_type not in {"part", "disk"} or (row_type == "disk" and not existing_whole_disk_fs):
+            reasons.append("select an ext4 partition or an ext4 whole-disk filesystem")
         if mountpoint in protected_mounts:
             reasons.append(f"protected mount {mountpoint}")
         if root_parent and parent_real == root_parent:
             reasons.append("parent disk contains the active root filesystem")
-        if row.get("type") == "part" and row.get("fstype") != "ext4":
-            reasons.append(f"filesystem is {row.get('fstype') or 'missing'}, expected ext4")
-        if row.get("type") != "disk":
+        if row_type in {"part", "disk"} and filesystem != "ext4":
+            reasons.append(f"filesystem is {filesystem or 'missing'}, expected ext4")
+        if row_type != "disk":
             blank_prepare_reasons.append("only whole disks can be prepared as blank recording storage")
         if root_parent and parent_real == root_parent:
             blank_prepare_reasons.append("disk contains the active root filesystem")
@@ -476,6 +479,7 @@ def recording_storage_candidates(cfg: dict[str, Any]) -> list[dict[str, Any]]:
             "mountpoint": mountpoint,
             "allowed": not reasons,
             "blocked_reason": "; ".join(reasons),
+            "existing_mode": "whole disk ext4 filesystem" if existing_whole_disk_fs else "partition",
             "blank_prepare_allowed": not blank_prepare_reasons,
             "blank_prepare_reason": "; ".join(blank_prepare_reasons),
         })
@@ -539,6 +543,13 @@ def configure_recording_storage(cfg: dict[str, Any], device: str, confirm_label:
         return {"ok": False, "message": "Selected device is protected or unsuitable.", "output": selected.get("blocked_reason", "")}
     if selected.get("filesystem") != expected_fs:
         return {"ok": False, "message": f"Selected device must already be {expected_fs}. The watchdog will not format disks.", "output": ""}
+    current_mountpoint = str(selected.get("mountpoint") or "")
+    if current_mountpoint and current_mountpoint != mountpoint:
+        return {
+            "ok": False,
+            "message": "Selected storage is mounted somewhere else. The watchdog will not unmount it automatically.",
+            "output": f"Current mountpoint: {current_mountpoint}\nExpected mountpoint: {mountpoint}\nRun this first, then reload the Storage page and try again:\n\nsudo umount {current_mountpoint}",
+        }
 
     output = []
     current_label = selected.get("label") or _blkid_value(device, "LABEL")

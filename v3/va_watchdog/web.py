@@ -2010,12 +2010,12 @@ def start_web(cfg):
                 f"<td>{escape(str(item.get('filesystem', '-') or '-'))}</td>"
                 f"<td>{escape(str(item.get('label', '-') or '-'))}</td>"
                 f"<td>{escape(str(item.get('mountpoint', '-') or '-'))}</td>"
-                f"<td class=\"{'healthy' if allowed else 'warning'}\">{escape('Selectable' if allowed else str(item.get('blocked_reason', 'Blocked')))}</td>"
+                f"<td class=\"{'healthy' if allowed else 'warning'}\">{escape(str(item.get('existing_mode', 'Selectable')) if allowed else str(item.get('blocked_reason', 'Blocked')))}</td>"
                 "</tr>"
             )
             if allowed:
                 partition_options.append(
-                    f"<option value=\"{escape(device)}\">{escape(device)} - {escape(str(item.get('model', '-') or '-'))} - {escape(str(item.get('size_gb', '-')))} GB</option>"
+                    f"<option value=\"{escape(device)}\">{escape(device)} - {escape(str(item.get('existing_mode', 'ext4 filesystem')))} - {escape(str(item.get('model', '-') or '-'))} - {escape(str(item.get('size_gb', '-')))} GB</option>"
                 )
             if item.get("type") == "disk":
                 blank_row_class = "selectable-row" if blank_allowed else ""
@@ -2046,7 +2046,7 @@ def start_web(cfg):
         body = (
             "<div class=\"card\">"
             "<h2>Configure Recording Storage</h2>"
-            "<p class=\"warning\">Existing partition setup does not format, erase, unmount, or automatically repair a drive. It only labels the selected ext4 partition after confirmation and writes a labelled /etc/fstab entry.</p>"
+            "<p class=\"warning\">Existing filesystem setup does not format, erase, unmount, or automatically repair a drive. It only labels the selected ext4 partition or whole-disk ext4 filesystem after confirmation and writes a labelled /etc/fstab entry.</p>"
             "<div class=\"label\">Intended fstab entry</div>"
             f"<pre>{escape(str(fstab_entry))}</pre>"
             f"<div class=\"label\">Current status</div><div class=\"value {escape(str(rec.get('status', 'unknown')))}\">{escape(str(rec.get('message', '-')))}</div>"
@@ -2054,10 +2054,10 @@ def start_web(cfg):
             "function selectStorageRadio(row,name){var input=row.querySelector('input[type=radio][name='+name+']');if(!input||input.disabled){return;}input.checked=true;var rows=row.closest('tbody').querySelectorAll('tr');for(var i=0;i<rows.length;i++){rows[i].classList.remove('selected');}row.classList.add('selected');}"
             "function selectStorageDropdown(select,name){var form=select.form;var inputs=form.querySelectorAll('input[type=radio][name='+name+']');for(var i=0;i<inputs.length;i++){if(inputs[i].value===select.value&&!inputs[i].disabled){inputs[i].checked=true;var row=inputs[i].closest('tr');if(row){selectStorageRadio(row,name);}break;}}}"
             "</script>"
-            "<h3>Use Existing ext4 Partition</h3>"
+            "<h3>Use Existing ext4 Filesystem</h3>"
             "<form method=\"post\" action=\"/recording-storage-confirm\">"
-            "<label class=\"label\">Choose partition</label>"
-            f"<select onchange=\"selectStorageDropdown(this, 'device')\"><option value=\"\">Select partition...</option>{''.join(partition_options)}</select>"
+            "<label class=\"label\">Choose existing ext4 storage</label>"
+            f"<select onchange=\"selectStorageDropdown(this, 'device')\"><option value=\"\">Select existing storage...</option>{''.join(partition_options)}</select>"
             "<table><thead><tr><th>Select</th><th>Device</th><th>Model</th><th>Serial</th><th>Size</th><th>Filesystem</th><th>Label</th><th>Mountpoint</th><th>Safety</th></tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table>"
             "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Use selected partition</button><a class=\"ghost\" href=\"/storage\">Cancel</a></div>"
@@ -2097,12 +2097,13 @@ def start_web(cfg):
         body = (
             "<div class=\"card\">"
             "<h2>Confirm Recording Storage Device</h2>"
-            "<p class=\"critical\">Only continue if this is the CCTV recording partition. Changing the label can make existing recordings inaccessible until paths are updated.</p>"
+            "<p class=\"critical\">Only continue if this is the CCTV recording filesystem. Changing the label can make existing recordings inaccessible until paths are updated.</p>"
             f"<div class=\"label\">Device</div><div class=\"value\">{escape(str(selected.get('device', '-')))}</div>"
             f"<div class=\"label\">Model</div><div class=\"value\">{escape(str(selected.get('model', '-')))}</div>"
             f"<div class=\"label\">Serial</div><div class=\"value\">{escape(str(selected.get('serial', '-')))}</div>"
             f"<div class=\"label\">Size</div><div class=\"value\">{escape(str(selected.get('size_gb', '-')))} GB</div>"
             f"<div class=\"label\">Filesystem</div><div class=\"value\">{escape(str(selected.get('filesystem', '-')))}</div>"
+            f"<div class=\"label\">Type</div><div class=\"value\">{escape(str(selected.get('existing_mode', '-')))}</div>"
             f"<div class=\"label\">Current label</div><div class=\"value\">{escape(str(selected.get('label', '-') or '-'))}</div>"
             f"<div class=\"label\">Current mountpoint</div><div class=\"value\">{escape(str(selected.get('mountpoint', '-') or '-'))}</div>"
             "<form method=\"post\" action=\"/recording-storage-apply\">"
