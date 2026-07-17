@@ -59,7 +59,7 @@ Recording storage is mounted by Linux through `/etc/fstab`; the watchdog monitor
 LABEL=CCTV_STORAGE /media/vsuser/Storage ext4 defaults,nofail,x-systemd.device-timeout=5 0 2
 ```
 
-The Storage page includes a Recording Storage panel and guarded setup flows. Existing-partition setup refuses protected system mounts and the parent disk containing `/`, never formats a disk, and only relabels a selected ext4 partition after explicit confirmation. Blank-disk setup is separate and requires explicit confirmation before creating a single ext4 partition labelled `CCTV_STORAGE`.
+The Storage page includes a Recording Storage panel and guarded setup flows. Existing-partition setup refuses protected system mounts and the parent disk containing `/`, never formats a disk, and only relabels a selected ext4 partition after explicit confirmation. Blank-disk setup is separate and requires explicit confirmation before creating a single ext4 partition labelled `CCTV_STORAGE`. Setup also prepares `/media/vsuser/Storage/recordings` for the `vsuser` account so the recording application can create files there.
 
 Hardware watchdog is disabled by default. Enable only after testing:
 For POC-451VTC / Intel Atom x6425E gateways, first expose the Intel TCO watchdog:

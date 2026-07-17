@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import shutil
 import subprocess
 import time
@@ -16,6 +17,10 @@ DEFAULT_RECORDING_STORAGE = {
     "mountpoint": "/media/vsuser/Storage",
     "filesystem": "ext4",
     "fstab_options": "defaults,nofail,x-systemd.device-timeout=5",
+    "recording_subdir": "recordings",
+    "owner": "vsuser",
+    "group": "vsuser",
+    "directory_mode": "775",
     "free_warning_percent": 10,
     "temperature_warning_c": 55,
     "recording_services": [],
@@ -201,6 +206,38 @@ def _recording_writable(mountpoint):
     except Exception:
         return False
 
+def recording_storage_recordings_path(cfg: dict[str, Any]) -> str:
+    rec_cfg = recording_storage_cfg(cfg)
+    mountpoint = str(rec_cfg.get("mountpoint") or "/media/vsuser/Storage").rstrip("/")
+    subdir = str(rec_cfg.get("recording_subdir") or "recordings").strip().strip("/")
+    return posixpath.join(mountpoint, subdir) if subdir else mountpoint
+
+def _prepare_recording_directories(cfg: dict[str, Any]) -> dict[str, Any]:
+    rec_cfg = recording_storage_cfg(cfg)
+    mountpoint = Path(str(rec_cfg.get("mountpoint") or "/media/vsuser/Storage"))
+    recordings_path = Path(recording_storage_recordings_path(cfg))
+    owner = str(rec_cfg.get("owner") or "").strip()
+    group = str(rec_cfg.get("group") or "").strip()
+    mode = str(rec_cfg.get("directory_mode") or "775").strip()
+    output = []
+    try:
+        recordings_path.mkdir(parents=True, exist_ok=True)
+        chmod_mount = _run(["chmod", mode, str(mountpoint)], timeout=10)
+        chmod_recordings = _run(["chmod", mode, str(recordings_path)], timeout=10)
+        output.append(f"chmod {mode} {mountpoint}: {chmod_mount['stdout'] or chmod_mount['stderr'] or chmod_mount['returncode']}")
+        output.append(f"chmod {mode} {recordings_path}: {chmod_recordings['stdout'] or chmod_recordings['stderr'] or chmod_recordings['returncode']}")
+        if owner:
+            spec = f"{owner}:{group}" if group else owner
+            chown_mount = _run(["chown", spec, str(mountpoint)], timeout=10)
+            chown_recordings = _run(["chown", spec, str(recordings_path)], timeout=10)
+            output.append(f"chown {spec} {mountpoint}: {chown_mount['stdout'] or chown_mount['stderr'] or chown_mount['returncode']}")
+            output.append(f"chown {spec} {recordings_path}: {chown_recordings['stdout'] or chown_recordings['stderr'] or chown_recordings['returncode']}")
+            if not chown_mount["ok"] or not chown_recordings["ok"]:
+                return {"ok": False, "message": "Mounted, but could not set recording directory ownership.", "output": "\n".join(output)}
+        return {"ok": True, "message": "Recording directory prepared.", "output": "\n".join(output), "recordings_path": str(recordings_path)}
+    except Exception as exc:
+        return {"ok": False, "message": f"Could not prepare recording directory: {exc}", "output": "\n".join(output), "recordings_path": str(recordings_path)}
+
 def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
     rec_cfg = recording_storage_cfg(cfg)
     expected_label = str(rec_cfg.get("expected_label") or "CCTV_STORAGE")
@@ -302,6 +339,9 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
         "checked_at": checked_at,
         "last_successful_check": checked_at if status in ("healthy", "warning") else "",
         "fstab_entry": f"LABEL={expected_label} {mountpoint} {expected_fs} {rec_cfg.get('fstab_options')} 0 2",
+        "recordings_path": recording_storage_recordings_path(cfg),
+        "owner": rec_cfg.get("owner") or "",
+        "group": rec_cfg.get("group") or "",
         "recording_service_mount_guards": recording_service_mount_guards(cfg),
     }
 
@@ -516,6 +556,16 @@ def configure_recording_storage(cfg: dict[str, Any], device: str, confirm_label:
         output.append(f"Backed up /etc/fstab to {backup}" if backup else "Created /etc/fstab entry")
         mount = _run(["mount", "-a"], timeout=30)
         output.append(f"mount -a: {mount['stdout'] or mount['stderr'] or mount['returncode']}")
+        dirs = _prepare_recording_directories(cfg)
+        output.append(dirs.get("output", ""))
+        if not dirs.get("ok"):
+            return {
+                "ok": False,
+                "message": dirs.get("message", "Recording directory preparation failed."),
+                "output": "\n".join(output),
+                "backup": str(backup) if backup else "",
+                "fstab_entry": entry,
+            }
     except Exception as exc:
         if label_changed:
             restored_label = _run(["e2label", device, previous_label], timeout=20)
@@ -607,6 +657,16 @@ def prepare_blank_recording_disk(cfg: dict[str, Any], disk: str, confirm_device:
         output.append(f"Backed up /etc/fstab to {backup}" if backup else "Created /etc/fstab entry")
         mount = _run(["mount", "-a"], timeout=30)
         output.append(f"mount -a: {mount['stdout'] or mount['stderr'] or mount['returncode']}")
+        dirs = _prepare_recording_directories(cfg)
+        output.append(dirs.get("output", ""))
+        if not dirs.get("ok"):
+            return {
+                "ok": False,
+                "message": dirs.get("message", "Recording directory preparation failed."),
+                "output": "\n".join(output),
+                "backup": str(backup) if backup else "",
+                "fstab_entry": entry,
+            }
         status = recording_storage_status(cfg)
         if not (status.get("mounted") and status.get("writable") and status.get("label") == expected_label and status.get("filesystem") == expected_fs):
             _restore_fstab(fstab_path, backup, original)
