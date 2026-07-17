@@ -18,7 +18,7 @@ from .config import active_config_path, deep_merge, load_raw_config, save_raw_co
 from .history import history_path, read_history
 from .retention import purge_data as retention_purge_data
 from .retention import retention_status as retention_status_for_cfg
-from .storage import apply_recording_service_mount_guards, configure_recording_storage, recording_storage_candidates, recording_storage_status
+from .storage import apply_recording_service_mount_guards, configure_recording_storage, prepare_blank_recording_disk, recording_storage_candidates, recording_storage_status
 from .watchdog_test import arm_trip_test, confirm_trip_test, read_trip_test_state, trip_test_summary
 from .update import launch_update_job, load_update_status
 
@@ -150,6 +150,7 @@ pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale))
 .chart .grid-line { stroke:var(--line); stroke-width:1; }
 .button-row { display:flex; gap:calc(8px * var(--scale)); flex-wrap:wrap; align-items:center; margin:calc(10px * var(--scale)) 0; }
 button.action { background:var(--blue); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; }
+button.danger { background:var(--red); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; }
 button.ghost, a.ghost { background:transparent; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:calc(7px * var(--scale)) calc(10px * var(--scale)); cursor:pointer; font-size:inherit; text-decoration:none; display:inline-block; }
 form.inline { display:inline-block; margin:0; }
 button.action:disabled { opacity:.5; cursor:not-allowed; }
@@ -1939,8 +1940,10 @@ def start_web(cfg):
     def recording_storage_configure_html():
         candidates = recording_storage_candidates(cfg)
         rows = []
+        blank_rows = []
         for item in candidates:
             allowed = bool(item.get("allowed"))
+            blank_allowed = bool(item.get("blank_prepare_allowed"))
             rows.append(
                 "<tr>"
                 f"<td><input type=\"radio\" name=\"device\" value=\"{escape(str(item.get('device', '')))}\" {'disabled' if not allowed else ''}></td>"
@@ -1954,20 +1957,47 @@ def start_web(cfg):
                 f"<td class=\"{'healthy' if allowed else 'warning'}\">{escape('Selectable' if allowed else str(item.get('blocked_reason', 'Blocked')))}</td>"
                 "</tr>"
             )
+            if item.get("type") == "disk":
+                blank_rows.append(
+                    "<tr>"
+                    f"<td><input type=\"radio\" name=\"disk\" value=\"{escape(str(item.get('device', '')))}\" {'disabled' if not blank_allowed else ''}></td>"
+                    f"<td>{escape(str(item.get('device', '-')))}</td>"
+                    f"<td>{escape(str(item.get('model', '-')))}</td>"
+                    f"<td>{escape(str(item.get('serial', '-')))}</td>"
+                    f"<td>{escape(str(item.get('size_gb', '-')))} GB</td>"
+                    f"<td>{escape(str(item.get('filesystem', '-') or '-'))}</td>"
+                    f"<td>{escape(str(item.get('label', '-') or '-'))}</td>"
+                    f"<td>{escape(str(item.get('mountpoint', '-') or '-'))}</td>"
+                    f"<td class=\"{'healthy' if blank_allowed else 'warning'}\">{escape('Can prepare as blank recording disk' if blank_allowed else str(item.get('blank_prepare_reason', 'Blocked')))}</td>"
+                    "</tr>"
+                )
         if not rows:
             rows.append("<tr><td colspan=\"9\">No block devices detected.</td></tr>")
+        if not blank_rows:
+            blank_rows.append("<tr><td colspan=\"9\">No whole disks detected.</td></tr>")
         rec = recording_storage_status(cfg)
+        fstab_entry = rec.get("fstab_entry", "LABEL=CCTV_STORAGE /media/vsuser/Storage ext4 defaults,nofail,x-systemd.device-timeout=5 0 2")
         body = (
             "<div class=\"card\">"
             "<h2>Configure Recording Storage</h2>"
-            "<p class=\"warning\">This does not format, erase, unmount, or automatically repair a drive. It only labels the selected ext4 partition after confirmation and writes a labelled /etc/fstab entry.</p>"
+            "<p class=\"warning\">Existing partition setup does not format, erase, unmount, or automatically repair a drive. It only labels the selected ext4 partition after confirmation and writes a labelled /etc/fstab entry.</p>"
             "<div class=\"label\">Intended fstab entry</div>"
-            "<pre>LABEL=CCTV_STORAGE /media/ususer/Storage ext4 defaults,nofail,x-systemd.device-timeout=5 0 2</pre>"
+            f"<pre>{escape(str(fstab_entry))}</pre>"
             f"<div class=\"label\">Current status</div><div class=\"value {escape(str(rec.get('status', 'unknown')))}\">{escape(str(rec.get('message', '-')))}</div>"
+            "<h3>Use Existing ext4 Partition</h3>"
             "<form method=\"post\" action=\"/recording-storage-confirm\">"
             "<table><thead><tr><th>Select</th><th>Device</th><th>Model</th><th>Serial</th><th>Size</th><th>Filesystem</th><th>Label</th><th>Mountpoint</th><th>Safety</th></tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table>"
-            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Continue</button><a class=\"ghost\" href=\"/storage\">Cancel</a></div>"
+            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Use selected partition</button><a class=\"ghost\" href=\"/storage\">Cancel</a></div>"
+            "</form>"
+            "</div>"
+            "<div class=\"card\">"
+            "<h2>Prepare New Blank Recording Disk</h2>"
+            "<p class=\"critical\">This path creates a new partition and ext4 filesystem. Use it only for a new/empty recording disk. Existing data on the selected disk will be erased after confirmation.</p>"
+            "<form method=\"post\" action=\"/recording-storage-blank-confirm\">"
+            "<table><thead><tr><th>Select</th><th>Disk</th><th>Model</th><th>Serial</th><th>Size</th><th>Filesystem</th><th>Label</th><th>Mountpoint</th><th>Safety</th></tr></thead>"
+            f"<tbody>{''.join(blank_rows)}</tbody></table>"
+            "<div class=\"button-row\"><button class=\"danger\" type=\"submit\">Prepare selected blank disk</button><a class=\"ghost\" href=\"/storage\">Cancel</a></div>"
             "</form>"
             "</div>"
         )
@@ -2012,6 +2042,45 @@ def start_web(cfg):
         )
         return page_shell(body, "Storage")
 
+    def recording_storage_blank_confirm_html(disk):
+        candidates = recording_storage_candidates(cfg)
+        selected = next((item for item in candidates if os.path.realpath(str(item.get("device", ""))) == os.path.realpath(str(disk or ""))), None)
+        if not selected:
+            body = (
+                "<div class=\"card\"><h2>Prepare Blank Recording Disk</h2>"
+                "<p class=\"critical\">Selected disk was not detected.</p>"
+                "<a class=\"ghost\" href=\"/recording-storage-configure\">Back</a></div>"
+            )
+            return page_shell(body, "Storage")
+        if not selected.get("blank_prepare_allowed"):
+            body = (
+                "<div class=\"card\"><h2>Prepare Blank Recording Disk</h2>"
+                f"<p class=\"critical\">Selected disk is blocked: {escape(str(selected.get('blank_prepare_reason', '-')))}</p>"
+                "<a class=\"ghost\" href=\"/recording-storage-configure\">Back</a></div>"
+            )
+            return page_shell(body, "Storage")
+        device = str(selected.get("device", ""))
+        body = (
+            "<div class=\"card\">"
+            "<h2>Final Confirmation: Prepare Blank Recording Disk</h2>"
+            "<p class=\"critical\">This will erase the selected disk, create one ext4 partition labelled CCTV_STORAGE, add the labelled fstab entry, run mount -a, and confirm the mount is writable.</p>"
+            f"<div class=\"label\">Disk</div><div class=\"value\">{escape(device)}</div>"
+            f"<div class=\"label\">Model</div><div class=\"value\">{escape(str(selected.get('model', '-')))}</div>"
+            f"<div class=\"label\">Serial</div><div class=\"value\">{escape(str(selected.get('serial', '-')))}</div>"
+            f"<div class=\"label\">Size</div><div class=\"value\">{escape(str(selected.get('size_gb', '-')))} GB</div>"
+            "<form method=\"post\" action=\"/recording-storage-blank-apply\">"
+            f"<input type=\"hidden\" name=\"disk\" value=\"{escape(device)}\">"
+            "<label><input type=\"checkbox\" name=\"ack\" value=\"1\"> I understand this will erase the selected disk</label>"
+            "<label class=\"label\">Type the disk path exactly</label>"
+            f"<input name=\"confirm_device\" autocomplete=\"off\" placeholder=\"{escape(device)}\">"
+            "<label class=\"label\">Type CCTV_STORAGE to confirm</label>"
+            "<input name=\"confirm_label\" autocomplete=\"off\" placeholder=\"CCTV_STORAGE\">"
+            "<div class=\"button-row\"><button class=\"danger\" type=\"submit\">Erase and prepare recording disk</button><a class=\"ghost\" href=\"/recording-storage-configure\">Cancel</a></div>"
+            "</form>"
+            "</div>"
+        )
+        return page_shell(body, "Storage")
+
     def recording_storage_result_html(result):
         ok = bool(result.get("ok"))
         status = result.get("status", {})
@@ -2021,7 +2090,7 @@ def start_web(cfg):
             "<h2>Recording Storage Configuration</h2>"
             f"<p class=\"{'healthy' if ok else 'critical'}\">{escape(str(result.get('message', '-')))}</p>"
             f"<div class=\"label\">Backup</div><div class=\"value\">{escape(str(result.get('backup', '-')))}</div>"
-            f"<div class=\"label\">fstab entry</div><pre>{escape(str(result.get('fstab_entry', 'LABEL=CCTV_STORAGE /media/ususer/Storage ext4 defaults,nofail,x-systemd.device-timeout=5 0 2')))}</pre>"
+            f"<div class=\"label\">fstab entry</div><pre>{escape(str(result.get('fstab_entry', 'LABEL=CCTV_STORAGE /media/vsuser/Storage ext4 defaults,nofail,x-systemd.device-timeout=5 0 2')))}</pre>"
             f"<div class=\"label\">Validation status</div><pre>{escape(json.dumps(status, indent=2))}</pre>"
             f"<div class=\"label\">Output</div><pre>{escape(str(result.get('output', '')))}</pre>"
             "<p class=\"muted\">This page returns to Storage automatically in 20 seconds.</p>"
@@ -4161,6 +4230,22 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if route_path == "/recording-storage-blank-confirm":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    disk = form.get("disk", [""])[0]
+                    body = recording_storage_blank_confirm_html(disk).encode("utf-8")
+                except Exception as exc:
+                    body = recording_storage_result_html({"ok": False, "message": str(exc), "output": ""}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path == "/recording-storage-apply":
                 try:
                     length = int(self.headers.get("Content-Length", "0"))
@@ -4171,6 +4256,27 @@ def start_web(cfg):
                     ack = form.get("ack", [""])[0] in {"1", "on", "true", "True", "yes"}
                     result = configure_recording_storage(cfg, device, confirm_label, ack)
                     append_web_event("healthy" if result.get("ok") else "critical", "recording_storage", result.get("message", "Recording storage configure processed"), result)
+                except Exception as exc:
+                    result = {"ok": False, "message": str(exc), "output": ""}
+                body = recording_storage_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 400)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/recording-storage-blank-apply":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    disk = form.get("disk", [""])[0]
+                    confirm_device = form.get("confirm_device", [""])[0]
+                    confirm_label = form.get("confirm_label", [""])[0]
+                    ack = form.get("ack", [""])[0] in {"1", "on", "true", "True", "yes"}
+                    result = prepare_blank_recording_disk(cfg, disk, confirm_device, confirm_label, ack)
+                    append_web_event("healthy" if result.get("ok") else "critical", "recording_storage", result.get("message", "Blank recording disk prepare processed"), result)
                 except Exception as exc:
                     result = {"ok": False, "message": str(exc), "output": ""}
                 body = recording_storage_result_html(result).encode("utf-8")

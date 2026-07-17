@@ -13,7 +13,7 @@ from .common import CheckResult
 DEFAULT_RECORDING_STORAGE = {
     "enabled": True,
     "expected_label": "CCTV_STORAGE",
-    "mountpoint": "/media/ususer/Storage",
+    "mountpoint": "/media/vsuser/Storage",
     "filesystem": "ext4",
     "fstab_options": "defaults,nofail,x-systemd.device-timeout=5",
     "free_warning_percent": 10,
@@ -59,6 +59,8 @@ def recording_storage_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
     configured = cfg.get("recording_storage", {}) if isinstance(cfg.get("recording_storage", {}), dict) else {}
     merged = dict(DEFAULT_RECORDING_STORAGE)
     merged.update(configured)
+    if merged.get("mountpoint") == "/media/ususer/Storage" and Path("/home/vsuser").exists():
+        merged["mountpoint"] = "/media/vsuser/Storage"
     return merged
 
 def _now_iso():
@@ -202,7 +204,7 @@ def _recording_writable(mountpoint):
 def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
     rec_cfg = recording_storage_cfg(cfg)
     expected_label = str(rec_cfg.get("expected_label") or "CCTV_STORAGE")
-    mountpoint = str(rec_cfg.get("mountpoint") or "/media/ususer/Storage")
+    mountpoint = str(rec_cfg.get("mountpoint") or "/media/vsuser/Storage")
     expected_fs = str(rec_cfg.get("filesystem") or "ext4")
     checked_at = _now_iso()
     mounted_info = _findmnt(mountpoint)
@@ -305,7 +307,7 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
 
 def recording_service_mount_guards(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     rec_cfg = recording_storage_cfg(cfg)
-    mountpoint = str(rec_cfg.get("mountpoint") or "/media/ususer/Storage")
+    mountpoint = str(rec_cfg.get("mountpoint") or "/media/vsuser/Storage")
     guards = []
     for service in rec_cfg.get("recording_services", []) or []:
         service = str(service).strip()
@@ -331,7 +333,7 @@ def apply_recording_service_mount_guards(cfg: dict[str, Any], ack: bool) -> dict
         return {"ok": False, "message": "Confirmation checkbox was not ticked.", "output": ""}
     rec_cfg = recording_storage_cfg(cfg)
     services = [str(item).strip() for item in rec_cfg.get("recording_services", []) or [] if str(item).strip()]
-    mountpoint = str(rec_cfg.get("mountpoint") or "/media/ususer/Storage")
+    mountpoint = str(rec_cfg.get("mountpoint") or "/media/vsuser/Storage")
     if not services:
         return {
             "ok": False,
@@ -370,6 +372,17 @@ def _root_parent_disk():
     parent = _parent_disk(source)
     return os.path.realpath(parent) if parent else source
 
+def _partitions_for_disk(disk):
+    disk_real = os.path.realpath(str(disk or ""))
+    parts = []
+    for row in _lsblk_rows():
+        if row.get("type") != "part":
+            continue
+        parent = _parent_disk(row.get("path")) or row.get("parent_path")
+        if parent and os.path.realpath(str(parent)) == disk_real:
+            parts.append(row.get("path"))
+    return [p for p in parts if p]
+
 def recording_storage_candidates(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     root_parent = _root_parent_disk()
     protected_mounts = {"/", "/boot", "/boot/efi"}
@@ -385,14 +398,26 @@ def recording_storage_candidates(cfg: dict[str, Any]) -> list[dict[str, Any]]:
         except OSError:
             parent_real = str(parent)
         reasons = []
+        blank_prepare_reasons = []
         if row.get("type") != "part":
             reasons.append("select a partition, not a whole disk")
         if mountpoint in protected_mounts:
             reasons.append(f"protected mount {mountpoint}")
         if root_parent and parent_real == root_parent:
             reasons.append("parent disk contains the active root filesystem")
-        if row.get("fstype") and row.get("fstype") != "ext4":
-            reasons.append(f"filesystem is {row.get('fstype')}, expected ext4")
+        if row.get("type") == "part" and row.get("fstype") != "ext4":
+            reasons.append(f"filesystem is {row.get('fstype') or 'missing'}, expected ext4")
+        if row.get("type") != "disk":
+            blank_prepare_reasons.append("only whole disks can be prepared as blank recording storage")
+        if root_parent and parent_real == root_parent:
+            blank_prepare_reasons.append("disk contains the active root filesystem")
+        if mountpoint:
+            blank_prepare_reasons.append(f"disk is mounted at {mountpoint}")
+        if row.get("fstype"):
+            blank_prepare_reasons.append(f"disk already has filesystem {row.get('fstype')}")
+        children = row.get("children") or []
+        if children:
+            blank_prepare_reasons.append("disk already has partitions")
         candidates.append({
             "device": path,
             "parent_disk": parent,
@@ -406,6 +431,8 @@ def recording_storage_candidates(cfg: dict[str, Any]) -> list[dict[str, Any]]:
             "mountpoint": mountpoint,
             "allowed": not reasons,
             "blocked_reason": "; ".join(reasons),
+            "blank_prepare_allowed": not blank_prepare_reasons,
+            "blank_prepare_reason": "; ".join(blank_prepare_reasons),
         })
     return candidates
 
@@ -520,6 +547,92 @@ def configure_recording_storage(cfg: dict[str, Any], device: str, confirm_label:
         "backup": str(backup) if backup else "",
         "fstab_entry": entry,
     }
+
+def prepare_blank_recording_disk(cfg: dict[str, Any], disk: str, confirm_device: str, confirm_label: str, ack: bool) -> dict[str, Any]:
+    rec_cfg = recording_storage_cfg(cfg)
+    expected_label = str(rec_cfg["expected_label"])
+    mountpoint = str(rec_cfg["mountpoint"])
+    expected_fs = str(rec_cfg["filesystem"])
+    fstab_options = str(rec_cfg["fstab_options"])
+    disk = os.path.realpath(str(disk or ""))
+    confirm_device = os.path.realpath(str(confirm_device or ""))
+    if not ack or confirm_device != disk or str(confirm_label or "").strip() != expected_label:
+        return {
+            "ok": False,
+            "message": f"Confirmation failed. Tick the box, type {expected_label}, and type the selected disk path exactly.",
+            "output": "",
+        }
+    if expected_fs != "ext4":
+        return {"ok": False, "message": "Blank disk preparation currently only supports ext4.", "output": ""}
+
+    candidates = recording_storage_candidates(cfg)
+    selected = next((item for item in candidates if os.path.realpath(str(item.get("device"))) == disk), None)
+    if not selected:
+        return {"ok": False, "message": f"Selected disk was not detected: {disk}", "output": ""}
+    if not selected.get("blank_prepare_allowed"):
+        return {"ok": False, "message": "Selected disk is protected or not blank.", "output": selected.get("blank_prepare_reason", "")}
+
+    fstab_path = Path("/etc/fstab")
+    entry = f"LABEL={expected_label} {mountpoint} {expected_fs} {fstab_options} 0 2"
+    backup = None
+    original = ""
+    output = [
+        f"Preparing blank recording disk {disk}.",
+        "This creates one ext4 partition labelled CCTV_STORAGE and writes the labelled fstab entry.",
+    ]
+    try:
+        wipe = _run(["wipefs", "-a", disk], timeout=30)
+        output.append(f"wipefs: {wipe['stdout'] or wipe['stderr'] or wipe['returncode']}")
+        if not wipe["ok"]:
+            return {"ok": False, "message": "Could not clear existing disk signatures.", "output": "\n".join(output)}
+        part = _run(["parted", "-s", disk, "mklabel", "gpt", "mkpart", "primary", "ext4", "0%", "100%"], timeout=60)
+        output.append(f"parted: {part['stdout'] or part['stderr'] or part['returncode']}")
+        if not part["ok"]:
+            return {"ok": False, "message": "Could not create recording partition.", "output": "\n".join(output)}
+        _run(["partprobe", disk], timeout=20)
+        time.sleep(2)
+        parts = _partitions_for_disk(disk)
+        if not parts:
+            time.sleep(3)
+            parts = _partitions_for_disk(disk)
+        if not parts:
+            return {"ok": False, "message": "Partition was created but not detected yet. Reboot or run partprobe, then try existing partition setup.", "output": "\n".join(output)}
+        partition = parts[0]
+        mkfs = _run(["mkfs.ext4", "-F", "-L", expected_label, partition], timeout=180)
+        output.append(f"mkfs.ext4: {mkfs['stdout'] or mkfs['stderr'] or mkfs['returncode']}")
+        if not mkfs["ok"]:
+            return {"ok": False, "message": "Could not create ext4 recording filesystem.", "output": "\n".join(output)}
+        Path(mountpoint).mkdir(parents=True, exist_ok=True)
+        backup, original = _update_fstab(fstab_path, entry, mountpoint, expected_label)
+        output.append(f"Backed up /etc/fstab to {backup}" if backup else "Created /etc/fstab entry")
+        mount = _run(["mount", "-a"], timeout=30)
+        output.append(f"mount -a: {mount['stdout'] or mount['stderr'] or mount['returncode']}")
+        status = recording_storage_status(cfg)
+        if not (status.get("mounted") and status.get("writable") and status.get("label") == expected_label and status.get("filesystem") == expected_fs):
+            _restore_fstab(fstab_path, backup, original)
+            remount = _run(["mount", "-a"], timeout=30)
+            output.append("Validation failed; restored previous /etc/fstab.")
+            output.append(f"mount -a after restore: {remount['stdout'] or remount['stderr'] or remount['returncode']}")
+            return {
+                "ok": False,
+                "message": "Recording disk was prepared, but mount validation failed. Previous /etc/fstab was restored.",
+                "output": "\n".join(output),
+                "status": status,
+                "backup": str(backup) if backup else "",
+                "fstab_entry": entry,
+            }
+        return {
+            "ok": True,
+            "message": "Blank recording disk prepared, mounted, and verified writable.",
+            "output": "\n".join(output),
+            "status": status,
+            "backup": str(backup) if backup else "",
+            "fstab_entry": entry,
+        }
+    except Exception as exc:
+        if backup is not None or original:
+            _restore_fstab(fstab_path, backup, original)
+        return {"ok": False, "message": f"Blank recording disk preparation failed: {exc}", "output": "\n".join(output)}
 
 def _usage_check(name, path, warn, crit, critical):
     if not os.path.exists(path):

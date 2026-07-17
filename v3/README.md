@@ -56,10 +56,10 @@ http://<gateway-ip>:9110/
 Recording storage is mounted by Linux through `/etc/fstab`; the watchdog monitors and can safely configure the labelled entry, but it is not required for the mount to exist. Intended entry:
 
 ```fstab
-LABEL=CCTV_STORAGE /media/ususer/Storage ext4 defaults,nofail,x-systemd.device-timeout=5 0 2
+LABEL=CCTV_STORAGE /media/vsuser/Storage ext4 defaults,nofail,x-systemd.device-timeout=5 0 2
 ```
 
-The Storage page includes a Recording Storage panel and a guarded configuration flow. It refuses protected system mounts and the parent disk containing `/`, never formats a disk, and only relabels a selected ext4 partition after explicit confirmation.
+The Storage page includes a Recording Storage panel and guarded setup flows. Existing-partition setup refuses protected system mounts and the parent disk containing `/`, never formats a disk, and only relabels a selected ext4 partition after explicit confirmation. Blank-disk setup is separate and requires explicit confirmation before creating a single ext4 partition labelled `CCTV_STORAGE`.
 
 Hardware watchdog is disabled by default. Enable only after testing:
 For POC-451VTC / Intel Atom x6425E gateways, first expose the Intel TCO watchdog:
