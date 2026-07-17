@@ -119,6 +119,8 @@ label { display:block; margin:calc(6px * var(--scale)) 0; }
 .critical { color:var(--red); }
 .unknown, .disabled, .idle { color:var(--muted); }
 .pill { display:inline-block; border-radius:999px; padding:calc(4px * var(--scale)) calc(8px * var(--scale)); background:#0d2b17; color:var(--green); font-size:calc(12px * var(--scale)); font-weight:700; }
+.pill.warning { background:rgba(255,191,60,.14); color:var(--amber); }
+.pill.critical { background:rgba(255,79,100,.14); color:var(--red); }
 .label { color:var(--muted); font-size:calc(12px * var(--scale)); margin-top:calc(8px * var(--scale)); }
 .value { font-weight:700; overflow-wrap:anywhere; }
 .tile-value { font-size:calc(24px * var(--scale)); font-weight:800; margin:calc(8px * var(--scale)) 0 calc(4px * var(--scale)); }
@@ -226,10 +228,18 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   function renderBasic(status){
     var lastUpdate = document.getElementById('last-update');
     var sideState = document.getElementById('side-state');
-    var state = status.critical_failed ? 'critical' : 'healthy';
+    var checks = status.checks || [];
+    var hasIssue = false;
+    for (var i = 0; i < checks.length; i++) {
+      if (checks[i].state === 'critical' || checks[i].state === 'warning' || checks[i].state === 'unknown') {
+        hasIssue = true;
+        break;
+      }
+    }
+    var state = status.critical_failed ? 'critical' : (hasIssue ? 'warning' : 'healthy');
     if (lastUpdate) lastUpdate.textContent = 'Last update: ' + (status.time || '-');
     if (sideState) {
-      sideState.textContent = status.critical_failed ? 'CRITICAL' : 'HEALTHY';
+      sideState.textContent = state.toUpperCase();
       sideState.className = 'value ' + state;
     }
   }
@@ -315,11 +325,13 @@ function statusClass(state){
 
 function displayState(status){
   const critical = !!status.critical_failed;
+  const nonFeedCritical = (status.checks || []).some(c => c.state === 'critical');
   const degraded = (status.checks || []).some(c => c.state === 'degraded');
   const warnings = (status.checks || []).some(c => c.state === 'warning' || c.state === 'unknown');
   if (critical) return 'critical';
+  if (nonFeedCritical) return 'warning';
   if (degraded) return 'degraded';
-  if (warnings) return 'healthy';
+  if (warnings) return 'warning';
   return 'healthy';
 }
 
@@ -483,7 +495,9 @@ function renderHistoryChart(rows, key='score'){
 function renderGatewaySummary(status){
   const state = displayState(status);
   const recovery = status.recovery || {};
-  return `<div class="card summary-card"><div><div class="status-word ${state}">${displayWord(status)}</div><div class="score">${escapeHtml(status.score ?? '-')}%</div><span class="pill">${status.critical_failed ? 'Critical issue' : 'No critical issues'}</span></div><div><div class="label">Gateway Name</div><div class="value">POC-451VTC</div><div class="label">Branch</div><div class="value">${escapeHtml(lastUpdateStatus?.branch || 'codex/v3-gateway-ready')}</div><div class="label">Last Status</div><div class="value">${escapeHtml(status.time || '-')}</div></div><div><div class="label">Recovery Status</div><div class="value ${escapeHtml(recovery.state || 'unknown')}">${escapeHtml((recovery.state || 'unknown').toUpperCase())}</div><div class="label">Watchdog Feed</div><div class="value">${status.hardware_watchdog_feed?.enabled ? 'Enabled' : 'Disabled'}</div></div></div>`;
+  const hasNonFeedCritical = (status.checks || []).some(c => c.state === 'critical');
+  const pill = status.critical_failed ? 'Critical issue blocking feed' : (hasNonFeedCritical ? 'Attention needed, feed safe' : 'No critical issues');
+  return `<div class="card summary-card"><div><div class="status-word ${state}">${displayWord(status)}</div><div class="score">${escapeHtml(status.score ?? '-')}%</div><span class="pill">${escapeHtml(pill)}</span></div><div><div class="label">Gateway Name</div><div class="value">POC-451VTC</div><div class="label">Branch</div><div class="value">${escapeHtml(lastUpdateStatus?.branch || 'codex/v3-gateway-ready')}</div><div class="label">Last Status</div><div class="value">${escapeHtml(status.time || '-')}</div></div><div><div class="label">Recovery Status</div><div class="value ${escapeHtml(recovery.state || 'unknown')}">${escapeHtml((recovery.state || 'unknown').toUpperCase())}</div><div class="label">Watchdog Feed</div><div class="value">${status.hardware_watchdog_feed?.enabled ? 'Enabled' : 'Disabled'}</div></div></div>`;
 }
 
 function pageHelp(page){
@@ -565,7 +579,13 @@ function renderMetricTiles(status){
   const cpu = findCheck(status, 'cpu_load');
   const ram = findCheck(status, 'ram');
   const root = findCheck(status, 'root_disk');
-  const rec = findCheck(status, 'recordings_disk');
+  const recStorage = status.recording_storage || {};
+  const recStorageCheck = {
+    state: recStorage.status || findCheck(status, 'recording_storage').state || 'unknown',
+    message: recStorage.message || findCheck(status, 'recording_storage').message || 'Recording storage status unavailable',
+  };
+  const recStorageValue = recStorage.mounted ? fmtPercent(recStorage.used_percent) : String(recStorage.status || 'missing').toUpperCase();
+  const recStorageDetail = recStorage.mounted ? `${recStorage.free_gb ?? '-'} GB free at ${recStorage.mountpoint || '-'}` : (recStorage.message || recStorage.mountpoint || '-');
   const wdt = findCheck(status, 'hardware_watchdog_present');
   const wdtFeed = status.hardware_watchdog_feed || {};
   const wdtConfig = lastConfigSummary.hardware_watchdog || {};
@@ -574,7 +594,7 @@ function renderMetricTiles(status){
     wdtConfig.timeout_seconds ? `${wdtConfig.timeout_seconds}s timeout` : 'Timeout unknown',
     wdtFeed.enabled && wdtFeed.last_feed_unix ? `Last feed ${wdtFeed.last_feed_unix}` : '',
   ].filter(Boolean).join(' | ');
-  return `<div class="grid metric-grid">${tile('CPU Temp', temp, fmtValue(temp.value, ' C'), temp.message)}${tile('CPU Load', cpu, fmtPercent(cpu.value), cpu.message)}${tile('RAM', ram, fmtPercent(ram.value), ram.message)}${tile('Root Disk', root, fmtPercent(root.value?.used_percent), `${root.value?.free_gb ?? '-'} GB free`)}${tile('Recordings Disk', rec, fmtPercent(rec.value?.used_percent), `${rec.value?.free_gb ?? '-'} GB free`)}${tile('Hardware WDT', wdt, wdt.value ? 'Present' : 'Not present', wdtDetails)}</div>`;
+  return `<div class="grid metric-grid">${tile('CPU Temp', temp, fmtValue(temp.value, ' C'), temp.message)}${tile('CPU Load', cpu, fmtPercent(cpu.value), cpu.message)}${tile('RAM', ram, fmtPercent(ram.value), ram.message)}${tile('Root Disk', root, fmtPercent(root.value?.used_percent), `${root.value?.free_gb ?? '-'} GB free`)}${tile('Recording Storage', recStorageCheck, recStorageValue, recStorageDetail)}${tile('Hardware WDT', wdt, wdt.value ? 'Present' : 'Not present', wdtDetails)}</div>`;
 }
 
 function renderServices(status){
@@ -1030,10 +1050,20 @@ def start_web(cfg):
         version = version_info()
         update_status = load_update_status(cfg)
         critical = bool(status.get("critical_failed", False))
-        state = "critical" if critical else "healthy"
-        word = "CRITICAL" if critical else "HEALTHY"
         checks = [check for check in status.get("checks", []) or [] if isinstance(check, dict)]
         check_map = {str(check.get("name", "")): check for check in checks}
+        has_any_critical = any(check.get("state") == "critical" for check in checks)
+        has_degraded = any(check.get("state") == "degraded" for check in checks)
+        has_warning = any(check.get("state") in ("warning", "unknown") for check in checks)
+        if critical:
+            state = "critical"
+        elif has_any_critical or has_warning:
+            state = "warning"
+        elif has_degraded:
+            state = "degraded"
+        else:
+            state = "healthy"
+        word = state.upper()
 
         def check_value(name, default="-"):
             return check_map.get(name, {}).get("value", default)
@@ -1066,13 +1096,21 @@ def start_web(cfg):
             )
 
         def metric_tiles():
+            rec_storage = status.get("recording_storage", {}) if isinstance(status.get("recording_storage", {}), dict) else {}
+            rec_storage_state = str(rec_storage.get("status") or check_state("recording_storage", "unknown"))
+            if rec_storage.get("mounted"):
+                rec_storage_value = f"{escape(str(rec_storage.get('used_percent', '-')))}%"
+                rec_storage_detail = f"{escape(str(rec_storage.get('free_gb', '-')))} GB free at {escape(str(rec_storage.get('mountpoint', '-')))}"
+            else:
+                rec_storage_value = escape(str(rec_storage.get("status", "missing")).upper())
+                rec_storage_detail = escape(str(rec_storage.get("message") or rec_storage.get("mountpoint") or "-"))
             return (
                 "<div class=\"grid metric-grid\">"
                 + tile("CPU Temp", check_value("temperature", "-"), check_message("temperature", ""), check_state("temperature", "healthy"))
                 + tile("CPU Load", f"{escape(str(check_value('cpu_load', '-')))}%", check_message("cpu_load", ""), check_state("cpu_load", "healthy"))
                 + tile("RAM", f"{escape(str(check_value('ram', '-')))}%", check_message("ram", ""), check_state("ram", "healthy"))
                 + tile("Root Disk", disk_used("root_disk"), disk_free("root_disk"), check_state("root_disk", "healthy"))
-                + tile("Recordings Disk", disk_used("recordings_disk"), disk_free("recordings_disk"), check_state("recordings_disk", "healthy"))
+                + tile("Recording Storage", rec_storage_value, rec_storage_detail, rec_storage_state)
                 + tile("Hardware WDT", "Present" if check_value("hardware_watchdog_present", False) else "Not present", check_message("hardware_watchdog_present", ""), check_state("hardware_watchdog_present", "warning"))
                 + "</div>"
             )
@@ -1765,9 +1803,14 @@ def start_web(cfg):
         error_html = ""
         if status.get("error"):
             error_html = f"<p class=\"critical\">{escape(str(status.get('error')))}</p>"
-        issue_pill = "<span class=\"pill\">No critical issues</span>"
         if critical:
             issue_pill = "<span class=\"pill critical\">Critical issue</span>"
+        elif has_any_critical:
+            issue_pill = "<span class=\"pill warning\">Attention needed, watchdog feed safe</span>"
+        elif has_warning:
+            issue_pill = "<span class=\"pill warning\">Warning</span>"
+        else:
+            issue_pill = "<span class=\"pill\">No critical issues</span>"
         overview_html = (
             "<div class=\"grid top-grid\">"
             "<div class=\"card summary-card\">"
@@ -3603,7 +3646,7 @@ def start_web(cfg):
                 "always_full_expected": False,
             },
             {
-                "name": "Recordings Disk",
+                "name": "Legacy Recordings Path",
                 "path": storage_cfg.get("recordings_path", "/home/vsuser/recordings"),
                 "warning_percent": thresholds.get("recordings_disk_warning_percent", 85),
                 "critical_percent": thresholds.get("recordings_disk_critical_percent", 95),
