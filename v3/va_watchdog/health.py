@@ -71,12 +71,16 @@ def collect_health(cfg):
     checks.extend(check_network(cfg))
 
     critical_failed = any(c.state == "critical" and c.critical for c in checks)
+    recording_storage = next((c.value for c in checks if c.name == "recording_storage"), None)
 
-    return {
+    status = {
         "time": now_iso(),
         "state": worst_state([c.state for c in checks]),
         "score": score_from_checks(checks),
         "critical_failed": critical_failed,
         "checks": [c.to_dict() for c in checks],
         "startup_summary": build_startup_summary(cfg, checks),
-    }, checks
+    }
+    if isinstance(recording_storage, dict):
+        status["recording_storage"] = recording_storage
+    return status, checks

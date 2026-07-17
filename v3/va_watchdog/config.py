@@ -60,6 +60,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             }
         ]
     },
+    "recording_storage": {
+        "enabled": True,
+        "expected_label": "CCTV_STORAGE",
+        "mountpoint": "/media/ususer/Storage",
+        "filesystem": "ext4",
+        "fstab_options": "defaults,nofail,x-systemd.device-timeout=5",
+        "free_warning_percent": 10,
+        "temperature_warning_c": 55,
+        "recording_services": []
+    },
     "recovery": {
         "enabled": False,
         "restart_failed_services": False,

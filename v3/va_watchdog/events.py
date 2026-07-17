@@ -27,3 +27,45 @@ class EventLog:
             if old is not None and old != check.state:
                 self.add(check.state, check.name, f"{check.name} changed from {old} to {check.state}", check.to_dict())
             self.previous_states[check.name] = check.state
+
+    def add_recording_storage_change(self, status):
+        if not isinstance(status, dict):
+            return
+        previous = self.previous_states.get("__recording_storage_snapshot__")
+        current = {
+            "status": status.get("status"),
+            "present": status.get("present"),
+            "mounted": status.get("mounted"),
+            "writable": status.get("writable"),
+            "read_only": status.get("read_only"),
+            "smart_status": status.get("smart_status"),
+            "free_percent": status.get("free_percent"),
+            "message": status.get("message"),
+        }
+        if previous == current:
+            return
+
+        message = None
+        level = status.get("status", "warning")
+        if status.get("status") == "healthy" and previous and previous.get("status") != "healthy":
+            message = "Recording storage restored"
+            level = "healthy"
+        elif status.get("mounted") and previous and not previous.get("mounted"):
+            message = "Recording storage mounted"
+            level = status.get("status", "healthy")
+        elif not status.get("present"):
+            message = "Recording storage missing"
+            level = "critical"
+        elif status.get("read_only"):
+            message = "Recording storage read-only"
+            level = "critical"
+        elif status.get("smart_status") == "FAILED":
+            message = "Recording storage SMART failure"
+            level = "critical"
+        elif status.get("free_percent") is not None and float(status.get("free_percent") or 0) < 10:
+            message = "Recording storage low space"
+            level = "warning"
+
+        if message:
+            self.add(level, "recording_storage", message, status)
+        self.previous_states["__recording_storage_snapshot__"] = current

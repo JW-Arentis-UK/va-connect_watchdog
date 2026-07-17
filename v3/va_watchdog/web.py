@@ -18,6 +18,7 @@ from .config import active_config_path, deep_merge, load_raw_config, save_raw_co
 from .history import history_path, read_history
 from .retention import purge_data as retention_purge_data
 from .retention import retention_status as retention_status_for_cfg
+from .storage import apply_recording_service_mount_guards, configure_recording_storage, recording_storage_candidates, recording_storage_status
 from .watchdog_test import arm_trip_test, confirm_trip_test, read_trip_test_state, trip_test_summary
 from .update import launch_update_job, load_update_status
 
@@ -411,7 +412,7 @@ function groupChecks(checks){
       groups.hardware.push(check);
     } else if (name.endsWith('.service')) {
       groups.services.push(check);
-    } else if (name === 'root_disk' || name === 'recordings_disk' || name === 'write_test') {
+    } else if (name === 'root_disk' || name === 'recordings_disk' || name === 'recording_storage' || name === 'write_test') {
       groups.storage.push(check);
     } else if (name === 'network_module') {
       groups.system.push(check);
@@ -633,7 +634,26 @@ function renderHardwarePage(grouped){
 
 function renderStoragePage(grouped){
   const rows = (lastStorageInfo.volumes || []).map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.path)}</td><td>${escapeHtml(item.used_percent)}%</td><td>${escapeHtml(item.free_gb)} GB</td><td>${escapeHtml(item.warning_percent)}%</td><td>${escapeHtml(item.critical_percent)}%</td><td>${item.always_full_expected ? 'Yes' : 'No'}</td></tr>`).join('');
-  return `<div class="grid metric-grid">${grouped.storage.map(c => tile(c.name, c, c.value?.used_percent !== undefined ? fmtPercent(c.value.used_percent) : fmtValue(c.value), c.message)).join('')}</div><div class="card"><h2>Configured Storage Limits</h2><table><thead><tr><th>Name</th><th>Path</th><th>Used</th><th>Free</th><th>Warn</th><th>Critical</th><th>Full expected</th></tr></thead><tbody>${rows || '<tr><td colspan="7">No monitored paths configured</td></tr>'}</tbody></table>${placeholderList(['Editable warning/critical limits','Separate recordings drive detection','One-drive full-expected mode'])}</div>${renderRetentionPage()}`;
+  const rec = lastStatus.recording_storage || {};
+  const recStatus = rec.status || 'unknown';
+  const recRows = [
+    ['Status', recStatus.toUpperCase()],
+    ['Device', rec.device || '-'],
+    ['Mountpoint', rec.mountpoint || '-'],
+    ['Label', `${rec.label || '-'} / expected ${rec.expected_label || '-'}`],
+    ['Filesystem', `${rec.filesystem || '-'} / expected ${rec.expected_filesystem || '-'}`],
+    ['Capacity', rec.total_gb !== null && rec.total_gb !== undefined ? `${rec.total_gb} GB` : '-'],
+    ['Free space', rec.free_gb !== null && rec.free_gb !== undefined ? `${rec.free_gb} GB` : '-'],
+    ['Used %', rec.used_percent !== null && rec.used_percent !== undefined ? `${rec.used_percent}%` : '-'],
+    ['Writable', rec.writable ? 'Yes' : 'No'],
+    ['SMART', rec.smart_status || '-'],
+    ['Temperature', rec.temperature_c !== null && rec.temperature_c !== undefined ? `${rec.temperature_c} C` : '-'],
+    ['Last successful check', rec.last_successful_check || rec.checked_at || '-'],
+  ].map(row => `<tr><td>${escapeHtml(row[0])}</td><td>${escapeHtml(row[1])}</td></tr>`).join('');
+  const guards = rec.recording_service_mount_guards || [];
+  const guardRows = guards.length ? guards.map(item => `<tr><td>${escapeHtml(item.service || '-')}</td><td>${escapeHtml(item.mountpoint || '-')}</td><td class="${item.configured ? 'healthy' : 'warning'}">${item.configured ? 'Configured' : 'Not configured'}</td></tr>`).join('') : '<tr><td colspan="3">No recording services configured. Add service names to recording_storage.recording_services when known.</td></tr>';
+  const recordingPanel = `<div class="card"><h2>Recording Storage</h2><p class="${escapeHtml(recStatus)}">${escapeHtml(rec.message || 'Recording storage status unavailable')}</p><table><tbody>${recRows}</tbody></table><h3>Recording Service Mount Guard</h3><table><thead><tr><th>Service</th><th>Requires mount</th><th>Status</th></tr></thead><tbody>${guardRows}</tbody></table><div class="button-row"><a class="action" href="/recording-storage-configure">Configure recording storage</a><a class="ghost" href="/api/status">Raw status</a></div><form class="inline" method="post" action="/recording-storage-guard-apply"><label><input type="checkbox" name="ack" value="1"> Apply RequiresMountsFor to configured recording services</label> <button class="ghost" type="submit">Apply service guard</button></form></div>`;
+  return `<div class="grid metric-grid">${grouped.storage.map(c => tile(c.name, c, c.value?.used_percent !== undefined ? fmtPercent(c.value.used_percent) : fmtValue(c.value), c.message)).join('')}</div>${recordingPanel}<div class="card"><h2>Configured Storage Limits</h2><table><thead><tr><th>Name</th><th>Path</th><th>Used</th><th>Free</th><th>Warn</th><th>Critical</th><th>Full expected</th></tr></thead><tbody>${rows || '<tr><td colspan="7">No monitored paths configured</td></tr>'}</tbody></table></div>${renderRetentionPage()}`;
 }
 
 function renderEventsPage(){
@@ -1444,8 +1464,52 @@ def start_web(cfg):
             if not file_rows:
                 file_rows.append("<tr><td colspan=\"3\">No watchdog data files found.</td></tr>")
             default_days = retention.get("events_retention_days") or 30
+            recording = status_snapshot().get("recording_storage") or recording_storage_status(cfg)
+            rec_rows = [
+                ("Status", str(recording.get("status", "unknown")).upper()),
+                ("Device", recording.get("device", "-")),
+                ("Mountpoint", recording.get("mountpoint", "-")),
+                ("Label", f"{recording.get('label', '-')} / expected {recording.get('expected_label', '-')}"),
+                ("Filesystem", f"{recording.get('filesystem', '-')} / expected {recording.get('expected_filesystem', '-')}"),
+                ("Capacity", f"{recording.get('total_gb', '-')} GB"),
+                ("Free space", f"{recording.get('free_gb', '-')} GB"),
+                ("Used %", f"{recording.get('used_percent', '-')}%"),
+                ("Writable", "Yes" if recording.get("writable") else "No"),
+                ("SMART", recording.get("smart_status", "-")),
+                ("Temperature", f"{recording.get('temperature_c', '-')} C"),
+                ("Last successful check", recording.get("last_successful_check") or recording.get("checked_at", "-")),
+            ]
+            rec_html = "".join(
+                "<tr>"
+                f"<td>{escape(str(label))}</td>"
+                f"<td>{escape(str(value))}</td>"
+                "</tr>"
+                for label, value in rec_rows
+            )
+            guard_rows = "".join(
+                "<tr>"
+                f"<td>{escape(str(item.get('service', '-')))}</td>"
+                f"<td>{escape(str(item.get('mountpoint', '-')))}</td>"
+                f"<td class=\"{'healthy' if item.get('configured') else 'warning'}\">{escape('Configured' if item.get('configured') else 'Not configured')}</td>"
+                "</tr>"
+                for item in recording.get("recording_service_mount_guards", [])
+            )
+            if not guard_rows:
+                guard_rows = "<tr><td colspan=\"3\">No recording services configured. Add service names to recording_storage.recording_services when known.</td></tr>"
+            rec_state = str(recording.get("status", "unknown"))
             return (
                 metric_tiles()
+                + "<div class=\"card\"><h2>Recording Storage</h2>"
+                f"<p class=\"{escape(rec_state)}\">{escape(str(recording.get('message', 'Recording storage status unavailable')))}</p>"
+                "<table><tbody>"
+                f"{rec_html}"
+                "</tbody></table>"
+                "<h3>Recording Service Mount Guard</h3>"
+                "<table><thead><tr><th>Service</th><th>Requires mount</th><th>Status</th></tr></thead>"
+                f"<tbody>{guard_rows}</tbody></table>"
+                "<div class=\"button-row\"><a class=\"action\" href=\"/recording-storage-configure\">Configure recording storage</a><a class=\"ghost\" href=\"/api/status\">Raw status</a></div>"
+                "<form class=\"inline\" method=\"post\" action=\"/recording-storage-guard-apply\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> Apply RequiresMountsFor to configured recording services</label> <button class=\"ghost\" type=\"submit\">Apply service guard</button></form>"
+                "</div>"
                 + "<div class=\"card\"><h2>Configured Storage Limits</h2>"
                 "<table><thead><tr><th>Name</th><th>Path</th><th>Used</th><th>Free</th><th>Warn</th><th>Critical</th><th>Full expected</th></tr></thead>"
                 f"<tbody>{''.join(volume_rows)}</tbody></table></div>"
@@ -1867,6 +1931,100 @@ def start_web(cfg):
             "<table><thead><tr><th>Removed file</th><th>Size</th></tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table>"
             "<p class=\"muted\">This page will return to Storage automatically in 8 seconds.</p>"
+            "<a class=\"ghost\" href=\"/storage\">Back to Storage</a>"
+            "</div>"
+        )
+        return page_shell(body, "Storage")
+
+    def recording_storage_configure_html():
+        candidates = recording_storage_candidates(cfg)
+        rows = []
+        for item in candidates:
+            allowed = bool(item.get("allowed"))
+            rows.append(
+                "<tr>"
+                f"<td><input type=\"radio\" name=\"device\" value=\"{escape(str(item.get('device', '')))}\" {'disabled' if not allowed else ''}></td>"
+                f"<td>{escape(str(item.get('device', '-')))}</td>"
+                f"<td>{escape(str(item.get('model', '-')))}</td>"
+                f"<td>{escape(str(item.get('serial', '-')))}</td>"
+                f"<td>{escape(str(item.get('size_gb', '-')))} GB</td>"
+                f"<td>{escape(str(item.get('filesystem', '-') or '-'))}</td>"
+                f"<td>{escape(str(item.get('label', '-') or '-'))}</td>"
+                f"<td>{escape(str(item.get('mountpoint', '-') or '-'))}</td>"
+                f"<td class=\"{'healthy' if allowed else 'warning'}\">{escape('Selectable' if allowed else str(item.get('blocked_reason', 'Blocked')))}</td>"
+                "</tr>"
+            )
+        if not rows:
+            rows.append("<tr><td colspan=\"9\">No block devices detected.</td></tr>")
+        rec = recording_storage_status(cfg)
+        body = (
+            "<div class=\"card\">"
+            "<h2>Configure Recording Storage</h2>"
+            "<p class=\"warning\">This does not format, erase, unmount, or automatically repair a drive. It only labels the selected ext4 partition after confirmation and writes a labelled /etc/fstab entry.</p>"
+            "<div class=\"label\">Intended fstab entry</div>"
+            "<pre>LABEL=CCTV_STORAGE /media/ususer/Storage ext4 defaults,nofail,x-systemd.device-timeout=5 0 2</pre>"
+            f"<div class=\"label\">Current status</div><div class=\"value {escape(str(rec.get('status', 'unknown')))}\">{escape(str(rec.get('message', '-')))}</div>"
+            "<form method=\"post\" action=\"/recording-storage-confirm\">"
+            "<table><thead><tr><th>Select</th><th>Device</th><th>Model</th><th>Serial</th><th>Size</th><th>Filesystem</th><th>Label</th><th>Mountpoint</th><th>Safety</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Continue</button><a class=\"ghost\" href=\"/storage\">Cancel</a></div>"
+            "</form>"
+            "</div>"
+        )
+        return page_shell(body, "Storage")
+
+    def recording_storage_confirm_html(device):
+        candidates = recording_storage_candidates(cfg)
+        selected = next((item for item in candidates if os.path.realpath(str(item.get("device", ""))) == os.path.realpath(str(device or ""))), None)
+        if not selected:
+            body = (
+                "<div class=\"card\"><h2>Recording Storage Configuration</h2>"
+                "<p class=\"critical\">Selected device was not detected.</p>"
+                "<a class=\"ghost\" href=\"/recording-storage-configure\">Back</a></div>"
+            )
+            return page_shell(body, "Storage")
+        if not selected.get("allowed"):
+            body = (
+                "<div class=\"card\"><h2>Recording Storage Configuration</h2>"
+                f"<p class=\"critical\">Selected device is blocked: {escape(str(selected.get('blocked_reason', '-')))}</p>"
+                "<a class=\"ghost\" href=\"/recording-storage-configure\">Back</a></div>"
+            )
+            return page_shell(body, "Storage")
+        body = (
+            "<div class=\"card\">"
+            "<h2>Confirm Recording Storage Device</h2>"
+            "<p class=\"critical\">Only continue if this is the CCTV recording partition. Changing the label can make existing recordings inaccessible until paths are updated.</p>"
+            f"<div class=\"label\">Device</div><div class=\"value\">{escape(str(selected.get('device', '-')))}</div>"
+            f"<div class=\"label\">Model</div><div class=\"value\">{escape(str(selected.get('model', '-')))}</div>"
+            f"<div class=\"label\">Serial</div><div class=\"value\">{escape(str(selected.get('serial', '-')))}</div>"
+            f"<div class=\"label\">Size</div><div class=\"value\">{escape(str(selected.get('size_gb', '-')))} GB</div>"
+            f"<div class=\"label\">Filesystem</div><div class=\"value\">{escape(str(selected.get('filesystem', '-')))}</div>"
+            f"<div class=\"label\">Current label</div><div class=\"value\">{escape(str(selected.get('label', '-') or '-'))}</div>"
+            f"<div class=\"label\">Current mountpoint</div><div class=\"value\">{escape(str(selected.get('mountpoint', '-') or '-'))}</div>"
+            "<form method=\"post\" action=\"/recording-storage-apply\">"
+            f"<input type=\"hidden\" name=\"device\" value=\"{escape(str(selected.get('device', '')))}\">"
+            "<label><input type=\"checkbox\" name=\"ack\" value=\"1\"> I understand this may change how existing recordings are accessed</label>"
+            "<label class=\"label\">Type CCTV_STORAGE to confirm</label>"
+            "<input name=\"confirm_label\" autocomplete=\"off\" placeholder=\"CCTV_STORAGE\">"
+            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Apply labelled fstab mount</button><a class=\"ghost\" href=\"/recording-storage-configure\">Cancel</a></div>"
+            "</form>"
+            "</div>"
+        )
+        return page_shell(body, "Storage")
+
+    def recording_storage_result_html(result):
+        ok = bool(result.get("ok"))
+        status = result.get("status", {})
+        body = (
+            "<meta http-equiv=\"refresh\" content=\"20;url=/storage\">"
+            "<div class=\"card\">"
+            "<h2>Recording Storage Configuration</h2>"
+            f"<p class=\"{'healthy' if ok else 'critical'}\">{escape(str(result.get('message', '-')))}</p>"
+            f"<div class=\"label\">Backup</div><div class=\"value\">{escape(str(result.get('backup', '-')))}</div>"
+            f"<div class=\"label\">fstab entry</div><pre>{escape(str(result.get('fstab_entry', 'LABEL=CCTV_STORAGE /media/ususer/Storage ext4 defaults,nofail,x-systemd.device-timeout=5 0 2')))}</pre>"
+            f"<div class=\"label\">Validation status</div><pre>{escape(json.dumps(status, indent=2))}</pre>"
+            f"<div class=\"label\">Output</div><pre>{escape(str(result.get('output', '')))}</pre>"
+            "<p class=\"muted\">This page returns to Storage automatically in 20 seconds.</p>"
             "<a class=\"ghost\" href=\"/storage\">Back to Storage</a>"
             "</div>"
         )
@@ -3398,6 +3556,8 @@ def start_web(cfg):
             "volumes": volumes,
             "write_test_path": storage_cfg.get("write_test_path"),
             "retention": retention_status(),
+            "recording_storage": status_snapshot().get("recording_storage") or recording_storage_status(cfg),
+            "recording_storage_candidates": recording_storage_candidates(cfg),
         }
 
     def _format_duration(seconds):
@@ -3520,6 +3680,7 @@ def start_web(cfg):
             "poll_interval_seconds": cfg.get("poll_interval_seconds"),
             "web": cfg.get("web", {}),
             "hardware_watchdog": cfg.get("hardware_watchdog", {}),
+            "recording_storage": cfg.get("recording_storage", {}),
             "storage": cfg.get("storage", {}),
             "thresholds": cfg.get("thresholds", {}),
             "services": cfg.get("services", []),
@@ -3761,6 +3922,15 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if route_path == "/recording-storage-configure":
+                body = recording_storage_configure_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path == "/recovery-install-confirm":
                 body = recovery_install_confirm_html().encode("utf-8")
                 self.send_response(200)
@@ -3910,6 +4080,9 @@ def start_web(cfg):
             if route_path == "/api/storage-info":
                 self._send_json(storage_info())
                 return
+            if route_path == "/api/recording-storage-candidates":
+                self._send_json({"candidates": recording_storage_candidates(cfg)})
+                return
             if route_path == "/api/install-status":
                 self._send_json(install_status())
                 return
@@ -3966,6 +4139,61 @@ def start_web(cfg):
                 result = purge_data(mode="all")
                 body = storage_purge_result_html(result, "all").encode("utf-8")
                 self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/recording-storage-confirm":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    device = form.get("device", [""])[0]
+                    body = recording_storage_confirm_html(device).encode("utf-8")
+                except Exception as exc:
+                    body = recording_storage_result_html({"ok": False, "message": str(exc), "output": ""}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/recording-storage-apply":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    device = form.get("device", [""])[0]
+                    confirm_label = form.get("confirm_label", [""])[0]
+                    ack = form.get("ack", [""])[0] in {"1", "on", "true", "True", "yes"}
+                    result = configure_recording_storage(cfg, device, confirm_label, ack)
+                    append_web_event("healthy" if result.get("ok") else "critical", "recording_storage", result.get("message", "Recording storage configure processed"), result)
+                except Exception as exc:
+                    result = {"ok": False, "message": str(exc), "output": ""}
+                body = recording_storage_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 400)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/recording-storage-guard-apply":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    ack = form.get("ack", [""])[0] in {"1", "on", "true", "True", "yes"}
+                    result = apply_recording_service_mount_guards(cfg, ack)
+                    result.setdefault("status", recording_storage_status(cfg))
+                    append_web_event("healthy" if result.get("ok") else "warning", "recording_storage", result.get("message", "Recording service mount guard processed"), result)
+                except Exception as exc:
+                    result = {"ok": False, "message": str(exc), "output": "", "status": recording_storage_status(cfg)}
+                body = recording_storage_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 400)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()
