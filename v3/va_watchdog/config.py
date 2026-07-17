@@ -68,7 +68,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "fstab_options": "defaults,nofail,x-systemd.device-timeout=5",
         "recording_subdir": "recordings",
         "owner": "vsuser",
-        "group": "vsuser",
+        "group": "",
         "directory_mode": "775",
         "free_warning_percent": 10,
         "temperature_warning_c": 55,

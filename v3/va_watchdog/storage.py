@@ -19,7 +19,7 @@ DEFAULT_RECORDING_STORAGE = {
     "fstab_options": "defaults,nofail,x-systemd.device-timeout=5",
     "recording_subdir": "recordings",
     "owner": "vsuser",
-    "group": "vsuser",
+    "group": "",
     "directory_mode": "775",
     "free_warning_percent": 10,
     "temperature_warning_c": 55,
@@ -227,6 +227,11 @@ def _prepare_recording_directories(cfg: dict[str, Any]) -> dict[str, Any]:
         output.append(f"chmod {mode} {mountpoint}: {chmod_mount['stdout'] or chmod_mount['stderr'] or chmod_mount['returncode']}")
         output.append(f"chmod {mode} {recordings_path}: {chmod_recordings['stdout'] or chmod_recordings['stderr'] or chmod_recordings['returncode']}")
         if owner:
+            if not group:
+                detected_group = _run(["id", "-gn", owner], timeout=10)
+                if detected_group["ok"] and detected_group["stdout"]:
+                    group = detected_group["stdout"].splitlines()[0].strip()
+                    output.append(f"Detected primary group for {owner}: {group}")
             spec = f"{owner}:{group}" if group else owner
             chown_mount = _run(["chown", spec, str(mountpoint)], timeout=10)
             chown_recordings = _run(["chown", spec, str(recordings_path)], timeout=10)
@@ -341,7 +346,7 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
         "fstab_entry": f"LABEL={expected_label} {mountpoint} {expected_fs} {rec_cfg.get('fstab_options')} 0 2",
         "recordings_path": recording_storage_recordings_path(cfg),
         "owner": rec_cfg.get("owner") or "",
-        "group": rec_cfg.get("group") or "",
+        "group": rec_cfg.get("group") or "primary group",
         "recording_service_mount_guards": recording_service_mount_guards(cfg),
     }
 
