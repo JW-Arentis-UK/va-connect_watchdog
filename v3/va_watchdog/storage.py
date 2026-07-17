@@ -526,6 +526,18 @@ def _restore_fstab(path: Path, backup: Path | None, original: str):
     elif path.exists():
         path.unlink()
 
+def _same_mountpoint(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    left_norm = os.path.normpath(str(left))
+    right_norm = os.path.normpath(str(right))
+    if left_norm == right_norm:
+        return True
+    try:
+        return os.path.realpath(left_norm) == os.path.realpath(right_norm)
+    except OSError:
+        return False
+
 def configure_recording_storage(cfg: dict[str, Any], device: str, confirm_label: str, ack: bool) -> dict[str, Any]:
     rec_cfg = recording_storage_cfg(cfg)
     expected_label = str(rec_cfg["expected_label"])
@@ -544,7 +556,7 @@ def configure_recording_storage(cfg: dict[str, Any], device: str, confirm_label:
     if selected.get("filesystem") != expected_fs:
         return {"ok": False, "message": f"Selected device must already be {expected_fs}. The watchdog will not format disks.", "output": ""}
     current_mountpoint = str(selected.get("mountpoint") or "")
-    if current_mountpoint and current_mountpoint != mountpoint:
+    if current_mountpoint and not _same_mountpoint(current_mountpoint, mountpoint):
         return {
             "ok": False,
             "message": "Selected storage is mounted somewhere else. The watchdog will not unmount it automatically.",
