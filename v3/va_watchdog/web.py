@@ -446,7 +446,7 @@ function groupChecks(checks){
   };
   for (const check of checks || []) {
     const name = String(check.name || '');
-    if (name === 'temperature' || name === 'ram' || name === 'cpu_load' || name === 'hardware_watchdog_present') {
+    if (name === 'temperature' || name === 'ram' || name === 'cpu_load' || name === 'hardware_watchdog_present' || name === 'hardware_watchdog_feed_status') {
       groups.hardware.push(check);
     } else if (name.endsWith('.service')) {
       groups.services.push(check);
@@ -620,14 +620,17 @@ function renderMetricTiles(status){
   const recStorageFree = `${recStorage.free_gb ?? '-'} GB free at ${recStorage.mountpoint || '-'}`;
   const recStorageDetail = recStorage.mounted && recStorage.status === 'healthy' ? recStorageFree : (recStorage.message || recStorageFree || recStorage.mountpoint || '-');
   const wdt = findCheck(status, 'hardware_watchdog_present');
+  const wdtFeedCheck = findCheck(status, 'hardware_watchdog_feed_status');
   const wdtFeed = status.hardware_watchdog_feed || {};
   const wdtConfig = lastConfigSummary.hardware_watchdog || {};
+  const wdtState = wdtFeedCheck.state || wdt.state || 'unknown';
+  const wdtValue = wdtFeed.enabled && wdtFeed.opened ? 'Feeding' : (wdt.value ? 'Not feeding' : 'Not present');
   const wdtDetails = [
-    wdtFeed.enabled ? 'Enabled' : 'Disabled',
+    wdtFeedCheck.message || wdt.message || '',
     wdtConfig.timeout_seconds ? `${wdtConfig.timeout_seconds}s timeout` : 'Timeout unknown',
     wdtFeed.enabled && wdtFeed.last_feed_unix ? `Last feed ${wdtFeed.last_feed_unix}` : '',
   ].filter(Boolean).join(' | ');
-  return `<div class="grid metric-grid">${tile('CPU Temp', temp, fmtValue(temp.value, ' C'), temp.message)}${tile('CPU Load', cpu, fmtPercent(cpu.value), cpu.message)}${tile('RAM', ram, fmtPercent(ram.value), ram.message)}${tile('Root Disk', root, fmtPercent(root.value?.used_percent), `${root.value?.free_gb ?? '-'} GB free`)}${tile('Recording Storage', recStorageCheck, recStorageValue, recStorageDetail)}${tile('Hardware WDT', wdt, wdt.value ? 'Present' : 'Not present', wdtDetails)}</div>`;
+  return `<div class="grid metric-grid">${tile('CPU Temp', temp, fmtValue(temp.value, ' C'), temp.message)}${tile('CPU Load', cpu, fmtPercent(cpu.value), cpu.message)}${tile('RAM', ram, fmtPercent(ram.value), ram.message)}${tile('Root Disk', root, fmtPercent(root.value?.used_percent), `${root.value?.free_gb ?? '-'} GB free`)}${tile('Recording Storage', recStorageCheck, recStorageValue, recStorageDetail)}${tile('Hardware WDT', {state: wdtState, message: wdtDetails}, wdtValue, wdtDetails)}</div>`;
 }
 
 function renderServices(status){
@@ -1157,7 +1160,12 @@ def start_web(cfg):
                 + tile("RAM", f"{escape(str(check_value('ram', '-')))}%", check_message("ram", ""), check_state("ram", "healthy"))
                 + tile("Root Disk", disk_used("root_disk"), disk_free("root_disk"), check_state("root_disk", "healthy"))
                 + tile("Recording Storage", rec_storage_value, rec_storage_detail, rec_storage_state)
-                + tile("Hardware WDT", "Present" if check_value("hardware_watchdog_present", False) else "Not present", check_message("hardware_watchdog_present", ""), check_state("hardware_watchdog_present", "warning"))
+                + tile(
+                    "Hardware WDT",
+                    "Feeding" if (status.get("hardware_watchdog_feed", {}).get("enabled") and status.get("hardware_watchdog_feed", {}).get("opened")) else ("Not feeding" if check_value("hardware_watchdog_present", False) else "Not present"),
+                    check_message("hardware_watchdog_feed_status", check_message("hardware_watchdog_present", "")),
+                    check_state("hardware_watchdog_feed_status", check_state("hardware_watchdog_present", "warning")),
+                )
                 + "</div>"
             )
 

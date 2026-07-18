@@ -8,8 +8,9 @@ from pathlib import Path
 import traceback
 
 from .config import load_config
+from .common import CheckResult, score_from_checks, worst_state
 from .events import EventLog
-from .health import collect_health
+from .health import build_startup_summary, collect_health
 from .history import append_history
 from .recovery import RecoveryEngine
 from .retention import enforce_retention
@@ -36,6 +37,81 @@ def write_startup_error_log():
         Path("/tmp/va-watchdog-startup-error.log").write_text(payload + "\n", encoding="utf-8")
     except Exception:
         pass
+
+def add_hardware_feed_check(status, cfg):
+    feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
+    hw_cfg = cfg.get("hardware_watchdog", {}) if isinstance(cfg.get("hardware_watchdog", {}), dict) else {}
+    enabled = bool(feed.get("enabled") or hw_cfg.get("enabled"))
+    opened = bool(feed.get("opened"))
+    device = str(feed.get("device") or hw_cfg.get("device") or "/dev/watchdog0")
+    feed_interval = int(hw_cfg.get("feed_interval_seconds", 10) or 10)
+    poll_interval = int(cfg.get("poll_interval_seconds", 5) or 5)
+    stale_after = max(feed_interval * 3, poll_interval * 3, 30)
+    last_feed = feed.get("last_feed_unix")
+    age = None
+    if last_feed:
+        try:
+            age = max(0, time.time() - float(last_feed))
+        except (TypeError, ValueError):
+            age = None
+
+    if feed.get("trip_test_active"):
+        check = CheckResult(
+            "hardware_watchdog_feed_status",
+            "warning",
+            "Deliberate watchdog trip test active; feed paused for this boot",
+            feed,
+            False,
+        )
+    elif not enabled:
+        check = CheckResult(
+            "hardware_watchdog_feed_status",
+            "warning",
+            f"Hardware watchdog present but V3 feed is disabled for {device}",
+            feed,
+            False,
+        )
+    elif not opened:
+        check = CheckResult(
+            "hardware_watchdog_feed_status",
+            "warning",
+            f"V3 feed enabled but {device} is not opened",
+            feed,
+            False,
+        )
+    elif age is None:
+        check = CheckResult(
+            "hardware_watchdog_feed_status",
+            "warning",
+            "V3 opened the watchdog, but no feed has been recorded yet",
+            feed,
+            False,
+        )
+    elif age > stale_after:
+        check = CheckResult(
+            "hardware_watchdog_feed_status",
+            "warning",
+            f"Last hardware watchdog feed is stale ({int(age)}s ago)",
+            feed,
+            False,
+        )
+    else:
+        check = CheckResult(
+            "hardware_watchdog_feed_status",
+            "healthy",
+            f"V3 is feeding the hardware watchdog ({int(age)}s ago)",
+            feed,
+            False,
+        )
+
+    checks = [CheckResult(**item) for item in status.get("checks", []) if item.get("name") != check.name]
+    checks.append(check)
+    status["checks"] = [item.to_dict() for item in checks]
+    status["state"] = worst_state([item.state for item in checks])
+    status["score"] = score_from_checks(checks)
+    status["critical_failed"] = any(item.state == "critical" and item.critical for item in checks)
+    status["startup_summary"] = build_startup_summary(cfg, checks)
+    return status
 
 def main():
     cfg = load_config()
@@ -64,6 +140,7 @@ def main():
         "timeout_seconds": hw.get_timeout(),
         "fed_this_cycle": False
     }
+    add_hardware_feed_check(status, cfg)
     status["recovery"] = recovery.summary()
     event_log.add(
         "info",
@@ -103,6 +180,7 @@ def main():
                 "trip_test_active": trip_active,
                 "trip_test": trip_summary,
             }
+            add_hardware_feed_check(status, cfg)
             status["recovery"] = recovery.summary()
             atomic_write_json(cfg["status_path"], status)
             append_history(cfg, status)
