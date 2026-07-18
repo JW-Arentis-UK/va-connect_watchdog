@@ -8,6 +8,7 @@ import socket
 import subprocess
 import re
 import time
+from datetime import datetime
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -137,6 +138,8 @@ input[type="radio"] { width:18px; height:18px; }
 .event-time { color:var(--muted); font-size:calc(12px * var(--scale)); }
 .event-card { border:1px solid var(--line); border-radius:6px; padding:calc(10px * var(--scale)); background:rgba(255,255,255,.025); }
 .event-card .event-head { display:flex; justify-content:space-between; gap:calc(10px * var(--scale)); align-items:center; margin-bottom:calc(6px * var(--scale)); }
+.event-card summary { cursor:pointer; list-style:none; }
+.event-card summary::-webkit-details-marker { display:none; }
 .event-source { color:var(--muted); font-size:calc(12px * var(--scale)); }
 .event-message { font-weight:700; }
 .event-data { margin-top:calc(6px * var(--scale)); max-height:calc(130px * var(--scale)); }
@@ -457,7 +460,7 @@ function serviceRows(status){
 function renderEvents(events, limit=8){
   const rows = (events || []).slice(0, limit);
   if (!rows.length) return '<div class="event"><div class="event-time">-</div><div>No events yet</div></div>';
-  return rows.map(event => `<div class="event"><div class="event-time">${escapeHtml(fmtTime(event.time))}</div><div><span class="${statusClass(event.level)}">${escapeHtml((event.level || 'info').toUpperCase())}</span> ${escapeHtml(event.message || '')}</div></div>`).join('');
+  return rows.map(event => `<details class="event-card"><summary><div class="event-head"><span class="${statusClass(event.level)}">${escapeHtml((event.level || 'info').toUpperCase())}</span><span class="event-time">${escapeHtml(fmtTime(event.time))}</span></div><div class="event-message">${escapeHtml(event.message || '')}</div></summary><div class="event-source">Source: ${escapeHtml(event.source || '-')}</div>${event.data ? `<pre class="event-data">${escapeHtml(JSON.stringify(event.data, null, 2))}</pre>` : ''}</details>`).join('');
 }
 
 function filteredEvents(limit=50){
@@ -1049,6 +1052,16 @@ def start_web(cfg):
                 "error": str(exc),
             }
 
+    def local_time(value):
+        if not value:
+            return "-"
+        text = str(value)
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            return parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return text
+
     def basic_dashboard_html(page="Overview"):
         status = status_snapshot()
         version = version_info()
@@ -1168,14 +1181,16 @@ def start_web(cfg):
             rows = []
             for event in events:
                 rows.append(
-                    "<div class=\"event-card\">"
+                    "<details class=\"event-card\">"
+                    "<summary>"
                     "<div class=\"event-head\">"
                     f"<span class=\"{escape(str(event.get('level', 'info')))}\">{escape(str(event.get('level', 'info')).upper())}</span>"
-                    f"<span class=\"event-time\">{escape(str(event.get('time', '-')))}</span>"
+                    f"<span class=\"event-time\">{escape(local_time(event.get('time')))}</span>"
                     "</div>"
                     f"<div class=\"event-message\">{escape(str(event.get('message', '')))}</div>"
+                    "</summary>"
                     f"<div class=\"event-source\">Source: {escape(str(event.get('source', '-')))}</div>"
-                    "</div>"
+                    "</details>"
                 )
             if not rows:
                 rows.append("<div class=\"event\"><div class=\"event-time\">-</div><div>No events yet</div></div>")
@@ -1202,15 +1217,17 @@ def start_web(cfg):
                 if data:
                     data_html = f"<pre class=\"event-data\">{escape(json.dumps(data, indent=2))}</pre>"
                 event_cards.append(
-                    "<div class=\"event-card\">"
+                    "<details class=\"event-card\">"
+                    "<summary>"
                     "<div class=\"event-head\">"
                     f"<span class=\"{escape(str(event.get('level', 'info')))}\">{escape(str(event.get('level', 'info')).upper())}</span>"
-                    f"<span class=\"event-time\">{escape(str(event.get('time', '-')))}</span>"
+                    f"<span class=\"event-time\">{escape(local_time(event.get('time')))}</span>"
                     "</div>"
                     f"<div class=\"event-message\">{escape(str(event.get('message', '')))}</div>"
+                    "</summary>"
                     f"<div class=\"event-source\">Source: {escape(str(event.get('source', '-')))}</div>"
                     f"{data_html}"
-                    "</div>"
+                    "</details>"
                 )
             if not event_cards:
                 event_cards.append("<div class=\"event-card\">No events yet.</div>")
@@ -2000,6 +2017,11 @@ def start_web(cfg):
             device = str(item.get("device", ""))
             row_class = "selectable-row" if allowed else ""
             row_onclick = "onclick=\"selectStorageRadio(this, 'device')\"" if allowed else ""
+            monitor_action = ""
+            if allowed and item.get("mountpoint"):
+                monitor_action = (
+                    f"<a class=\"ghost\" href=\"/recording-storage-monitor-confirm/{quote(device)}\">Monitor only</a>"
+                )
             rows.append(
                 f"<tr class=\"{row_class}\" {row_onclick}>"
                 f"<td><label><input type=\"radio\" name=\"device\" value=\"{escape(device)}\" {'disabled' if not allowed else ''}> Select</label></td>"
@@ -2010,7 +2032,7 @@ def start_web(cfg):
                 f"<td>{escape(str(item.get('filesystem', '-') or '-'))}</td>"
                 f"<td>{escape(str(item.get('label', '-') or '-'))}</td>"
                 f"<td>{escape(str(item.get('mountpoint', '-') or '-'))}</td>"
-                f"<td class=\"{'healthy' if allowed else 'warning'}\">{escape(str(item.get('existing_mode', 'Selectable')) if allowed else str(item.get('blocked_reason', 'Blocked')))}</td>"
+                f"<td class=\"{'healthy' if allowed else 'warning'}\">{escape(str(item.get('existing_mode', 'Selectable')) if allowed else str(item.get('blocked_reason', 'Blocked')))} {monitor_action}</td>"
                 "</tr>"
             )
             if allowed:
@@ -2055,6 +2077,7 @@ def start_web(cfg):
             "function selectStorageDropdown(select,name){var form=select.form;var inputs=form.querySelectorAll('input[type=radio][name='+name+']');for(var i=0;i<inputs.length;i++){if(inputs[i].value===select.value&&!inputs[i].disabled){inputs[i].checked=true;var row=inputs[i].closest('tr');if(row){selectStorageRadio(row,name);}break;}}}"
             "</script>"
             "<h3>Use Existing ext4 Filesystem</h3>"
+            "<p class=\"muted\">Use selected storage if the watchdog is allowed to relabel and manage the fstab entry. Use Monitor only for an already-working recorder mount that must not be changed.</p>"
             "<form method=\"post\" action=\"/recording-storage-confirm\">"
             "<label class=\"label\">Choose existing ext4 storage</label>"
             f"<select onchange=\"selectStorageDropdown(this, 'device')\"><option value=\"\">Select existing storage...</option>{''.join(partition_options)}</select>"
@@ -2155,6 +2178,74 @@ def start_web(cfg):
             "</div>"
         )
         return page_shell(body, "Storage")
+
+    def recording_storage_monitor_confirm_html(device):
+        candidates = recording_storage_candidates(cfg)
+        selected = next((item for item in candidates if os.path.realpath(str(item.get("device", ""))) == os.path.realpath(str(device or ""))), None)
+        if not selected:
+            body = (
+                "<div class=\"card\"><h2>Monitor Existing Recording Storage</h2>"
+                "<p class=\"critical\">Selected device was not detected.</p>"
+                "<a class=\"ghost\" href=\"/recording-storage-configure\">Back</a></div>"
+            )
+            return page_shell(body, "Storage")
+        if not selected.get("allowed") or not selected.get("mountpoint"):
+            body = (
+                "<div class=\"card\"><h2>Monitor Existing Recording Storage</h2>"
+                "<p class=\"critical\">Selected device must be a mounted ext4 storage device larger than the minimum CCTV size.</p>"
+                f"<pre>{escape(str(selected.get('blocked_reason') or 'No mountpoint detected'))}</pre>"
+                "<a class=\"ghost\" href=\"/recording-storage-configure\">Back</a></div>"
+            )
+            return page_shell(body, "Storage")
+        body = (
+            "<div class=\"card\">"
+            "<h2>Confirm Monitor Only</h2>"
+            "<p class=\"warning\">This does not relabel, remount, format, change ownership, or edit /etc/fstab. It only changes the watchdog config to monitor this existing mounted storage.</p>"
+            f"<div class=\"label\">Device</div><div class=\"value\">{escape(str(selected.get('device', '-')))}</div>"
+            f"<div class=\"label\">Mountpoint</div><div class=\"value\">{escape(str(selected.get('mountpoint', '-')))}</div>"
+            f"<div class=\"label\">Filesystem</div><div class=\"value\">{escape(str(selected.get('filesystem', '-')))}</div>"
+            f"<div class=\"label\">Current label</div><div class=\"value\">{escape(str(selected.get('label', '-') or '-'))}</div>"
+            "<form method=\"post\" action=\"/recording-storage-monitor-only\">"
+            f"<input type=\"hidden\" name=\"device\" value=\"{escape(str(selected.get('device', '')))}\">"
+            "<label><input type=\"checkbox\" name=\"ack\" value=\"1\"> Monitor this existing mount without changing the disk</label>"
+            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Use monitor-only mode</button><a class=\"ghost\" href=\"/recording-storage-configure\">Cancel</a></div>"
+            "</form>"
+            "</div>"
+        )
+        return page_shell(body, "Storage")
+
+    def monitor_existing_recording_storage(device, ack):
+        if not ack:
+            return {"ok": False, "message": "Confirmation checkbox was not ticked.", "output": ""}
+        candidates = recording_storage_candidates(cfg)
+        selected = next((item for item in candidates if os.path.realpath(str(item.get("device", ""))) == os.path.realpath(str(device or ""))), None)
+        if not selected:
+            return {"ok": False, "message": f"Selected device was not detected: {device}", "output": ""}
+        if not selected.get("allowed") or not selected.get("mountpoint"):
+            return {"ok": False, "message": "Selected device is not a mounted ext4 CCTV storage candidate.", "output": selected.get("blocked_reason") or "No mountpoint detected"}
+        label = str(selected.get("label") or "").strip()
+        updates = {
+            "recording_storage": {
+                "enabled": True,
+                "expected_label": label,
+                "mountpoint": str(selected.get("mountpoint")),
+                "filesystem": str(selected.get("filesystem") or "ext4"),
+                "managed_fstab": False,
+            }
+        }
+        raw = load_raw_config()
+        merged_raw = deep_merge(raw, updates)
+        saved_path = save_raw_config(merged_raw)
+        live_cfg = deep_merge(cfg, updates)
+        cfg.clear()
+        cfg.update(live_cfg)
+        return {
+            "ok": True,
+            "message": "Watchdog is now monitoring the existing recording mount only.",
+            "output": "No disk, label, mount, ownership, or fstab changes were made.",
+            "backup": f"Config backup created automatically beside {saved_path}",
+            "status": recording_storage_status(cfg),
+        }
 
     def recording_storage_result_html(result):
         ok = bool(result.get("ok"))
@@ -4075,6 +4166,16 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if route_path.startswith("/recording-storage-monitor-confirm/"):
+                device = unquote(route_path.rsplit("/", 1)[-1])
+                body = recording_storage_monitor_confirm_html(device).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path == "/recovery-install-confirm":
                 body = recovery_install_confirm_html().encode("utf-8")
                 self.send_response(200)
@@ -4352,6 +4453,25 @@ def start_web(cfg):
                     ack = form.get("ack", [""])[0] in {"1", "on", "true", "True", "yes"}
                     result = prepare_blank_recording_disk(cfg, disk, confirm_device, confirm_label, ack)
                     append_web_event("healthy" if result.get("ok") else "critical", "recording_storage", result.get("message", "Blank recording disk prepare processed"), result)
+                except Exception as exc:
+                    result = {"ok": False, "message": str(exc), "output": ""}
+                body = recording_storage_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 400)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/recording-storage-monitor-only":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    device = form.get("device", [""])[0]
+                    ack = form.get("ack", [""])[0] in {"1", "on", "true", "True", "yes"}
+                    result = monitor_existing_recording_storage(device, ack)
+                    append_web_event("healthy" if result.get("ok") else "warning", "recording_storage", result.get("message", "Recording storage monitor-only processed"), result)
                 except Exception as exc:
                     result = {"ok": False, "message": str(exc), "output": ""}
                 body = recording_storage_result_html(result).encode("utf-8")

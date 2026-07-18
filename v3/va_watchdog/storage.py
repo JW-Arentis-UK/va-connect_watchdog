@@ -21,6 +21,7 @@ DEFAULT_RECORDING_STORAGE = {
     "owner": "vsuser",
     "group": "",
     "directory_mode": "775",
+    "minimum_candidate_gb": 10,
     "free_warning_percent": 10,
     "temperature_warning_c": 55,
     "recording_services": [],
@@ -429,12 +430,17 @@ def _partitions_for_disk(disk):
     return [p for p in parts if p]
 
 def recording_storage_candidates(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    rec_cfg = recording_storage_cfg(cfg)
+    minimum_candidate_gb = float(rec_cfg.get("minimum_candidate_gb", 10) or 10)
     root_parent = _root_parent_disk()
     protected_mounts = {"/", "/boot", "/boot/efi"}
     candidates = []
     for row in _lsblk_rows():
         path = row.get("path")
         if not path:
+            continue
+        size_gb = round(float(row.get("size") or 0) / 1024 / 1024 / 1024, 1)
+        if size_gb < minimum_candidate_gb:
             continue
         mountpoint = row.get("mountpoint") or ""
         parent = _parent_disk(path) or row.get("parent_path") or path
@@ -473,7 +479,7 @@ def recording_storage_candidates(cfg: dict[str, Any]) -> list[dict[str, Any]]:
             "model": row.get("model") or "",
             "serial": row.get("serial") or "",
             "size_bytes": row.get("size"),
-            "size_gb": round(float(row.get("size") or 0) / 1024 / 1024 / 1024, 1),
+            "size_gb": size_gb,
             "filesystem": row.get("fstype") or "",
             "label": row.get("label") or "",
             "mountpoint": mountpoint,

@@ -66,6 +66,7 @@
     "owner": "vsuser",
     "group": "",
     "directory_mode": "775",
+    "minimum_candidate_gb": 10,
     "free_warning_percent": 10,
     "temperature_warning_c": 55,
     "recording_services": []
