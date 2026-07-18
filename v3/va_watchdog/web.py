@@ -151,6 +151,21 @@ input[type="radio"] { width:18px; height:18px; }
 pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale)); background:var(--input); border:1px solid var(--line); border-radius:6px; padding:calc(12px * var(--scale)); }
 .detail-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:calc(10px * var(--scale)); }
 .mini-card { border:1px solid var(--line); border-radius:6px; padding:calc(10px * var(--scale)); background:rgba(255,255,255,.03); min-width:0; }
+.status-strip { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:calc(10px * var(--scale)); margin:calc(10px * var(--scale)) 0; }
+.status-box { border:1px solid var(--line); border-radius:8px; padding:calc(12px * var(--scale)); background:rgba(255,255,255,.035); min-width:0; }
+.status-box .big { font-size:calc(22px * var(--scale)); font-weight:800; margin:calc(4px * var(--scale)) 0; overflow-wrap:anywhere; }
+.action-panel { border-left:calc(5px * var(--scale)) solid var(--amber); }
+.action-panel.healthy { border-left-color:var(--green); }
+.action-panel.critical { border-left-color:var(--red); }
+.setup-steps { display:grid; gap:calc(8px * var(--scale)); counter-reset:step; }
+.setup-step { display:grid; grid-template-columns:calc(28px * var(--scale)) 1fr auto; gap:calc(10px * var(--scale)); align-items:center; border:1px solid var(--line); border-radius:8px; padding:calc(10px * var(--scale)); background:rgba(255,255,255,.025); }
+.setup-step:before { counter-increment:step; content:counter(step); width:calc(24px * var(--scale)); height:calc(24px * var(--scale)); display:grid; place-items:center; border-radius:999px; background:var(--input); color:var(--muted); font-weight:800; }
+.setup-step.healthy:before { background:rgba(54,209,95,.16); color:var(--green); }
+.setup-step.warning:before { background:rgba(255,191,60,.16); color:var(--amber); }
+.setup-step.critical:before { background:rgba(255,79,100,.16); color:var(--red); }
+.step-title { font-weight:800; }
+.step-detail { color:var(--muted); font-size:calc(12px * var(--scale)); overflow-wrap:anywhere; }
+.compact-table td, .compact-table th { white-space:normal; }
 .muted { color:var(--muted); }
 .toolbar { display:flex; flex-wrap:wrap; gap:calc(8px * var(--scale)); align-items:center; margin-bottom:calc(10px * var(--scale)); }
 .chart { width:100%; height:calc(180px * var(--scale)); border:1px solid var(--line); border-radius:6px; background:rgba(54,209,95,.08); }
@@ -158,8 +173,8 @@ pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale))
 .chart polyline { fill:none; stroke:var(--green); stroke-width:2; }
 .chart .grid-line { stroke:var(--line); stroke-width:1; }
 .button-row { display:flex; gap:calc(8px * var(--scale)); flex-wrap:wrap; align-items:center; margin:calc(10px * var(--scale)) 0; }
-button.action { background:var(--blue); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; }
-button.danger { background:var(--red); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; }
+button.action, a.action { background:var(--blue); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; text-decoration:none; display:inline-block; }
+button.danger, a.danger { background:var(--red); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; text-decoration:none; display:inline-block; }
 button.ghost, a.ghost { background:transparent; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:calc(7px * var(--scale)) calc(10px * var(--scale)); cursor:pointer; font-size:inherit; text-decoration:none; display:inline-block; }
 form.inline { display:inline-block; margin:0; }
 button.action:disabled { opacity:.5; cursor:not-allowed; }
@@ -168,12 +183,14 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
 @media (max-width: 1100px) {
   .shell { grid-template-columns: calc(180px * var(--scale)) 1fr; }
   .metric-grid { grid-template-columns: repeat(3, minmax(calc(130px * var(--scale)), 1fr)); }
+  .status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .top-grid, .lower-grid, .bottom-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
   .shell { grid-template-columns: 1fr; }
   .sidebar { position:static; }
   .metric-grid { grid-template-columns: repeat(2, minmax(calc(130px * var(--scale)), 1fr)); }
+  .status-strip { grid-template-columns: 1fr; }
   .summary-card { grid-template-columns: 1fr; }
 }
 </style>
@@ -553,6 +570,7 @@ function renderWatchdogPage(status){
   ];
   const ready = setupChecks.slice(0, 7).every(row => row[1] === 'healthy');
   const checkRows = setupChecks.map(row => `<tr><td>${escapeHtml(row[0])}</td><td class="${escapeHtml(row[1])}">${escapeHtml(row[1].toUpperCase())}</td><td>${escapeHtml(row[2])}</td></tr>`).join('');
+  const checkCards = setupChecks.map(row => `<div class="setup-step ${escapeHtml(row[1])}"><div><div class="step-title">${escapeHtml(row[0])}</div><div class="step-detail">${escapeHtml(row[2])}</div></div><strong class="${escapeHtml(row[1])}">${escapeHtml(row[1].toUpperCase())}</strong></div>`).join('');
   const configRows = [
     ['Hardware feed', hwCfg.enabled ? 'Enabled' : 'Disabled'],
     ['Device', hwCfg.device || '/dev/watchdog0'],
@@ -563,9 +581,15 @@ function renderWatchdogPage(status){
     ['Device owner', watchdog.owners?.summary || '-'],
     ['Legacy package', legacy.package_status || '-'],
   ].map(row => `<tr><td>${escapeHtml(row[0])}</td><td>${escapeHtml(row[1])}</td></tr>`).join('');
-  const legacyRows = units.length ? units.map(unit => `<tr><td>${escapeHtml(unit.unit || '-')}</td><td>${escapeHtml(unit.active || '-')}</td><td>${escapeHtml(unit.enabled || '-')}</td></tr>`).join('') : '<tr><td colspan="3">No legacy watchdog units found.</td></tr>';
+  const legacyRows = units.length ? units.map(unit => `<tr><td>${escapeHtml(unit.unit || '-')}</td><td class="${unit.active === 'active' ? 'critical' : 'healthy'}">${escapeHtml(unit.active || '-')}</td><td class="${['enabled', 'static'].includes(unit.enabled) ? 'warning' : 'healthy'}">${escapeHtml(unit.enabled || '-')}</td></tr>`).join('') : '<tr><td colspan="3">No legacy watchdog units found.</td></tr>';
   const tripAction = ready ? '<a class="action" href="/watchdog-trip-confirm">Open trip confirm page</a>' : '<button class="action" disabled>Open trip confirm page</button>';
-  return `${pageHelp('Watchdog')}<div class="grid lower-grid"><div class="card"><h2>Hardware Watchdog Setup</h2><p class="${ready ? 'healthy' : 'warning'}">${ready ? 'Hardware watchdog is ready and owned by V3' : 'Setup incomplete: run the one-click setup, then reload this page'}</p><table><thead><tr><th>Check</th><th>Status</th><th>Meaning</th></tr></thead><tbody>${checkRows}</tbody></table><div class="button-row"><a class="action" href="/hardware-watchdog-prepare-confirm">Run one-click setup and cleanup</a><a class="ghost" href="/watchdog-hardware-probe-confirm">Run full probe</a></div></div><div class="card"><h2>Current Configuration</h2><table><tbody>${configRows}</tbody></table><h3>Legacy Units</h3><table><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead><tbody>${legacyRows}</tbody></table></div></div><div class="grid lower-grid"><div class="card"><h2>Safe Watchdog Test</h2><p class="muted">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-test-arm"><button class="action" type="submit">Arm safe test</button></form></div><div class="label">Feed enabled</div><div class="value">${feed.enabled ? 'Enabled' : 'Disabled'}</div><div class="label">Last feed</div><div class="value">${escapeHtml(lastFeed)}</div></div><div class="card"><h2>Deliberate Watchdog Trip Test</h2><p class="warning">This stops V3 hardware feeding and may reboot the gateway.</p><p class="muted">Triple confirmation: arm the test, check the risk box, and type TRIP on the confirm page.</p><div class="button-row">${tripAction}</div>${ready ? '' : '<p class="warning">Trip test is blocked until setup is complete and V3 has a recent hardware feed.</p>'}<div class="label">State</div><div class="value">${escapeHtml(tripTest.triggered ? 'Triggered this boot' : (tripTest.completed_previous_boot ? 'Completed on previous boot' : (tripTest.armed ? 'Armed' : 'Not armed')))}</div><div class="label">Last result</div><div class="value">${escapeHtml(tripTest.last_result_message || 'No trip test recorded yet')}</div></div><div class="card"><h2>Extend Timeout</h2><p class="muted">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p><form method="post" action="/watchdog-timeout-set"><label class="label">Timeout seconds</label><select name="timeout_seconds"><option value="30" ${timeout === 30 ? 'selected' : ''}>30</option><option value="60" ${timeout === 60 ? 'selected' : ''}>60</option><option value="120" ${timeout === 120 ? 'selected' : ''}>120</option><option value="180" ${timeout === 180 ? 'selected' : ''}>180</option><option value="300" ${timeout === 300 ? 'selected' : ''}>300</option></select><div class="button-row"><button class="action" type="submit">Apply timeout</button></div></form><div class="label">Current config</div><pre>${escapeHtml(JSON.stringify(hwCfg, null, 2))}</pre></div></div><div class="card"><h2>Advanced Tools</h2><p class="muted">Use these only when the one-click setup cannot complete.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy only</a><a class="ghost" href="/hardware-watchdog-enable-confirm">Enable feed only</a><a class="ghost" href="/hardware">Hardware details</a><a class="ghost" href="/diagnostics">Diagnostics</a></div></div>`;
+  const legacyProblem = !legacyClean;
+  const pageState = ready ? 'healthy' : (legacyProblem ? 'critical' : 'warning');
+  const pageTitle = ready ? 'Hardware watchdog ready' : (legacyProblem ? 'Existing watchdog conflict found' : 'Watchdog needs setup');
+  const pageMessage = ready ? 'V3 owns /dev/watchdog0 and is feeding it. The deliberate trip test is available.' : (legacyProblem ? 'A legacy watchdog service may own the device. Clean legacy watchdogs, then run one-click setup.' : 'Run the one-click setup to load the driver, clean old watchdog daemons, enable V3 feed, and restart the service.');
+  const primaryAction = ready ? '<a class="action" href="/watchdog-trip-confirm">Start deliberate trip test</a>' : (legacyProblem ? '<a class="danger" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs</a>' : '<a class="action" href="/hardware-watchdog-prepare-confirm">Run one-click setup</a>');
+  const feedState = feed.enabled && feed.opened ? 'healthy' : 'warning';
+  return `${pageHelp('Watchdog')}<div class="card action-panel ${pageState}"><h2>${escapeHtml(pageTitle)}</h2><p class="${pageState}">${escapeHtml(pageMessage)}</p><div class="button-row">${primaryAction}<a class="ghost" href="/hardware-watchdog-prepare-confirm">Run full setup/cleanup</a><a class="ghost" href="/watchdog-hardware-probe-confirm">Run probe</a></div></div><div class="status-strip"><div class="status-box"><div class="label">Driver</div><div class="big ${modules.iTCO_wdt ? 'healthy' : 'warning'}">${modules.iTCO_wdt ? 'Loaded' : 'Needs setup'}</div><div class="step-detail">Intel TCO hardware watchdog driver</div></div><div class="status-box"><div class="label">Device</div><div class="big ${wdctl.device ? 'healthy' : 'warning'}">${escapeHtml(hwCfg.device || '/dev/watchdog0')}</div><div class="step-detail">${escapeHtml(wdctl.identity || 'No identity yet')}</div></div><div class="status-box"><div class="label">V3 feed</div><div class="big ${feedState}">${feed.enabled && feed.opened ? 'Feeding' : 'Not feeding'}</div><div class="step-detail">${escapeHtml(lastFeed)}</div></div><div class="status-box"><div class="label">Legacy watchdogs</div><div class="big ${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Conflict' : 'Clear'}</div><div class="step-detail">${escapeHtml(legacyProblem ? 'Cleanup needed' : 'Removed/disabled')}</div></div></div><div class="grid lower-grid"><div class="card"><h2>Setup Checklist</h2><p class="muted">Work from top to bottom. Green means that layer is ready; amber/red shows the part to fix next.</p><div class="setup-steps">${checkCards}</div></div><div class="card"><h2>Existing Watchdogs and Cleanup</h2><p class="${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Another watchdog may still be installed or enabled.' : 'No conflicting legacy watchdog services detected.'}</p><table class="compact-table"><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead><tbody>${legacyRows}</tbody></table><p class="muted">V3 should be the only process feeding the hardware watchdog.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs only</a><a class="ghost" href="/hardware">Hardware details</a></div></div></div><div class="grid lower-grid"><div class="card"><h2>Current V3 Configuration</h2><table class="compact-table"><tbody>${configRows}</tbody></table></div><div class="card"><h2>What the Layers Mean</h2><ul><li><strong>Hardware watchdog</strong> reboots the whole gateway if Linux stops feeding /dev/watchdog0.</li><li><strong>V3 feed</strong> is this service opening and feeding the hardware device.</li><li><strong>V3 process watchdog</strong> is systemd restarting va-watchdog if the Python process hangs.</li><li><strong>Legacy watchdogs</strong> are old daemons/packages that should not also control the device.</li></ul></div></div><div class="grid lower-grid"><div class="card"><h2>Safe Watchdog Test</h2><p class="muted">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-test-arm"><button class="action" type="submit">Arm safe test</button></form></div><div class="label">Feed enabled</div><div class="value">${feed.enabled ? 'Enabled' : 'Disabled'}</div><div class="label">Last feed</div><div class="value">${escapeHtml(lastFeed)}</div></div><div class="card"><h2>Deliberate Watchdog Trip Test</h2><p class="warning">This stops V3 hardware feeding and may reboot the gateway.</p><p class="muted">Triple confirmation: arm the test, check the risk box, and type TRIP on the confirm page.</p><div class="button-row">${tripAction}</div>${ready ? '' : '<p class="warning">Trip test is blocked until setup is complete and V3 has a recent hardware feed.</p>'}<div class="label">State</div><div class="value">${escapeHtml(tripTest.triggered ? 'Triggered this boot' : (tripTest.completed_previous_boot ? 'Completed on previous boot' : (tripTest.armed ? 'Armed' : 'Not armed')))}</div><div class="label">Last result</div><div class="value">${escapeHtml(tripTest.last_result_message || 'No trip test recorded yet')}</div></div><div class="card"><h2>Extend Timeout</h2><p class="muted">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p><form method="post" action="/watchdog-timeout-set"><label class="label">Timeout seconds</label><select name="timeout_seconds"><option value="30" ${timeout === 30 ? 'selected' : ''}>30</option><option value="60" ${timeout === 60 ? 'selected' : ''}>60</option><option value="120" ${timeout === 120 ? 'selected' : ''}>120</option><option value="180" ${timeout === 180 ? 'selected' : ''}>180</option><option value="300" ${timeout === 300 ? 'selected' : ''}>300</option></select><div class="button-row"><button class="action" type="submit">Apply timeout</button></div></form><p class="muted">Use a longer timeout while diagnosing reboot loops. Put it back to 30s once stable.</p></div></div><div class="card"><h2>Advanced Tools</h2><p class="muted">Use these only when the guided setup cannot complete.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy only</a><a class="ghost" href="/hardware-watchdog-enable-confirm">Enable feed only</a><a class="ghost" href="/hardware">Hardware details</a><a class="ghost" href="/diagnostics">Diagnostics</a></div></div>`;
 }
 
 function renderBreakdown(status){
@@ -1395,7 +1419,6 @@ def start_web(cfg):
             info = hardware_info()
             watchdog = info.get("watchdog", {})
             hw_cfg = cfg.get("hardware_watchdog", {})
-            safe_test = watchdog.get("safe_test", {})
             trip_test = watchdog.get("trip_test", trip_test_summary(cfg))
             systemd_wdt = watchdog.get("systemd_watchdog", systemd_watchdog_info())
             setup = watchdog_setup_rows(watchdog, systemd_wdt)
@@ -1403,19 +1426,61 @@ def start_web(cfg):
             legacy = watchdog.get("legacy_daemon", {})
             wdctl = watchdog.get("wdctl", {})
             timeout = int(hw_cfg.get("timeout_seconds", 30) or 30)
+            checks = setup.get("checks", [])
+            by_name = {str(row.get("name", "")): row for row in checks}
+            driver = by_name.get("Intel TCO driver", {})
+            device = by_name.get("Watchdog device", {})
+            legacy_check = by_name.get("Legacy daemon", {})
+            config_check = by_name.get("V3 config", {})
+            owner_check = by_name.get("V3 device owner", {})
+            feed_check = by_name.get("Live feed", {})
+            process_check = by_name.get("V3 process watchdog", {})
+            trip_ready = bool(setup.get("trip_ready"))
+            legacy_units = legacy.get("units", [])
+            legacy_problem = str(legacy_check.get("state", "")) == "critical"
+            feed_enabled = bool(setup_config.get("enabled"))
+            feed_opened = bool(setup_config.get("opened"))
+            feed_count = setup_config.get("feed_count", 0)
+            if setup.get("ready"):
+                page_state = "healthy"
+                page_title = "Hardware watchdog ready"
+                page_message = "V3 owns /dev/watchdog0 and is feeding it. The deliberate trip test is available."
+                primary_action = "<a class=\"action\" href=\"/watchdog-trip-confirm\">Start deliberate trip test</a>"
+            elif legacy_problem:
+                page_state = "critical"
+                page_title = "Existing watchdog conflict found"
+                page_message = "A legacy watchdog service may own the device. Clean legacy watchdogs, then run one-click setup."
+                primary_action = "<a class=\"danger\" href=\"/watchdog-legacy-disable-confirm\">Clean legacy watchdogs</a>"
+            elif str(driver.get("state", "")) != "healthy" or str(device.get("state", "")) != "healthy":
+                page_state = "warning"
+                page_title = "Hardware watchdog not fully prepared"
+                page_message = "Load the Intel TCO driver and let V3 configure ownership/feed in one step."
+                primary_action = "<a class=\"action\" href=\"/hardware-watchdog-prepare-confirm\">Run one-click setup</a>"
+            elif not feed_enabled or not feed_opened:
+                page_state = "warning"
+                page_title = "V3 is not feeding the watchdog yet"
+                page_message = "The hardware exists, but V3 feed is not enabled or has not opened the device."
+                primary_action = "<a class=\"action\" href=\"/hardware-watchdog-prepare-confirm\">Enable V3 feed</a>"
+            else:
+                page_state = "warning"
+                page_title = "Watchdog needs attention"
+                page_message = str(setup.get("message", "Check the setup steps below."))
+                primary_action = "<a class=\"action\" href=\"/hardware-watchdog-prepare-confirm\">Run one-click setup</a>"
             timeout_options = "".join(
                 f"<option value=\"{value}\" {'selected' if timeout == value else ''}>{value}</option>"
                 for value in [30, 60, 120, 180, 300]
             )
-            check_rows = []
-            for row in setup.get("checks", []):
+            step_rows = []
+            for row in checks:
                 state = str(row.get("state", "unknown"))
-                check_rows.append(
-                    "<tr>"
-                    f"<td>{escape(str(row.get('name', '-')))}</td>"
-                    f"<td class=\"{escape(state)}\">{escape(state.upper())}</td>"
-                    f"<td>{escape(str(row.get('message', '-')))}</td>"
-                    "</tr>"
+                step_rows.append(
+                    f"<div class=\"setup-step {escape(state)}\">"
+                    "<div>"
+                    f"<div class=\"step-title\">{escape(str(row.get('name', '-')))}</div>"
+                    f"<div class=\"step-detail\">{escape(str(row.get('message', '-')))}</div>"
+                    "</div>"
+                    f"<strong class=\"{escape(state)}\">{escape(state.upper())}</strong>"
+                    "</div>"
                 )
             config_rows = [
                 ("Config file", setup_config.get("path", "-")),
@@ -1428,6 +1493,8 @@ def start_web(cfg):
                 ("Driver timeout", wdctl.get("timeout", "-")),
                 ("Device owner", watchdog.get("owners", {}).get("summary", "-")),
                 ("Legacy package", legacy.get("package_status", "-")),
+                ("Last feed", setup_config.get("last_feed", "-")),
+                ("Feed count", setup_config.get("feed_count", 0)),
             ]
             config_html = "".join(
                 "<tr>"
@@ -1439,14 +1506,13 @@ def start_web(cfg):
             legacy_rows = "".join(
                 "<tr>"
                 f"<td>{escape(str(unit.get('unit', '-')))}</td>"
-                f"<td>{escape(str(unit.get('active', '-')))}</td>"
-                f"<td>{escape(str(unit.get('enabled', '-')))}</td>"
+                f"<td class=\"{'critical' if unit.get('active') == 'active' else 'healthy'}\">{escape(str(unit.get('active', '-')))}</td>"
+                f"<td class=\"{'warning' if unit.get('enabled') in {'enabled', 'static'} else 'healthy'}\">{escape(str(unit.get('enabled', '-')))}</td>"
                 "</tr>"
-                for unit in legacy.get("units", [])
+                for unit in legacy_units
             )
             if not legacy_rows:
                 legacy_rows = "<tr><td colspan=\"3\">No legacy watchdog units found.</td></tr>"
-            trip_ready = bool(setup.get("trip_ready"))
             trip_action = (
                 "<a class=\"action\" href=\"/watchdog-trip-confirm\">Open trip confirm page</a>"
                 if trip_ready
@@ -1454,22 +1520,46 @@ def start_web(cfg):
             )
             trip_warning = "" if trip_ready else "<p class=\"warning\">Trip test is blocked until setup is complete and V3 has a recent hardware feed.</p>"
             return (
-                "<div class=\"grid lower-grid\">"
-                "<div class=\"card\"><h2>Hardware Watchdog Setup</h2>"
-                f"<p class=\"{escape(str(setup.get('state', 'warning')))}\">{escape(str(setup.get('message', '-')))}</p>"
-                "<table><thead><tr><th>Check</th><th>Status</th><th>Meaning</th></tr></thead>"
-                f"<tbody>{''.join(check_rows)}</tbody></table>"
-                "<div class=\"button-row\"><a class=\"action\" href=\"/hardware-watchdog-prepare-confirm\">Run one-click setup and cleanup</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run full probe</a></div>"
+                f"<div class=\"card action-panel {escape(page_state)}\"><h2>{escape(page_title)}</h2>"
+                f"<p class=\"{escape(page_state)}\">{escape(page_message)}</p>"
+                "<div class=\"button-row\">"
+                f"{primary_action}"
+                "<a class=\"ghost\" href=\"/hardware-watchdog-prepare-confirm\">Run full setup/cleanup</a>"
+                "<a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run probe</a>"
                 "</div>"
-                "<div class=\"card\"><h2>Current Configuration</h2>"
-                "<table><tbody>"
+                "</div>"
+                "<div class=\"status-strip\">"
+                f"<div class=\"status-box\"><div class=\"label\">Driver</div><div class=\"big {escape(str(driver.get('state', 'unknown')))}\">{escape('Loaded' if driver.get('state') == 'healthy' else 'Needs setup')}</div><div class=\"step-detail\">{escape(str(driver.get('message', '-')))}</div></div>"
+                f"<div class=\"status-box\"><div class=\"label\">Device</div><div class=\"big {escape(str(device.get('state', 'unknown')))}\">{escape(setup_config.get('device', '/dev/watchdog0'))}</div><div class=\"step-detail\">{escape(str(wdctl.get('identity') or device.get('message') or '-'))}</div></div>"
+                f"<div class=\"status-box\"><div class=\"label\">V3 feed</div><div class=\"big {'healthy' if feed_enabled and feed_opened else 'warning'}\">{escape('Feeding' if feed_enabled and feed_opened else 'Not feeding')}</div><div class=\"step-detail\">{escape(str(feed_check.get('message', '-')))}; count {escape(str(feed_count))}</div></div>"
+                f"<div class=\"status-box\"><div class=\"label\">Legacy watchdogs</div><div class=\"big {escape(str(legacy_check.get('state', 'unknown')))}\">{escape('Clear' if not legacy_problem else 'Conflict')}</div><div class=\"step-detail\">{escape(str(legacy_check.get('message', '-')))}</div></div>"
+                "</div>"
+                "<div class=\"grid lower-grid\">"
+                "<div class=\"card\"><h2>Setup Checklist</h2>"
+                "<p class=\"muted\">Work from top to bottom. Green means that layer is ready; amber/red shows the part to fix next.</p>"
+                f"<div class=\"setup-steps\">{''.join(step_rows)}</div>"
+                "</div>"
+                "<div class=\"card\"><h2>Existing Watchdogs and Cleanup</h2>"
+                f"<p class=\"{escape(str(legacy_check.get('state', 'unknown')))}\">{escape(str(legacy_check.get('message', '-')))}</p>"
+                "<table class=\"compact-table\"><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead>"
+                f"<tbody>{legacy_rows}</tbody></table>"
+                "<p class=\"muted\">Legacy watchdog services can take ownership of /dev/watchdog0. V3 should be the only process feeding the hardware watchdog.</p>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">Clean legacy watchdogs only</a><a class=\"ghost\" href=\"/hardware\">Hardware details</a></div>"
+                "</div></div>"
+                "<div class=\"grid lower-grid\">"
+                "<div class=\"card\"><h2>Current V3 Configuration</h2>"
+                "<table class=\"compact-table\"><tbody>"
                 f"{config_html}"
                 "</tbody></table>"
-                "<h3>Legacy Units</h3>"
-                "<table><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead>"
-                f"<tbody>{legacy_rows}</tbody></table>"
                 "</div>"
-                "</div>"
+                "<div class=\"card\"><h2>What the Layers Mean</h2>"
+                "<ul>"
+                "<li><strong>Hardware watchdog</strong> reboots the whole gateway if Linux stops feeding /dev/watchdog0.</li>"
+                "<li><strong>V3 feed</strong> is this service opening and feeding the hardware device.</li>"
+                "<li><strong>V3 process watchdog</strong> is systemd restarting va-watchdog if the Python process hangs.</li>"
+                "<li><strong>Legacy watchdogs</strong> are old watchdog daemons/packages that should not also control the device.</li>"
+                "</ul>"
+                "</div></div>"
                 "<div class=\"grid lower-grid\">"
                 "<div class=\"card\"><h2>Safe Watchdog Test</h2>"
                 "<p class=\"muted\">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p>"
@@ -1492,11 +1582,11 @@ def start_web(cfg):
                 f"<label class=\"label\">Timeout seconds</label><select name=\"timeout_seconds\">{timeout_options}</select>"
                 "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Apply timeout</button></div>"
                 "</form>"
-                f"<div class=\"label\">Current config</div><pre>{escape(json.dumps(hw_cfg, indent=2))}</pre>"
+                "<p class=\"muted\">Use a longer timeout while diagnosing reboot loops or slow startup. Put it back to 30s once stable.</p>"
                 "</div>"
                 "</div>"
                 "<div class=\"card\"><h2>Advanced Tools</h2>"
-                "<p class=\"muted\">Use these only when the one-click setup cannot complete. The normal route is the setup and cleanup button above.</p>"
+                "<p class=\"muted\">Use these only when the guided setup cannot complete. Diagnostics are intentionally separated from the normal operator path.</p>"
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">Clean legacy only</a><a class=\"ghost\" href=\"/hardware-watchdog-enable-confirm\">Enable feed only</a><a class=\"ghost\" href=\"/hardware\">Hardware details</a><a class=\"ghost\" href=\"/diagnostics\">Diagnostics</a></div>"
                 "</div>"
             )
