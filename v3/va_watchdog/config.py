@@ -71,7 +71,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "group": "",
         "directory_mode": "775",
         "minimum_candidate_gb": 10,
-        "free_warning_percent": 10,
+        "used_warning_percent": None,
+        "used_critical_percent": None,
+        "free_warning_percent": None,
+        "free_warning_enabled": False,
         "temperature_warning_c": 55,
         "recording_services": []
     },

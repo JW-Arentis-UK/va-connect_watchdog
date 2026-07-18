@@ -22,7 +22,10 @@ DEFAULT_RECORDING_STORAGE = {
     "group": "",
     "directory_mode": "775",
     "minimum_candidate_gb": 10,
-    "free_warning_percent": 10,
+    "used_warning_percent": None,
+    "used_critical_percent": None,
+    "free_warning_percent": None,
+    "free_warning_enabled": False,
     "temperature_warning_c": 55,
     "recording_services": [],
 }
@@ -285,7 +288,12 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
     smart = _smart_info(device) if present else {"status": "unavailable", "temperature_c": None, "device": None, "message": "Drive not present"}
     smart_status = smart.get("status") or "unavailable"
     temperature_c = smart.get("temperature_c")
-    free_warning_percent = float(rec_cfg.get("free_warning_percent", 10) or 10)
+    thresholds = cfg.get("thresholds", {}) if isinstance(cfg.get("thresholds", {}), dict) else {}
+    used_warning_percent = float(rec_cfg.get("used_warning_percent") or thresholds.get("recordings_disk_warning_percent", 90) or 90)
+    used_critical_percent = float(rec_cfg.get("used_critical_percent") or thresholds.get("recordings_disk_critical_percent", 99) or 99)
+    free_warning_enabled = bool(rec_cfg.get("free_warning_enabled", False))
+    free_warning_raw = rec_cfg.get("free_warning_percent")
+    free_warning_percent = float(free_warning_raw) if free_warning_enabled and free_warning_raw not in (None, "") else None
     temp_warning = int(rec_cfg.get("temperature_warning_c", 55) or 55)
 
     status = "healthy"
@@ -311,9 +319,15 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
     elif smart_status == "FAILED":
         status = "critical"
         message = "Recording storage SMART failure"
-    elif free_percent is not None and free_percent < free_warning_percent:
+    elif used_percent is not None and used_percent >= used_critical_percent:
+        status = "critical"
+        message = "Recording storage critically full"
+    elif used_percent is not None and used_percent >= used_warning_percent:
         status = "warning"
         message = "Recording storage low space"
+    elif free_warning_percent is not None and free_percent is not None and free_percent < free_warning_percent:
+        status = "warning"
+        message = "Recording storage low free space"
     elif smart_status == "unavailable":
         status = "warning"
         message = "Recording storage SMART unavailable"
@@ -337,6 +351,10 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
         "free_gb": free_gb,
         "used_percent": used_percent,
         "free_percent": free_percent,
+        "used_warning_percent": used_warning_percent,
+        "used_critical_percent": used_critical_percent,
+        "free_warning_percent": free_warning_percent,
+        "free_warning_enabled": free_warning_enabled,
         "smart_status": smart_status,
         "smart_device": smart.get("device"),
         "temperature_c": temperature_c,

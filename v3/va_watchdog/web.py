@@ -593,7 +593,8 @@ function renderMetricTiles(status){
     message: recStorage.message || findCheck(status, 'recording_storage').message || 'Recording storage status unavailable',
   };
   const recStorageValue = recStorage.mounted ? fmtPercent(recStorage.used_percent) : String(recStorage.status || 'missing').toUpperCase();
-  const recStorageDetail = recStorage.mounted ? `${recStorage.free_gb ?? '-'} GB free at ${recStorage.mountpoint || '-'}` : (recStorage.message || recStorage.mountpoint || '-');
+  const recStorageFree = `${recStorage.free_gb ?? '-'} GB free at ${recStorage.mountpoint || '-'}`;
+  const recStorageDetail = recStorage.mounted && recStorage.status === 'healthy' ? recStorageFree : (recStorage.message || recStorageFree || recStorage.mountpoint || '-');
   const wdt = findCheck(status, 'hardware_watchdog_present');
   const wdtFeed = status.hardware_watchdog_feed || {};
   const wdtConfig = lastConfigSummary.hardware_watchdog || {};
@@ -676,6 +677,8 @@ function renderStoragePage(grouped){
     ['Capacity', rec.total_gb !== null && rec.total_gb !== undefined ? `${rec.total_gb} GB` : '-'],
     ['Free space', rec.free_gb !== null && rec.free_gb !== undefined ? `${rec.free_gb} GB` : '-'],
     ['Used %', rec.used_percent !== null && rec.used_percent !== undefined ? `${rec.used_percent}%` : '-'],
+    ['Used warn / critical', `${rec.used_warning_percent ?? '-'}% / ${rec.used_critical_percent ?? '-'}%`],
+    ['Legacy free warning', rec.free_warning_enabled ? `${rec.free_warning_percent ?? '-'}% free` : 'Disabled'],
     ['Writable', rec.writable ? 'Yes' : 'No'],
     ['SMART', rec.smart_status || '-'],
     ['Temperature', rec.temperature_c !== null && rec.temperature_c !== undefined ? `${rec.temperature_c} C` : '-'],
@@ -1118,7 +1121,8 @@ def start_web(cfg):
             rec_storage_state = str(rec_storage.get("status") or check_state("recording_storage", "unknown"))
             if rec_storage.get("mounted"):
                 rec_storage_value = f"{escape(str(rec_storage.get('used_percent', '-')))}%"
-                rec_storage_detail = f"{escape(str(rec_storage.get('free_gb', '-')))} GB free at {escape(str(rec_storage.get('mountpoint', '-')))}"
+                rec_storage_free = f"{escape(str(rec_storage.get('free_gb', '-')))} GB free at {escape(str(rec_storage.get('mountpoint', '-')))}"
+                rec_storage_detail = rec_storage_free if rec_storage_state == "healthy" else escape(str(rec_storage.get("message") or rec_storage_free))
             else:
                 rec_storage_value = escape(str(rec_storage.get("status", "missing")).upper())
                 rec_storage_detail = escape(str(rec_storage.get("message") or rec_storage.get("mountpoint") or "-"))
@@ -1539,6 +1543,8 @@ def start_web(cfg):
                 ("Capacity", f"{recording.get('total_gb', '-')} GB"),
                 ("Free space", f"{recording.get('free_gb', '-')} GB"),
                 ("Used %", f"{recording.get('used_percent', '-')}%"),
+                ("Used warn / critical", f"{recording.get('used_warning_percent', '-')}% / {recording.get('used_critical_percent', '-')}%"),
+                ("Legacy free warning", f"{recording.get('free_warning_percent', '-')}% free" if recording.get("free_warning_enabled") else "Disabled"),
                 ("Writable", "Yes" if recording.get("writable") else "No"),
                 ("SMART", recording.get("smart_status", "-")),
                 ("Temperature", f"{recording.get('temperature_c', '-')} C"),
