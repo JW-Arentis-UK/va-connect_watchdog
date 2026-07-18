@@ -360,7 +360,8 @@ function fmtTime(value){
   if (!value) return '-';
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return String(value);
-  return d.toLocaleTimeString();
+  const pad = part => String(part).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 function buildNav(){
@@ -1058,7 +1059,7 @@ def start_web(cfg):
         text = str(value)
         try:
             parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-            return parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            return parsed.astimezone().strftime("%H:%M:%S %Y-%m-%d")
         except Exception:
             return text
 
@@ -2020,7 +2021,7 @@ def start_web(cfg):
             monitor_action = ""
             if allowed and item.get("mountpoint"):
                 monitor_action = (
-                    f"<a class=\"ghost\" href=\"/recording-storage-monitor-confirm/{quote(device)}\">Monitor only</a>"
+                    f"<a class=\"ghost\" href=\"/recording-storage-monitor-confirm/{quote(device, safe='')}\">Monitor only</a>"
                 )
             rows.append(
                 f"<tr class=\"{row_class}\" {row_onclick}>"
