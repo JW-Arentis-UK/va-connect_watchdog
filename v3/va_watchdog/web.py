@@ -199,6 +199,36 @@ pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale))
 .issue-row .pill { min-width:calc(68px * var(--scale)); text-align:center; }
 .advanced-disclosure { margin-top:calc(12px * var(--scale)); border-top:1px solid var(--line); padding-top:calc(10px * var(--scale)); }
 .advanced-disclosure summary { color:var(--blue); cursor:pointer; font-weight:700; }
+.section-disclosure { margin-top:calc(12px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel); overflow:hidden; }
+.section-disclosure > summary { display:flex; align-items:center; justify-content:space-between; gap:calc(10px * var(--scale)); padding:calc(12px * var(--scale)) calc(14px * var(--scale)); color:var(--text); cursor:pointer; font-weight:800; list-style:none; }
+.section-disclosure > summary::-webkit-details-marker { display:none; }
+.section-disclosure > summary:after { content:'Show'; color:var(--blue); font-size:calc(11px * var(--scale)); font-weight:700; }
+.section-disclosure[open] > summary:after { content:'Hide'; }
+.section-disclosure[open] > summary { border-bottom:1px solid var(--line); }
+.section-body { padding:calc(14px * var(--scale)); }
+.summary-strip { display:grid; grid-template-columns:repeat(auto-fit, minmax(calc(145px * var(--scale)),1fr)); gap:calc(10px * var(--scale)); margin-bottom:calc(12px * var(--scale)); }
+.summary-stat { min-width:0; padding:calc(12px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:linear-gradient(145deg, var(--panel), var(--panel-2)); }
+.summary-stat .stat-value { margin-top:calc(5px * var(--scale)); font-size:calc(21px * var(--scale)); font-weight:800; overflow-wrap:anywhere; }
+.summary-stat .stat-detail { margin-top:calc(3px * var(--scale)); color:var(--muted); font-size:calc(11px * var(--scale)); overflow-wrap:anywhere; }
+.tool-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:calc(9px * var(--scale)); }
+.tool-card { display:flex; flex-direction:column; justify-content:space-between; min-height:calc(86px * var(--scale)); padding:calc(12px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel-2); color:var(--text); text-decoration:none; }
+.tool-card strong { font-size:calc(14px * var(--scale)); }
+.tool-card span { margin-top:calc(5px * var(--scale)); color:var(--muted); font-size:calc(11px * var(--scale)); }
+.tool-card:not(.disabled):hover { border-color:var(--blue); }
+.tool-card.primary { background:var(--blue); color:#fff; border-color:var(--blue); }
+.tool-card.primary span { color:rgba(255,255,255,.78); }
+.tool-card.danger { border-color:var(--red); }
+.tool-card.disabled { opacity:.58; cursor:not-allowed; }
+.section-lead { display:flex; align-items:flex-start; justify-content:space-between; gap:calc(12px * var(--scale)); margin-bottom:calc(10px * var(--scale)); }
+.section-lead h2 { margin-bottom:calc(4px * var(--scale)); }
+.section-lead p { margin:0; }
+.status-dot { display:inline-block; width:calc(8px * var(--scale)); height:calc(8px * var(--scale)); margin-right:calc(5px * var(--scale)); border-radius:999px; background:currentColor; }
+.settings-sections { display:grid; gap:calc(9px * var(--scale)); }
+.settings-sections .section-disclosure { margin-top:0; }
+.settings-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:calc(12px * var(--scale)); }
+.option-row { display:flex; align-items:flex-start; gap:calc(8px * var(--scale)); margin:calc(10px * var(--scale)) 0; padding:calc(10px * var(--scale)); border:1px solid var(--line); border-radius:7px; background:var(--panel-2); }
+.option-row input { width:auto; margin-top:calc(2px * var(--scale)); }
+.table-scroll { overflow-x:auto; }
 button.action, a.action { background:var(--blue); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; text-decoration:none; display:inline-block; }
 button.danger, a.danger { background:var(--red); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; text-decoration:none; display:inline-block; }
 button.ghost, a.ghost { background:transparent; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:calc(7px * var(--scale)) calc(10px * var(--scale)); cursor:pointer; font-size:inherit; text-decoration:none; display:inline-block; }
@@ -211,16 +241,21 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   .metric-grid { grid-template-columns: repeat(3, minmax(calc(130px * var(--scale)), 1fr)); }
   .status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .top-grid, .lower-grid, .bottom-grid { grid-template-columns: 1fr; }
+  .tool-grid { grid-template-columns:repeat(2, minmax(0,1fr)); }
 }
 @media (max-width: 760px) {
   .shell { grid-template-columns: 1fr; }
   .sidebar { position:static; }
+  .topbar { height:auto; min-height:calc(58px * var(--scale)); align-items:flex-start; flex-direction:column; gap:calc(8px * var(--scale)); padding-top:calc(10px * var(--scale)); padding-bottom:calc(10px * var(--scale)); }
+  .topbar-right { width:100%; flex-wrap:wrap; gap:calc(7px * var(--scale)); }
+  #last-update { flex:1 1 100%; overflow-wrap:anywhere; }
   .metric-grid { grid-template-columns: repeat(2, minmax(calc(130px * var(--scale)), 1fr)); }
   .status-strip { grid-template-columns: 1fr; }
   .summary-card { grid-template-columns: 1fr; }
   .overview-top, .operations-grid { grid-template-columns:1fr; }
   .page-intro { align-items:flex-start; }
   .quick-actions { grid-template-columns:1fr; }
+  .summary-strip, .tool-grid, .settings-grid { grid-template-columns:1fr; }
 }
 </style>
 </head>
@@ -580,9 +615,11 @@ function renderGatewaySummary(status){
   const pill = status.critical_failed ? 'Critical issue blocking feed' : (hasNonFeedCritical ? 'Attention needed, feed safe' : (warningCount ? `${warningCount} active warning${warningCount === 1 ? '' : 's'}` : 'No active alerts'));
   const wdt = findCheck(status, 'hardware_watchdog_present');
   const feed = status.hardware_watchdog_feed || {};
+  const services = (status.checks || []).filter(c => String(c.name || '').endsWith('.service'));
+  const healthyServices = services.filter(c => c.state === 'healthy').length;
   const protection = feed.enabled && feed.opened ? 'Active' : (wdt.value ? 'Detected, not active' : 'Not available');
   const protectionState = feed.enabled && feed.opened ? 'healthy' : 'warning';
-  return `<div class="card summary-card"><div><div class="label">Gateway status</div><div class="status-word ${state}">${displayWord(status)}</div><div class="score">${escapeHtml(status.score ?? '-')}%</div><span class="pill ${state}">${escapeHtml(pill)}</span></div><div><div class="label">Gateway</div><div class="value">POC-451VTC</div><div class="label">Last check</div><div class="value">${escapeHtml(fmtTime(status.time))}</div><div class="label">Build</div><div class="build-badge">${escapeHtml(lastVersion.commit || '-')}</div></div><div><div class="label">Gateway monitor</div><div class="value healthy">ONLINE</div><div class="label">Hardware recovery</div><div class="value ${protectionState}">${escapeHtml(protection)}</div><div class="label">Branch</div><div class="value">${escapeHtml(lastVersion.branch || lastUpdateStatus?.branch || '-')}</div></div></div>`;
+  return `<div class="card summary-card"><div><div class="label">Gateway status</div><div class="status-word ${state}">${displayWord(status)}</div><div class="score">${escapeHtml(status.score ?? '-')}%</div><span class="pill ${state}">${escapeHtml(pill)}</span></div><div><div class="label">Gateway</div><div class="value">POC-451VTC</div><div class="label">Last check</div><div class="value">${escapeHtml(fmtTime(status.time))}</div><div class="label">Build</div><div class="build-badge">${escapeHtml(lastVersion.commit || '-')}</div><div class="value">${escapeHtml(lastVersion.branch || lastUpdateStatus?.branch || '-')}</div></div><div><div class="label">Gateway monitor</div><div class="value healthy">ONLINE</div><div class="label">Videosoft services</div><div class="value ${healthyServices === services.length && services.length ? 'healthy' : 'warning'}">${escapeHtml(healthyServices)}/${escapeHtml(services.length)} running</div><div class="label">Hardware recovery</div><div class="value ${protectionState}">${escapeHtml(protection)}</div></div></div>`;
 }
 
 function pageHelp(page){
@@ -714,7 +751,7 @@ function renderSystemInfo(status){
 }
 
 function renderOverview(status, events){
-  return `${pageHelp('Overview')}<div class="grid overview-top">${renderGatewaySummary(status)}${renderBreakdown(status)}</div>${renderMetricTiles(status)}<div class="grid operations-grid">${renderOperationalAlerts(status)}${renderQuickActions()}</div>${renderServices(status)}`;
+  return `${pageHelp('Overview')}<div class="grid overview-top">${renderGatewaySummary(status)}${renderBreakdown(status)}</div>${renderMetricTiles(status)}<div class="grid operations-grid">${renderOperationalAlerts(status)}${renderQuickActions()}</div>`;
 }
 
 function renderSimplePage(title, content){
@@ -1039,11 +1076,14 @@ window.setEventSearch = setEventSearch;
 window.saveSettings = saveSettings;
 window.purgeOldData = purgeOldData;
 window.purgeAllData = purgeAllData;
-buildNav();
-showAdvancedControls();
+const LIVE_RENDERED_PAGES = ['Overview', 'Events'];
 initTheme();
-initRefresh();
-load();
+if (LIVE_RENDERED_PAGES.includes(currentPage)) {
+  buildNav();
+  showAdvancedControls();
+  initRefresh();
+  load();
+}
 </script>
 </body>
 </html>
@@ -1250,6 +1290,42 @@ def start_web(cfg):
                 "</div>"
             )
 
+        def summary_strip(items):
+            cards = []
+            for label, value, detail, item_state in items:
+                cards.append(
+                    "<div class=\"summary-stat\">"
+                    f"<div class=\"label\">{escape(str(label))}</div>"
+                    f"<div class=\"stat-value {escape(str(item_state or ''))}\">{escape(str(value))}</div>"
+                    f"<div class=\"stat-detail\">{escape(str(detail or ''))}</div>"
+                    "</div>"
+                )
+            return f"<div class=\"summary-strip\">{''.join(cards)}</div>"
+
+        def disclosure(title, body, opened=False):
+            open_attr = " open" if opened else ""
+            return (
+                f"<details class=\"section-disclosure\"{open_attr}>"
+                f"<summary>{escape(str(title))}</summary>"
+                f"<div class=\"section-body\">{body}</div></details>"
+            )
+
+        def tool_grid(items):
+            cards = []
+            for title, detail, href, style in items:
+                classes = f"tool-card {style or ''}".strip()
+                if href:
+                    cards.append(
+                        f"<a class=\"{escape(classes)}\" href=\"{escape(str(href))}\">"
+                        f"<strong>{escape(str(title))}</strong><span>{escape(str(detail))}</span></a>"
+                    )
+                else:
+                    cards.append(
+                        f"<div class=\"{escape(classes)} disabled\">"
+                        f"<strong>{escape(str(title))}</strong><span>{escape(str(detail))}</span></div>"
+                    )
+            return f"<div class=\"tool-grid\">{''.join(cards)}</div>"
+
         def metric_tiles():
             rec_storage = status.get("recording_storage", {}) if isinstance(status.get("recording_storage", {}), dict) else {}
             rec_storage_state = str(rec_storage.get("status") or check_state("recording_storage", "unknown"))
@@ -1405,11 +1481,20 @@ def start_web(cfg):
                 )
             if not rows:
                 rows.append("<tr><td colspan=\"10\">No configured services found.</td></tr>")
+            active_count = sum(1 for svc in live if str(svc.get("active", "")) == "active")
+            critical_failures = sum(1 for svc in live if svc.get("critical") and str(svc.get("active", "")) != "active")
+            restart_count = sum(int(svc.get("restarts") or 0) for svc in live)
             return (
-                "<div class=\"card\"><h2>Services</h2>"
-                "<p class=\"muted\">Configured services monitored by the watchdog. Restart actions are manual and require confirmation. Service CPU is process CPU from ps and can differ from the instant whole-system CPU tile, especially on multi-core systems.</p>"
-                "<table><thead><tr><th>Service</th><th>Active</th><th>Substate</th><th>Enabled</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th><th>Critical</th><th>Actions</th></tr></thead>"
-                f"<tbody>{''.join(rows)}</tbody></table></div>"
+                summary_strip([
+                    ("Videosoft services", f"{active_count}/{len(live)}", "Running now", "healthy" if live and active_count == len(live) else "warning"),
+                    ("Critical failures", critical_failures, "Require attention", "critical" if critical_failures else "healthy"),
+                    ("Service restarts", restart_count, "Since service start", "warning" if restart_count else "healthy"),
+                    ("Monitoring", "ACTIVE", "Four configured units", "healthy"),
+                ])
+                + "<div class=\"card\"><h2>Videosoft Services</h2>"
+                "<p class=\"muted\">Restart actions require confirmation. A service CPU value is relative to one CPU core, so it can be higher than the whole-gateway CPU percentage.</p>"
+                "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Active</th><th>Substate</th><th>Enabled</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th><th>Critical</th><th>Actions</th></tr></thead>"
+                f"<tbody>{''.join(rows)}</tbody></table></div></div>"
             )
 
         def operational_alerts_card():
@@ -1450,17 +1535,33 @@ def start_web(cfg):
             )
 
         def updates_card():
+            current = version_info()
+            update_cfg = cfg.get("update", {}) if isinstance(cfg.get("update", {}), dict) else {}
+            log = tail_file(update_cfg.get("log_path") or data_dir / "update.log")
+            update_state = str(update_status.get("state", "unknown"))
+            log_detail = (
+                f"<div class=\"label\">Log file</div><div class=\"value\">{escape(str(log.get('path', '-')))}</div>"
+                f"<div class=\"label\">Last log change</div><div class=\"value\">{escape(unix_time(log.get('modified_unix')))}</div>"
+                f"<pre>{escape(str(log.get('tail') or 'No update log yet.'))}</pre>"
+            )
             return (
-                "<div class=\"card\"><h2>Updates</h2>"
-                "<p class=\"healthy\">Web update enabled</p>"
-                f"<div class=\"label\">State</div><div class=\"value {escape(str(update_status.get('state', 'unknown')))}\">{escape(str(update_status.get('state', 'unknown')).upper())}</div>"
-                f"<div class=\"label\">Message</div><div class=\"value\">{escape(str(update_status.get('message', '-')))}</div>"
-                f"<div class=\"label\">Branch</div><div class=\"value\">{escape(str(update_status.get('branch', '-')))}</div>"
-                f"<div class=\"label\">Commit</div><div class=\"value\">{escape(str(update_status.get('commit', '-')))}</div>"
-                f"<div class=\"label\">Updated</div><div class=\"value\">{escape(str(update_status.get('updated_at', '-')))}</div>"
+                summary_strip([
+                    ("Current build", current.get("commit", "-"), current.get("branch", "-"), "healthy"),
+                    ("Update state", update_state.upper(), update_status.get("message", "-"), "healthy" if update_state in {"idle", "complete", "completed", "success"} else "warning"),
+                    ("Target", update_cfg.get("branch") or current.get("branch", "-"), f"Remote {update_cfg.get('remote', 'origin')}", "healthy"),
+                    ("Last update", local_time(update_status.get("updated_at")), update_status.get("commit", "-"), "healthy"),
+                ])
+                + "<div class=\"card\"><h2>Controlled Update</h2>"
+                "<p class=\"section-lead\">Updates pull the configured Git branch and restart this watchdog service. Videosoft services are not deliberately restarted by this action.</p>"
+                f"<p class=\"{escape(update_state)}\">{escape(str(update_status.get('message', 'No update has been started.')))}</p>"
                 "<form class=\"inline\" method=\"post\" action=\"/update-now\"><button class=\"action\" type=\"submit\">Update watchdog now</button></form>"
-                "<p class=\"muted\">The watchdog service may restart after an update. This page returns automatically after the update request.</p>"
+                "<p class=\"muted\">After starting, the result page returns to Operations automatically. Reopen Updates to confirm the new build and log result.</p>"
                 "</div>"
+                + disclosure("Update log", log_detail)
+                + tool_grid([
+                    ("Check-only comparison", "Planned: compare local and remote builds without applying an update.", "", ""),
+                    ("Rollback", "Planned: return to a previously validated build after explicit confirmation.", "", ""),
+                ])
             )
 
         def settings_card():
@@ -1470,40 +1571,53 @@ def start_web(cfg):
             update = cfg.get("update", {})
             recovery = cfg.get("recovery", {})
             rec_storage = cfg.get("recording_storage", {}) if isinstance(cfg.get("recording_storage", {}), dict) else {}
+            general_settings = (
+                "<div class=\"settings-grid\">"
+                f"<div><label class=\"label\">Health check interval</label><input name=\"poll_interval_seconds\" type=\"number\" min=\"2\" max=\"300\" value=\"{escape(str(cfg.get('poll_interval_seconds', 5)))}\"><p class=\"muted\">Seconds between live gateway checks.</p></div>"
+                f"<div><label class=\"label\">History sample interval</label><input name=\"history_sample_seconds\" type=\"number\" min=\"10\" max=\"3600\" value=\"{escape(str(retention.get('history_sample_seconds', 60)))}\"><p class=\"muted\">How often a trend sample is stored.</p></div>"
+                f"<div><label class=\"label\">History retention</label><input name=\"history_retention_days\" type=\"number\" min=\"1\" max=\"365\" value=\"{escape(str(retention.get('history_retention_days', 30)))}\"><p class=\"muted\">Days of historical samples to retain.</p></div>"
+                f"<div><label class=\"label\">Maximum watchdog data</label><input name=\"max_total_mb\" type=\"number\" min=\"10\" max=\"4096\" value=\"{escape(str(retention.get('max_total_mb', 100)))}\"><p class=\"muted\">Self-purge starts when this limit is reached.</p></div>"
+                "</div>"
+            )
+            storage_settings = (
+                "<div class=\"settings-grid\">"
+                f"<div><label class=\"label\">Root warning used %</label><input name=\"root_disk_warning_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('root_disk_warning_percent', 80)))}\"></div>"
+                f"<div><label class=\"label\">Root critical used %</label><input name=\"root_disk_critical_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('root_disk_critical_percent', 95)))}\"></div>"
+                f"<div><label class=\"label\">Legacy recordings warning used %</label><input name=\"recordings_disk_warning_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('recordings_disk_warning_percent', 85)))}\"></div>"
+                f"<div><label class=\"label\">Legacy recordings critical used %</label><input name=\"recordings_disk_critical_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('recordings_disk_critical_percent', 95)))}\"></div>"
+                "</div>"
+                f"<label class=\"option-row\"><input name=\"recording_storage_expected_full\" type=\"checkbox\" {'checked' if rec_storage.get('expected_full') else ''}> <span><strong>Videosoft-managed recording storage</strong><br><span class=\"muted\">High used percentage is normal; alert using minimum free space instead.</span></span></label>"
+                "<div class=\"settings-grid\">"
+                f"<div><label class=\"label\">Recording warning below free MB</label><input name=\"recording_storage_minimum_free_mb_warning\" type=\"number\" min=\"0\" max=\"1048576\" value=\"{escape(str(rec_storage.get('minimum_free_mb_warning') or ''))}\" placeholder=\"blank = disabled\"></div>"
+                f"<div><label class=\"label\">Recording critical below free MB</label><input name=\"recording_storage_minimum_free_mb_critical\" type=\"number\" min=\"0\" max=\"1048576\" value=\"{escape(str(rec_storage.get('minimum_free_mb_critical') or ''))}\" placeholder=\"blank = disabled\"></div>"
+                "</div>"
+            )
+            network_settings = (
+                "<div class=\"settings-grid\">"
+                f"<div><label class=\"label\">Internet hosts, one per line</label><textarea name=\"internet_hosts\">{escape(chr(10).join(network.get('internet_hosts', [])))}</textarea><p class=\"muted\">Public hosts used to check internet reachability.</p></div>"
+                f"<div><label class=\"label\">Local targets, one per line</label><textarea name=\"local_targets\">{escape(chr(10).join(network.get('local_targets', [])))}</textarea><p class=\"muted\">Router, camera, or local service targets.</p></div>"
+                f"<div><label class=\"label\">Remote access services, one per line</label><textarea name=\"remote_access_services\">{escape(chr(10).join(network.get('remote_access_services', [])))}</textarea><p class=\"muted\">Systemd units such as TeamViewer support.</p></div>"
+                "</div>"
+            )
+            recovery_settings = (
+                "<div class=\"settings-grid\">"
+                f"<div><label class=\"label\">Update remote</label><input name=\"update_remote\" value=\"{escape(str(update.get('remote', 'origin')))}\"></div>"
+                f"<div><label class=\"label\">Update branch</label><input name=\"update_branch\" value=\"{escape(str(update.get('branch', '')))}\" placeholder=\"blank = current branch\"></div>"
+                "</div>"
+                f"<label class=\"option-row\"><input name=\"recovery_enabled\" type=\"checkbox\" {'checked' if recovery.get('enabled') else ''}> Enable recovery engine</label>"
+                f"<label class=\"option-row\"><input name=\"restart_failed_services\" type=\"checkbox\" {'checked' if recovery.get('restart_failed_services') else ''}> Restart failed critical services</label>"
+                f"<label class=\"option-row\"><input name=\"allow_reboot\" type=\"checkbox\" {'checked' if recovery.get('allow_reboot') else ''}> Allow gateway reboot after a persistent critical failure</label>"
+                "<p class=\"warning\">Automatic reboot should remain disabled until recovery rules have been tested on the gateway.</p>"
+            )
             return (
-                "<div class=\"card\"><h2>Settings</h2>"
-                f"<div class=\"label\">Config path</div><div class=\"value\">{escape(str(active_config_path()))}</div>"
-                "<p class=\"muted\">Saving creates a config backup and applies safe settings immediately.</p>"
+                "<div class=\"card\"><h2>Gateway Settings</h2>"
+                "<p class=\"section-lead\">Settings are grouped by purpose. Saving creates a backup before the new configuration is applied.</p>"
                 "<form method=\"post\" action=\"/settings-save\">"
-                "<div class=\"detail-grid\">"
-                "<div class=\"mini-card\"><h3>Polling and Retention</h3>"
-                f"<label class=\"label\">Poll interval seconds</label><input name=\"poll_interval_seconds\" type=\"number\" min=\"2\" max=\"300\" value=\"{escape(str(cfg.get('poll_interval_seconds', 5)))}\">"
-                f"<label class=\"label\">History sample seconds</label><input name=\"history_sample_seconds\" type=\"number\" min=\"10\" max=\"3600\" value=\"{escape(str(retention.get('history_sample_seconds', 60)))}\">"
-                f"<label class=\"label\">History retention days</label><input name=\"history_retention_days\" type=\"number\" min=\"1\" max=\"365\" value=\"{escape(str(retention.get('history_retention_days', 30)))}\">"
-                f"<label class=\"label\">Max watchdog storage MB</label><input name=\"max_total_mb\" type=\"number\" min=\"10\" max=\"4096\" value=\"{escape(str(retention.get('max_total_mb', 100)))}\">"
-                "</div>"
-                "<div class=\"mini-card\"><h3>Storage Thresholds</h3>"
-                f"<label class=\"label\">Root warn %</label><input name=\"root_disk_warning_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('root_disk_warning_percent', 80)))}\">"
-                f"<label class=\"label\">Root critical %</label><input name=\"root_disk_critical_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('root_disk_critical_percent', 95)))}\">"
-                f"<label class=\"label\">Recordings warn %</label><input name=\"recordings_disk_warning_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('recordings_disk_warning_percent', 85)))}\">"
-                f"<label class=\"label\">Recordings critical %</label><input name=\"recordings_disk_critical_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('recordings_disk_critical_percent', 95)))}\">"
-                f"<label><input name=\"recording_storage_expected_full\" type=\"checkbox\" {'checked' if rec_storage.get('expected_full') else ''}> Recording storage is Videosoft managed / expected full</label>"
-                f"<label class=\"label\">Recording storage warn below free MB</label><input name=\"recording_storage_minimum_free_mb_warning\" type=\"number\" min=\"0\" max=\"1048576\" value=\"{escape(str(rec_storage.get('minimum_free_mb_warning') or ''))}\" placeholder=\"blank = disabled\">"
-                f"<label class=\"label\">Recording storage critical below free MB</label><input name=\"recording_storage_minimum_free_mb_critical\" type=\"number\" min=\"0\" max=\"1048576\" value=\"{escape(str(rec_storage.get('minimum_free_mb_critical') or ''))}\" placeholder=\"blank = disabled\">"
-                "<p class=\"muted\">Use expected-full mode when Videosoft manages retention and high used percentage is normal.</p>"
-                "</div>"
-                "<div class=\"mini-card\"><h3>Network</h3>"
-                f"<label class=\"label\">Internet hosts, one per line</label><textarea name=\"internet_hosts\">{escape(chr(10).join(network.get('internet_hosts', [])))}</textarea>"
-                f"<label class=\"label\">Local targets, one per line</label><textarea name=\"local_targets\">{escape(chr(10).join(network.get('local_targets', [])))}</textarea>"
-                f"<label class=\"label\">Remote access services, one per line</label><textarea name=\"remote_access_services\">{escape(chr(10).join(network.get('remote_access_services', [])))}</textarea>"
-                "</div>"
-                "<div class=\"mini-card\"><h3>Updates and Recovery</h3>"
-                f"<label class=\"label\">Update remote</label><input name=\"update_remote\" value=\"{escape(str(update.get('remote', 'origin')))}\">"
-                f"<label class=\"label\">Update branch</label><input name=\"update_branch\" value=\"{escape(str(update.get('branch', '')))}\" placeholder=\"blank = current branch\">"
-                f"<label><input name=\"recovery_enabled\" type=\"checkbox\" {'checked' if recovery.get('enabled') else ''}> Enable recovery engine</label>"
-                f"<label><input name=\"restart_failed_services\" type=\"checkbox\" {'checked' if recovery.get('restart_failed_services') else ''}> Restart failed critical services</label>"
-                f"<label><input name=\"allow_reboot\" type=\"checkbox\" {'checked' if recovery.get('allow_reboot') else ''}> Allow reboot on persistent critical failure</label>"
-                "</div></div>"
+                f"{disclosure('General and monitoring', general_settings, opened=True)}"
+                f"{disclosure('Storage alerts', storage_settings, opened=True)}"
+                f"{disclosure('Network and remote access', network_settings)}"
+                f"{disclosure('Recovery and updates', recovery_settings)}"
+                f"{disclosure('Advanced configuration', '<div class=\"label\">Active config file</div><div class=\"value\">' + escape(str(active_config_path())) + '</div><p class=\"muted\">The theme is saved by this browser and is changed from the page header.</p>')}"
                 "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Save settings</button><a class=\"ghost\" href=\"/settings\">Cancel</a></div>"
                 "</form>"
                 "</div>"
@@ -1531,45 +1645,49 @@ def start_web(cfg):
                     f"<td>{escape(str(item.get('message', '-')))}</td>"
                     "</tr>"
                 )
+            hardware_state = "healthy" if watchdog_devices else "warning"
+            device_detail = (
+                "<div class=\"card\"><h2>Detected Devices</h2>"
+                f"<div class=\"label\">Watchdog devices</div><div class=\"value\">{escape(', '.join(watchdog_devices) if watchdog_devices else 'None detected')}</div>"
+                f"<div class=\"label\">Block devices</div><pre>{escape(chr(10).join(block_devices) if block_devices else 'No block device details available')}</pre>"
+                "</div>"
+            )
+            watchdog_detail = (
+                "<div class=\"card\"><h2>Intel TCO Discovery</h2>"
+                "<p class=\"muted\">These values identify whether Linux can see the POC hardware watchdog. Setup and testing are managed on the dedicated Watchdog page.</p>"
+                "<div class=\"settings-grid\">"
+                f"<div><div class=\"label\">Expected driver</div><div class=\"value\">iTCO_wdt with iTCO_vendor_support</div></div>"
+                f"<div><div class=\"label\">iTCO_wdt loaded</div><div class=\"value {'healthy' if modules.get('iTCO_wdt') else 'warning'}\">{escape('Yes' if modules.get('iTCO_wdt') else 'No')}</div></div>"
+                f"<div><div class=\"label\">Vendor support loaded</div><div class=\"value {'healthy' if modules.get('iTCO_vendor_support') else 'warning'}\">{escape('Yes' if modules.get('iTCO_vendor_support') else 'No')}</div></div>"
+                f"<div><div class=\"label\">Platform module loaded</div><div class=\"value {'healthy' if modules.get('intel_pmc_bxt') else 'warning'}\">{escape('Yes' if modules.get('intel_pmc_bxt') else 'No')}</div></div>"
+                f"<div><div class=\"label\">Driver identity</div><div class=\"value {escape(str(wdctl.get('state', 'unknown')))}\">{escape(str(wdctl.get('identity', '-')))}</div></div>"
+                f"<div><div class=\"label\">Driver timeout</div><div class=\"value\">{escape(str(wdctl.get('timeout', '-')))}</div></div>"
+                f"<div><div class=\"label\">Legacy watchdog service</div><div class=\"value {'warning' if legacy.get('active') == 'active' else 'healthy'}\">{escape(str(legacy.get('active', '-')).upper())} / {escape(str(legacy.get('enabled', '-')).upper())}</div></div>"
+                "</div>"
+                "<div class=\"button-row\"><a class=\"action\" href=\"/watchdog\">Open Watchdog setup</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run full probe</a></div>"
+                f"{disclosure('Raw wdctl output', '<pre>' + escape(str(wdctl.get('raw', 'wdctl not available or watchdog not present'))) + '</pre>')}"
+                f"{disclosure('Setup and probe logs', '<h3>One-click prepare</h3><pre>' + escape(str(watchdog.get('prepare_log', 'No prepare log yet'))) + '</pre><h3>Setup</h3><pre>' + escape(str(watchdog.get('setup_log', 'No setup log yet'))) + '</pre><h3>Full probe</h3><pre>' + escape(str(watchdog.get('probe_log', 'No hardware probe log yet'))) + '</pre>')}"
+                "</div>"
+            )
             return (
-                metric_tiles()
-                + "<div class=\"grid lower-grid\">"
-                "<div class=\"card\"><h2>CPU and Memory</h2>"
+                summary_strip([
+                    ("Hardware", "DETECTED", "Gateway sensors available", "healthy"),
+                    ("CPU temperature", f"{check_value('temperature', '-')} C", "Current reading", check_state("temperature")),
+                    ("CPU load", f"{check_value('cpu_load', '-')}%", f"{cpu.get('cores', '-')} logical cores", check_state("cpu_load")),
+                    ("Memory", f"{check_value('ram', '-')}%", f"{memory.get('available_mb', '-')} MB available", check_state("ram")),
+                    ("Watchdog device", "Present" if watchdog_devices else "Not present", ", ".join(watchdog_devices) if watchdog_devices else "Run discovery", hardware_state),
+                ])
+                + "<div class=\"card\"><h2>CPU and Memory</h2>"
+                "<p class=\"section-lead\">The live hardware readings used by the health engine.</p>"
+                "<div class=\"settings-grid\">"
                 f"<div class=\"label\">CPU model</div><div class=\"value\">{escape(str(cpu.get('model', '-')))}</div>"
                 f"<div class=\"label\">CPU cores</div><div class=\"value\">{escape(str(cpu.get('cores', '-')))}</div>"
                 f"<div class=\"label\">Architecture</div><div class=\"value\">{escape(str(cpu.get('architecture', '-')))}</div>"
                 f"<div class=\"label\">RAM total</div><div class=\"value\">{escape(str(memory.get('total_mb', '-')))} MB</div>"
                 f"<div class=\"label\">RAM available</div><div class=\"value\">{escape(str(memory.get('available_mb', '-')))} MB</div>"
-                "</div>"
-                "<div class=\"card\"><h2>Detected Devices</h2>"
-                f"<div class=\"label\">Watchdog devices</div><div class=\"value\">{escape(', '.join(watchdog_devices) if watchdog_devices else 'None detected')}</div>"
-                f"<div class=\"label\">Block devices</div><pre>{escape(chr(10).join(block_devices) if block_devices else 'No block device details available')}</pre>"
                 "</div></div>"
-                "<div class=\"card\"><h2>Intel TCO Watchdog</h2>"
-                f"<div class=\"label\">Expected driver</div><div class=\"value\">iTCO_wdt with iTCO_vendor_support</div>"
-                f"<div class=\"label\">iTCO_wdt loaded</div><div class=\"value {'healthy' if modules.get('iTCO_wdt') else 'warning'}\">{escape('Yes' if modules.get('iTCO_wdt') else 'No')}</div>"
-                f"<div class=\"label\">iTCO_vendor_support loaded</div><div class=\"value {'healthy' if modules.get('iTCO_vendor_support') else 'warning'}\">{escape('Yes' if modules.get('iTCO_vendor_support') else 'No')}</div>"
-                f"<div class=\"label\">intel_pmc_bxt loaded</div><div class=\"value {'healthy' if modules.get('intel_pmc_bxt') else 'warning'}\">{escape('Yes' if modules.get('intel_pmc_bxt') else 'No')}</div>"
-                f"<div class=\"label\">wdctl identity</div><div class=\"value {escape(str(wdctl.get('state', 'unknown')))}\">{escape(str(wdctl.get('identity', '-')))}</div>"
-                f"<div class=\"label\">wdctl timeout</div><div class=\"value\">{escape(str(wdctl.get('timeout', '-')))}</div>"
-                f"<div class=\"label\">Legacy watchdog.service</div><div class=\"value {'warning' if legacy.get('active') == 'active' else 'healthy'}\">{escape(str(legacy.get('active', '-')).upper())} / {escape(str(legacy.get('enabled', '-')).upper())}</div>"
-                f"<div class=\"label\">wdctl raw output</div><pre>{escape(str(wdctl.get('raw', 'wdctl not available or watchdog not present')))}</pre>"
-                f"<div class=\"label\">Last one-click prepare log</div><pre>{escape(str(watchdog.get('prepare_log', 'No prepare log yet')))}</pre>"
-                f"<div class=\"label\">Last setup log</div><pre>{escape(str(watchdog.get('setup_log', 'No setup log yet')))}</pre>"
-                f"<div class=\"label\">Last full probe</div><pre>{escape(str(watchdog.get('probe_log', 'No hardware probe log yet')))}</pre>"
-                "<p class=\"muted\">For POC-451VTC, the expected hardware watchdog is Intel TCO. The one-click prepare action loads and persists the driver, disables Ubuntu's legacy watchdog.service, enables VA-Connect feeding, reinstalls the systemd unit, and restarts va-watchdog in the background.</p>"
-                "<div class=\"button-row\"><a class=\"action\" href=\"/hardware-watchdog-prepare-confirm\">Prepare hardware watchdog automatically</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run full watchdog probe</a></div>"
-                "</div>"
-                "<div class=\"card\"><h2>Watchdog Controls</h2>"
-                "<p class=\"muted\">The control panel for the hardware watchdog now lives on the Watchdog page so the Hardware page stays focused on discovery and sensor detail.</p>"
-                f"<div class=\"label\">Current device</div><div class=\"value {escape(str(wdt.get('device_state', 'unknown')))}\">{escape(str(wdt.get('device', '-')))} - {escape(str(wdt.get('device_message', '-')))}</div>"
-                f"<div class=\"label\">Current timeout</div><div class=\"value\">{escape(str(wdt.get('driver_timeout', '-')))}</div>"
-                f"<div class=\"label\">Systemd fallback</div><div class=\"value\">{escape(str(systemd_wdt.get('message', '-')))} {escape(str(systemd_wdt.get('watchdog_sec', '-')))}</div>"
-                "<div class=\"button-row\">"
-                "<a class=\"action\" href=\"/watchdog\">Open Watchdog page</a>"
-                "<a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run probe</a>"
-                "</div>"
-                "</div>"
+                + disclosure("Detected devices", device_detail)
+                + disclosure("Hardware watchdog discovery", watchdog_detail)
             )
 
         def watchdog_page():
@@ -1676,47 +1794,49 @@ def start_web(cfg):
                 else "<button class=\"action\" disabled>Open trip confirm page</button>"
             )
             trip_warning = "" if trip_ready else "<p class=\"warning\">Trip test is blocked until setup is complete and the service has a recent hardware feed.</p>"
+            legacy_detail = (
+                f"<p class=\"{escape(str(legacy_check.get('state', 'unknown')))}\">{escape(str(legacy_check.get('message', '-')))}</p>"
+                "<div class=\"table-scroll\"><table class=\"compact-table\"><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead>"
+                f"<tbody>{legacy_rows}</tbody></table></div>"
+                "<p class=\"muted\">A legacy watchdog service can take ownership of /dev/watchdog0. VA-Connect should be the only process feeding this device.</p>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">Clean legacy watchdogs</a><a class=\"ghost\" href=\"/hardware\">Hardware details</a></div>"
+            )
+            config_detail = (
+                "<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>"
+                f"{config_html}"
+                "</tbody></table></div>"
+            )
+            layers_detail = (
+                "<ul>"
+                "<li><strong>Hardware watchdog:</strong> reboots the gateway if Linux stops feeding /dev/watchdog0.</li>"
+                "<li><strong>Hardware feed:</strong> VA-Connect opening and regularly feeding the hardware device.</li>"
+                "<li><strong>Process watchdog:</strong> systemd restarting VA-Connect if its Python process hangs.</li>"
+                "<li><strong>Legacy watchdog:</strong> an older daemon that must not compete for the same device.</li>"
+                "</ul>"
+            )
             return (
-                f"<div class=\"card action-panel {escape(page_state)}\"><h2>{escape(page_title)}</h2>"
+                summary_strip([
+                    ("Overall readiness", "READY" if setup.get("ready") else "SETUP NEEDED", page_message, page_state),
+                    ("Intel TCO driver", "Loaded" if driver.get("state") == "healthy" else "Needs setup", driver.get("message", "-"), driver.get("state", "unknown")),
+                    ("Watchdog device", setup_config.get("device", "/dev/watchdog0"), wdctl.get("identity") or device.get("message") or "-", device.get("state", "unknown")),
+                    ("Live feed", "Feeding" if feed_enabled and feed_opened else "Not feeding", f"Feed count {feed_count}", "healthy" if feed_enabled and feed_opened else "warning"),
+                    ("Legacy watchdogs", "Clear" if not legacy_problem else "Conflict", legacy_check.get("message", "-"), legacy_check.get("state", "unknown")),
+                ])
+                + f"<div class=\"card action-panel {escape(page_state)}\"><h2>{escape(page_title)}</h2>"
                 f"<p class=\"{escape(page_state)}\">{escape(page_message)}</p>"
                 "<div class=\"button-row\">"
                 f"{primary_action}"
-                "<a class=\"ghost\" href=\"/hardware-watchdog-prepare-confirm\">Run full setup/cleanup</a>"
                 "<a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run probe</a>"
                 "</div>"
                 "</div>"
-                "<div class=\"status-strip\">"
-                f"<div class=\"status-box\"><div class=\"label\">Driver</div><div class=\"big {escape(str(driver.get('state', 'unknown')))}\">{escape('Loaded' if driver.get('state') == 'healthy' else 'Needs setup')}</div><div class=\"step-detail\">{escape(str(driver.get('message', '-')))}</div></div>"
-                f"<div class=\"status-box\"><div class=\"label\">Device</div><div class=\"big {escape(str(device.get('state', 'unknown')))}\">{escape(setup_config.get('device', '/dev/watchdog0'))}</div><div class=\"step-detail\">{escape(str(wdctl.get('identity') or device.get('message') or '-'))}</div></div>"
-                f"<div class=\"status-box\"><div class=\"label\">Hardware feed</div><div class=\"big {'healthy' if feed_enabled and feed_opened else 'warning'}\">{escape('Feeding' if feed_enabled and feed_opened else 'Not feeding')}</div><div class=\"step-detail\">{escape(str(feed_check.get('message', '-')))}; count {escape(str(feed_count))}</div></div>"
-                f"<div class=\"status-box\"><div class=\"label\">Legacy watchdogs</div><div class=\"big {escape(str(legacy_check.get('state', 'unknown')))}\">{escape('Clear' if not legacy_problem else 'Conflict')}</div><div class=\"step-detail\">{escape(str(legacy_check.get('message', '-')))}</div></div>"
-                "</div>"
-                "<div class=\"grid lower-grid\">"
                 "<div class=\"card\"><h2>Setup Checklist</h2>"
-                "<p class=\"muted\">Work from top to bottom. Green means that layer is ready; amber/red shows the part to fix next.</p>"
+                "<p class=\"section-lead\">Work from top to bottom. The first amber or red item identifies what to fix next.</p>"
                 f"<div class=\"setup-steps\">{''.join(step_rows)}</div>"
                 "</div>"
-                "<div class=\"card\"><h2>Existing Watchdogs and Cleanup</h2>"
-                f"<p class=\"{escape(str(legacy_check.get('state', 'unknown')))}\">{escape(str(legacy_check.get('message', '-')))}</p>"
-                "<table class=\"compact-table\"><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead>"
-                f"<tbody>{legacy_rows}</tbody></table>"
-                "<p class=\"muted\">Legacy watchdog services can take ownership of /dev/watchdog0. This service should be the only process feeding the hardware watchdog.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">Clean legacy watchdogs only</a><a class=\"ghost\" href=\"/hardware\">Hardware details</a></div>"
-                "</div></div>"
-                "<div class=\"grid lower-grid\">"
-                "<div class=\"card\"><h2>Current Watchdog Configuration</h2>"
-                "<table class=\"compact-table\"><tbody>"
-                f"{config_html}"
-                "</tbody></table>"
-                "</div>"
-                "<div class=\"card\"><h2>What the Layers Mean</h2>"
-                "<ul>"
-                "<li><strong>Hardware watchdog</strong> reboots the whole gateway if Linux stops feeding /dev/watchdog0.</li>"
-                "<li><strong>Hardware feed</strong> is this service opening and feeding the hardware device.</li>"
-                "<li><strong>Process watchdog</strong> is systemd restarting va-watchdog if the Python process hangs.</li>"
-                "<li><strong>Legacy watchdogs</strong> are old watchdog daemons/packages that should not also control the device.</li>"
-                "</ul>"
-                "</div></div>"
+                + disclosure("Existing watchdogs and cleanup", legacy_detail, opened=legacy_problem)
+                + disclosure("Current configuration", config_detail)
+                + disclosure("What the protection layers mean", layers_detail)
+                +
                 "<div class=\"grid lower-grid\">"
                 "<div class=\"card\"><h2>Safe Watchdog Test</h2>"
                 "<p class=\"muted\">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p>"
@@ -1817,42 +1937,51 @@ def start_web(cfg):
             if not guard_rows:
                 guard_rows = "<tr><td colspan=\"3\">No recording services configured. Add service names to recording_storage.recording_services when known.</td></tr>"
             rec_state = str(recording.get("status", "unknown"))
-            return (
-                metric_tiles()
-                + "<div class=\"card\"><h2>Recording Storage</h2>"
-                f"<p class=\"{escape(rec_state)}\">{escape(str(recording.get('message', 'Recording storage status unavailable')))}</p>"
-                "<table><tbody>"
-                f"{rec_html}"
-                "</tbody></table>"
-                "<h3>Recording Service Mount Guard</h3>"
-                "<table><thead><tr><th>Service</th><th>Requires mount</th><th>Status</th></tr></thead>"
-                f"<tbody>{guard_rows}</tbody></table>"
-                "<div class=\"button-row\"><a class=\"action\" href=\"/recording-storage-configure\">Configure recording storage</a><a class=\"ghost\" href=\"/api/status\">Raw status</a></div>"
-                "<form class=\"inline\" method=\"post\" action=\"/recording-storage-guard-apply\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> Apply RequiresMountsFor to configured recording services</label> <button class=\"ghost\" type=\"submit\">Apply service guard</button></form>"
-                "</div>"
-                + "<div class=\"card\"><h2>Configured Storage Limits</h2>"
-                "<table><thead><tr><th>Name</th><th>Path</th><th>Used</th><th>Free</th><th>Warn</th><th>Critical</th><th>Full expected</th></tr></thead>"
+            limits_detail = (
+                "<div class=\"table-scroll\"><table><thead><tr><th>Name</th><th>Path</th><th>Used</th><th>Free</th><th>Warn</th><th>Critical</th><th>Full expected</th></tr></thead>"
                 f"<tbody>{''.join(volume_rows)}</tbody></table></div>"
-                "<div class=\"card\"><h2>Watchdog Data Storage</h2>"
+            )
+            retention_detail = (
                 f"<div class=\"label\">Data directory</div><div class=\"value\">{escape(str(retention.get('data_dir', '-')))}</div>"
                 f"<div class=\"label\">Used</div><div class=\"value\">{escape(str(retention.get('used_mb', '-')))} MB / {escape(str(retention.get('max_total_mb', '-')))} MB</div>"
                 f"<div class=\"label\">Events retention</div><div class=\"value\">{escape(str(retention.get('events_retention_days', '-')))} days</div>"
                 f"<div class=\"label\">History retention</div><div class=\"value\">{escape(str(retention.get('history_retention_days', '-')))} days</div>"
-                f"<div class=\"label\">Auto-purge rule</div><div class=\"value\">Self-purge old watchdog data when usage exceeds {escape(str(retention.get('max_total_mb', '-')))} MB.</div>"
+                "<p class=\"muted\">Old watchdog data is self-purged when the configured limit is reached. Recordings are never purged by this control.</p>"
                 "<div class=\"button-row\">"
                 "<form class=\"inline\" method=\"post\" action=\"/storage-purge-old\">"
                 f"<label class=\"label\">Older than days</label><input name=\"older_than_days\" type=\"number\" min=\"0\" max=\"3650\" value=\"{escape(str(default_days))}\"> "
-                "<button class=\"action\" type=\"submit\">Purge old data</button>"
+                "<button class=\"action\" type=\"submit\">Purge old watchdog data</button>"
                 "</form>"
                 "<a class=\"ghost\" href=\"/storage-purge-confirm\">Purge all non-status data</a>"
-                "<a class=\"ghost\" href=\"/settings\">Edit retention settings</a>"
+                "<a class=\"ghost\" href=\"/settings\">Edit retention</a>"
                 "</div>"
-                "<p class=\"muted\">Purge never removes the live status file, so /api/status remains available.</p>"
+            )
+            files_detail = (
+                "<div class=\"table-scroll\"><table><thead><tr><th>File</th><th>Size</th><th>Modified</th></tr></thead>"
+                f"<tbody>{''.join(file_rows)}</tbody></table></div>"
+            )
+            return (
+                summary_strip([
+                    ("Recording storage", rec_state.upper(), recording.get("message", "Status unavailable"), rec_state),
+                    ("Mounted", "Yes" if recording.get("mounted") else "No", recording.get("mountpoint", "-"), "healthy" if recording.get("mounted") else "critical"),
+                    ("Writable", "Yes" if recording.get("writable") else "No", recording.get("recordings_path", "-"), "healthy" if recording.get("writable") else "critical"),
+                    ("Free space", f"{recording.get('free_gb', '-')} GB", f"{recording.get('used_percent', '-')}% used", rec_state),
+                    ("SMART", recording.get("smart_status", "-"), f"{recording.get('temperature_c', '-')} C", "warning" if str(recording.get("smart_status", "")).lower() == "unavailable" else rec_state),
+                ])
+                + "<div class=\"card\"><h2>Recording Storage</h2>"
+                f"<p class=\"{escape(rec_state)}\">{escape(str(recording.get('message', 'Recording storage status unavailable')))}</p>"
+                "<div class=\"table-scroll\"><table><tbody>"
+                f"{rec_html}"
+                "</tbody></table></div>"
+                "<h3>Recording Service Mount Guard</h3>"
+                "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Requires mount</th><th>Status</th></tr></thead>"
+                f"<tbody>{guard_rows}</tbody></table></div>"
+                "<div class=\"button-row\"><a class=\"action\" href=\"/recording-storage-configure\">Configure recording storage</a><a class=\"ghost\" href=\"/api/status\">Raw status</a></div>"
+                "<form class=\"inline\" method=\"post\" action=\"/recording-storage-guard-apply\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> Apply RequiresMountsFor to configured recording services</label> <button class=\"ghost\" type=\"submit\">Apply service guard</button></form>"
                 "</div>"
-                "<div class=\"card\"><h2>Watchdog Data Files</h2>"
-                "<table><thead><tr><th>File</th><th>Size</th><th>Modified</th></tr></thead>"
-                f"<tbody>{''.join(file_rows)}</tbody></table>"
-                "</div>"
+                + disclosure("Configured storage limits", limits_detail)
+                + disclosure("Watchdog data retention and purge", retention_detail)
+                + disclosure("Watchdog data files", files_detail)
             )
 
         def network_page():
@@ -1900,43 +2029,46 @@ def start_web(cfg):
             if not remote_rows:
                 remote_rows.append("<tr><td colspan=\"4\">No remote access services configured. TeamViewer placeholder remains in Settings as teamviewerd.</td></tr>")
             urls = "".join(f"<li>{escape(str(url))}</li>" for url in info.get("support_urls", []))
-            return (
-                "<div class=\"grid metric-grid\">"
-                f"<div class=\"tile\"><h3>Hostname</h3><div class=\"tile-value\">{escape(str(info.get('hostname', '-')))}</div><div class=\"tile-detail\">Gateway identity</div></div>"
-                f"<div class=\"tile\"><h3>IP Addresses</h3><div class=\"tile-value\">{escape(str(info.get('ip_addresses', '-') or '-'))}</div><div class=\"tile-detail\">hostname -I</div></div>"
-                f"<div class=\"tile\"><h3>Web Port</h3><div class=\"tile-value {'healthy' if local_web.get('ok') else 'warning'}\">{escape(str(info.get('listening_port', '-')))}</div><div class=\"tile-detail\">{escape(str(local_web.get('detail', '-')))}</div></div>"
-                f"<div class=\"tile\"><h3>Internet Targets</h3><div class=\"tile-value\">{escape(str(len(info.get('configured_internet_hosts', []))))}</div><div class=\"tile-detail\">Configured checks</div></div>"
-                f"<div class=\"tile\"><h3>Local Targets</h3><div class=\"tile-value\">{escape(str(len(info.get('configured_local_targets', []))))}</div><div class=\"tile-detail\">Camera/router/software checks</div></div>"
-                f"<div class=\"tile\"><h3>Remote Access</h3><div class=\"tile-value\">{escape(str(len(info.get('remote_access', []))))}</div><div class=\"tile-detail\">TeamViewer/support services</div></div>"
-                "</div>"
-                "<div class=\"grid lower-grid\">"
-                "<div class=\"card\"><h2>Interfaces</h2>"
-                "<table><thead><tr><th>Name</th><th>State</th><th>Addresses</th></tr></thead>"
-                f"<tbody>{''.join(interfaces)}</tbody></table>"
+            ping_items = info.get("pings", [])
+            ping_ok = sum(1 for item in ping_items if item.get("ok"))
+            remote_items = info.get("remote_access", [])
+            remote_ok = sum(1 for item in remote_items if item.get("active"))
+            interface_detail = (
+                "<div class=\"table-scroll\"><table><thead><tr><th>Name</th><th>State</th><th>Addresses</th></tr></thead>"
+                f"<tbody>{''.join(interfaces)}</tbody></table></div>"
                 f"<div class=\"label\">Default route</div><pre>{escape(str(info.get('default_route', '-')))}</pre>"
-                "</div>"
-                "<div class=\"card\"><h2>Support URLs</h2>"
+            )
+            support_detail = (
                 f"<ul>{urls}</ul>"
-                "<p class=\"muted\">Use the gateway IP URL remotely. Some forwarders only accept the port at the end, so keep the format as http://IP:9110/.</p>"
+                "<p class=\"muted\">Use the gateway IP remotely in the form http://IP:9110/. This keeps the port at the end for forwarding software.</p>"
                 f"<div class=\"label\">DNS</div><pre>{escape(str(info.get('dns', '-')))}</pre>"
-                "</div></div>"
-                "<div class=\"card\"><h2>Connectivity Checks</h2>"
-                "<table><thead><tr><th>Target</th><th>Host</th><th>Port</th><th>Ping</th><th>TCP</th><th>Overall</th><th>Detail</th></tr></thead>"
-                f"<tbody>{''.join(ping_rows)}</tbody></table></div>"
-                "<div class=\"grid lower-grid\">"
-                "<div class=\"card\"><h2>Remote Access Services</h2>"
-                "<table><thead><tr><th>Service</th><th>Status</th><th>Enabled</th><th>Detail</th></tr></thead>"
-                f"<tbody>{''.join(remote_rows)}</tbody></table>"
-                "<p class=\"muted\">TeamViewer or other support tooling can be tracked here by adding the systemd service name in Settings.</p>"
-                "</div>"
-                "<div class=\"card\"><h2>Routes and Neighbours</h2>"
+            )
+            route_detail = (
                 f"<div class=\"label\">Route table</div><pre>{escape(str(info.get('route_table', '-')))}</pre>"
                 f"<div class=\"label\">LAN neighbours</div><pre>{escape(str(info.get('neighbours', '-')))}</pre>"
-                "</div></div>"
-                "<div class=\"card\"><h2>Listening TCP Sockets</h2>"
-                f"<pre>{escape(str(info.get('listening_sockets', 'ss output not available')))}</pre>"
-                "</div>"
-                + all_checks_table("Network Checks", {"network_module"})
+                f"<div class=\"label\">Listening TCP sockets</div><pre>{escape(str(info.get('listening_sockets', 'ss output not available')))}</pre>"
+            )
+            return (
+                summary_strip([
+                    ("Gateway", info.get("hostname", "-"), info.get("ip_addresses", "-") or "-", "healthy"),
+                    ("Dashboard", f"Port {info.get('listening_port', '-')}", local_web.get("detail", "-"), "healthy" if local_web.get("ok") else "warning"),
+                    ("Connectivity", f"{ping_ok}/{len(ping_items)}", "Configured targets reachable", "healthy" if ping_items and ping_ok == len(ping_items) else "warning"),
+                    ("Remote access", f"{remote_ok}/{len(remote_items)}", "Support services active", "healthy" if remote_items and remote_ok == len(remote_items) else "warning"),
+                ])
+                +
+                "<div class=\"card\"><h2>Connectivity Checks</h2>"
+                "<p class=\"section-lead\">Configured internet, local device, and TCP checks. Add or change targets in Settings.</p>"
+                "<div class=\"table-scroll\"><table><thead><tr><th>Target</th><th>Host</th><th>Port</th><th>Ping</th><th>TCP</th><th>Overall</th><th>Detail</th></tr></thead>"
+                f"<tbody>{''.join(ping_rows)}</tbody></table></div></div>"
+                "<div class=\"card\"><h2>Remote Access Services</h2>"
+                "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Status</th><th>Enabled</th><th>Detail</th></tr></thead>"
+                f"<tbody>{''.join(remote_rows)}</tbody></table></div>"
+                "<p class=\"muted\">TeamViewer or other support tooling can be tracked here by adding the systemd service name in Settings.</p>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/settings\">Edit network targets</a></div></div>"
+                + disclosure("Interfaces and default route", interface_detail)
+                + disclosure("Support URLs and DNS", support_detail)
+                + disclosure("Routes, neighbours, and listening sockets", route_detail)
+                + disclosure("Health-engine network check", all_checks_table("Network Check", {"network_module"}))
             )
 
         def recovery_page():
@@ -1955,24 +2087,29 @@ def start_web(cfg):
                 )
             if not service_rows:
                 service_rows.append("<tr><td colspan=\"3\">No monitored services configured.</td></tr>")
-            return (
-                "<div class=\"grid lower-grid\">"
-                "<div class=\"card\"><h2>Recovery Status</h2>"
+            configured_services = [item for item in cfg.get("services", []) if isinstance(item, dict) and item.get("name")]
+            active_services = sum(
+                1 for item in configured_services
+                if str(check_map.get(str(item.get("name")), {}).get("state", "unknown")) == "healthy"
+            )
+            recovery_tools = [
+                (f"Restart {item.get('name')}", "Open a confirmation page before restarting this Videosoft service.", f"/service-restart-confirm/{quote(str(item.get('name')))}", "")
+                for item in configured_services
+            ]
+            recovery_tools.extend([
+                ("Reinstall watchdog service", "Repair the VA-Connect systemd installation without deleting configuration or data.", "/recovery-install-confirm", "primary"),
+                ("Update VA-Connect", "Open controlled build update and result details.", "/updates", ""),
+                ("Download support bundle", "Collect status, journals, history, storage, network, and reboot evidence.", "/api/diagnostics/support-bundle.zip", ""),
+                ("Hardware watchdog controls", "Open setup, timeout, and deliberate test controls.", "/watchdog", ""),
+                ("Restart gateway", "Planned emergency action. Not enabled until field policy is agreed.", "", "danger"),
+            ])
+            recovery_detail = (
                 f"<div class=\"label\">Current state</div><div class=\"value {escape(str(recovery.get('state', 'unknown')))}\">{escape(str(recovery.get('state', 'unknown')).upper())}</div>"
                 f"<div class=\"label\">Message</div><div class=\"value\">{escape(str(recovery.get('message', '-')))}</div>"
-                f"<div class=\"label\">Updated</div><div class=\"value\">{escape(str(recovery.get('updated_at', '-')))}</div>"
+                f"<div class=\"label\">Updated</div><div class=\"value\">{escape(local_time(recovery.get('updated_at')))}</div>"
                 f"<div class=\"label\">Last reboot reason</div><pre>{escape(json.dumps(reboot, indent=2) if reboot else 'No watchdog reboot reason recorded.')}</pre>"
-                "</div>"
-                "<div class=\"card\"><h2>Recovery Configuration</h2>"
-                f"<div class=\"label\">Enabled</div><div class=\"value\">{escape(str(cfg_recovery.get('enabled', False)))}</div>"
-                f"<div class=\"label\">Restart failed services</div><div class=\"value\">{escape(str(cfg_recovery.get('restart_failed_services', False)))}</div>"
-                f"<div class=\"label\">Restart non-critical services</div><div class=\"value\">{escape(str(cfg_recovery.get('restart_noncritical_services', False)))}</div>"
-                f"<div class=\"label\">Allow reboot</div><div class=\"value\">{escape(str(cfg_recovery.get('allow_reboot', False)))}</div>"
-                f"<div class=\"label\">Critical grace seconds</div><div class=\"value\">{escape(str(cfg_recovery.get('critical_grace_seconds', '-')))}</div>"
-                "<a class=\"ghost\" href=\"/settings\">Edit recovery settings</a>"
-                "</div></div>"
-                "<div class=\"grid lower-grid\">"
-                "<div class=\"card\"><h2>Install and Service</h2>"
+            )
+            install_detail = (
                 f"<div class=\"label\">Service unit</div><div class=\"value {escape(str(install.get('unit_state', 'unknown')))}\">{escape(str(install.get('unit_path', '-')))}</div>"
                 f"<div class=\"label\">Service active</div><div class=\"value {escape(str(install.get('active', 'unknown')))}\">{escape(str(install.get('active', '-')).upper())}</div>"
                 f"<div class=\"label\">Service enabled</div><div class=\"value\">{escape(str(install.get('enabled', '-')).upper())}</div>"
@@ -1980,14 +2117,27 @@ def start_web(cfg):
                 f"<div class=\"label\">Config path</div><div class=\"value\">{escape(str(active_config_path()))}</div>"
                 f"<div class=\"label\">Data directory</div><div class=\"value\">{escape(str(data_dir))}</div>"
                 f"<div class=\"label\">Install log</div><div class=\"value\">{escape(str(install.get('log_path', '-')))}</div>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/recovery-install-confirm\">Reinstall/reconfigure watchdog service</a><a class=\"ghost\" href=\"/diagnostics\">Open diagnostics</a></div>"
-                "<p class=\"muted\">Reinstall copies the systemd unit, reloads systemd, enables the service, and restarts va-watchdog. It does not remove config or data.</p>"
-                "</div>"
-                "<div class=\"card\"><h2>Recovery Policy Matrix</h2>"
-                "<table><thead><tr><th>Service</th><th>Critical</th><th>Restart allowed</th></tr></thead>"
-                f"<tbody>{''.join(service_rows)}</tbody></table>"
-                "<p class=\"muted\">Service restart controls are deliberately kept in Settings/Recovery policy first; manual per-service restart buttons can be added once the field rules are confirmed.</p>"
-                "</div></div>"
+            )
+            policy_detail = (
+                "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Critical</th><th>Restart allowed</th></tr></thead>"
+                f"<tbody>{''.join(service_rows)}</tbody></table></div>"
+                f"<p class=\"muted\">Recovery engine enabled: {escape(str(cfg_recovery.get('enabled', False)))}. Restart failed services: {escape(str(cfg_recovery.get('restart_failed_services', False)))}. Allow reboot: {escape(str(cfg_recovery.get('allow_reboot', False)))}.</p>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/settings\">Edit recovery policy</a></div>"
+            )
+            return (
+                summary_strip([
+                    ("Recovery engine", "Enabled" if cfg_recovery.get("enabled") else "Disabled", recovery.get("message", "-"), "healthy" if cfg_recovery.get("enabled") else "warning"),
+                    ("Videosoft services", f"{active_services}/{len(configured_services)}", "Running now", "healthy" if configured_services and active_services == len(configured_services) else "critical"),
+                    ("Watchdog service", str(install.get("active", "unknown")).upper(), str(install.get("enabled", "-")).upper(), "healthy" if install.get("active") == "active" else "critical"),
+                    ("Automatic reboot", "Allowed" if cfg_recovery.get("allow_reboot") else "Blocked", f"Grace {cfg_recovery.get('critical_grace_seconds', '-')}s", "warning" if cfg_recovery.get("allow_reboot") else "healthy"),
+                ])
+                + "<div class=\"card\"><h2>Recovery Toolbox</h2>"
+                "<p class=\"section-lead\">Every live action opens a confirmation or download. Disabled cards identify planned controls that are not safe to expose yet.</p>"
+                + tool_grid(recovery_tools)
+                + "</div>"
+                + disclosure("Current recovery status and reboot evidence", recovery_detail, opened=bool(reboot))
+                + disclosure("Watchdog installation details", install_detail)
+                + disclosure("Recovery policy matrix", policy_detail)
             )
 
         def history_page():
@@ -2021,15 +2171,38 @@ def start_web(cfg):
                 )
             if not rows:
                 rows.append("<tr><td colspan=\"8\">No history samples have been captured yet.</td></tr>")
+            extra_charts = (
+                "<div class=\"grid lower-grid\">"
+                "<div><h3>Temperature Trend</h3>"
+                f"{history_chart(samples, 'temperature', 0, 100, 'C')}"
+                "</div><div><h3>Disk Usage Trend</h3>"
+                f"{multi_history_chart(samples, [('root_disk', 'Root'), ('recordings_disk', 'Recordings')], 0, 100, '%')}"
+                "</div></div>"
+            )
+            storage_detail = (
+                "<div class=\"grid lower-grid\"><div>"
+                "<h3>State Counts</h3><table><thead><tr><th>State</th><th>Samples</th></tr></thead>"
+                f"<tbody>{''.join(state_rows)}</tbody></table></div><div>"
+                "<h3>History Storage</h3>"
+                f"<div class=\"label\">History file</div><div class=\"value\">{escape(str(history_path(cfg)))}</div>"
+                f"<div class=\"label\">Max rows</div><div class=\"value\">{escape(str(retention.get('history_max_rows', '-')))}</div>"
+                f"<div class=\"label\">Time range</div><div class=\"value\">{escape(str(summary.get('first_time', '-')))} to {escape(str(summary.get('last_time', '-')))}</div>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/api/history\">Export JSON</a><a class=\"ghost\" href=\"/api/history/export.csv\">Export CSV</a></div>"
+                "</div></div>"
+            )
+            samples_detail = (
+                "<div class=\"table-scroll\"><table><thead><tr><th>Time</th><th>State</th><th>Score</th><th>Temp</th><th>CPU</th><th>RAM</th><th>Root Disk</th><th>Recordings Disk</th></tr></thead>"
+                f"<tbody>{''.join(rows)}</tbody></table></div>"
+            )
             return (
-                "<div class=\"grid metric-grid\">"
-                f"<div class=\"tile\"><h3>Samples</h3><div class=\"tile-value\">{escape(str(summary.get('samples', 0)))}</div><div class=\"tile-detail\">Stored history rows</div></div>"
-                f"<div class=\"tile\"><h3>Latest Score</h3><div class=\"tile-value {'healthy' if not latest.get('critical_failed') else 'critical'}\">{escape(str(latest.get('score', '-')))}%</div><div class=\"tile-detail\">{escape(str(latest.get('time', '-')))}</div></div>"
-                f"<div class=\"tile\"><h3>Average Score</h3><div class=\"tile-value\">{escape(str(summary.get('avg_score', '-')))}%</div><div class=\"tile-detail\">Recent retained window</div></div>"
-                f"<div class=\"tile\"><h3>Lowest Score</h3><div class=\"tile-value {'warning' if summary.get('min_score') not in ('-', None) and float(summary.get('min_score')) < 95 else 'healthy'}\">{escape(str(summary.get('min_score', '-')))}%</div><div class=\"tile-detail\">Worst recorded score</div></div>"
-                f"<div class=\"tile\"><h3>Critical Samples</h3><div class=\"tile-value {'critical' if summary.get('critical_count', 0) else 'healthy'}\">{escape(str(summary.get('critical_count', 0)))}</div><div class=\"tile-detail\">critical_failed true</div></div>"
-                f"<div class=\"tile\"><h3>Retention</h3><div class=\"tile-value\">{escape(str(retention.get('history_retention_days', '-')))}d</div><div class=\"tile-detail\">sample every {escape(str(retention.get('history_sample_seconds', '-')))}s</div></div>"
-                "</div>"
+                summary_strip([
+                    ("Samples", summary.get("samples", 0), "Stored history rows", "healthy"),
+                    ("Latest score", f"{latest.get('score', '-')}%", local_time(latest.get("time")), "critical" if latest.get("critical_failed") else "healthy"),
+                    ("Average score", f"{summary.get('avg_score', '-')}%", "Retained window", "healthy"),
+                    ("Lowest score", f"{summary.get('min_score', '-')}%", "Worst recorded sample", "warning" if summary.get("min_score") not in ("-", None) and float(summary.get("min_score")) < 95 else "healthy"),
+                    ("Critical samples", summary.get("critical_count", 0), f"{retention.get('history_retention_days', '-')} day retention", "critical" if summary.get("critical_count", 0) else "healthy"),
+                ])
+                +
                 "<div class=\"grid lower-grid\">"
                 "<div class=\"card\"><h2>Health Score Trend</h2>"
                 f"{history_chart(samples, 'score', 0, 100, '%')}"
@@ -2037,48 +2210,47 @@ def start_web(cfg):
                 "<div class=\"card\"><h2>CPU/RAM Trend</h2>"
                 f"{multi_history_chart(samples, [('cpu_load', 'CPU load'), ('ram', 'RAM')], 0, 100, '%')}"
                 "</div></div>"
-                "<div class=\"grid lower-grid\">"
-                "<div class=\"card\"><h2>Temperature Trend</h2>"
-                f"{history_chart(samples, 'temperature', 0, 100, 'C')}"
-                "</div>"
-                "<div class=\"card\"><h2>Disk Usage Trend</h2>"
-                f"{multi_history_chart(samples, [('root_disk', 'Root'), ('recordings_disk', 'Recordings')], 0, 100, '%')}"
-                "</div></div>"
-                "<div class=\"grid lower-grid\">"
-                "<div class=\"card\"><h2>State Counts</h2>"
-                "<table><thead><tr><th>State</th><th>Samples</th></tr></thead>"
-                f"<tbody>{''.join(state_rows)}</tbody></table>"
-                "</div>"
-                "<div class=\"card\"><h2>History Storage</h2>"
-                f"<div class=\"label\">History file</div><div class=\"value\">{escape(str(history_path(cfg)))}</div>"
-                f"<div class=\"label\">Max rows</div><div class=\"value\">{escape(str(retention.get('history_max_rows', '-')))}</div>"
-                f"<div class=\"label\">Time range</div><div class=\"value\">{escape(str(summary.get('first_time', '-')))} to {escape(str(summary.get('last_time', '-')))}</div>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/api/history\">Export JSON</a><a class=\"ghost\" href=\"/api/history/export.csv\">Export CSV</a></div>"
-                "</div></div>"
-                "<div class=\"card\"><h2>Recent Samples</h2>"
-                "<table><thead><tr><th>Time</th><th>State</th><th>Score</th><th>Temp</th><th>CPU</th><th>RAM</th><th>Root Disk</th><th>Recordings Disk</th></tr></thead>"
-                f"<tbody>{''.join(rows)}</tbody></table></div>"
+                + disclosure("Temperature and disk trends", extra_charts)
+                + disclosure("History storage and state counts", storage_detail)
+                + disclosure("Recent sample data", samples_detail)
             )
 
         def diagnostics_page():
             service_status = _run(["systemctl", "is-active", "va-watchdog"], timeout=3)
             service_enabled = _run(["systemctl", "is-enabled", "va-watchdog"], timeout=3)
             bb = blackbox_summary(cfg)
+            active_value = str(service_status.get("stdout") or service_status.get("stderr") or "unknown")
+            enabled_value = str(service_enabled.get("stdout") or service_enabled.get("stderr") or "unknown")
+            commands = (
+                "<pre>systemctl status va-watchdog\n"
+                "journalctl -u va-watchdog -n 80 --no-pager\n"
+                "wget -qO- http://127.0.0.1:9110/api/healthz\n"
+                "wget -qO- http://127.0.0.1:9110/api/version</pre>"
+            )
             return (
-                "<div class=\"grid lower-grid\">"
-                "<div class=\"card\"><h2>Diagnostics</h2>"
-                "<p class=\"muted\">Download a support bundle when a unit locks up or needs remote investigation. It includes watchdog status, recent events/history, journals, service status, reboot history, storage, network, and hardware watchdog context.</p>"
-                "<div class=\"button-row\"><a class=\"action\" href=\"/api/diagnostics/support-bundle.zip\">Download support bundle</a><a class=\"ghost\" href=\"/api/diagnostics\">View diagnostics JSON</a><a class=\"ghost\" href=\"/api/blackbox\">View black-box JSON</a></div>"
-                f"<div class=\"label\">Service active</div><div class=\"value {escape(str(service_status.get('stdout', 'unknown')))}\">{escape(str(service_status.get('stdout') or service_status.get('stderr') or 'unknown'))}</div>"
-                f"<div class=\"label\">Service enabled</div><div class=\"value\">{escape(str(service_enabled.get('stdout') or service_enabled.get('stderr') or 'unknown'))}</div>"
-                f"<div class=\"label\">Status path</div><div class=\"value\">{escape(str(status_path))}</div>"
-                f"<div class=\"label\">Events path</div><div class=\"value\">{escape(str(events_path))}</div>"
-                f"<div class=\"label\">Black-box recorder</div><div class=\"value\">{'Enabled' if bb.get('enabled') else 'Disabled'}; {escape(str(bb.get('rows', 0)))} snapshots; last {escape(str(bb.get('last_time') or '-'))}</div>"
-                "</div>"
-                "<div class=\"card\"><h2>Useful Commands</h2>"
-                "<pre>systemctl status va-watchdog\njournalctl -u va-watchdog -n 80 --no-pager\nwget -qO- http://127.0.0.1:9110/api/healthz\nwget -qO- http://127.0.0.1:9110/api/version</pre>"
-                "</div></div>"
-                + all_checks_table("Diagnostics Checks")
+                summary_strip([
+                    ("Watchdog service", active_value.upper(), f"Enabled: {enabled_value}", "healthy" if active_value == "active" else "critical"),
+                    ("Current health", str(status.get("state", "unknown")).upper(), f"Score {status.get('score', '-')}%", str(status.get("state", "unknown"))),
+                    ("Black-box recorder", "Enabled" if bb.get("enabled") else "Disabled", f"{bb.get('rows', 0)} snapshots", "healthy" if bb.get("enabled") else "warning"),
+                    ("Latest snapshot", local_time(bb.get("last_time")), "Hang investigation evidence", "healthy" if bb.get("last_time") else "warning"),
+                ])
+                + "<div class=\"card\"><h2>Diagnostic Toolbox</h2>"
+                "<p class=\"section-lead\">Start with the support bundle after a lockup. The other tools expose focused live evidence without changing gateway configuration.</p>"
+                + tool_grid([
+                    ("Download support bundle", "Best first step: logs, status, history, reboot, storage, network, and watchdog evidence.", "/api/diagnostics/support-bundle.zip", "primary"),
+                    ("Live diagnostics JSON", "Collected operating-system and watchdog diagnostic data.", "/api/diagnostics", ""),
+                    ("Black-box snapshots", "Short-interval evidence retained around a hang or reboot.", "/api/blackbox", ""),
+                    ("Raw health status", "Unchanged /api/status payload used by integrations.", "/api/status", ""),
+                    ("Network tests", "Connectivity, interfaces, routes, and remote access.", "/network", ""),
+                    ("Storage tests", "Mount, write, capacity, SMART, and retention checks.", "/storage", ""),
+                    ("Watchdog tests", "Safe and deliberate watchdog validation controls.", "/watchdog", ""),
+                    ("Relay test", "Planned: validate an attached relay output.", "", ""),
+                    ("Camera snapshot", "Planned: capture an image from a configured source.", "", ""),
+                    ("RTSP probe", "Planned: verify stream access and response timing.", "", ""),
+                ])
+                + "</div>"
+                + disclosure("Useful terminal commands", commands)
+                + disclosure("All health-engine checks", all_checks_table("Diagnostics Checks"))
             )
 
         error_html = ""
@@ -2092,6 +2264,8 @@ def start_web(cfg):
             issue_pill = "<span class=\"pill warning\">Warning</span>"
         else:
             issue_pill = "<span class=\"pill\">No critical issues</span>"
+        service_checks = [check for check in checks if str(check.get("name", "")).endswith(".service")]
+        healthy_service_count = sum(1 for check in service_checks if check.get("state") == "healthy")
         feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
         if feed.get("enabled") and feed.get("opened"):
             protection_text = "ACTIVE"
@@ -2120,8 +2294,8 @@ def start_web(cfg):
             "</div>"
             "<div>"
             "<div class=\"label\">Gateway monitor</div><div class=\"value healthy\">ONLINE</div>"
+            f"<div class=\"label\">Videosoft services</div><div class=\"value {'healthy' if service_checks and healthy_service_count == len(service_checks) else 'warning'}\">{healthy_service_count}/{len(service_checks)} running</div>"
             f"<div class=\"label\">Hardware recovery</div><div class=\"value {protection_state}\">{protection_text}</div>"
-            f"<div class=\"label\">Config</div><div class=\"value\">{escape(str(version.get('config_path', '-')))}</div>"
             "</div>"
             f"{error_html}"
             "</div>"
@@ -2136,7 +2310,6 @@ def start_web(cfg):
             + operational_alerts_card()
             + quick_actions_card()
             + "</div>"
-            + services_card()
         )
 
         if page == "Overview":
@@ -2162,7 +2335,7 @@ def start_web(cfg):
         if page == "Updates":
             return page_help_html(page) + updates_card()
         if page == "Diagnostics":
-            return page_help_html(page) + diagnostics_page() + "<div class=\"card\"><h2>Raw Status</h2><pre>" + escape(json.dumps(status, indent=2)) + "</pre></div>"
+            return page_help_html(page) + diagnostics_page() + disclosure("Raw status JSON", "<pre>" + escape(json.dumps(status, indent=2)) + "</pre>")
         return page_help_html("Overview") + overview_html
 
     def html_page(route_path="/"):
