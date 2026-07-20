@@ -62,9 +62,13 @@ class EventLog:
         elif status.get("smart_status") == "FAILED":
             message = "Recording storage SMART failure"
             level = "critical"
-        elif status.get("free_percent") is not None and float(status.get("free_percent") or 0) < 10:
-            message = "Recording storage low space"
-            level = "warning"
+        elif str(status.get("message") or "").lower() in {
+            "recording storage low space",
+            "recording storage low free space",
+            "recording storage critically full",
+        }:
+            message = status.get("message")
+            level = status.get("status", "warning")
 
         if message:
             self.add(level, "recording_storage", message, status)

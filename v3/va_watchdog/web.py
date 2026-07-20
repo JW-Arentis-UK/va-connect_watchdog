@@ -8,6 +8,8 @@ import socket
 import subprocess
 import re
 import time
+import io
+import zipfile
 from datetime import datetime
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1915,6 +1917,8 @@ def start_web(cfg):
             return (
                 "<div class=\"grid lower-grid\">"
                 "<div class=\"card\"><h2>Diagnostics</h2>"
+                "<p class=\"muted\">Download a support bundle when a unit locks up or needs remote investigation. It includes watchdog status, recent events/history, journals, service status, reboot history, storage, network, and hardware watchdog context.</p>"
+                "<div class=\"button-row\"><a class=\"action\" href=\"/api/diagnostics/support-bundle.zip\">Download support bundle</a><a class=\"ghost\" href=\"/api/diagnostics\">View diagnostics JSON</a></div>"
                 f"<div class=\"label\">Service active</div><div class=\"value {escape(str(service_status.get('stdout', 'unknown')))}\">{escape(str(service_status.get('stdout') or service_status.get('stderr') or 'unknown'))}</div>"
                 f"<div class=\"label\">Service enabled</div><div class=\"value\">{escape(str(service_enabled.get('stdout') or service_enabled.get('stderr') or 'unknown'))}</div>"
                 f"<div class=\"label\">Status path</div><div class=\"value\">{escape(str(status_path))}</div>"
@@ -4201,6 +4205,73 @@ def start_web(cfg):
             "generated_at_unix": time.time(),
         }
 
+    def support_bundle_bytes():
+        generated = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        status = status_snapshot()
+        services = cfg.get("services", []) if isinstance(cfg.get("services", []), list) else []
+        service_names = [str(item.get("name", "")).strip() for item in services if isinstance(item, dict) and item.get("name")]
+        watched_services = ["va-watchdog"] + service_names
+        service_status_cmd = ["systemctl", "status", *watched_services, "--no-pager", "-l"]
+        bundle = {
+            "generated_utc": generated,
+            "version": version_info(),
+            "active_config_path": str(active_config_path()),
+            "data_dir": str(data_dir),
+            "status_path": str(status_path),
+            "events_path": str(events_path),
+            "history_path": str(history_path(cfg)),
+        }
+        command_outputs = {
+            "systemctl-status.txt": _run(service_status_cmd, timeout=10),
+            "va-watchdog-journal.txt": _run(["journalctl", "-u", "va-watchdog", "--since", "7 days ago", "--no-pager"], timeout=15),
+            "kernel-journal.txt": _run(["journalctl", "-k", "--since", "7 days ago", "--no-pager"], timeout=15),
+            "reboots-last-x.txt": _run(["last", "-x"], timeout=10),
+            "disk-lsblk.txt": _run(["lsblk", "-o", "NAME,PATH,TYPE,SIZE,FSTYPE,LABEL,MOUNTPOINT,MODEL,SERIAL"], timeout=5),
+            "mounts-findmnt.txt": _run(["findmnt"], timeout=5),
+            "watchdog-wdctl.txt": _run(["wdctl", str(cfg.get("hardware_watchdog", {}).get("device") or "/dev/watchdog0")], timeout=5),
+            "network-ip-addr.txt": _run(["ip", "-4", "addr", "show"], timeout=5),
+            "network-routes.txt": _run(["ip", "route"], timeout=5),
+        }
+        file_sources = {
+            "status.json": status_path,
+            "events.jsonl": events_path,
+            "history.jsonl": history_path(cfg),
+            "update-state.json": data_dir / "update-state.json",
+            "update.log": Path(cfg.get("update", {}).get("log_path") or data_dir / "update.log"),
+            "last-reboot-reason.json": Path(cfg.get("last_reboot_reason_path") or data_dir / "last-reboot-reason.json"),
+        }
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("README.txt", "\n".join([
+                "VA-Connect Watchdog V3 support bundle",
+                f"Generated UTC: {generated}",
+                "",
+                "Use this bundle to investigate lockups, service failures, storage issues, network faults, and watchdog feed state.",
+                "It does not include CCTV recordings.",
+                "",
+            ]))
+            archive.writestr("bundle-summary.json", json.dumps(bundle, indent=2))
+            archive.writestr("current-status.json", json.dumps(status, indent=2))
+            archive.writestr("diagnostics-summary.json", json.dumps(diagnostics_summary(), indent=2))
+            archive.writestr("storage-info.json", json.dumps(storage_info(), indent=2))
+            archive.writestr("hardware-info.json", json.dumps(hardware_info(), indent=2))
+            archive.writestr("network-info.json", json.dumps(network_info(), indent=2))
+            archive.writestr("services-info.json", json.dumps(service_info(), indent=2))
+            archive.writestr("history-export.csv", history_csv(limit=5000))
+            archive.writestr("events-export.csv", events_csv(limit=1000))
+            for name, result in command_outputs.items():
+                archive.writestr(name, json.dumps(result, indent=2) + "\n\nSTDOUT:\n" + str(result.get("stdout") or "") + "\n\nSTDERR:\n" + str(result.get("stderr") or ""))
+            for name, path in file_sources.items():
+                try:
+                    target = Path(path)
+                    if target.exists() and target.is_file():
+                        archive.write(target, f"raw-files/{name}")
+                    else:
+                        archive.writestr(f"raw-files/{name}.missing.txt", f"{target} was not present")
+                except Exception as exc:
+                    archive.writestr(f"raw-files/{name}.error.txt", str(exc))
+        return buffer.getvalue(), f"va-watchdog-support-{generated}.zip"
+
     def config_summary():
         hardware = cfg.get("hardware_watchdog", {})
         return {
@@ -4245,6 +4316,16 @@ def start_web(cfg):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
+            self._send_no_cache_headers()
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _send_bytes(self, data, content_type="application/octet-stream", filename=None, status=200):
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            if filename:
+                self.send_header("Content-Disposition", f"attachment; filename=\"{filename}\"")
             self._send_no_cache_headers()
             self.end_headers()
             self.wfile.write(data)
@@ -4439,6 +4520,13 @@ def start_web(cfg):
                 return
             if route_path == "/api/diagnostics":
                 self._send_json(diagnostics_summary())
+                return
+            if route_path == "/api/diagnostics/support-bundle.zip":
+                try:
+                    data, filename = support_bundle_bytes()
+                    self._send_bytes(data, content_type="application/zip", filename=filename)
+                except Exception as exc:
+                    self._send_json({"error": str(exc)}, status=500)
                 return
             if route_path == "/api/hardware-info":
                 self._send_json(hardware_info())
