@@ -91,13 +91,18 @@ body[data-theme="sand"] {
   --blue: #1769aa;
 }
 * { box-sizing: border-box; }
-body { font-family: Arial, sans-serif; background: var(--bg); color: var(--text); margin:0; font-size:calc(14px * var(--scale)); }
+body { font-family:"Trebuchet MS", "DejaVu Sans", sans-serif; background:var(--bg); color:var(--text); margin:0; font-size:calc(14px * var(--scale)); }
 .shell { display:grid; grid-template-columns: calc(220px * var(--scale)) 1fr; min-height:100vh; }
 .sidebar { border-right:1px solid var(--line); background:var(--sidebar); padding:calc(18px * var(--scale)) calc(14px * var(--scale)); display:flex; flex-direction:column; gap:calc(18px * var(--scale)); }
-.brand { font-size:calc(18px * var(--scale)); font-weight:700; line-height:1.25; }
+.brand { font-size:calc(18px * var(--scale)); font-weight:800; line-height:1.25; letter-spacing:-.02em; }
+.brand small { display:block; margin-top:calc(5px * var(--scale)); color:var(--muted); font-size:calc(10px * var(--scale)); font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
 .nav { display:grid; gap:calc(6px * var(--scale)); }
 .nav button, .nav a { width:100%; text-align:left; background:transparent; color:var(--muted); border:1px solid transparent; border-radius:6px; padding:calc(10px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-size:inherit; text-decoration:none; display:block; }
 .nav button.active, .nav a.active { color:var(--text); background:#0f2d59; border-color:#235a9e; }
+.mode-switcher { display:grid; grid-template-columns:1fr; gap:calc(4px * var(--scale)); margin-bottom:calc(12px * var(--scale)); padding:calc(4px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.nav .mode-tab { padding:calc(7px * var(--scale)) calc(8px * var(--scale)); text-align:left; font-size:calc(10px * var(--scale)); font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
+.nav .mode-tab.active { background:var(--blue); border-color:var(--blue); color:#fff; }
+.nav-section { padding:calc(4px * var(--scale)) calc(10px * var(--scale)); color:var(--muted); font-size:calc(10px * var(--scale)); font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
 .side-status { margin-top:auto; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:calc(12px * var(--scale)); color:var(--muted); }
 .main { min-width:0; }
 .topbar { height:calc(58px * var(--scale)); border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; padding:0 calc(18px * var(--scale)); color:var(--muted); }
@@ -106,10 +111,20 @@ select, input, textarea { background:var(--input); color:var(--text); border:1px
 textarea { width:100%; min-height:calc(70px * var(--scale)); resize:vertical; }
 label { display:block; margin:calc(6px * var(--scale)) 0; }
 .content { padding:calc(18px * var(--scale)); max-width:calc(1360px * var(--scale)); margin:0 auto; }
+.page-intro { display:flex; align-items:center; justify-content:space-between; gap:calc(14px * var(--scale)); margin-bottom:calc(14px * var(--scale)); padding:0 calc(2px * var(--scale)); }
+.page-intro h1 { margin:calc(2px * var(--scale)) 0; font-size:calc(24px * var(--scale)); letter-spacing:-.03em; }
+.page-kicker { color:var(--blue); font-size:calc(11px * var(--scale)); font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+.page-question { color:var(--muted); font-size:calc(13px * var(--scale)); }
+.help-popover { position:relative; flex:0 0 auto; }
+.help-popover summary { display:grid; place-items:center; width:calc(32px * var(--scale)); height:calc(32px * var(--scale)); border:1px solid var(--line); border-radius:999px; color:var(--blue); background:var(--panel); cursor:pointer; font-weight:900; list-style:none; }
+.help-popover summary::-webkit-details-marker { display:none; }
+.help-popover p { position:absolute; z-index:5; right:0; width:calc(300px * var(--scale)); margin:calc(8px * var(--scale)) 0 0; padding:calc(12px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text); box-shadow:0 10px 30px rgba(0,0,0,.2); }
 .grid { display:grid; gap:calc(12px * var(--scale)); }
 .top-grid { grid-template-columns: minmax(0, 1.6fr) minmax(300px, 0.9fr); }
+.overview-top { grid-template-columns:minmax(0, 1.6fr) minmax(calc(240px * var(--scale)), .75fr); }
 .metric-grid { grid-template-columns: repeat(6, minmax(calc(130px * var(--scale)), 1fr)); }
 .lower-grid { grid-template-columns: minmax(0, 1.1fr) minmax(330px, 0.9fr); }
+.operations-grid { grid-template-columns:repeat(2, minmax(0,1fr)); }
 .bottom-grid { grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr); }
 .card, .tile { background:linear-gradient(145deg, var(--panel), var(--panel-2)); border:1px solid var(--line); border-radius:8px; padding:calc(14px * var(--scale)); min-width:0; }
 .card h2, .card h3, .tile h3 { margin:0 0 calc(10px * var(--scale)); font-size:calc(16px * var(--scale)); }
@@ -176,6 +191,14 @@ pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale))
 .chart polyline { fill:none; stroke:var(--green); stroke-width:2; }
 .chart .grid-line { stroke:var(--line); stroke-width:1; }
 .button-row { display:flex; gap:calc(8px * var(--scale)); flex-wrap:wrap; align-items:center; margin:calc(10px * var(--scale)) 0; }
+.quick-actions { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:calc(8px * var(--scale)); }
+.quick-actions a { min-height:calc(54px * var(--scale)); display:flex; flex-direction:column; justify-content:center; }
+.quick-actions a span { display:block; margin-top:calc(3px * var(--scale)); color:var(--muted); font-size:calc(11px * var(--scale)); font-weight:400; }
+.issue-list { display:grid; gap:calc(7px * var(--scale)); }
+.issue-row { display:grid; grid-template-columns:auto 1fr; gap:calc(9px * var(--scale)); align-items:start; padding:calc(9px * var(--scale)); border:1px solid var(--line); border-radius:7px; background:rgba(255,255,255,.025); }
+.issue-row .pill { min-width:calc(68px * var(--scale)); text-align:center; }
+.advanced-disclosure { margin-top:calc(12px * var(--scale)); border-top:1px solid var(--line); padding-top:calc(10px * var(--scale)); }
+.advanced-disclosure summary { color:var(--blue); cursor:pointer; font-weight:700; }
 button.action, a.action { background:var(--blue); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; text-decoration:none; display:inline-block; }
 button.danger, a.danger { background:var(--red); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; text-decoration:none; display:inline-block; }
 button.ghost, a.ghost { background:transparent; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:calc(7px * var(--scale)) calc(10px * var(--scale)); cursor:pointer; font-size:inherit; text-decoration:none; display:inline-block; }
@@ -195,26 +218,29 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   .metric-grid { grid-template-columns: repeat(2, minmax(calc(130px * var(--scale)), 1fr)); }
   .status-strip { grid-template-columns: 1fr; }
   .summary-card { grid-template-columns: 1fr; }
+  .overview-top, .operations-grid { grid-template-columns:1fr; }
+  .page-intro { align-items:flex-start; }
+  .quick-actions { grid-template-columns:1fr; }
 }
 </style>
 </head>
 <body data-theme="__BODY_THEME__">
 <div class="shell">
   <aside class="sidebar">
-    <div class="brand">VA-Connect<br>Watchdog</div>
+    <div class="brand">VA-Connect Watchdog<small>Gateway resilience</small></div>
     <nav class="nav" id="nav">__SERVER_NAV__</nav>
     <div class="side-status">
       <div>Watchdog</div>
       <div id="side-state" class="value">Loading</div>
-      <div class="label">Version</div>
-      <div class="value">V3</div>
+      <div class="label">Build</div>
+      <div class="value">__BUILD_ID__</div>
     </div>
   </aside>
   <main class="main">
     <header class="topbar">
-      <div id="page-title">__PAGE_TITLE__</div>
+      <div id="page-title">__PAGE_MODE__ / __PAGE_TITLE__</div>
       <div class="topbar-right">
-        <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="dark">Dark</option><option value="light">Light</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
+        <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="light">Light</option><option value="dark">Dark</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
         <span class="advanced-only"><label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label></span>
         <button class="ghost advanced-only" onclick="load()">Refresh now</button>
         <button class="ghost" onclick="reloadPage()">Reload page</button>
@@ -304,15 +330,29 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
       localStorage.setItem('va_watchdog_theme', value);
     } catch (e) {}
     document.cookie = 'va_watchdog_theme=' + encodeURIComponent(value) + '; path=/; max-age=31536000; samesite=lax';
-    document.body.setAttribute('data-theme', value === 'dark' ? '' : value);
+    document.body.setAttribute('data-theme', value);
   };
+  var initialTheme = document.body.getAttribute('data-theme') || 'light';
+  var themeSelect = document.getElementById('theme-select');
+  if (themeSelect) themeSelect.value = initialTheme;
   hideAdvancedControls();
   window.vaWatchdogCompatibilityLoad();
 }());
 </script>
 <script type="module">
-const PAGES = ['Overview','Hardware','Watchdog','Services','Storage','Network','Recovery','Events','History','Settings','Updates','Diagnostics'];
-let currentPage = 'Overview';
+const PAGE_MODES = {
+  Operations: ['Overview', 'Events'],
+  Engineering: ['Hardware', 'Storage', 'Network', 'Services', 'Watchdog', 'History', 'Settings', 'Diagnostics'],
+  Recovery: ['Recovery', 'Updates'],
+};
+const MODE_LANDING = { Operations: 'Overview', Engineering: 'Hardware', Recovery: 'Recovery' };
+const PATH_PAGES = {
+  '/': 'Overview', '/hardware': 'Hardware', '/storage': 'Storage', '/network': 'Network',
+  '/services': 'Services', '/watchdog': 'Watchdog', '/events': 'Events', '/history': 'History',
+  '/settings': 'Settings', '/diagnostics': 'Diagnostics', '/recovery': 'Recovery', '/updates': 'Updates',
+};
+const PAGES = Object.keys(PAGE_MODES).reduce((pages, mode) => pages.concat(PAGE_MODES[mode]), []);
+let currentPage = PATH_PAGES[window.location.pathname] || 'Overview';
 let lastStatus = null;
 let lastUpdateStatus = null;
 let lastEvents = [];
@@ -386,7 +426,18 @@ function fmtTime(value){
 
 function buildNav(){
   const nav = document.getElementById('nav');
-  nav.innerHTML = PAGES.map(page => `<button class="${page === currentPage ? 'active' : ''}" onclick="showPage('${page}')">${escapeHtml(page)}</button>`).join('');
+  const currentMode = modeForPage(currentPage);
+  const modeTabs = Object.keys(PAGE_MODES).map(mode => `<a class="mode-tab ${mode === currentMode ? 'active' : ''}" href="${pathForPage(MODE_LANDING[mode])}">${escapeHtml(mode)}</a>`).join('');
+  const pageLinks = PAGE_MODES[currentMode].map(page => `<a class="${page === currentPage ? 'active' : ''}" href="${pathForPage(page)}">${escapeHtml(page)}</a>`).join('');
+  nav.innerHTML = `<div class="mode-switcher">${modeTabs}</div><div class="nav-section">${escapeHtml(currentMode)}</div>${pageLinks}`;
+}
+
+function modeForPage(page){
+  return Object.keys(PAGE_MODES).find(mode => PAGE_MODES[mode].includes(page)) || 'Operations';
+}
+
+function pathForPage(page){
+  return Object.keys(PATH_PAGES).find(path => PATH_PAGES[path] === page) || '/';
 }
 
 function setRefreshInterval(value){
@@ -418,7 +469,7 @@ function showAdvancedControls(){
   function setTheme(value){
     localStorage.setItem('va_watchdog_theme', value);
     document.cookie = 'va_watchdog_theme=' + encodeURIComponent(value) + '; path=/; max-age=31536000; samesite=lax';
-    document.body.dataset.theme = value === 'dark' ? '' : value;
+    document.body.dataset.theme = value;
   }
 
 function reloadPage(){
@@ -427,7 +478,7 @@ function reloadPage(){
 
 function initTheme(){
   const cookieMatch = document.cookie.match(/(?:^|; )va_watchdog_theme=([^;]+)/);
-  const saved = (cookieMatch ? decodeURIComponent(cookieMatch[1]) : '') || localStorage.getItem('va_watchdog_theme') || 'dark';
+  const saved = (cookieMatch ? decodeURIComponent(cookieMatch[1]) : '') || localStorage.getItem('va_watchdog_theme') || 'light';
   const select = document.getElementById('theme-select');
   select.value = saved;
   setTheme(saved);
@@ -435,6 +486,8 @@ function initTheme(){
 
 async function showPage(page){
   currentPage = page;
+  const title = document.getElementById('page-title');
+  if (title) title.textContent = `${modeForPage(page)} / ${page}`;
   buildNav();
   await load();
 }
@@ -522,28 +575,33 @@ function renderHistoryChart(rows, key='score'){
 
 function renderGatewaySummary(status){
   const state = displayState(status);
-  const recovery = status.recovery || {};
   const hasNonFeedCritical = (status.checks || []).some(c => c.state === 'critical');
-  const pill = status.critical_failed ? 'Critical issue blocking feed' : (hasNonFeedCritical ? 'Attention needed, feed safe' : 'No critical issues');
-  return `<div class="card summary-card"><div><div class="status-word ${state}">${displayWord(status)}</div><div class="score">${escapeHtml(status.score ?? '-')}%</div><span class="pill">${escapeHtml(pill)}</span></div><div><div class="label">Gateway Name</div><div class="value">POC-451VTC</div><div class="label">Branch</div><div class="value">${escapeHtml(lastUpdateStatus?.branch || 'codex/v3-gateway-ready')}</div><div class="label">Last Status</div><div class="value">${escapeHtml(status.time || '-')}</div></div><div><div class="label">Recovery Status</div><div class="value ${escapeHtml(recovery.state || 'unknown')}">${escapeHtml((recovery.state || 'unknown').toUpperCase())}</div><div class="label">Watchdog Feed</div><div class="value">${status.hardware_watchdog_feed?.enabled ? 'Enabled' : 'Disabled'}</div></div></div>`;
+  const warningCount = (status.checks || []).filter(c => c.state === 'warning' || c.state === 'unknown').length;
+  const pill = status.critical_failed ? 'Critical issue blocking feed' : (hasNonFeedCritical ? 'Attention needed, feed safe' : (warningCount ? `${warningCount} active warning${warningCount === 1 ? '' : 's'}` : 'No active alerts'));
+  const wdt = findCheck(status, 'hardware_watchdog_present');
+  const feed = status.hardware_watchdog_feed || {};
+  const protection = feed.enabled && feed.opened ? 'Active' : (wdt.value ? 'Detected, not active' : 'Not available');
+  const protectionState = feed.enabled && feed.opened ? 'healthy' : 'warning';
+  return `<div class="card summary-card"><div><div class="label">Gateway status</div><div class="status-word ${state}">${displayWord(status)}</div><div class="score">${escapeHtml(status.score ?? '-')}%</div><span class="pill ${state}">${escapeHtml(pill)}</span></div><div><div class="label">Gateway</div><div class="value">POC-451VTC</div><div class="label">Last check</div><div class="value">${escapeHtml(fmtTime(status.time))}</div><div class="label">Build</div><div class="build-badge">${escapeHtml(lastVersion.commit || '-')}</div></div><div><div class="label">Gateway monitor</div><div class="value healthy">ONLINE</div><div class="label">Hardware recovery</div><div class="value ${protectionState}">${escapeHtml(protection)}</div><div class="label">Branch</div><div class="value">${escapeHtml(lastVersion.branch || lastUpdateStatus?.branch || '-')}</div></div></div>`;
 }
 
 function pageHelp(page){
   const help = {
-    Overview: 'Shows the main health score, service summary, recent events, and history snapshot.',
-    Hardware: 'Shows sensors, disks, devices, and watchdog presence. This page is read-only and useful for discovery.',
-    Watchdog: 'Controls the hardware watchdog, safe double-knock test, and timeout extension.',
-    Services: 'Shows each monitored service and lets you restart them with confirmation.',
-    Storage: 'Shows watchdog data retention and purge tools.',
-    Network: 'Shows interfaces, targets, and remote-access placeholders.',
-    Recovery: 'Shows recovery settings and install/reconfigure actions.',
-    Events: 'Shows recent events with filters and export buttons.',
-    History: 'Shows health history and trend placeholders.',
-    Settings: 'Edits polling, thresholds, retention, network targets, updates, and recovery settings.',
-    Updates: 'Starts an update and shows the result and log tail.',
-    Diagnostics: 'Shows deep troubleshooting output and raw JSON for support work.',
+    Overview: ['Is this gateway ready to operate?', 'Shows live health, current alerts, the four Videosoft services, and the actions used most often.'],
+    Hardware: ['Is the hardware healthy?', 'Read-only sensor, CPU, memory, disk, and device discovery details.'],
+    Watchdog: ['Will the gateway recover itself?', 'Configure, verify, and test the hardware and process watchdog protection layers.'],
+    Services: ['Are the Videosoft services running?', 'Shows each monitored service and provides confirmed manual restart controls.'],
+    Storage: ['Will recordings continue?', 'Shows recording storage, mount health, capacity, permissions, retention, and setup tools.'],
+    Network: ['Can the gateway communicate?', 'Shows interfaces, routes, targets, sockets, and remote-access service status.'],
+    Recovery: ['How can this gateway be recovered?', 'Contains service repair, reinstall, reboot policy, and emergency support actions.'],
+    Events: ['What changed recently?', 'Review concise event summaries, expand technical detail, or export the event log.'],
+    History: ['Has gateway health changed over time?', 'Shows retained health trends and previous state samples.'],
+    Settings: ['What should the watchdog monitor?', 'Configure monitoring, display, storage, network, update, and recovery behavior.'],
+    Updates: ['Which build is running?', 'Starts a controlled update and shows the branch, commit, result, and log.'],
+    Diagnostics: ['What evidence is available?', 'Technical toolbox, raw status, black-box snapshots, and downloadable support bundle.'],
   };
-  return `<div class="card"><h2>What this page means</h2><p class="muted">${escapeHtml(help[page] || 'Page help unavailable.')}</p></div>`;
+  const content = help[page] || ['What does this page show?', 'Page help unavailable.'];
+  return `<div class="page-intro"><div><div class="page-kicker">${escapeHtml(modeForPage(page))}</div><h1>${escapeHtml(page)}</h1><div class="page-question">${escapeHtml(content[0])}</div></div><details class="help-popover"><summary title="Page help">?</summary><p>${escapeHtml(content[1])}</p></details></div>`;
 }
 
 function renderWatchdogPage(status){
@@ -640,13 +698,23 @@ function renderServices(status){
   return `<div class="card"><h2>Services</h2><p class="muted">Service CPU is process CPU from ps and can differ from the instant whole-system CPU tile, especially on multi-core systems.</p><table><thead><tr><th>Service</th><th>Status</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th></tr></thead><tbody>${serviceRows(status)}</tbody></table></div>`;
 }
 
+function renderOperationalAlerts(status){
+  const issues = (status.checks || []).filter(check => check.state !== 'healthy').slice(0, 6);
+  const rows = issues.length ? issues.map(check => `<div class="issue-row"><span class="pill ${statusClass(check.state)}">${escapeHtml(String(check.state || 'unknown').toUpperCase())}</span><div><div class="value">${escapeHtml(check.name || 'Unknown check')}</div><div class="muted">${escapeHtml(check.message || 'No detail')}</div></div></div>`).join('') : '<div class="issue-row"><span class="pill">CLEAR</span><div><div class="value">No active alerts</div><div class="muted">All current checks are healthy.</div></div></div>';
+  return `<div class="card"><h2>Active Alerts</h2><div class="issue-list">${rows}</div><div class="button-row"><a class="ghost" href="/events">Open event history</a></div></div>`;
+}
+
+function renderQuickActions(){
+  return `<div class="card"><h2>Quick Actions</h2><div class="quick-actions"><a class="action" href="/service-restart-confirm/bridge.service">Restart Bridge<span>Requires confirmation</span></a><a class="ghost" href="/events">Review Alerts<span>Recent state changes</span></a><a class="ghost" href="/api/diagnostics/support-bundle.zip">Support Bundle<span>Download investigation logs</span></a><a class="ghost" href="/recovery">Recovery Tools<span>Repair and update controls</span></a></div><details class="advanced-disclosure"><summary>Planned gateway controls</summary><p class="muted">Relay control, snapshots, and direct remote-session launch remain visible in the roadmap but are not connected in this build.</p></details></div>`;
+}
+
 function renderSystemInfo(status){
   const rtc = lastSystemInfo.rtc || {};
   return `<div class="card"><h2>System Information</h2><div class="detail-grid"><div><div class="label">Hostname</div><div class="value">${escapeHtml(lastSystemInfo.hostname || '-')}</div><div class="label">OS</div><div class="value">${escapeHtml(lastSystemInfo.os || '-')}</div><div class="label">Kernel</div><div class="value">${escapeHtml(lastSystemInfo.kernel || '-')}</div><div class="label">Architecture</div><div class="value">${escapeHtml(lastSystemInfo.architecture || '-')}</div><div class="label">Build</div><div class="value">${escapeHtml(lastVersion.branch || '-')} / ${escapeHtml(lastVersion.commit || '-')}</div></div><div><div class="label">Uptime</div><div class="value">${escapeHtml(lastSystemInfo.uptime_seconds ? `${Math.round(lastSystemInfo.uptime_seconds)}s` : '-')}</div><div class="label">Python</div><div class="value">${escapeHtml(lastSystemInfo.python || '-')}</div><div class="label">Timezone</div><div class="value">${escapeHtml((lastSystemInfo.timezone || []).join(' / ') || '-')}</div><div class="label">BIOS/RTC Clock</div><div class="value ${rtc.rtc0_present ? 'healthy' : 'warning'}">${rtc.rtc0_present ? 'RTC present' : 'RTC not confirmed'}</div><div class="label">Config</div><div class="value">${escapeHtml(lastVersion.config_path || '-')}</div></div></div><div class="label">Clock detail</div><pre>${escapeHtml(rtc.hwclock || rtc.timedatectl || 'Clock command output not available')}</pre></div>`;
 }
 
 function renderOverview(status, events){
-  return `${pageHelp('Overview')}<div class="grid top-grid">${renderGatewaySummary(status)}${renderBreakdown(status)}</div>${renderMetricTiles(status)}<div class="grid lower-grid">${renderServices(status)}<div class="card"><h2>Recent Events</h2><div class="events">${renderEvents(events, 8)}</div></div></div><div class="grid bottom-grid">${renderSystemInfo(status)}<div class="card"><h2>Health History</h2><div class="history-box">Health history placeholder</div></div></div>`;
+  return `${pageHelp('Overview')}<div class="grid overview-top">${renderGatewaySummary(status)}${renderBreakdown(status)}</div>${renderMetricTiles(status)}<div class="grid operations-grid">${renderOperationalAlerts(status)}${renderQuickActions()}</div>${renderServices(status)}`;
 }
 
 function renderSimplePage(title, content){
@@ -738,7 +806,7 @@ function renderPage(status, updateStatus, events){
   if (currentPage === 'Overview') return renderOverview(status, events);
   if (currentPage === 'Hardware') return `${pageHelp('Hardware')}${renderHardwarePage(grouped)}`;
   if (currentPage === 'Watchdog') return renderWatchdogPage(status);
-  if (currentPage === 'Services') return renderServices(status);
+  if (currentPage === 'Services') return `${pageHelp('Services')}${renderServices(status)}`;
   if (currentPage === 'Storage') return `${pageHelp('Storage')}${renderStoragePage(grouped)}`;
   if (currentPage === 'Network') return `${pageHelp('Network')}${renderNetworkPage()}`;
   if (currentPage === 'Recovery') return `${pageHelp('Recovery')}${renderSimplePage('Recovery', `<p class="${escapeHtml(status.recovery?.state || 'unknown')}">${escapeHtml((status.recovery?.state || 'unknown').toUpperCase())}</p><p>${escapeHtml(status.recovery?.message || 'No recovery state available.')}</p>${placeholderList(['Enable/disable recovery','Restart service policy','Reboot grace period','Install/configure hardware watchdog','Last reboot reason'])}`)}`;
@@ -818,7 +886,7 @@ function fetchWithTimeout(path, timeoutMs){
 
 function render(){
   if (!lastStatus) return;
-  document.getElementById('page-title').textContent = currentPage;
+  document.getElementById('page-title').textContent = `${modeForPage(currentPage)} / ${currentPage}`;
   document.getElementById('last-update').textContent = `Last update: ${fmtTime(lastStatus.time)}`;
   document.getElementById('side-state').textContent = displayWord(lastStatus);
   document.getElementById('side-state').className = `value ${displayState(lastStatus)}`;
@@ -871,7 +939,7 @@ async function exportEventsCsv(){
 
 function linesFromTextarea(id){
   return String(document.getElementById(id)?.value || '')
-    .split(/\r?\n/)
+    .split(/\\r?\\n/)
     .map(item => item.trim())
     .filter(Boolean);
 }
@@ -1022,53 +1090,70 @@ def start_web(cfg):
             "data_dir": str(data_dir),
         }
 
-    server_pages = [
-        ("Overview", "/"),
-        ("Hardware", "/hardware"),
-        ("Watchdog", "/watchdog"),
-        ("Services", "/services"),
-        ("Storage", "/storage"),
-        ("Network", "/network"),
-        ("Recovery", "/recovery"),
-        ("Events", "/events"),
-        ("History", "/history"),
-        ("Settings", "/settings"),
-        ("Updates", "/updates"),
-        ("Diagnostics", "/diagnostics"),
+    page_modes = [
+        ("Operations", [("Overview", "/"), ("Events", "/events")]),
+        ("Engineering", [
+            ("Hardware", "/hardware"),
+            ("Storage", "/storage"),
+            ("Network", "/network"),
+            ("Services", "/services"),
+            ("Watchdog", "/watchdog"),
+            ("History", "/history"),
+            ("Settings", "/settings"),
+            ("Diagnostics", "/diagnostics"),
+        ]),
+        ("Recovery", [("Recovery", "/recovery"), ("Updates", "/updates")]),
     ]
+    server_pages = [item for _, pages in page_modes for item in pages]
+    mode_landing = {"Operations": "/", "Engineering": "/hardware", "Recovery": "/recovery"}
 
     request_context = local()
 
     def current_theme_name():
-        theme = getattr(request_context, "theme", "dark") or "dark"
-        return theme if theme in {"dark", "light", "steel", "sand"} else "dark"
+        theme = getattr(request_context, "theme", "light") or "light"
+        return theme if theme in {"dark", "light", "steel", "sand"} else "light"
+
+    def mode_for_page(page):
+        for mode, pages in page_modes:
+            if any(name == page for name, _ in pages):
+                return mode
+        return "Operations"
 
     def page_shell(body, page):
         theme = current_theme_name()
-        theme_attr = "" if theme == "dark" else theme
+        build = version_info().get("commit") or "-"
         return (
             HTML.replace("__BASIC_DASHBOARD__", body)
             .replace("__SERVER_NAV__", server_nav_html(page))
             .replace("__PAGE_TITLE__", page)
-            .replace("__BODY_THEME__", theme_attr)
+            .replace("__PAGE_MODE__", mode_for_page(page))
+            .replace("__BUILD_ID__", escape(str(build)))
+            .replace("__BODY_THEME__", theme)
         )
 
     def page_help_html(page):
         help_map = {
-            "Overview": "Shows the current health score, live status, recent events, and history snapshot.",
-            "Hardware": "Shows sensors, disks, devices, and watchdog presence. This page is read-only and useful for discovery.",
-            "Watchdog": "Controls the hardware watchdog, safe double-knock test, and timeout extension.",
-            "Services": "Shows each monitored service and lets you restart them with confirmation.",
-            "Storage": "Shows watchdog data retention and purge tools.",
-            "Network": "Shows interfaces, targets, and remote-access placeholders.",
-            "Recovery": "Shows recovery settings and install/reconfigure actions.",
-            "Events": "Shows recent events with filters and export buttons.",
-            "History": "Shows health history and trend placeholders.",
-            "Settings": "Edits polling, thresholds, retention, network targets, updates, and recovery settings.",
-            "Updates": "Starts an update and shows the result and log tail.",
-            "Diagnostics": "Shows deep troubleshooting output and raw JSON for support work.",
+            "Overview": ("Is this gateway ready to operate?", "Shows live health, current alerts, the four Videosoft services, and the actions used most often."),
+            "Hardware": ("Is the hardware healthy?", "Read-only sensor, CPU, memory, disk, and device discovery details."),
+            "Watchdog": ("Will the gateway recover itself?", "Configure, verify, and test the hardware and process watchdog protection layers."),
+            "Services": ("Are the Videosoft services running?", "Shows each monitored service and provides confirmed manual restart controls."),
+            "Storage": ("Will recordings continue?", "Shows recording storage, mount health, capacity, permissions, retention, and setup tools."),
+            "Network": ("Can the gateway communicate?", "Shows interfaces, routes, targets, sockets, and remote-access service status."),
+            "Recovery": ("How can this gateway be recovered?", "Contains service repair, reinstall, reboot policy, and emergency support actions."),
+            "Events": ("What changed recently?", "Review concise event summaries, expand technical detail, or export the event log."),
+            "History": ("Has gateway health changed over time?", "Shows retained health trends and previous state samples."),
+            "Settings": ("What should the watchdog monitor?", "Configure monitoring, display, storage, network, update, and recovery behavior."),
+            "Updates": ("Which build is running?", "Starts a controlled update and shows the branch, commit, result, and log."),
+            "Diagnostics": ("What evidence is available?", "Technical toolbox, raw status, black-box snapshots, and downloadable support bundle."),
         }
-        return f"<div class=\"card\"><h2>What this page means</h2><p class=\"muted\">{escape(help_map.get(page, 'Page help unavailable.'))}</p></div>"
+        question, detail = help_map.get(page, ("What does this page show?", "Page help unavailable."))
+        return (
+            "<div class=\"page-intro\"><div>"
+            f"<div class=\"page-kicker\">{escape(mode_for_page(page))}</div>"
+            f"<h1>{escape(page)}</h1><div class=\"page-question\">{escape(question)}</div>"
+            "</div><details class=\"help-popover\"><summary title=\"Page help\">?</summary>"
+            f"<p>{escape(detail)}</p></details></div>"
+        )
 
     def page_name_for_path(route_path):
         if route_path in ("", "/"):
@@ -1080,8 +1165,14 @@ def start_web(cfg):
         return "Overview"
 
     def server_nav_html(current_page):
-        links = []
-        for name, path in server_pages:
+        current_mode = mode_for_page(current_page)
+        tabs = []
+        for mode, _ in page_modes:
+            active = "active" if mode == current_mode else ""
+            tabs.append(f"<a class=\"mode-tab {active}\" href=\"{escape(mode_landing[mode])}\">{escape(mode)}</a>")
+        links = [f"<div class=\"mode-switcher\">{''.join(tabs)}</div><div class=\"nav-section\">{escape(current_mode)}</div>"]
+        current_pages = next((pages for mode, pages in page_modes if mode == current_mode), [])
+        for name, path in current_pages:
             active = "active" if name == current_page else ""
             links.append(f"<a class=\"{active}\" href=\"{escape(path)}\">{escape(name)}</a>")
         return "".join(links)
@@ -1319,6 +1410,43 @@ def start_web(cfg):
                 "<p class=\"muted\">Configured services monitored by the watchdog. Restart actions are manual and require confirmation. Service CPU is process CPU from ps and can differ from the instant whole-system CPU tile, especially on multi-core systems.</p>"
                 "<table><thead><tr><th>Service</th><th>Active</th><th>Substate</th><th>Enabled</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th><th>Critical</th><th>Actions</th></tr></thead>"
                 f"<tbody>{''.join(rows)}</tbody></table></div>"
+            )
+
+        def operational_alerts_card():
+            issues = [check for check in checks if str(check.get("state", "unknown")) != "healthy"][:6]
+            rows = []
+            for check in issues:
+                item_state = str(check.get("state", "unknown"))
+                rows.append(
+                    "<div class=\"issue-row\">"
+                    f"<span class=\"pill {escape(item_state)}\">{escape(item_state.upper())}</span>"
+                    "<div>"
+                    f"<div class=\"value\">{escape(str(check.get('name', 'Unknown check')))}</div>"
+                    f"<div class=\"muted\">{escape(str(check.get('message', 'No detail')))}</div>"
+                    "</div></div>"
+                )
+            if not rows:
+                rows.append(
+                    "<div class=\"issue-row\"><span class=\"pill\">CLEAR</span>"
+                    "<div><div class=\"value\">No active alerts</div>"
+                    "<div class=\"muted\">All current checks are healthy.</div></div></div>"
+                )
+            return (
+                "<div class=\"card\"><h2>Active Alerts</h2>"
+                f"<div class=\"issue-list\">{''.join(rows)}</div>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/events\">Open event history</a></div></div>"
+            )
+
+        def quick_actions_card():
+            return (
+                "<div class=\"card\"><h2>Quick Actions</h2><div class=\"quick-actions\">"
+                "<a class=\"action\" href=\"/service-restart-confirm/bridge.service\">Restart Bridge<span>Requires confirmation</span></a>"
+                "<a class=\"ghost\" href=\"/events\">Review Alerts<span>Recent state changes</span></a>"
+                "<a class=\"ghost\" href=\"/api/diagnostics/support-bundle.zip\">Support Bundle<span>Download investigation logs</span></a>"
+                "<a class=\"ghost\" href=\"/recovery\">Recovery Tools<span>Repair and update controls</span></a>"
+                "</div><details class=\"advanced-disclosure\"><summary>Planned gateway controls</summary>"
+                "<p class=\"muted\">Relay control, snapshots, and direct remote-session launch remain in the roadmap but are not connected in this build.</p>"
+                "</details></div>"
             )
 
         def updates_card():
@@ -1964,26 +2092,36 @@ def start_web(cfg):
             issue_pill = "<span class=\"pill warning\">Warning</span>"
         else:
             issue_pill = "<span class=\"pill\">No critical issues</span>"
+        feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
+        if feed.get("enabled") and feed.get("opened"):
+            protection_text = "ACTIVE"
+            protection_state = "healthy"
+        elif check_value("hardware_watchdog_present", False):
+            protection_text = "DETECTED, NOT ACTIVE"
+            protection_state = "warning"
+        else:
+            protection_text = "NOT AVAILABLE"
+            protection_state = "warning"
         overview_html = (
-            "<div class=\"grid top-grid\">"
+            "<div class=\"grid overview-top\">"
             "<div class=\"card summary-card\">"
             "<div>"
+            "<div class=\"label\">Gateway status</div>"
             f"<div class=\"status-word {state}\">{word}</div>"
             f"<div class=\"score\">{escape(str(status.get('score', '-')))}%</div>"
             f"{issue_pill}"
             "</div>"
             "<div>"
             "<div class=\"label\">Gateway</div><div class=\"value\">POC-451VTC</div>"
-            f"<div class=\"label\">Last status</div><div class=\"value\">{escape(str(status.get('time', '-')))}</div>"
-            "<div class=\"label\">Current version</div>"
+            f"<div class=\"label\">Last check</div><div class=\"value\">{escape(local_time(status.get('time')))}</div>"
+            "<div class=\"label\">Build</div>"
             f"<div class=\"build-badge\">{escape(str(version.get('commit', '-')))}</div>"
             f"<div class=\"value\">{escape(str(version.get('branch', '-')))}</div>"
             "</div>"
             "<div>"
+            "<div class=\"label\">Gateway monitor</div><div class=\"value healthy\">ONLINE</div>"
+            f"<div class=\"label\">Hardware recovery</div><div class=\"value {protection_state}\">{protection_text}</div>"
             f"<div class=\"label\">Config</div><div class=\"value\">{escape(str(version.get('config_path', '-')))}</div>"
-            f"<div class=\"label\">Data</div><div class=\"value\">{escape(str(version.get('data_dir', '-')))}</div>"
-            "<button class=\"action\" onclick=\"window.location.reload()\">Refresh dashboard</button>"
-            "<form class=\"inline\" method=\"post\" action=\"/update-now\"><button class=\"ghost\" type=\"submit\">Update watchdog</button></form>"
             "</div>"
             f"{error_html}"
             "</div>"
@@ -1991,29 +2129,14 @@ def start_web(cfg):
             f"<div class=\"donut\" style=\"--score:{escape(str(status.get('score', 0)))}\"><span>{escape(str(status.get('score', '-')))}%</span></div>"
             "<div class=\"breakdown-row\"><span>Critical failed</span><strong>" + escape(str(critical).lower()) + "</strong></div>"
             "<div class=\"breakdown-row\"><span>Total checks</span><strong>" + escape(str(len(checks))) + "</strong></div>"
-            "<div class=\"breakdown-row\"><span>Mode</span><strong>Compatibility</strong></div>"
+            "<div class=\"breakdown-row\"><span>View</span><strong>Operations</strong></div>"
             "</div></div>"
             + metric_tiles()
-            + "<div class=\"grid lower-grid\">"
+            + "<div class=\"grid operations-grid\">"
+            + operational_alerts_card()
+            + quick_actions_card()
+            + "</div>"
             + services_card()
-            + f"<div class=\"card\"><h2>Recent Events</h2><div class=\"events\">{event_rows()}</div></div>"
-            "</div>"
-            "<div class=\"grid bottom-grid\">"
-            "<div class=\"card\"><h2>System Information</h2>"
-            f"<div class=\"label\">Repository</div><div class=\"value\">{escape(str(version.get('repo_root', '-')))}</div>"
-            f"<div class=\"label\">Remote</div><div class=\"value\">{escape(str(version.get('remote', '-')))}</div>"
-            "<div class=\"label\">Dashboard</div><div class=\"value\">Server-rendered compatibility appliance view</div>"
-            "</div>"
-            + updates_card()
-            + "</div>"
-            + "<div class=\"card\"><h2>Next Sections</h2>"
-            "<ul><li>Hardware deep probes</li><li>Settings service/path editor</li><li>Diagnostics support bundle</li></ul>"
-            "</div>"
-            + "<div class=\"card\"><h2>Health History</h2>"
-            + history_chart(read_history(cfg, limit=60), "score", 0, 100, "%")
-            + "<a class=\"ghost\" href=\"/history\">Open History</a>"
-            + "</div>"
-            + all_checks_table()
         )
 
         if page == "Overview":
@@ -4396,7 +4519,7 @@ def start_web(cfg):
                     value = value.strip()
                     if value in {"dark", "light", "steel", "sand"}:
                         return value
-            return "dark"
+            return "light"
 
         def do_GET(self):
             request_context.theme = self._request_theme()

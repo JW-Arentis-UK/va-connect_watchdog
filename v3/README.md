@@ -24,6 +24,7 @@ The web page now includes a watchdog update action that pulls the current branch
 Default monitored services:
 - esg.service
 - bridge.service
+- sysops.service
 - esg-config.service
 
 Install on target:

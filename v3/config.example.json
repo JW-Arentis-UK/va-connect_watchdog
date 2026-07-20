@@ -98,6 +98,11 @@
       "restart": true
     },
     {
+      "name": "sysops.service",
+      "critical": true,
+      "restart": true
+    },
+    {
       "name": "esg-config.service",
       "critical": false,
       "restart": true

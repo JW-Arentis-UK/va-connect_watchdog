@@ -46,6 +46,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "services": [
         {"name": "esg.service", "critical": True, "restart": True},
         {"name": "bridge.service", "critical": True, "restart": True},
+        {"name": "sysops.service", "critical": True, "restart": True},
         {"name": "esg-config.service", "critical": False, "restart": True}
     ],
     "storage": {
@@ -134,6 +135,22 @@ def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]
             out[key] = value
     return out
 
+def _migrate_default_videosoft_services(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Add sysops to the original three-service V3 baseline without changing custom lists."""
+    services = cfg.get("services", [])
+    if not isinstance(services, list):
+        return cfg
+    names = {
+        str(item.get("name", "")).strip()
+        for item in services
+        if isinstance(item, dict)
+    }
+    original_defaults = {"esg.service", "bridge.service", "esg-config.service"}
+    if original_defaults.issubset(names) and "sysops.service" not in names:
+        cfg = dict(cfg)
+        cfg["services"] = [*services, {"name": "sysops.service", "critical": True, "restart": True}]
+    return cfg
+
 def load_config() -> Dict[str, Any]:
     cfg = DEFAULT_CONFIG
     for path in CONFIG_PATHS:
@@ -141,7 +158,7 @@ def load_config() -> Dict[str, Any]:
             with path.open("r", encoding="utf-8") as f:
                 cfg = deep_merge(cfg, json.load(f))
             break
-    return cfg
+    return _migrate_default_videosoft_services(cfg)
 
 def active_config_path() -> Path:
     for path in CONFIG_PATHS:
