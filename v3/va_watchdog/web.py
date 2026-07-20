@@ -1624,17 +1624,22 @@ def start_web(cfg):
                 f"<label class=\"option-row\"><input name=\"allow_reboot\" type=\"checkbox\" {'checked' if recovery.get('allow_reboot') else ''}> Allow gateway reboot after a persistent critical failure</label>"
                 "<p class=\"warning\">Automatic reboot should remain disabled until recovery rules have been tested on the gateway.</p>"
             )
+            advanced_settings = (
+                "<div class=\"label\">Active config file</div>"
+                f"<div class=\"value\">{escape(str(active_config_path()))}</div>"
+                "<p class=\"muted\">The theme is saved by this browser and is changed from the page header.</p>"
+            )
             return (
                 software_update
                 + "<div class=\"card\"><h2>Gateway Settings</h2>"
                 "<p class=\"section-lead\">Settings are grouped by purpose. Saving creates a backup before the new configuration is applied.</p>"
                 "<form method=\"post\" action=\"/settings-save\">"
-                f"{disclosure('General and monitoring', general_settings, opened=True)}"
-                f"{disclosure('Storage alerts', storage_settings, opened=True)}"
-                f"{disclosure('Network and remote access', network_settings)}"
-                f"{disclosure('Recovery and updates', recovery_settings)}"
-                f"{disclosure('Advanced configuration', '<div class=\"label\">Active config file</div><div class=\"value\">' + escape(str(active_config_path())) + '</div><p class=\"muted\">The theme is saved by this browser and is changed from the page header.</p>')}"
-                "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Save settings</button><a class=\"ghost\" href=\"/settings\">Cancel</a></div>"
+                + disclosure("General and monitoring", general_settings, opened=True)
+                + disclosure("Storage alerts", storage_settings, opened=True)
+                + disclosure("Network and remote access", network_settings)
+                + disclosure("Recovery and updates", recovery_settings)
+                + disclosure("Advanced configuration", advanced_settings)
+                + "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Save settings</button><a class=\"ghost\" href=\"/settings\">Cancel</a></div>"
                 "</form>"
                 "</div>"
             )
