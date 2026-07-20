@@ -663,7 +663,8 @@ function renderSettingsPage(){
   const u = lastSettings.update || {};
   const h = lastSettings.hardware_watchdog || {};
   const rec = lastSettings.recovery || {};
-  return renderSimplePage('Settings', `<p>Edit common watchdog settings. A backup is made before saving to disk.</p><div class="detail-grid"><div class="mini-card"><h3>Polling and History</h3><label class="label">Poll interval seconds</label><input id="set-poll" type="number" min="2" max="300" value="${escapeHtml(lastSettings.poll_interval_seconds ?? 5)}"><label class="label">History sample seconds</label><input id="set-history-sample" type="number" min="10" max="3600" value="${escapeHtml(r.history_sample_seconds ?? 60)}"><label class="label">History retention days</label><input id="set-history-days" type="number" min="1" max="365" value="${escapeHtml(r.history_retention_days ?? 30)}"><label class="label">Max watchdog storage MB</label><input id="set-max-mb" type="number" min="10" max="4096" value="${escapeHtml(r.max_total_mb ?? 100)}"></div><div class="mini-card"><h3>Storage Thresholds</h3><label class="label">Root warn %</label><input id="set-root-warn" type="number" min="1" max="100" value="${escapeHtml(t.root_disk_warning_percent ?? 80)}"><label class="label">Root critical %</label><input id="set-root-critical" type="number" min="1" max="100" value="${escapeHtml(t.root_disk_critical_percent ?? 95)}"><label class="label">Recordings warn %</label><input id="set-rec-warn" type="number" min="1" max="100" value="${escapeHtml(t.recordings_disk_warning_percent ?? 85)}"><label class="label">Recordings critical %</label><input id="set-rec-critical" type="number" min="1" max="100" value="${escapeHtml(t.recordings_disk_critical_percent ?? 95)}"></div><div class="mini-card"><h3>Network</h3><label class="label">Internet hosts, one per line</label><textarea id="set-internet-hosts">${escapeHtml((n.internet_hosts || []).join('\\n'))}</textarea><label class="label">Local targets, one per line</label><textarea id="set-local-targets">${escapeHtml((n.local_targets || []).join('\\n'))}</textarea><label class="label">Remote access services, one per line</label><textarea id="set-remote-services">${escapeHtml((n.remote_access_services || []).join('\\n'))}</textarea></div><div class="mini-card"><h3>Updates and Recovery</h3><label class="label">Update remote</label><input id="set-update-remote" value="${escapeHtml(u.remote || 'origin')}"><label class="label">Update branch</label><input id="set-update-branch" value="${escapeHtml(u.branch || '')}" placeholder="blank = current branch"><label><input id="set-hw-enabled" type="checkbox" ${h.enabled ? 'checked' : ''}> Enable hardware watchdog feed</label><label><input id="set-recovery-enabled" type="checkbox" ${rec.enabled ? 'checked' : ''}> Enable recovery engine</label><label><input id="set-restart-services" type="checkbox" ${rec.restart_failed_services ? 'checked' : ''}> Restart failed critical services</label><label><input id="set-allow-reboot" type="checkbox" ${rec.allow_reboot ? 'checked' : ''}> Allow reboot on persistent critical failure</label></div></div><div class="button-row"><button class="action" onclick="saveSettings()">Save settings</button><button class="ghost" onclick="load()">Reload from service</button></div><p id="settings-feedback"></p><h3>Current config summary</h3><pre>${escapeHtml(JSON.stringify(lastSettings, null, 2))}</pre>${placeholderList(['Service list editor','Install/reconfigure watchdog from Recovery page','Full raw config editor with validation'])}`);
+  const rs = lastSettings.recording_storage || {};
+  return renderSimplePage('Settings', `<p>Edit common watchdog settings. A backup is made before saving to disk.</p><div class="detail-grid"><div class="mini-card"><h3>Polling and History</h3><label class="label">Poll interval seconds</label><input id="set-poll" type="number" min="2" max="300" value="${escapeHtml(lastSettings.poll_interval_seconds ?? 5)}"><label class="label">History sample seconds</label><input id="set-history-sample" type="number" min="10" max="3600" value="${escapeHtml(r.history_sample_seconds ?? 60)}"><label class="label">History retention days</label><input id="set-history-days" type="number" min="1" max="365" value="${escapeHtml(r.history_retention_days ?? 30)}"><label class="label">Max watchdog storage MB</label><input id="set-max-mb" type="number" min="10" max="4096" value="${escapeHtml(r.max_total_mb ?? 100)}"></div><div class="mini-card"><h3>Storage Thresholds</h3><label class="label">Root warn %</label><input id="set-root-warn" type="number" min="1" max="100" value="${escapeHtml(t.root_disk_warning_percent ?? 80)}"><label class="label">Root critical %</label><input id="set-root-critical" type="number" min="1" max="100" value="${escapeHtml(t.root_disk_critical_percent ?? 95)}"><label class="label">Recordings warn %</label><input id="set-rec-warn" type="number" min="1" max="100" value="${escapeHtml(t.recordings_disk_warning_percent ?? 85)}"><label class="label">Recordings critical %</label><input id="set-rec-critical" type="number" min="1" max="100" value="${escapeHtml(t.recordings_disk_critical_percent ?? 95)}"><label><input id="set-rs-expected-full" type="checkbox" ${rs.expected_full ? 'checked' : ''}> Recording storage is Videosoft managed / expected full</label><label class="label">Recording storage warn below free MB</label><input id="set-rs-min-free-warning" type="number" min="0" max="1048576" value="${escapeHtml(rs.minimum_free_mb_warning ?? '')}" placeholder="blank = disabled"><label class="label">Recording storage critical below free MB</label><input id="set-rs-min-free-critical" type="number" min="0" max="1048576" value="${escapeHtml(rs.minimum_free_mb_critical ?? '')}" placeholder="blank = disabled"><p class="muted">Use expected-full mode when Videosoft manages retention and high used percentage is normal.</p></div><div class="mini-card"><h3>Network</h3><label class="label">Internet hosts, one per line</label><textarea id="set-internet-hosts">${escapeHtml((n.internet_hosts || []).join('\\n'))}</textarea><label class="label">Local targets, one per line</label><textarea id="set-local-targets">${escapeHtml((n.local_targets || []).join('\\n'))}</textarea><label class="label">Remote access services, one per line</label><textarea id="set-remote-services">${escapeHtml((n.remote_access_services || []).join('\\n'))}</textarea></div><div class="mini-card"><h3>Updates and Recovery</h3><label class="label">Update remote</label><input id="set-update-remote" value="${escapeHtml(u.remote || 'origin')}"><label class="label">Update branch</label><input id="set-update-branch" value="${escapeHtml(u.branch || '')}" placeholder="blank = current branch"><label><input id="set-hw-enabled" type="checkbox" ${h.enabled ? 'checked' : ''}> Enable hardware watchdog feed</label><label><input id="set-recovery-enabled" type="checkbox" ${rec.enabled ? 'checked' : ''}> Enable recovery engine</label><label><input id="set-restart-services" type="checkbox" ${rec.restart_failed_services ? 'checked' : ''}> Restart failed critical services</label><label><input id="set-allow-reboot" type="checkbox" ${rec.allow_reboot ? 'checked' : ''}> Allow reboot on persistent critical failure</label></div></div><div class="button-row"><button class="action" onclick="saveSettings()">Save settings</button><button class="ghost" onclick="load()">Reload from service</button></div><p id="settings-feedback"></p><h3>Current config summary</h3><pre>${escapeHtml(JSON.stringify(lastSettings, null, 2))}</pre>${placeholderList(['Service list editor','Install/reconfigure watchdog from Recovery page','Full raw config editor with validation'])}`);
 }
 
 function renderRetentionPage(){
@@ -707,6 +708,8 @@ function renderStoragePage(grouped){
     ['Free space', rec.free_gb !== null && rec.free_gb !== undefined ? `${rec.free_gb} GB` : '-'],
     ['Used %', rec.used_percent !== null && rec.used_percent !== undefined ? `${rec.used_percent}%` : '-'],
     ['Used warn / critical', `${rec.used_warning_percent ?? '-'}% / ${rec.used_critical_percent ?? '-'}%`],
+    ['Expected full mode', rec.expected_full ? 'Enabled' : 'Disabled'],
+    ['Minimum free MB warn / critical', `${rec.minimum_free_mb_warning ?? '-'} / ${rec.minimum_free_mb_critical ?? '-'}`],
     ['Legacy free warning', rec.free_warning_enabled ? `${rec.free_warning_percent ?? '-'}% free` : 'Disabled'],
     ['Writable', rec.writable ? 'Yes' : 'No'],
     ['SMART', rec.smart_status || '-'],
@@ -876,6 +879,11 @@ function numberValue(id){
   return Number(document.getElementById(id)?.value);
 }
 
+function nullableNumberValue(id){
+  const raw = String(document.getElementById(id)?.value ?? '').trim();
+  return raw === '' ? null : Number(raw);
+}
+
 async function saveSettings(){
   const feedback = document.getElementById('settings-feedback');
   const allowReboot = !!document.getElementById('set-allow-reboot')?.checked;
@@ -906,6 +914,11 @@ async function saveSettings(){
     },
     hardware_watchdog: {
       enabled: !!document.getElementById('set-hw-enabled')?.checked,
+    },
+    recording_storage: {
+      expected_full: !!document.getElementById('set-rs-expected-full')?.checked,
+      minimum_free_mb_warning: nullableNumberValue('set-rs-min-free-warning'),
+      minimum_free_mb_critical: nullableNumberValue('set-rs-min-free-critical'),
     },
     recovery: {
       enabled: !!document.getElementById('set-recovery-enabled')?.checked,
@@ -1327,6 +1340,7 @@ def start_web(cfg):
             network = cfg.get("network", {})
             update = cfg.get("update", {})
             recovery = cfg.get("recovery", {})
+            rec_storage = cfg.get("recording_storage", {}) if isinstance(cfg.get("recording_storage", {}), dict) else {}
             return (
                 "<div class=\"card\"><h2>Settings</h2>"
                 f"<div class=\"label\">Config path</div><div class=\"value\">{escape(str(active_config_path()))}</div>"
@@ -1344,6 +1358,10 @@ def start_web(cfg):
                 f"<label class=\"label\">Root critical %</label><input name=\"root_disk_critical_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('root_disk_critical_percent', 95)))}\">"
                 f"<label class=\"label\">Recordings warn %</label><input name=\"recordings_disk_warning_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('recordings_disk_warning_percent', 85)))}\">"
                 f"<label class=\"label\">Recordings critical %</label><input name=\"recordings_disk_critical_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('recordings_disk_critical_percent', 95)))}\">"
+                f"<label><input name=\"recording_storage_expected_full\" type=\"checkbox\" {'checked' if rec_storage.get('expected_full') else ''}> Recording storage is Videosoft managed / expected full</label>"
+                f"<label class=\"label\">Recording storage warn below free MB</label><input name=\"recording_storage_minimum_free_mb_warning\" type=\"number\" min=\"0\" max=\"1048576\" value=\"{escape(str(rec_storage.get('minimum_free_mb_warning') or ''))}\" placeholder=\"blank = disabled\">"
+                f"<label class=\"label\">Recording storage critical below free MB</label><input name=\"recording_storage_minimum_free_mb_critical\" type=\"number\" min=\"0\" max=\"1048576\" value=\"{escape(str(rec_storage.get('minimum_free_mb_critical') or ''))}\" placeholder=\"blank = disabled\">"
+                "<p class=\"muted\">Use expected-full mode when Videosoft manages retention and high used percentage is normal.</p>"
                 "</div>"
                 "<div class=\"mini-card\"><h3>Network</h3>"
                 f"<label class=\"label\">Internet hosts, one per line</label><textarea name=\"internet_hosts\">{escape(chr(10).join(network.get('internet_hosts', [])))}</textarea>"
@@ -1644,6 +1662,8 @@ def start_web(cfg):
                 ("Free space", f"{recording.get('free_gb', '-')} GB"),
                 ("Used %", f"{recording.get('used_percent', '-')}%"),
                 ("Used warn / critical", f"{recording.get('used_warning_percent', '-')}% / {recording.get('used_critical_percent', '-')}%"),
+                ("Expected full mode", "Enabled" if recording.get("expected_full") else "Disabled"),
+                ("Minimum free MB warn / critical", f"{recording.get('minimum_free_mb_warning', '-')} / {recording.get('minimum_free_mb_critical', '-')}"),
                 ("Legacy free warning", f"{recording.get('free_warning_percent', '-')}% free" if recording.get("free_warning_enabled") else "Disabled"),
                 ("Writable", "Yes" if recording.get("writable") else "No"),
                 ("SMART", recording.get("smart_status", "-")),
@@ -2803,6 +2823,11 @@ def start_web(cfg):
             },
             "hardware_watchdog": {
                 "enabled": bool(cfg.get("hardware_watchdog", {}).get("enabled", False)),
+            },
+            "recording_storage": {
+                "expected_full": "recording_storage_expected_full" in form,
+                "minimum_free_mb_warning": first("recording_storage_minimum_free_mb_warning", ""),
+                "minimum_free_mb_critical": first("recording_storage_minimum_free_mb_critical", ""),
             },
             "recovery": {
                 "enabled": "recovery_enabled" in form,
@@ -4043,6 +4068,18 @@ def start_web(cfg):
             raise ValueError(f"{name} must be between {minimum} and {maximum}")
         return value
 
+    def _nullable_float_range(payload, name, minimum, maximum):
+        value = payload.get(name)
+        if value in (None, ""):
+            return None
+        try:
+            number = float(value)
+        except Exception as exc:
+            raise ValueError(f"{name} must be a number or blank") from exc
+        if number < minimum or number > maximum:
+            raise ValueError(f"{name} must be between {minimum} and {maximum}")
+        return number
+
     def _string_list(value, name):
         if not isinstance(value, list):
             raise ValueError(f"{name} must be a list")
@@ -4061,6 +4098,7 @@ def start_web(cfg):
         network = payload.get("network", {})
         update = payload.get("update", {})
         hardware = payload.get("hardware_watchdog", {})
+        recording_storage = payload.get("recording_storage", {})
         recovery = payload.get("recovery", {})
 
         updates = {
@@ -4088,6 +4126,11 @@ def start_web(cfg):
             "hardware_watchdog": {
                 "enabled": bool(hardware.get("enabled", False)),
             },
+            "recording_storage": {
+                "expected_full": bool(recording_storage.get("expected_full", False)),
+                "minimum_free_mb_warning": _nullable_float_range(recording_storage, "minimum_free_mb_warning", 0, 1048576),
+                "minimum_free_mb_critical": _nullable_float_range(recording_storage, "minimum_free_mb_critical", 0, 1048576),
+            },
             "recovery": {
                 "enabled": bool(recovery.get("enabled", False)),
                 "restart_failed_services": bool(recovery.get("restart_failed_services", False)),
@@ -4098,6 +4141,10 @@ def start_web(cfg):
             raise ValueError("root disk warning must be lower than critical")
         if updates["thresholds"]["recordings_disk_warning_percent"] >= updates["thresholds"]["recordings_disk_critical_percent"]:
             raise ValueError("recordings disk warning must be lower than critical")
+        rs_warning = updates["recording_storage"]["minimum_free_mb_warning"]
+        rs_critical = updates["recording_storage"]["minimum_free_mb_critical"]
+        if rs_warning is not None and rs_critical is not None and rs_warning <= rs_critical:
+            raise ValueError("recording storage warning free MB must be higher than critical free MB")
 
         raw = load_raw_config()
         merged_raw = deep_merge(raw, updates)
@@ -4170,6 +4217,10 @@ def start_web(cfg):
             "recording_storage_mounted",
             "recording_storage_writable",
             "recording_storage_used_percent",
+            "recording_storage_free_mb",
+            "recording_storage_expected_full",
+            "recording_storage_minimum_free_mb_warning",
+            "recording_storage_minimum_free_mb_critical",
         ]
         lines = [",".join(columns)]
         for row in rows:

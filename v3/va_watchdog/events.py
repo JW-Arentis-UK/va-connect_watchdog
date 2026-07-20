@@ -65,7 +65,9 @@ class EventLog:
         elif str(status.get("message") or "").lower() in {
             "recording storage low space",
             "recording storage low free space",
+            "recording storage low free mb",
             "recording storage critically full",
+            "recording storage below minimum free mb",
         }:
             message = status.get("message")
             level = status.get("status", "warning")

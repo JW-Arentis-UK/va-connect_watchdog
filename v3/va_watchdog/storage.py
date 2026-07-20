@@ -24,6 +24,9 @@ DEFAULT_RECORDING_STORAGE = {
     "minimum_candidate_gb": 10,
     "used_warning_percent": None,
     "used_critical_percent": None,
+    "expected_full": False,
+    "minimum_free_mb_warning": None,
+    "minimum_free_mb_critical": None,
     "free_warning_percent": None,
     "free_warning_enabled": False,
     "temperature_warning_c": 55,
@@ -275,12 +278,13 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
     option_set = {item.strip() for item in options.split(",") if item.strip()}
     read_only = mounted and "ro" in option_set
     writable = bool(mounted and not read_only and _recording_writable(mountpoint))
-    total_gb = free_gb = used_percent = free_percent = None
+    total_gb = free_gb = free_mb = used_percent = free_percent = None
     if mounted:
         try:
             total, used, free = shutil.disk_usage(mountpoint)
             total_gb = round(total / 1024 / 1024 / 1024, 1)
             free_gb = round(free / 1024 / 1024 / 1024, 1)
+            free_mb = round(free / 1024 / 1024, 1)
             used_percent = round((used / max(1, total)) * 100, 1)
             free_percent = round((free / max(1, total)) * 100, 1)
         except Exception:
@@ -291,6 +295,11 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
     thresholds = cfg.get("thresholds", {}) if isinstance(cfg.get("thresholds", {}), dict) else {}
     used_warning_percent = float(rec_cfg.get("used_warning_percent") or thresholds.get("recordings_disk_warning_percent", 90) or 90)
     used_critical_percent = float(rec_cfg.get("used_critical_percent") or thresholds.get("recordings_disk_critical_percent", 99) or 99)
+    expected_full = bool(rec_cfg.get("expected_full", False))
+    min_free_warning_raw = rec_cfg.get("minimum_free_mb_warning")
+    min_free_critical_raw = rec_cfg.get("minimum_free_mb_critical")
+    minimum_free_mb_warning = float(min_free_warning_raw) if min_free_warning_raw not in (None, "") else None
+    minimum_free_mb_critical = float(min_free_critical_raw) if min_free_critical_raw not in (None, "") else None
     free_warning_enabled = bool(rec_cfg.get("free_warning_enabled", False))
     free_warning_raw = rec_cfg.get("free_warning_percent")
     free_warning_percent = float(free_warning_raw) if free_warning_enabled and free_warning_raw not in (None, "") else None
@@ -319,10 +328,16 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
     elif smart_status == "FAILED":
         status = "critical"
         message = "Recording storage SMART failure"
-    elif used_percent is not None and used_percent >= used_critical_percent:
+    elif minimum_free_mb_critical is not None and free_mb is not None and free_mb < minimum_free_mb_critical:
+        status = "critical"
+        message = "Recording storage below minimum free MB"
+    elif not expected_full and used_percent is not None and used_percent >= used_critical_percent:
         status = "critical"
         message = "Recording storage critically full"
-    elif used_percent is not None and used_percent >= used_warning_percent:
+    elif minimum_free_mb_warning is not None and free_mb is not None and free_mb < minimum_free_mb_warning:
+        status = "warning"
+        message = "Recording storage low free MB"
+    elif not expected_full and used_percent is not None and used_percent >= used_warning_percent:
         status = "warning"
         message = "Recording storage low space"
     elif free_warning_percent is not None and free_percent is not None and free_percent < free_warning_percent:
@@ -349,10 +364,14 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
         "read_only": read_only,
         "total_gb": total_gb,
         "free_gb": free_gb,
+        "free_mb": free_mb,
         "used_percent": used_percent,
         "free_percent": free_percent,
         "used_warning_percent": used_warning_percent,
         "used_critical_percent": used_critical_percent,
+        "expected_full": expected_full,
+        "minimum_free_mb_warning": minimum_free_mb_warning,
+        "minimum_free_mb_critical": minimum_free_mb_critical,
         "free_warning_percent": free_warning_percent,
         "free_warning_enabled": free_warning_enabled,
         "smart_status": smart_status,

@@ -55,6 +55,10 @@ def append_history(cfg: dict[str, Any], status: dict[str, Any]) -> None:
         "recording_storage_mounted": recording_storage.get("mounted"),
         "recording_storage_writable": recording_storage.get("writable"),
         "recording_storage_used_percent": recording_storage.get("used_percent"),
+        "recording_storage_free_mb": recording_storage.get("free_mb"),
+        "recording_storage_expected_full": recording_storage.get("expected_full"),
+        "recording_storage_minimum_free_mb_warning": recording_storage.get("minimum_free_mb_warning"),
+        "recording_storage_minimum_free_mb_critical": recording_storage.get("minimum_free_mb_critical"),
     }
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, separators=(",", ":")) + "\n")
