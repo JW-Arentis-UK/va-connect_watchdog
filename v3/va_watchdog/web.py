@@ -1554,7 +1554,7 @@ def start_web(cfg):
                 + "<div class=\"card\"><h2>Controlled Update</h2>"
                 "<p class=\"section-lead\">Updates pull the configured Git branch and restart this watchdog service. Videosoft services are not deliberately restarted by this action.</p>"
                 f"<p class=\"{escape(update_state)}\">{escape(str(update_status.get('message', 'No update has been started.')))}</p>"
-                "<form class=\"inline\" method=\"post\" action=\"/update-now\"><button class=\"action\" type=\"submit\">Update watchdog now</button></form>"
+                "<a class=\"action\" href=\"/update-confirm\">Update watchdog now</a>"
                 "<p class=\"muted\">After starting, the result page returns to Operations automatically. Reopen Updates to confirm the new build and log result.</p>"
                 "</div>"
                 + disclosure("Update log", log_detail)
@@ -1571,6 +1571,21 @@ def start_web(cfg):
             update = cfg.get("update", {})
             recovery = cfg.get("recovery", {})
             rec_storage = cfg.get("recording_storage", {}) if isinstance(cfg.get("recording_storage", {}), dict) else {}
+            current = version_info()
+            update_state = str(update_status.get("state", "idle"))
+            update_target = update.get("branch") or current.get("branch", "-")
+            software_update = (
+                summary_strip([
+                    ("Running build", current.get("commit", "-"), current.get("branch", "-"), "healthy"),
+                    ("Update target", update_target, f"Remote {update.get('remote', 'origin')}", "healthy"),
+                    ("Last update", update_state.upper(), local_time(update_status.get("updated_at")), "healthy" if update_state in {"idle", "complete", "completed", "success"} else "warning"),
+                ])
+                + "<div class=\"card\"><h2>Software Update</h2>"
+                "<p>Update VA-Connect Watchdog from the configured Git branch and restart only the watchdog service.</p>"
+                "<p class=\"warning\">Check the target branch above before continuing. Save any branch change below before starting the update.</p>"
+                "<div class=\"button-row\"><a class=\"action\" href=\"/update-confirm\">Update watchdog</a>"
+                "<a class=\"ghost\" href=\"/updates\">View update details and log</a></div></div>"
+            )
             general_settings = (
                 "<div class=\"settings-grid\">"
                 f"<div><label class=\"label\">Health check interval</label><input name=\"poll_interval_seconds\" type=\"number\" min=\"2\" max=\"300\" value=\"{escape(str(cfg.get('poll_interval_seconds', 5)))}\"><p class=\"muted\">Seconds between live gateway checks.</p></div>"
@@ -1610,7 +1625,8 @@ def start_web(cfg):
                 "<p class=\"warning\">Automatic reboot should remain disabled until recovery rules have been tested on the gateway.</p>"
             )
             return (
-                "<div class=\"card\"><h2>Gateway Settings</h2>"
+                software_update
+                + "<div class=\"card\"><h2>Gateway Settings</h2>"
                 "<p class=\"section-lead\">Settings are grouped by purpose. Saving creates a backup before the new configuration is applied.</p>"
                 "<form method=\"post\" action=\"/settings-save\">"
                 f"{disclosure('General and monitoring', general_settings, opened=True)}"
@@ -2353,6 +2369,25 @@ def start_web(cfg):
                 "</div>"
             )
         return page_shell(body, page)
+
+    def update_confirm_html():
+        current = version_info()
+        update_cfg = cfg.get("update", {}) if isinstance(cfg.get("update", {}), dict) else {}
+        current_status = load_update_status(cfg)
+        target_branch = update_cfg.get("branch") or current.get("branch", "-")
+        body = (
+            "<div class=\"card action-panel\"><h2>Confirm Watchdog Update</h2>"
+            "<p class=\"warning\">The watchdog web page will be briefly unavailable while the update completes and the service restarts.</p>"
+            "<p>This updates VA-Connect Watchdog only. It does not deliberately restart the four Videosoft services.</p>"
+            f"<div class=\"label\">Running build</div><div class=\"build-badge\">{escape(str(current.get('commit', '-')))}</div>"
+            f"<div class=\"label\">Current branch</div><div class=\"value\">{escape(str(current.get('branch', '-')))}</div>"
+            f"<div class=\"label\">Update target</div><div class=\"value\">{escape(str(update_cfg.get('remote', 'origin')))}/{escape(str(target_branch))}</div>"
+            f"<div class=\"label\">Previous update state</div><div class=\"value\">{escape(str(current_status.get('state', 'idle')).upper())} - {escape(str(current_status.get('message', 'No previous result.')))}</div>"
+            "<div class=\"button-row\"><form class=\"inline\" method=\"post\" action=\"/update-now\"><button class=\"action\" type=\"submit\">Confirm update</button></form>"
+            "<a class=\"ghost\" href=\"/settings\">Cancel</a><a class=\"ghost\" href=\"/updates\">View update log</a></div>"
+            "</div>"
+        )
+        return page_shell(body, "Settings")
 
     def update_started_html(result):
         status_class = "healthy" if result.get("ok") else "critical"
@@ -4700,6 +4735,15 @@ def start_web(cfg):
             server_paths = {path for _, path in server_pages}
             if route_path in server_paths or route_path.startswith("/index") or route_path.startswith("/basic"):
                 body = html_page(route_path).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/update-confirm":
+                body = update_confirm_html().encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
