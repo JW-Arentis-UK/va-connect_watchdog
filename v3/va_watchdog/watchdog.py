@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 import traceback
 
+from .blackbox import check_unexpected_boot, maybe_capture_blackbox
 from .config import load_config
 from .common import CheckResult, score_from_checks, worst_state
 from .events import EventLog
@@ -118,6 +119,7 @@ def main():
     event_log = EventLog(cfg["events_path"])
     recovery = RecoveryEngine(cfg, event_log)
     last_trip_active = False
+    boot_change = check_unexpected_boot(cfg, event_log)
 
     hw = HardwareWatchdog(
         enabled=cfg["hardware_watchdog"]["enabled"],
@@ -142,6 +144,7 @@ def main():
     }
     add_hardware_feed_check(status, cfg)
     status["recovery"] = recovery.summary()
+    status["boot_change"] = boot_change
     event_log.add(
         "info",
         "watchdog",
@@ -150,6 +153,7 @@ def main():
     )
     atomic_write_json(cfg["status_path"], status)
     append_history(cfg, status)
+    maybe_capture_blackbox(cfg, status, force=True)
     start_web(cfg)
     systemd_notify("READY=1\nSTATUS=VA-Connect Watchdog V3 running")
 
@@ -182,6 +186,7 @@ def main():
             }
             add_hardware_feed_check(status, cfg)
             status["recovery"] = recovery.summary()
+            status["blackbox"] = maybe_capture_blackbox(cfg, status)
             atomic_write_json(cfg["status_path"], status)
             append_history(cfg, status)
             retention_result = enforce_retention(cfg)

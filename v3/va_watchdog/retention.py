@@ -24,6 +24,8 @@ def data_files(cfg: dict[str, Any]) -> list[Path]:
         base / "itco-watchdog-setup.log",
         base / "watchdog-hardware-probe.log",
         base / "history.jsonl",
+        base / "blackbox.jsonl",
+        base / "blackbox-state.json",
     ]
     custom_history = history_path(cfg)
     if custom_history not in files:

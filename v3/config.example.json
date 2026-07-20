@@ -4,6 +4,15 @@
   "events_path": "/var/lib/va-watchdog/events.jsonl",
   "history_path": "/var/lib/va-watchdog/history.jsonl",
   "last_reboot_reason_path": "/var/lib/va-watchdog/last-reboot-reason.json",
+  "blackbox": {
+    "enabled": true,
+    "path": "/var/lib/va-watchdog/blackbox.jsonl",
+    "state_path": "/var/lib/va-watchdog/blackbox-state.json",
+    "sample_seconds": 60,
+    "max_rows": 300,
+    "top_process_count": 8,
+    "journal_lines": 30
+  },
   "web": {
     "enabled": true,
     "host": "0.0.0.0",

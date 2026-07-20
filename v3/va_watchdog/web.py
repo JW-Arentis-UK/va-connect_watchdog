@@ -17,6 +17,7 @@ from pathlib import Path
 from threading import Thread, local
 from urllib.parse import parse_qs, quote, unquote
 
+from .blackbox import blackbox_summary, read_blackbox
 from .config import active_config_path, deep_merge, load_raw_config, save_raw_config
 from .history import history_path, read_history
 from .retention import purge_data as retention_purge_data
@@ -636,7 +637,7 @@ function renderMetricTiles(status){
 }
 
 function renderServices(status){
-  return `<div class="card"><h2>Services</h2><table><thead><tr><th>Service</th><th>Status</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th></tr></thead><tbody>${serviceRows(status)}</tbody></table></div>`;
+  return `<div class="card"><h2>Services</h2><p class="muted">Service CPU is process CPU from ps and can differ from the instant whole-system CPU tile, especially on multi-core systems.</p><table><thead><tr><th>Service</th><th>Status</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th></tr></thead><tbody>${serviceRows(status)}</tbody></table></div>`;
 }
 
 function renderSystemInfo(status){
@@ -1315,7 +1316,7 @@ def start_web(cfg):
                 rows.append("<tr><td colspan=\"10\">No configured services found.</td></tr>")
             return (
                 "<div class=\"card\"><h2>Services</h2>"
-                "<p class=\"muted\">Configured services monitored by the watchdog. Restart actions are manual and require confirmation.</p>"
+                "<p class=\"muted\">Configured services monitored by the watchdog. Restart actions are manual and require confirmation. Service CPU is process CPU from ps and can differ from the instant whole-system CPU tile, especially on multi-core systems.</p>"
                 "<table><thead><tr><th>Service</th><th>Active</th><th>Substate</th><th>Enabled</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th><th>Critical</th><th>Actions</th></tr></thead>"
                 f"<tbody>{''.join(rows)}</tbody></table></div>"
             )
@@ -1934,15 +1935,17 @@ def start_web(cfg):
         def diagnostics_page():
             service_status = _run(["systemctl", "is-active", "va-watchdog"], timeout=3)
             service_enabled = _run(["systemctl", "is-enabled", "va-watchdog"], timeout=3)
+            bb = blackbox_summary(cfg)
             return (
                 "<div class=\"grid lower-grid\">"
                 "<div class=\"card\"><h2>Diagnostics</h2>"
                 "<p class=\"muted\">Download a support bundle when a unit locks up or needs remote investigation. It includes watchdog status, recent events/history, journals, service status, reboot history, storage, network, and hardware watchdog context.</p>"
-                "<div class=\"button-row\"><a class=\"action\" href=\"/api/diagnostics/support-bundle.zip\">Download support bundle</a><a class=\"ghost\" href=\"/api/diagnostics\">View diagnostics JSON</a></div>"
+                "<div class=\"button-row\"><a class=\"action\" href=\"/api/diagnostics/support-bundle.zip\">Download support bundle</a><a class=\"ghost\" href=\"/api/diagnostics\">View diagnostics JSON</a><a class=\"ghost\" href=\"/api/blackbox\">View black-box JSON</a></div>"
                 f"<div class=\"label\">Service active</div><div class=\"value {escape(str(service_status.get('stdout', 'unknown')))}\">{escape(str(service_status.get('stdout') or service_status.get('stderr') or 'unknown'))}</div>"
                 f"<div class=\"label\">Service enabled</div><div class=\"value\">{escape(str(service_enabled.get('stdout') or service_enabled.get('stderr') or 'unknown'))}</div>"
                 f"<div class=\"label\">Status path</div><div class=\"value\">{escape(str(status_path))}</div>"
                 f"<div class=\"label\">Events path</div><div class=\"value\">{escape(str(events_path))}</div>"
+                f"<div class=\"label\">Black-box recorder</div><div class=\"value\">{'Enabled' if bb.get('enabled') else 'Disabled'}; {escape(str(bb.get('rows', 0)))} snapshots; last {escape(str(bb.get('last_time') or '-'))}</div>"
                 "</div>"
                 "<div class=\"card\"><h2>Useful Commands</h2>"
                 "<pre>systemctl status va-watchdog\njournalctl -u va-watchdog -n 80 --no-pager\nwget -qO- http://127.0.0.1:9110/api/healthz\nwget -qO- http://127.0.0.1:9110/api/version</pre>"
@@ -4253,6 +4256,7 @@ def start_web(cfg):
             "service_status": service_status["stdout"] or service_status["stderr"],
             "journal_tail": journal["stdout"] or journal["stderr"],
             "install_status": install,
+            "blackbox": blackbox_summary(cfg),
             "generated_at_unix": time.time(),
         }
 
@@ -4287,6 +4291,7 @@ def start_web(cfg):
             "status.json": status_path,
             "events.jsonl": events_path,
             "history.jsonl": history_path(cfg),
+            "blackbox.jsonl": Path(blackbox_summary(cfg)["path"]),
             "update-state.json": data_dir / "update-state.json",
             "update.log": Path(cfg.get("update", {}).get("log_path") or data_dir / "update.log"),
             "last-reboot-reason.json": Path(cfg.get("last_reboot_reason_path") or data_dir / "last-reboot-reason.json"),
@@ -4308,6 +4313,8 @@ def start_web(cfg):
             archive.writestr("hardware-info.json", json.dumps(hardware_info(), indent=2))
             archive.writestr("network-info.json", json.dumps(network_info(), indent=2))
             archive.writestr("services-info.json", json.dumps(service_info(), indent=2))
+            archive.writestr("blackbox-summary.json", json.dumps(blackbox_summary(cfg), indent=2))
+            archive.writestr("blackbox-last-100.json", json.dumps(read_blackbox(cfg, limit=100), indent=2))
             archive.writestr("history-export.csv", history_csv(limit=5000))
             archive.writestr("events-export.csv", events_csv(limit=1000))
             for name, result in command_outputs.items():
@@ -4571,6 +4578,9 @@ def start_web(cfg):
                 return
             if route_path == "/api/diagnostics":
                 self._send_json(diagnostics_summary())
+                return
+            if route_path == "/api/blackbox":
+                self._send_json({"summary": blackbox_summary(cfg), "snapshots": read_blackbox(cfg, limit=100)})
                 return
             if route_path == "/api/diagnostics/support-bundle.zip":
                 try:
