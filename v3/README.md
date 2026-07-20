@@ -1,4 +1,4 @@
-# VA-Connect Watchdog V3
+# VA-Connect Watchdog
 
 Health Engine prototype for Ubuntu gateways.
 

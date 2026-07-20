@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-echo "VA-Connect Watchdog V3 - automatic Intel TCO hardware watchdog prepare"
+echo "VA-Connect Watchdog - automatic Intel TCO hardware watchdog prepare"
 echo "Started: $(date -Is)"
 echo
 echo "This performs the recommended POC-451VTC setup:"

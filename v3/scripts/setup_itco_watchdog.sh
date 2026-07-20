@@ -3,7 +3,7 @@ set -euo pipefail
 
 MODULE_CONF="/etc/modules-load.d/iTCO_wdt.conf"
 
-echo "VA-Connect Watchdog V3 - Intel TCO hardware watchdog setup"
+echo "VA-Connect Watchdog - Intel TCO hardware watchdog setup"
 echo
 echo "This script loads the Intel TCO watchdog driver for POC-451VTC style gateways."
 echo "It does not enable VA-Connect hardware feeding in /etc/va-watchdog/config.json."

@@ -1,5 +1,5 @@
 [Unit]
-Description=VA-Connect Watchdog V3
+Description=VA-Connect Watchdog
 After=network-online.target
 Wants=network-online.target
 

@@ -17,6 +17,6 @@ sudo systemctl daemon-reload
 sudo systemctl enable va-watchdog.service
 sudo systemctl restart va-watchdog.service
 
-echo "Installed VA-Connect Watchdog V3"
+echo "Installed VA-Connect Watchdog"
 echo "Status: sudo systemctl status va-watchdog"
 echo "Web: http://<gateway-ip>:9110/"

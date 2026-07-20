@@ -68,7 +68,7 @@ def add_hardware_feed_check(status, cfg):
         check = CheckResult(
             "hardware_watchdog_feed_status",
             "warning",
-            f"Hardware watchdog present but V3 feed is disabled for {device}",
+            f"Hardware watchdog present but watchdog feed is disabled for {device}",
             feed,
             False,
         )
@@ -76,7 +76,7 @@ def add_hardware_feed_check(status, cfg):
         check = CheckResult(
             "hardware_watchdog_feed_status",
             "warning",
-            f"V3 feed enabled but {device} is not opened",
+            f"Watchdog feed enabled but {device} is not opened",
             feed,
             False,
         )
@@ -84,7 +84,7 @@ def add_hardware_feed_check(status, cfg):
         check = CheckResult(
             "hardware_watchdog_feed_status",
             "warning",
-            "V3 opened the watchdog, but no feed has been recorded yet",
+            "The watchdog service opened the device, but no feed has been recorded yet",
             feed,
             False,
         )
@@ -100,7 +100,7 @@ def add_hardware_feed_check(status, cfg):
         check = CheckResult(
             "hardware_watchdog_feed_status",
             "healthy",
-            f"V3 is feeding the hardware watchdog ({int(age)}s ago)",
+            f"The watchdog service is feeding the hardware watchdog ({int(age)}s ago)",
             feed,
             False,
         )
@@ -129,7 +129,7 @@ def main():
         timeout_seconds=cfg["hardware_watchdog"].get("timeout_seconds", 30),
     )
 
-    event_log.add("info", "watchdog", "VA-Connect Watchdog V3 starting")
+    event_log.add("info", "watchdog", "VA-Connect Watchdog starting")
     hw.open()
 
     status, checks = collect_health(cfg)
@@ -155,7 +155,7 @@ def main():
     append_history(cfg, status)
     maybe_capture_blackbox(cfg, status, force=True)
     start_web(cfg)
-    systemd_notify("READY=1\nSTATUS=VA-Connect Watchdog V3 running")
+    systemd_notify("READY=1\nSTATUS=VA-Connect Watchdog running")
 
     while True:
         try:
@@ -192,11 +192,11 @@ def main():
             retention_result = enforce_retention(cfg)
             if retention_result.get("actions"):
                 event_log.add("warning", "retention", "Watchdog data retention purge completed", retention_result)
-            systemd_notify("WATCHDOG=1\nSTATUS=VA-Connect Watchdog V3 healthy loop")
+            systemd_notify("WATCHDOG=1\nSTATUS=VA-Connect Watchdog healthy loop")
             last_trip_active = trip_active
         except Exception as e:
             event_log.add("critical", "watchdog", f"Main loop error: {e}")
-            systemd_notify(f"STATUS=VA-Connect Watchdog V3 loop error: {e}")
+            systemd_notify(f"STATUS=VA-Connect Watchdog loop error: {e}")
         time.sleep(int(cfg["poll_interval_seconds"]))
 
 if __name__ == "__main__":
