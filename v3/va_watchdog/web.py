@@ -387,7 +387,7 @@ const PATH_PAGES = {
   '/settings': 'Settings', '/diagnostics': 'Diagnostics', '/recovery': 'Recovery', '/updates': 'Updates',
 };
 const PAGES = Object.keys(PAGE_MODES).reduce((pages, mode) => pages.concat(PAGE_MODES[mode]), []);
-let currentPage = PATH_PAGES[window.location.pathname] || 'Overview';
+let currentPage = PATH_PAGES[window.location.pathname] || '__PAGE_TITLE__';
 let lastStatus = null;
 let lastUpdateStatus = null;
 let lastEvents = [];
