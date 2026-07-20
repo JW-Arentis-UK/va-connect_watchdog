@@ -78,6 +78,11 @@ Only enable feeding after `/dev/watchdog0` exists and `wdctl /dev/watchdog0` rep
 "hardware_watchdog": {
   "enabled": true,
   "device": "/dev/watchdog0",
-  "feed_interval_seconds": 10
+  "feed_interval_seconds": 10,
+  "timeout_seconds": 30,
+  "startup_grace_seconds": 300,
+  "post_trip_grace_seconds": 900
 }
 ```
+
+When hardware feeding is enabled, VA-Connect intentionally leaves `/dev/watchdog0` closed for five minutes after a normal reboot. A reboot caused by the deliberate trip test receives a 15-minute safety window. This gives remote support time to reconnect and disable hardware feeding before it is armed again. The Watchdog page shows the countdown and provides guarded controls to extend the current window, arm immediately, or disable feeding before the device is opened. Once armed, the hardware timeout remains 30 seconds.

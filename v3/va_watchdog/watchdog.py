@@ -17,6 +17,7 @@ from .recovery import RecoveryEngine
 from .retention import enforce_retention
 from .systemd_notify import notify as systemd_notify
 from .watchdog_device import HardwareWatchdog
+from .watchdog_grace import startup_grace_status
 from .watchdog_test import trip_test_active
 from .web import start_web
 
@@ -56,11 +57,20 @@ def add_hardware_feed_check(status, cfg):
         except (TypeError, ValueError):
             age = None
 
+    startup_grace = feed.get("startup_grace", {}) if isinstance(feed.get("startup_grace", {}), dict) else {}
     if feed.get("trip_test_active"):
         check = CheckResult(
             "hardware_watchdog_feed_status",
             "warning",
             "Deliberate watchdog trip test active; feed paused for this boot",
+            feed,
+            False,
+        )
+    elif startup_grace.get("active"):
+        check = CheckResult(
+            "hardware_watchdog_feed_status",
+            "warning",
+            f"Hardware watchdog startup safety window active; protection arms in {int(startup_grace.get('remaining_seconds', 0))}s",
             feed,
             False,
         )
@@ -114,6 +124,21 @@ def add_hardware_feed_check(status, cfg):
     status["startup_summary"] = build_startup_summary(cfg, checks)
     return status
 
+
+def hardware_feed_status(hw, startup_grace, trip_active=False, trip_summary=None, fed=False):
+    return {
+        "enabled": hw.enabled,
+        "device": hw.device,
+        "opened": hw.opened,
+        "last_feed_unix": hw.last_feed,
+        "feed_count": hw.feed_count,
+        "timeout_seconds": hw.get_timeout(),
+        "fed_this_cycle": fed,
+        "trip_test_active": trip_active,
+        "trip_test": trip_summary or {},
+        "startup_grace": startup_grace,
+    }
+
 def main():
     cfg = load_config()
     event_log = EventLog(cfg["events_path"])
@@ -130,18 +155,25 @@ def main():
     )
 
     event_log.add("info", "watchdog", "VA-Connect Watchdog starting")
-    hw.open()
+    trip_active, trip_summary = trip_test_active(cfg)
+    startup_grace = startup_grace_status(cfg, trip_summary)
+    if not startup_grace.get("active") and not trip_active:
+        hw.open()
+    elif startup_grace.get("active"):
+        event_log.add(
+            "info",
+            "hardware_watchdog",
+            f"Hardware watchdog startup safety window active for {startup_grace.get('remaining_seconds', 0)}s",
+            startup_grace,
+        )
 
     status, checks = collect_health(cfg)
-    status["hardware_watchdog_feed"] = {
-        "enabled": hw.enabled,
-        "device": hw.device,
-        "opened": hw.opened,
-        "last_feed_unix": hw.last_feed,
-        "feed_count": hw.feed_count,
-        "timeout_seconds": hw.get_timeout(),
-        "fed_this_cycle": False
-    }
+    status["hardware_watchdog_feed"] = hardware_feed_status(
+        hw,
+        startup_grace,
+        trip_active=trip_active,
+        trip_summary=trip_summary,
+    )
     add_hardware_feed_check(status, cfg)
     status["recovery"] = recovery.summary()
     status["boot_change"] = boot_change
@@ -164,6 +196,10 @@ def main():
             event_log.add_recording_storage_change(status.get("recording_storage"))
             recovery.process(checks)
             trip_active, trip_summary = trip_test_active(cfg)
+            startup_grace = startup_grace_status(cfg, trip_summary)
+            hw.enabled = bool(cfg.get("hardware_watchdog", {}).get("enabled"))
+            if hw.enabled and not hw.opened and not startup_grace.get("active") and not trip_active:
+                hw.open()
             if trip_active and not last_trip_active:
                 event_log.add(
                     "warning",
@@ -171,19 +207,15 @@ def main():
                     "Deliberate watchdog trip test active; hardware feed paused for this boot",
                     trip_summary,
                 )
-            feed_allowed = not status["critical_failed"] and not trip_active
+            feed_allowed = not status["critical_failed"] and not trip_active and not startup_grace.get("active")
             fed = hw.feed_if_due(feed_allowed)
-            status["hardware_watchdog_feed"] = {
-                "enabled": hw.enabled,
-                "device": hw.device,
-                "opened": hw.opened,
-                "last_feed_unix": hw.last_feed,
-                "feed_count": hw.feed_count,
-                "timeout_seconds": hw.get_timeout(),
-                "fed_this_cycle": fed,
-                "trip_test_active": trip_active,
-                "trip_test": trip_summary,
-            }
+            status["hardware_watchdog_feed"] = hardware_feed_status(
+                hw,
+                startup_grace,
+                trip_active=trip_active,
+                trip_summary=trip_summary,
+                fed=fed,
+            )
             add_hardware_feed_check(status, cfg)
             status["recovery"] = recovery.summary()
             status["blackbox"] = maybe_capture_blackbox(cfg, status)

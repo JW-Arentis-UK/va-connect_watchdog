@@ -30,8 +30,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "enabled": False,
         "device": "/dev/watchdog0",
         "feed_interval_seconds": 10,
-        "timeout_seconds": 30
+        "timeout_seconds": 30,
+        "startup_grace_seconds": 300,
+        "post_trip_grace_seconds": 900
     },
+    "hardware_watchdog_control_path": "/var/lib/va-watchdog/hardware-watchdog-control.json",
     "trip_test_path": "/var/lib/va-watchdog/watchdog-trip-test.json",
     "thresholds": {
         "cpu_temp_warning_c": 75,

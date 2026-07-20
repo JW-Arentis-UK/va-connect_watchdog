@@ -23,6 +23,7 @@ from .history import history_path, read_history
 from .retention import purge_data as retention_purge_data
 from .retention import retention_status as retention_status_for_cfg
 from .storage import apply_recording_service_mount_guards, configure_recording_storage, prepare_blank_recording_disk, recording_storage_candidates, recording_storage_status
+from .watchdog_grace import arm_current_boot, delay_current_boot, startup_grace_status
 from .watchdog_test import arm_trip_test, confirm_trip_test, read_trip_test_state, trip_test_summary
 from .update import launch_update_job, load_update_status
 
@@ -136,6 +137,7 @@ label { display:block; margin:calc(6px * var(--scale)) 0; }
 .warning { color:var(--amber); }
 .degraded { color:var(--orange); }
 .critical { color:var(--red); }
+.waiting { color:var(--blue); }
 .unknown, .disabled, .idle { color:var(--muted); }
 .pill { display:inline-block; border-radius:999px; padding:calc(4px * var(--scale)) calc(8px * var(--scale)); background:#0d2b17; color:var(--green); font-size:calc(12px * var(--scale)); font-weight:700; }
 .pill.warning { background:rgba(255,191,60,.14); color:var(--amber); }
@@ -617,8 +619,11 @@ function renderGatewaySummary(status){
   const feed = status.hardware_watchdog_feed || {};
   const services = (status.checks || []).filter(c => String(c.name || '').endsWith('.service'));
   const healthyServices = services.filter(c => c.state === 'healthy').length;
-  const protection = feed.enabled && feed.opened ? 'Active' : (wdt.value ? 'Detected, not active' : 'Not available');
-  const protectionState = feed.enabled && feed.opened ? 'healthy' : 'warning';
+  const startupGrace = feed.startup_grace || {};
+  const graceRemaining = Math.max(0, Number(startupGrace.remaining_seconds || 0));
+  const graceCountdown = `${Math.floor(graceRemaining / 60)}:${String(graceRemaining % 60).padStart(2, '0')}`;
+  const protection = startupGrace.active ? `Waiting ${graceCountdown}` : (feed.enabled && feed.opened ? 'Active' : (wdt.value ? 'Detected, not active' : 'Not available'));
+  const protectionState = startupGrace.active ? 'waiting' : (feed.enabled && feed.opened ? 'healthy' : 'warning');
   return `<div class="card summary-card"><div><div class="label">Gateway status</div><div class="status-word ${state}">${displayWord(status)}</div><div class="score">${escapeHtml(status.score ?? '-')}%</div><span class="pill ${state}">${escapeHtml(pill)}</span></div><div><div class="label">Gateway</div><div class="value">POC-451VTC</div><div class="label">Last check</div><div class="value">${escapeHtml(fmtTime(status.time))}</div><div class="label">Build</div><div class="build-badge">${escapeHtml(lastVersion.commit || '-')}</div><div class="value">${escapeHtml(lastVersion.branch || lastUpdateStatus?.branch || '-')}</div></div><div><div class="label">Gateway monitor</div><div class="value healthy">ONLINE</div><div class="label">Videosoft services</div><div class="value ${healthyServices === services.length && services.length ? 'healthy' : 'warning'}">${escapeHtml(healthyServices)}/${escapeHtml(services.length)} running</div><div class="label">Hardware recovery</div><div class="value ${protectionState}">${escapeHtml(protection)}</div></div></div>`;
 }
 
@@ -721,10 +726,13 @@ function renderMetricTiles(status){
   const wdtFeedCheck = findCheck(status, 'hardware_watchdog_feed_status');
   const wdtFeed = status.hardware_watchdog_feed || {};
   const wdtConfig = lastConfigSummary.hardware_watchdog || {};
-  const wdtState = wdtFeedCheck.state || wdt.state || 'unknown';
-  const wdtValue = wdtFeed.enabled && wdtFeed.opened ? 'Feeding' : (wdt.value ? 'Not feeding' : 'Not present');
+  const startupGrace = wdtFeed.startup_grace || {};
+  const graceRemaining = Math.max(0, Number(startupGrace.remaining_seconds || 0));
+  const graceCountdown = `${Math.floor(graceRemaining / 60)}:${String(graceRemaining % 60).padStart(2, '0')}`;
+  const wdtState = startupGrace.active ? 'waiting' : (wdtFeedCheck.state || wdt.state || 'unknown');
+  const wdtValue = startupGrace.active ? `Waiting ${graceCountdown}` : (wdtFeed.enabled && wdtFeed.opened ? 'Feeding' : (wdt.value ? 'Not feeding' : 'Not present'));
   const wdtDetails = [
-    wdtFeedCheck.message || wdt.message || '',
+    startupGrace.active ? `Startup safety window: ${graceCountdown} remaining` : (wdtFeedCheck.message || wdt.message || ''),
     wdtConfig.timeout_seconds ? `${wdtConfig.timeout_seconds}s timeout` : 'Timeout unknown',
     wdtFeed.enabled && wdtFeed.last_feed_unix ? `Last feed ${wdtFeed.last_feed_unix}` : '',
   ].filter(Boolean).join(' | ');
@@ -1328,6 +1336,19 @@ def start_web(cfg):
 
         def metric_tiles():
             rec_storage = status.get("recording_storage", {}) if isinstance(status.get("recording_storage", {}), dict) else {}
+            watchdog_feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
+            startup_grace = watchdog_feed.get("startup_grace", {}) if isinstance(watchdog_feed.get("startup_grace", {}), dict) else {}
+            if startup_grace.get("active"):
+                watchdog_seconds = int(startup_grace.get("remaining_seconds", 0) or 0)
+                watchdog_minutes, watchdog_remainder = divmod(watchdog_seconds, 60)
+                watchdog_value = f"Waiting {watchdog_minutes}:{watchdog_remainder:02d}"
+                watchdog_state = "waiting"
+            elif watchdog_feed.get("enabled") and watchdog_feed.get("opened"):
+                watchdog_value = "Feeding"
+                watchdog_state = "healthy"
+            else:
+                watchdog_value = "Not feeding" if check_value("hardware_watchdog_present", False) else "Not present"
+                watchdog_state = check_state("hardware_watchdog_feed_status", check_state("hardware_watchdog_present", "warning"))
             rec_storage_state = str(rec_storage.get("status") or check_state("recording_storage", "unknown"))
             if rec_storage.get("mounted"):
                 rec_storage_value = f"{escape(str(rec_storage.get('used_percent', '-')))}%"
@@ -1345,9 +1366,9 @@ def start_web(cfg):
                 + tile("Recording Storage", rec_storage_value, rec_storage_detail, rec_storage_state)
                 + tile(
                     "Hardware WDT",
-                    "Feeding" if (status.get("hardware_watchdog_feed", {}).get("enabled") and status.get("hardware_watchdog_feed", {}).get("opened")) else ("Not feeding" if check_value("hardware_watchdog_present", False) else "Not present"),
+                    watchdog_value,
                     check_message("hardware_watchdog_feed_status", check_message("hardware_watchdog_present", "")),
-                    check_state("hardware_watchdog_feed_status", check_state("hardware_watchdog_present", "warning")),
+                    watchdog_state,
                 )
                 + "</div>"
             )
@@ -1571,6 +1592,7 @@ def start_web(cfg):
             update = cfg.get("update", {})
             recovery = cfg.get("recovery", {})
             rec_storage = cfg.get("recording_storage", {}) if isinstance(cfg.get("recording_storage", {}), dict) else {}
+            hw_cfg = cfg.get("hardware_watchdog", {}) if isinstance(cfg.get("hardware_watchdog", {}), dict) else {}
             current = version_info()
             update_state = str(update_status.get("state", "idle"))
             update_target = update.get("branch") or current.get("branch", "-")
@@ -1624,6 +1646,22 @@ def start_web(cfg):
                 f"<label class=\"option-row\"><input name=\"allow_reboot\" type=\"checkbox\" {'checked' if recovery.get('allow_reboot') else ''}> Allow gateway reboot after a persistent critical failure</label>"
                 "<p class=\"warning\">Automatic reboot should remain disabled until recovery rules have been tested on the gateway.</p>"
             )
+            normal_grace = int(hw_cfg.get("startup_grace_seconds", 300) or 0)
+            post_trip_grace = int(hw_cfg.get("post_trip_grace_seconds", 900) or 0)
+            normal_grace_options = "".join(
+                f"<option value=\"{value}\" {'selected' if normal_grace == value else ''}>{label}</option>"
+                for value, label in [(60, "1 minute"), (300, "5 minutes"), (600, "10 minutes"), (900, "15 minutes")]
+            )
+            post_trip_grace_options = "".join(
+                f"<option value=\"{value}\" {'selected' if post_trip_grace == value else ''}>{label}</option>"
+                for value, label in [(300, "5 minutes"), (900, "15 minutes"), (1800, "30 minutes"), (3600, "60 minutes")]
+            )
+            watchdog_settings = (
+                "<div class=\"settings-grid\">"
+                f"<div><label class=\"label\">Normal reboot safety window</label><select name=\"watchdog_startup_grace_seconds\">{normal_grace_options}</select><p class=\"muted\">How long after boot before VA-Connect opens the hardware watchdog.</p></div>"
+                f"<div><label class=\"label\">After deliberate trip reboot</label><select name=\"watchdog_post_trip_grace_seconds\">{post_trip_grace_options}</select><p class=\"muted\">Extended window after a deliberate watchdog test to prevent a reboot loop.</p></div>"
+                "</div><p>The hardware timeout remains separate and starts only after the safety window ends.</p>"
+            )
             advanced_settings = (
                 "<div class=\"label\">Active config file</div>"
                 f"<div class=\"value\">{escape(str(active_config_path()))}</div>"
@@ -1635,6 +1673,7 @@ def start_web(cfg):
                 "<p class=\"section-lead\">Settings are grouped by purpose. Saving creates a backup before the new configuration is applied.</p>"
                 "<form method=\"post\" action=\"/settings-save\">"
                 + disclosure("General and monitoring", general_settings, opened=True)
+                + disclosure("Watchdog startup safety", watchdog_settings, opened=True)
                 + disclosure("Storage alerts", storage_settings, opened=True)
                 + disclosure("Network and remote access", network_settings)
                 + disclosure("Recovery and updates", recovery_settings)
@@ -1737,7 +1776,21 @@ def start_web(cfg):
             feed_enabled = bool(setup_config.get("enabled"))
             feed_opened = bool(setup_config.get("opened"))
             feed_count = setup_config.get("feed_count", 0)
-            if setup.get("ready"):
+            startup_grace = setup.get("startup_grace", {}) if isinstance(setup.get("startup_grace", {}), dict) else {}
+            grace_active = bool(startup_grace.get("active"))
+            remaining_seconds = int(startup_grace.get("remaining_seconds", 0) or 0)
+            remaining_minutes, remaining_remainder = divmod(remaining_seconds, 60)
+            grace_countdown = f"{remaining_minutes:02d}:{remaining_remainder:02d}"
+            if grace_active:
+                page_state = "waiting"
+                page_title = "Startup safety window active"
+                page_message = f"Hardware protection will arm in {grace_countdown}. Remote access remains available while /dev/watchdog0 stays closed."
+                primary_action = (
+                    "<form class=\"inline\" method=\"post\" action=\"/watchdog-grace-delay\"><input type=\"hidden\" name=\"delay_seconds\" value=\"900\"><button class=\"action\" type=\"submit\">Delay another 15 minutes</button></form> "
+                    "<a class=\"ghost\" href=\"/watchdog-arm-now-confirm\">Arm now</a> "
+                    "<a class=\"danger\" href=\"/hardware-watchdog-disable-confirm\">Disable hardware feed</a>"
+                )
+            elif setup.get("ready"):
                 page_state = "healthy"
                 page_title = "Hardware watchdog ready"
                 page_message = "The watchdog service owns /dev/watchdog0 and is feeding it. The deliberate trip test is available."
@@ -1791,6 +1844,8 @@ def start_web(cfg):
                 ("Legacy package", legacy.get("package_status", "-")),
                 ("Last feed", setup_config.get("last_feed", "-")),
                 ("Feed count", setup_config.get("feed_count", 0)),
+                ("Normal boot safety window", f"{setup_config.get('startup_grace_seconds', 300)} seconds"),
+                ("Post-trip safety window", f"{setup_config.get('post_trip_grace_seconds', 900)} seconds"),
             ]
             config_html = "".join(
                 "<tr>"
@@ -1835,12 +1890,41 @@ def start_web(cfg):
                 "<li><strong>Legacy watchdog:</strong> an older daemon that must not compete for the same device.</li>"
                 "</ul>"
             )
+            normal_grace = int(setup_config.get("startup_grace_seconds", 300) or 0)
+            post_trip_grace = int(setup_config.get("post_trip_grace_seconds", 900) or 0)
+            normal_grace_options = "".join(
+                f"<option value=\"{value}\" {'selected' if normal_grace == value else ''}>{label}</option>"
+                for value, label in [(60, "1 minute"), (300, "5 minutes"), (600, "10 minutes"), (900, "15 minutes")]
+            )
+            post_trip_grace_options = "".join(
+                f"<option value=\"{value}\" {'selected' if post_trip_grace == value else ''}>{label}</option>"
+                for value, label in [(300, "5 minutes"), (900, "15 minutes"), (1800, "30 minutes"), (3600, "60 minutes")]
+            )
+            grace_state = "WAITING" if grace_active else ("ARMED" if feed_opened else "INACTIVE")
+            grace_state_class = "waiting" if grace_active else ("healthy" if feed_opened else "warning")
+            grace_controls = (
+                "<div class=\"card\"><h2>Startup Safety Window</h2>"
+                f"<div class=\"status-word {grace_state_class}\">{grace_state}</div>"
+                f"<div class=\"score\" id=\"watchdog-grace-countdown\" data-seconds=\"{remaining_seconds}\">{grace_countdown if grace_active else '-'}</div>"
+                f"<p>{escape(str(startup_grace.get('reason', 'Startup safety state unavailable.')))}</p>"
+                "<p class=\"muted\">During this window the hardware device is not opened, so you can reconnect remotely and disable protection without causing another watchdog reboot.</p>"
+                "<div class=\"button-row\">"
+                "<form class=\"inline\" method=\"post\" action=\"/watchdog-grace-delay\"><input type=\"hidden\" name=\"delay_seconds\" value=\"900\"><button class=\"action\" type=\"submit\" " + ("" if grace_active else "disabled") + ">Delay another 15 minutes</button></form>"
+                "<a class=\"ghost\" href=\"/watchdog-arm-now-confirm\">Arm now</a>"
+                "<a class=\"danger\" href=\"/hardware-watchdog-disable-confirm\">Disable hardware feed</a>"
+                "</div><form method=\"post\" action=\"/watchdog-grace-config-set\"><div class=\"settings-grid\">"
+                f"<div><label class=\"label\">Normal reboot delay</label><select name=\"startup_grace_seconds\">{normal_grace_options}</select></div>"
+                f"<div><label class=\"label\">After deliberate trip reboot</label><select name=\"post_trip_grace_seconds\">{post_trip_grace_options}</select></div>"
+                "</div><div class=\"button-row\"><button class=\"ghost\" type=\"submit\">Save safety windows</button></div></form>"
+                + ("<script>(function(){var e=document.getElementById('watchdog-grace-countdown');if(!e)return;var s=Number(e.getAttribute('data-seconds')||0);setInterval(function(){if(s<=0)return;s-=1;e.textContent=Math.floor(s/60)+':' + String(s%60).padStart(2,'0');},1000);}());</script>" if grace_active else "")
+                + "</div>"
+            )
             return (
                 summary_strip([
-                    ("Overall readiness", "READY" if setup.get("ready") else "SETUP NEEDED", page_message, page_state),
+                    ("Overall readiness", "WAITING" if grace_active else ("READY" if setup.get("ready") else "SETUP NEEDED"), page_message, page_state),
                     ("Intel TCO driver", "Loaded" if driver.get("state") == "healthy" else "Needs setup", driver.get("message", "-"), driver.get("state", "unknown")),
                     ("Watchdog device", setup_config.get("device", "/dev/watchdog0"), wdctl.get("identity") or device.get("message") or "-", device.get("state", "unknown")),
-                    ("Live feed", "Feeding" if feed_enabled and feed_opened else "Not feeding", f"Feed count {feed_count}", "healthy" if feed_enabled and feed_opened else "warning"),
+                    ("Live feed", f"Starts in {grace_countdown}" if grace_active else ("Feeding" if feed_enabled and feed_opened else "Not feeding"), f"Feed count {feed_count}", "waiting" if grace_active else ("healthy" if feed_enabled and feed_opened else "warning")),
                     ("Legacy watchdogs", "Clear" if not legacy_problem else "Conflict", legacy_check.get("message", "-"), legacy_check.get("state", "unknown")),
                 ])
                 + f"<div class=\"card action-panel {escape(page_state)}\"><h2>{escape(page_title)}</h2>"
@@ -1850,7 +1934,8 @@ def start_web(cfg):
                 "<a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run probe</a>"
                 "</div>"
                 "</div>"
-                "<div class=\"card\"><h2>Setup Checklist</h2>"
+                + grace_controls
+                + "<div class=\"card\"><h2>Setup Checklist</h2>"
                 "<p class=\"section-lead\">Work from top to bottom. The first amber or red item identifies what to fix next.</p>"
                 f"<div class=\"setup-steps\">{''.join(step_rows)}</div>"
                 "</div>"
@@ -2288,7 +2373,13 @@ def start_web(cfg):
         service_checks = [check for check in checks if str(check.get("name", "")).endswith(".service")]
         healthy_service_count = sum(1 for check in service_checks if check.get("state") == "healthy")
         feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
-        if feed.get("enabled") and feed.get("opened"):
+        startup_grace = feed.get("startup_grace", {}) if isinstance(feed.get("startup_grace", {}), dict) else {}
+        if startup_grace.get("active"):
+            grace_seconds = int(startup_grace.get("remaining_seconds", 0) or 0)
+            grace_minutes, grace_remainder = divmod(grace_seconds, 60)
+            protection_text = f"WAITING {grace_minutes}:{grace_remainder:02d}"
+            protection_state = "waiting"
+        elif feed.get("enabled") and feed.get("opened"):
             protection_text = "ACTIVE"
             protection_state = "healthy"
         elif check_value("hardware_watchdog_present", False):
@@ -2886,7 +2977,7 @@ def start_web(cfg):
             "<div class=\"card\">"
             "<h2>Confirm VA-Connect Hardware Watchdog Feeding</h2>"
             f"<p class=\"{escape(str(wizard.get('state', 'warning')))}\">{escape(str(wizard.get('message', '-')))}</p>"
-            "<p class=\"muted\">This writes hardware_watchdog.enabled=true, device=/dev/watchdog0, feed_interval_seconds=10, then restarts va-watchdog in the background.</p>"
+            "<p class=\"muted\">This writes hardware_watchdog.enabled=true, device=/dev/watchdog0, feed_interval_seconds=10, starts the configured safety window, then restarts va-watchdog in the background.</p>"
             f"<div class=\"label\">Driver identity</div><div class=\"value\">{escape(str(watchdog.get('wdctl', {}).get('identity', '-')))}</div>"
             f"<div class=\"label\">Timeout</div><div class=\"value\">{escape(str(watchdog.get('wdctl', {}).get('timeout', '-')))}</div>"
             f"<div class=\"label\">Legacy watchdog.service</div><div class=\"value\">{escape(str(watchdog.get('legacy_daemon', {}).get('active', '-')))} / {escape(str(watchdog.get('legacy_daemon', {}).get('enabled', '-')))}</div>"
@@ -3103,6 +3194,45 @@ def start_web(cfg):
             )
         return page_shell(body, "Watchdog")
 
+    def watchdog_arm_now_confirm_html():
+        grace = startup_grace_status(cfg, trip_test_summary(cfg))
+        feed = status_snapshot().get("hardware_watchdog_feed", {})
+        can_arm = bool(cfg.get("hardware_watchdog", {}).get("enabled")) and bool(grace.get("active")) and not bool(feed.get("opened"))
+        remaining = int(grace.get("remaining_seconds", 0) or 0)
+        body = (
+            "<div class=\"card\"><h2>Confirm Arm Hardware Watchdog Now</h2>"
+            "<p class=\"warning\">This ends the startup safety window for this boot.</p>"
+            "<p>VA-Connect will open /dev/watchdog0 on its next health loop. Once opened, the configured 30-second hardware timeout applies and this page cannot safely disable the device.</p>"
+            f"<div class=\"label\">Safety time remaining</div><div class=\"value\">{remaining} seconds</div>"
+            f"<div class=\"label\">Device currently opened</div><div class=\"value\">{'Yes' if feed.get('opened') else 'No'}</div>"
+        )
+        if can_arm:
+            body += "<form class=\"inline\" method=\"post\" action=\"/watchdog-arm-now\"><button class=\"action\" type=\"submit\">Arm hardware watchdog now</button></form> "
+        else:
+            body += "<p class=\"warning\">Arm now is only available while an enabled watchdog is inside its startup safety window.</p>"
+        body += "<a class=\"ghost\" href=\"/watchdog\">Cancel</a></div>"
+        return page_shell(body, "Watchdog")
+
+    def hardware_watchdog_disable_confirm_html():
+        grace = startup_grace_status(cfg, trip_test_summary(cfg))
+        feed = status_snapshot().get("hardware_watchdog_feed", {})
+        remaining = int(grace.get("remaining_seconds", 0) or 0)
+        safety_margin = max(15, int(cfg.get("poll_interval_seconds", 5) or 5) * 2)
+        can_disable = bool(grace.get("active")) and remaining > safety_margin and not bool(feed.get("opened"))
+        body = (
+            "<div class=\"card\"><h2>Confirm Disable Hardware Watchdog Feed</h2>"
+            "<p class=\"warning\">This disables hardware reboot protection in the saved configuration. The systemd process watchdog remains available.</p>"
+            "<p>This action is deliberately blocked after /dev/watchdog0 has been opened. Closing a live watchdog device is not a safe recovery method.</p>"
+            f"<div class=\"label\">Safety time remaining</div><div class=\"value\">{remaining} seconds</div>"
+            f"<div class=\"label\">Device currently opened</div><div class=\"value\">{'Yes' if feed.get('opened') else 'No'}</div>"
+        )
+        if can_disable:
+            body += "<form class=\"inline\" method=\"post\" action=\"/hardware-watchdog-disable-now\"><button class=\"danger\" type=\"submit\">Disable hardware feed</button></form> "
+        else:
+            body += "<p class=\"critical\">Safe disable is not available now. Use this control earlier in the startup safety window.</p>"
+        body += "<a class=\"ghost\" href=\"/watchdog\">Cancel</a></div>"
+        return page_shell(body, "Watchdog")
+
     def watchdog_trip_armed_html(result):
         body = (
             "<meta http-equiv=\"refresh\" content=\"300;url=/watchdog\">"
@@ -3162,6 +3292,8 @@ def start_web(cfg):
             },
             "hardware_watchdog": {
                 "enabled": bool(cfg.get("hardware_watchdog", {}).get("enabled", False)),
+                "startup_grace_seconds": first("watchdog_startup_grace_seconds", "300"),
+                "post_trip_grace_seconds": first("watchdog_post_trip_grace_seconds", "900"),
             },
             "recording_storage": {
                 "expected_full": "recording_storage_expected_full" in form,
@@ -3290,9 +3422,13 @@ def start_web(cfg):
             except (TypeError, ValueError):
                 age = None
         feed_enabled = bool(feed.get("enabled") or hw_cfg.get("enabled"))
+        startup_grace = feed.get("startup_grace", {}) if isinstance(feed.get("startup_grace", {}), dict) else {}
         if not feed_enabled:
             feed_state = "warning"
             last_feed_message = "Feed disabled in config/status"
+        elif startup_grace.get("active"):
+            feed_state = "waiting"
+            last_feed_message = f"Startup safety window: {startup_grace.get('remaining_seconds', 0)}s remaining"
         elif age is None:
             feed_state = "warning"
             last_feed_message = "No feed timestamp recorded yet"
@@ -3321,6 +3457,7 @@ def start_web(cfg):
             "feed_state": feed_state,
             "last_feed_message": last_feed_message,
             "last_test_message": last_test_message,
+            "startup_grace": startup_grace,
         }
 
     def watchdog_owner_info(device):
@@ -3383,6 +3520,8 @@ def start_web(cfg):
         feed_enabled = bool(hw_cfg.get("enabled"))
         feed_opened = bool(wdt.get("opened"))
         feed_recent = wdt.get("feed_state") == "healthy"
+        startup_grace = wdt.get("startup_grace", {}) if isinstance(wdt.get("startup_grace", {}), dict) else {}
+        grace_active = bool(startup_grace.get("active"))
         timeout = int(hw_cfg.get("timeout_seconds", 30) or 30)
         feed_interval = int(hw_cfg.get("feed_interval_seconds", 10) or 10)
         rows = [
@@ -3413,12 +3552,12 @@ def start_web(cfg):
             },
             {
                 "name": "Device owner",
-                "state": "healthy" if feed_opened else "warning",
-                "message": "The watchdog service has opened the device" if feed_opened else owner.get("summary", "The watchdog service has not opened the device"),
+                "state": "healthy" if feed_opened else ("waiting" if grace_active else "warning"),
+                "message": "The watchdog service has opened the device" if feed_opened else ("Device intentionally remains closed during startup safety window" if grace_active else owner.get("summary", "The watchdog service has not opened the device")),
             },
             {
                 "name": "Live feed",
-                "state": "healthy" if feed_recent else "warning",
+                "state": "healthy" if feed_recent else ("waiting" if grace_active else "warning"),
                 "message": str(wdt.get("last_feed_message", "No feed status yet")),
             },
             {
@@ -3427,15 +3566,17 @@ def start_web(cfg):
                 "message": f"{systemd_wdt.get('message', '-')}; WatchdogSec {systemd_wdt.get('watchdog_sec', '-')}",
             },
         ]
-        required = rows[:7]
-        ready = all(row["state"] == "healthy" for row in required)
+        prerequisites_ready = all(row["state"] == "healthy" for row in rows[:5])
+        feed_ready = feed_opened and feed_recent
+        ready = prerequisites_ready and (feed_ready or grace_active)
         return {
             "ready": ready,
-            "trip_ready": ready,
-            "state": "healthy" if ready else "warning",
-            "message": "Hardware watchdog is ready and owned by V3" if ready else "Setup incomplete: run the one-click setup, then reload this page",
+            "trip_ready": prerequisites_ready and feed_ready and not grace_active,
+            "state": "waiting" if grace_active and ready else ("healthy" if ready else "warning"),
+            "message": (f"Startup safety window active; hardware protection arms in {startup_grace.get('remaining_seconds', 0)}s" if grace_active and ready else ("Hardware watchdog is ready and owned by VA-Connect" if ready else "Setup incomplete: run the one-click setup, then reload this page")),
             "checks": rows,
             "owner": owner,
+            "startup_grace": startup_grace,
             "config": {
                 "path": str(active_config_path()),
                 "enabled": feed_enabled,
@@ -3445,6 +3586,8 @@ def start_web(cfg):
                 "opened": feed_opened,
                 "feed_count": wdt.get("feed_count", 0),
                 "last_feed": wdt.get("last_feed_message", "-"),
+                "startup_grace_seconds": int(hw_cfg.get("startup_grace_seconds", 300) or 0),
+                "post_trip_grace_seconds": int(hw_cfg.get("post_trip_grace_seconds", 900) or 0),
             },
         }
 
@@ -3891,6 +4034,7 @@ def start_web(cfg):
         live_cfg = deep_merge(cfg, updates)
         cfg.clear()
         cfg.update(live_cfg)
+        delay_current_boot(cfg, int(cfg.get("hardware_watchdog", {}).get("startup_grace_seconds", 300) or 300), extend=False)
         command = "sleep 2; systemctl restart va-watchdog"
         try:
             subprocess.Popen(["/bin/bash", "-lc", command], start_new_session=True)
@@ -3901,12 +4045,13 @@ def start_web(cfg):
                 "command": command,
                 "output": str(exc),
             }
-        append_web_event("info", "hardware_watchdog", "VA-Connect hardware watchdog feeding enabled", {"config_path": str(saved_path)})
+        startup_delay = int(cfg.get("hardware_watchdog", {}).get("startup_grace_seconds", 300) or 300)
+        append_web_event("info", "hardware_watchdog", "VA-Connect hardware watchdog configured with startup safety window", {"config_path": str(saved_path), "startup_grace_seconds": startup_delay})
         return {
             "ok": True,
-            "message": f"Hardware watchdog feeding enabled. Config saved to {saved_path}; va-watchdog restart requested.",
+            "message": f"Hardware watchdog configured. A {startup_delay // 60}-minute safety window starts before the device is opened; va-watchdog restart requested.",
             "command": command,
-            "output": "hardware_watchdog.enabled=true, device=/dev/watchdog0, feed_interval_seconds=10",
+            "output": f"hardware_watchdog.enabled=true, device=/dev/watchdog0, feed_interval_seconds=10, startup_grace_seconds={startup_delay}",
         }
 
     def set_watchdog_timeout(timeout_seconds):
@@ -3944,6 +4089,105 @@ def start_web(cfg):
             "message": f"Hardware watchdog timeout updated to {timeout_seconds} seconds. Config saved to {saved_path}; va-watchdog restart requested.",
             "command": command,
             "output": f"hardware_watchdog.timeout_seconds={timeout_seconds}",
+        }
+
+    def current_watchdog_grace():
+        return startup_grace_status(cfg, trip_test_summary(cfg))
+
+    def delay_watchdog_arming(delay_seconds):
+        try:
+            delay_seconds = int(delay_seconds)
+        except (TypeError, ValueError):
+            return {"ok": False, "message": "Invalid delay value.", "command": "", "output": ""}
+        if delay_seconds < 60 or delay_seconds > 86400:
+            return {"ok": False, "message": "Delay must be between 60 seconds and 24 hours.", "command": "", "output": ""}
+        feed = status_snapshot().get("hardware_watchdog_feed", {})
+        grace = current_watchdog_grace()
+        safety_margin = max(15, int(cfg.get("poll_interval_seconds", 5) or 5) * 2)
+        if feed.get("opened") or not grace.get("active") or int(grace.get("remaining_seconds", 0) or 0) <= safety_margin:
+            return {
+                "ok": False,
+                "message": "The safety window is no longer safely extendable. The watchdog may already be arming.",
+                "command": "",
+                "output": json.dumps(grace, indent=2),
+            }
+        updated = delay_current_boot(cfg, delay_seconds)
+        append_web_event("warning", "hardware_watchdog", f"Hardware watchdog arming delayed by {delay_seconds} seconds for this boot", updated)
+        return {
+            "ok": True,
+            "message": f"Hardware watchdog arming delayed by another {delay_seconds // 60} minutes for this boot.",
+            "command": "Current-boot safety override",
+            "output": json.dumps(updated, indent=2),
+        }
+
+    def arm_hardware_watchdog_now():
+        feed = status_snapshot().get("hardware_watchdog_feed", {})
+        grace = current_watchdog_grace()
+        if not cfg.get("hardware_watchdog", {}).get("enabled"):
+            return {"ok": False, "message": "Hardware watchdog feed is disabled in configuration.", "command": "", "output": ""}
+        if feed.get("opened"):
+            return {"ok": False, "message": "The hardware watchdog device is already opened.", "command": "", "output": ""}
+        if not grace.get("active"):
+            return {"ok": False, "message": "There is no active startup safety window to end.", "command": "", "output": json.dumps(grace, indent=2)}
+        updated = arm_current_boot(cfg)
+        append_web_event("warning", "hardware_watchdog", "Hardware watchdog startup safety window ended manually", updated)
+        return {
+            "ok": True,
+            "message": "Safety window ended. VA-Connect will open and feed the hardware watchdog on the next health loop.",
+            "command": "Current-boot arm-now override",
+            "output": json.dumps(updated, indent=2),
+        }
+
+    def disable_hardware_watchdog_during_grace():
+        feed = status_snapshot().get("hardware_watchdog_feed", {})
+        grace = current_watchdog_grace()
+        remaining = int(grace.get("remaining_seconds", 0) or 0)
+        safety_margin = max(15, int(cfg.get("poll_interval_seconds", 5) or 5) * 2)
+        if feed.get("opened"):
+            return {"ok": False, "message": "Safe disable blocked: /dev/watchdog0 is already opened.", "command": "", "output": "A live hardware watchdog is never closed from the webpage."}
+        if not grace.get("active") or remaining <= safety_margin:
+            return {"ok": False, "message": "Safe disable blocked: use this control earlier in the startup safety window.", "command": "", "output": json.dumps(grace, indent=2)}
+        updates = {"hardware_watchdog": {"enabled": False}}
+        saved_path = save_raw_config(deep_merge(load_raw_config(), updates))
+        live_cfg = deep_merge(cfg, updates)
+        cfg.clear()
+        cfg.update(live_cfg)
+        append_web_event("warning", "hardware_watchdog", "Hardware watchdog feed disabled during startup safety window", {"config_path": str(saved_path)})
+        return {
+            "ok": True,
+            "message": "Hardware watchdog feed disabled before the device was opened. The process watchdog remains enabled.",
+            "command": f"Saved {saved_path}",
+            "output": "hardware_watchdog.enabled=false",
+        }
+
+    def set_watchdog_grace_periods(startup_seconds, post_trip_seconds):
+        try:
+            startup_seconds = int(startup_seconds)
+            post_trip_seconds = int(post_trip_seconds)
+        except (TypeError, ValueError):
+            return {"ok": False, "message": "Safety window values must be numbers.", "command": "", "output": ""}
+        if startup_seconds < 60 or startup_seconds > 3600:
+            return {"ok": False, "message": "Normal reboot delay must be between 1 and 60 minutes.", "command": "", "output": ""}
+        if post_trip_seconds < 300 or post_trip_seconds > 7200:
+            return {"ok": False, "message": "Post-trip delay must be between 5 minutes and 2 hours.", "command": "", "output": ""}
+        current = current_watchdog_grace()
+        updates = {"hardware_watchdog": {"startup_grace_seconds": startup_seconds, "post_trip_grace_seconds": post_trip_seconds}}
+        saved_path = save_raw_config(deep_merge(load_raw_config(), updates))
+        live_cfg = deep_merge(cfg, updates)
+        cfg.clear()
+        cfg.update(live_cfg)
+        if current.get("active"):
+            updated_current = current_watchdog_grace()
+            preserve_seconds = int(current.get("remaining_seconds", 0) or 0)
+            updated_seconds = int(updated_current.get("remaining_seconds", 0) or 0)
+            if updated_seconds < preserve_seconds:
+                delay_current_boot(cfg, preserve_seconds, extend=False)
+        append_web_event("info", "hardware_watchdog", "Hardware watchdog startup safety windows updated", {"startup_grace_seconds": startup_seconds, "post_trip_grace_seconds": post_trip_seconds})
+        return {
+            "ok": True,
+            "message": "Startup safety windows saved. The current active window was not shortened.",
+            "command": f"Saved {saved_path}",
+            "output": f"normal={startup_seconds}s, post_trip={post_trip_seconds}s",
         }
 
     def rtc_status():
@@ -4113,8 +4357,12 @@ def start_web(cfg):
         block_devices = _run(["lsblk", "-o", "NAME,MODEL,SIZE,TYPE,MOUNTPOINT", "-n"])["stdout"].splitlines()
         watchdog_devices = sorted(str(path) for path in Path("/dev").glob("watchdog*"))
         watchdog_summary = watchdog_driver_info(watchdog_devices)
+        status = status_snapshot()
+        live_feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
+        trip_summary = trip_test_summary(cfg)
         watchdog_summary["safe_test"] = watchdog_test_summary()
-        watchdog_summary["trip_test"] = trip_test_summary(cfg)
+        watchdog_summary["trip_test"] = trip_summary
+        watchdog_summary["startup_grace"] = live_feed.get("startup_grace") or startup_grace_status(cfg, trip_summary)
         return {
             "cpu": {
                 "model": cpu.get("Model name", ""),
@@ -4464,6 +4712,18 @@ def start_web(cfg):
             },
             "hardware_watchdog": {
                 "enabled": bool(hardware.get("enabled", False)),
+                "startup_grace_seconds": _int_range(
+                    {"startup_grace_seconds": hardware.get("startup_grace_seconds", cfg.get("hardware_watchdog", {}).get("startup_grace_seconds", 300))},
+                    "startup_grace_seconds",
+                    60,
+                    3600,
+                ),
+                "post_trip_grace_seconds": _int_range(
+                    {"post_trip_grace_seconds": hardware.get("post_trip_grace_seconds", cfg.get("hardware_watchdog", {}).get("post_trip_grace_seconds", 900))},
+                    "post_trip_grace_seconds",
+                    300,
+                    7200,
+                ),
             },
             "recording_storage": {
                 "expected_full": bool(recording_storage.get("expected_full", False)),
@@ -4480,6 +4740,8 @@ def start_web(cfg):
             raise ValueError("root disk warning must be lower than critical")
         if updates["thresholds"]["recordings_disk_warning_percent"] >= updates["thresholds"]["recordings_disk_critical_percent"]:
             raise ValueError("recordings disk warning must be lower than critical")
+        if cfg.get("hardware_watchdog", {}).get("enabled") and not updates["hardware_watchdog"]["enabled"]:
+            raise ValueError("hardware watchdog feed cannot be disabled from general Settings; use the guarded Watchdog startup safety control")
         rs_warning = updates["recording_storage"]["minimum_free_mb_warning"]
         rs_critical = updates["recording_storage"]["minimum_free_mb_critical"]
         if rs_warning is not None and rs_critical is not None and rs_warning <= rs_critical:
@@ -4631,6 +4893,8 @@ def start_web(cfg):
             "update-state.json": data_dir / "update-state.json",
             "update.log": Path(cfg.get("update", {}).get("log_path") or data_dir / "update.log"),
             "last-reboot-reason.json": Path(cfg.get("last_reboot_reason_path") or data_dir / "last-reboot-reason.json"),
+            "hardware-watchdog-control.json": Path(cfg.get("hardware_watchdog_control_path") or data_dir / "hardware-watchdog-control.json"),
+            "watchdog-trip-test.json": Path(cfg.get("trip_test_path") or data_dir / "watchdog-trip-test.json"),
         }
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -4822,6 +5086,24 @@ def start_web(cfg):
                 return
             if route_path == "/watchdog-trip-confirm":
                 body = watchdog_trip_confirm_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/watchdog-arm-now-confirm":
+                body = watchdog_arm_now_confirm_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/hardware-watchdog-disable-confirm":
+                body = hardware_watchdog_disable_confirm_html().encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
@@ -5173,6 +5455,61 @@ def start_web(cfg):
                 result = enable_va_hardware_watchdog()
                 body = watchdog_action_result_html(result).encode("utf-8")
                 self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/watchdog-grace-delay":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    result = delay_watchdog_arming(form.get("delay_seconds", ["900"])[0])
+                except Exception as exc:
+                    result = {"ok": False, "message": str(exc), "command": "", "output": ""}
+                body = watchdog_action_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 409)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/watchdog-arm-now":
+                result = arm_hardware_watchdog_now()
+                body = watchdog_action_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 409)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/hardware-watchdog-disable-now":
+                result = disable_hardware_watchdog_during_grace()
+                body = watchdog_action_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 409)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/watchdog-grace-config-set":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    result = set_watchdog_grace_periods(
+                        form.get("startup_grace_seconds", ["300"])[0],
+                        form.get("post_trip_grace_seconds", ["900"])[0],
+                    )
+                except Exception as exc:
+                    result = {"ok": False, "message": str(exc), "command": "", "output": ""}
+                body = watchdog_action_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 400)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()

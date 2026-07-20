@@ -11,7 +11,7 @@ echo "  1. Load and persist the Intel TCO watchdog driver"
 echo "  2. Stop, disable, mask, and remove Ubuntu's legacy watchdog daemon if present"
 echo "  3. Write the VA-Connect hardware watchdog config"
 echo "  4. Reinstall/reload the VA-Connect systemd unit"
-echo "  5. Restart va-watchdog so it owns /dev/watchdog0"
+echo "  5. Restart va-watchdog with a startup safety window before it owns /dev/watchdog0"
 echo
 
 echo "== Step 1: load and persist Intel TCO =="
@@ -57,6 +57,7 @@ echo "== Step 4: enable VA-Connect hardware watchdog config =="
 python3 - <<'PY'
 import json
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -74,12 +75,29 @@ payload["hardware_watchdog"].update({
     "device": "/dev/watchdog0",
     "feed_interval_seconds": 10,
     "timeout_seconds": 30,
+    "startup_grace_seconds": 300,
+    "post_trip_grace_seconds": 900,
 })
 
 tmp = path.with_suffix(path.suffix + ".tmp")
 tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 tmp.replace(path)
-print("Updated /etc/va-watchdog/config.json: hardware_watchdog.enabled=true")
+
+control_path = Path(payload.get("hardware_watchdog_control_path", "/var/lib/va-watchdog/hardware-watchdog-control.json"))
+control_path.parent.mkdir(parents=True, exist_ok=True)
+boot_id_path = Path("/proc/sys/kernel/random/boot_id")
+boot_id = boot_id_path.read_text(encoding="utf-8").strip() if boot_id_path.exists() else "-"
+delay_seconds = int(payload["hardware_watchdog"]["startup_grace_seconds"])
+control = {
+    "boot_id": boot_id,
+    "arm_now": False,
+    "manual_delay_until_unix": time.time() + delay_seconds,
+    "manual_delay_seconds": delay_seconds,
+}
+control_tmp = control_path.with_suffix(control_path.suffix + ".tmp")
+control_tmp.write_text(json.dumps(control, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+control_tmp.replace(control_path)
+print(f"Updated /etc/va-watchdog/config.json and set a {delay_seconds}s startup safety window")
 PY
 echo
 
