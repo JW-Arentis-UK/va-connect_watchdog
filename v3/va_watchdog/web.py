@@ -24,6 +24,7 @@ from .events import purge_events, read_events
 from .retention import purge_data as retention_purge_data
 from .retention import retention_status as retention_status_for_cfg
 from .storage import apply_recording_service_mount_guards, configure_recording_storage, prepare_blank_recording_disk, recording_storage_candidates, recording_storage_status
+from .services import _runtime_stats
 from .watchdog_grace import arm_current_boot, delay_current_boot, startup_grace_status
 from .watchdog_test import arm_trip_test, confirm_trip_test, read_trip_test_state, trip_test_summary
 from .update import launch_update_job, load_update_status
@@ -4815,15 +4816,10 @@ def start_web(cfg):
         ])
         active = props.get("ActiveState", "unknown")
         pid = props.get("MainPID", "0")
-        ps = _run(["ps", "-p", pid, "-o", "%cpu=,rss=,etimes="]) if pid and pid != "0" else {"stdout": ""}
-        cpu_percent = "-"
-        memory_mb = "-"
-        uptime = "-"
-        parts = ps["stdout"].split()
-        if len(parts) >= 3:
-            cpu_percent = parts[0]
-            memory_mb = round(int(parts[1]) / 1024, 1)
-            uptime = _format_duration(int(parts[2]))
+        runtime = _runtime_stats(name) if pid and pid != "0" else {}
+        cpu_percent = runtime.get("cpu_percent") if runtime.get("cpu_percent") is not None else "-"
+        memory_mb = runtime.get("memory_mb") if runtime.get("memory_mb") is not None else "-"
+        uptime = _format_duration(runtime.get("uptime_seconds")) if runtime.get("uptime_seconds") is not None else "-"
         return {
             "name": name,
             "description": props.get("Description", ""),
