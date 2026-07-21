@@ -703,6 +703,7 @@ function pageHelp(page){
 
 function renderWatchdogPage(status){
   const watchdog = lastHardwareInfo.watchdog || {};
+  const process = status.watchdog_process || {};
   const hwCfg = lastSettings.hardware_watchdog || {};
   const feed = status.hardware_watchdog_feed || {};
   const timeout = Number(hwCfg.timeout_seconds || 30);
@@ -738,6 +739,15 @@ function renderWatchdogPage(status){
     ['Driver timeout', wdctl.timeout || '-'],
     ['Device owner', watchdog.owners?.summary || '-'],
     ['Legacy package', legacy.package_status || '-'],
+    ['Watchdog CPU', process.cpu_percent == null ? '-' : `${Number(process.cpu_percent).toFixed(1)}%`],
+    ['Watchdog memory', process.memory_mb == null ? '-' : `${Number(process.memory_mb).toFixed(1)} MB`],
+    ['Watchdog PID', process.pid ?? '-'],
+    ['Resource monitor', process.message || 'Unavailable'],
+    ['CPU thresholds', `${process.cpu_warning_percent ?? '-'}% warning / ${process.cpu_critical_percent ?? '-'}% critical`],
+    ['Memory thresholds', `${process.memory_warning_mb ?? '-'} MB warning / ${process.memory_critical_mb ?? '-'} MB critical`],
+    ['Systemd memory limit', systemd.memory_max || 'Not reported'],
+    ['Systemd task limit', systemd.tasks_max || 'Not reported'],
+    ['Systemd restarts', systemd.restarts || '0'],
   ].map(row => `<tr><td>${escapeHtml(row[0])}</td><td>${escapeHtml(row[1])}</td></tr>`).join('');
   const legacyRows = units.length ? units.map(unit => `<tr><td>${escapeHtml(unit.unit || '-')}</td><td class="${unit.active === 'active' ? 'critical' : 'healthy'}">${escapeHtml(unit.active || '-')}</td><td class="${['enabled', 'static'].includes(unit.enabled) ? 'warning' : 'healthy'}">${escapeHtml(unit.enabled || '-')}</td></tr>`).join('') : '<tr><td colspan="3">No legacy watchdog units found.</td></tr>';
   const tripAction = ready ? '<a class="action" href="/watchdog-trip-confirm">Open trip confirm page</a>' : '<button class="action" disabled>Open trip confirm page</button>';
@@ -3711,6 +3721,18 @@ def start_web(cfg):
             "StatusText",
             "-p",
             "Type",
+            "-p",
+            "MemoryMax",
+            "-p",
+            "TasksMax",
+            "-p",
+            "CPUAccounting",
+            "-p",
+            "MemoryAccounting",
+            "-p",
+            "NRestarts",
+            "-p",
+            "MainPID",
         ], timeout=3)
         values = {}
         for line in props["stdout"].splitlines():
@@ -3754,6 +3776,12 @@ def start_web(cfg):
             "timestamp": values.get("WatchdogTimestamp", ""),
             "status_text": values.get("StatusText", ""),
             "type": values.get("Type", ""),
+            "memory_max": values.get("MemoryMax", ""),
+            "tasks_max": values.get("TasksMax", ""),
+            "cpu_accounting": values.get("CPUAccounting", ""),
+            "memory_accounting": values.get("MemoryAccounting", ""),
+            "restarts": values.get("NRestarts", ""),
+            "main_pid": values.get("MainPID", ""),
             "raw": values,
         }
 
@@ -4743,6 +4771,7 @@ def start_web(cfg):
             "poll_interval_seconds": cfg.get("poll_interval_seconds"),
             "web": cfg.get("web", {}),
             "hardware_watchdog": cfg.get("hardware_watchdog", {}),
+            "process_monitor": cfg.get("process_monitor", {}),
             "recording_storage": cfg.get("recording_storage", {}),
             "storage": cfg.get("storage", {}),
             "thresholds": cfg.get("thresholds", {}),
@@ -4792,6 +4821,7 @@ def start_web(cfg):
         network = payload.get("network", {})
         update = payload.get("update", {})
         hardware = payload.get("hardware_watchdog", {})
+        process_monitor = payload.get("process_monitor", {})
         recording_storage = payload.get("recording_storage", {})
         recovery = payload.get("recovery", {})
 
@@ -4832,6 +4862,14 @@ def start_web(cfg):
                     7200,
                 ),
             },
+            "process_monitor": {
+                "enabled": bool(process_monitor.get("enabled", cfg.get("process_monitor", {}).get("enabled", True))),
+                "cpu_warning_percent": _int_range({"cpu_warning_percent": process_monitor.get("cpu_warning_percent", cfg.get("process_monitor", {}).get("cpu_warning_percent", 25))}, "cpu_warning_percent", 1, 100),
+                "cpu_critical_percent": _int_range({"cpu_critical_percent": process_monitor.get("cpu_critical_percent", cfg.get("process_monitor", {}).get("cpu_critical_percent", 75))}, "cpu_critical_percent", 1, 100),
+                "memory_warning_mb": _int_range({"memory_warning_mb": process_monitor.get("memory_warning_mb", cfg.get("process_monitor", {}).get("memory_warning_mb", 100))}, "memory_warning_mb", 16, 4096),
+                "memory_critical_mb": _int_range({"memory_critical_mb": process_monitor.get("memory_critical_mb", cfg.get("process_monitor", {}).get("memory_critical_mb", 200))}, "memory_critical_mb", 32, 8192),
+                "sustained_seconds": _int_range({"sustained_seconds": process_monitor.get("sustained_seconds", cfg.get("process_monitor", {}).get("sustained_seconds", 300))}, "sustained_seconds", 30, 3600),
+            },
             "recording_storage": {
                 "expected_full": bool(recording_storage.get("expected_full", False)),
                 "minimum_free_mb_warning": _nullable_float_range(recording_storage, "minimum_free_mb_warning", 0, 1048576),
@@ -4847,6 +4885,10 @@ def start_web(cfg):
             raise ValueError("root disk warning must be lower than critical")
         if updates["thresholds"]["recordings_disk_warning_percent"] >= updates["thresholds"]["recordings_disk_critical_percent"]:
             raise ValueError("recordings disk warning must be lower than critical")
+        if updates["process_monitor"]["cpu_warning_percent"] >= updates["process_monitor"]["cpu_critical_percent"]:
+            raise ValueError("watchdog CPU warning must be lower than critical")
+        if updates["process_monitor"]["memory_warning_mb"] >= updates["process_monitor"]["memory_critical_mb"]:
+            raise ValueError("watchdog memory warning must be lower than critical")
         if cfg.get("hardware_watchdog", {}).get("enabled") and not updates["hardware_watchdog"]["enabled"]:
             raise ValueError("hardware watchdog feed cannot be disabled from general Settings; use the guarded Watchdog startup safety control")
         rs_warning = updates["recording_storage"]["minimum_free_mb_warning"]

@@ -36,6 +36,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "hardware_watchdog_control_path": "/var/lib/va-watchdog/hardware-watchdog-control.json",
     "trip_test_path": "/var/lib/va-watchdog/watchdog-trip-test.json",
+    "process_monitor": {
+        "enabled": True,
+        "cpu_warning_percent": 25,
+        "cpu_critical_percent": 75,
+        "memory_warning_mb": 100,
+        "memory_critical_mb": 200,
+        "sustained_seconds": 300
+    },
     "thresholds": {
         "cpu_temp_warning_c": 75,
         "cpu_temp_critical_c": 90,

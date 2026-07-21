@@ -5,6 +5,7 @@ from .hardware import check_hardware
 from .storage import check_storage
 from .services import check_services
 from .network import check_network
+from .process_monitor import check_watchdog_process
 
 
 def build_startup_summary(cfg, checks):
@@ -69,6 +70,7 @@ def collect_health(cfg):
     checks.extend(check_storage(cfg))
     checks.extend(check_services(cfg))
     checks.extend(check_network(cfg))
+    checks.append(check_watchdog_process(cfg))
 
     critical_failed = any(c.state == "critical" and c.critical for c in checks)
     recording_storage = next((c.value for c in checks if c.name == "recording_storage"), None)
@@ -83,4 +85,7 @@ def collect_health(cfg):
     }
     if isinstance(recording_storage, dict):
         status["recording_storage"] = recording_storage
+    process_check = next((c.value for c in checks if c.name == "watchdog_process"), None)
+    if isinstance(process_check, dict):
+        status["watchdog_process"] = process_check
     return status, checks

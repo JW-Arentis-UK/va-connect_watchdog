@@ -27,6 +27,14 @@
     "post_trip_grace_seconds": 900
   },
   "hardware_watchdog_control_path": "/var/lib/va-watchdog/hardware-watchdog-control.json",
+  "process_monitor": {
+    "enabled": true,
+    "cpu_warning_percent": 25,
+    "cpu_critical_percent": 75,
+    "memory_warning_mb": 100,
+    "memory_critical_mb": 200,
+    "sustained_seconds": 300
+  },
   "retention": {
     "max_total_mb": 100,
     "events_retention_days": 30,

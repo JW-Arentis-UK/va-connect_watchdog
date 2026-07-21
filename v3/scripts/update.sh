@@ -62,6 +62,12 @@ log "update started branch=$BRANCH remote=$REMOTE commit=$commit_before"
 commit_after="$("${GIT[@]}" rev-parse --short HEAD)"
 log "update pulled commit=$commit_after"
 
+if [ -f "$ROOT_DIR/systemd/va-watchdog.service" ]; then
+  install -m 0644 "$ROOT_DIR/systemd/va-watchdog.service" /etc/systemd/system/va-watchdog.service
+  systemctl daemon-reload
+  log "installed current va-watchdog systemd unit"
+fi
+
 systemctl restart va-watchdog
 log "service restart requested"
 sleep 2
