@@ -175,6 +175,7 @@ input[type="radio"] { width:18px; height:18px; }
 .history-box { height:calc(160px * var(--scale)); border:1px solid var(--line); border-radius:6px; background:linear-gradient(180deg, rgba(54,209,95,.18), rgba(54,209,95,.04)); display:flex; align-items:center; justify-content:center; color:var(--muted); }
 .trend-bars { display:flex; align-items:flex-end; gap:2px; height:34px; min-width:150px; padding:4px 0; }
 .trend-bar { flex:1; min-width:2px; background:var(--blue); border-radius:2px 2px 0 0; opacity:.8; }
+.top-watchdog { display:flex; align-items:center; gap:calc(8px * var(--scale)); border:1px solid var(--line); border-radius:8px; padding:calc(5px * var(--scale)) calc(8px * var(--scale)); background:var(--panel); white-space:nowrap; }
 pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale)); background:var(--input); border:1px solid var(--line); border-radius:6px; padding:calc(12px * var(--scale)); }
 .detail-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:calc(10px * var(--scale)); }
 .mini-card { border:1px solid var(--line); border-radius:6px; padding:calc(10px * var(--scale)); background:rgba(255,255,255,.03); min-width:0; }
@@ -275,17 +276,12 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   <aside class="sidebar">
     <div class="brand">VA-Connect Watchdog<small>Gateway resilience</small></div>
     <nav class="nav" id="nav">__SERVER_NAV__</nav>
-    <div class="side-status">
-      <div>Watchdog</div>
-      <div id="side-state" class="value">Loading</div>
-      <div class="label">Build</div>
-      <div class="value">__BUILD_ID__</div>
-    </div>
   </aside>
   <main class="main">
     <header class="topbar">
       <div id="page-title">__PAGE_MODE__ / __PAGE_TITLE__</div>
       <div class="topbar-right">
+        <div class="top-watchdog"><span>Watchdog</span><strong id="side-state" class="value">Loading</strong><span class="label">Build</span><strong>__BUILD_ID__</strong></div>
         <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="light">Light</option><option value="dark">Dark</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
         <span class="advanced-only"><label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label></span>
         <button class="ghost advanced-only" onclick="load()">Refresh now</button>
@@ -926,7 +922,16 @@ function renderEventsPage(){
 
 function renderHistoryPage(){
   const latest = (lastHistory || []).slice(-1)[0] || {};
-  return renderSimplePage('History', `<div class="detail-grid"><div><h3>Health Score</h3>${renderHistoryChart(lastHistory, 'score')}</div><div><h3>Recent Snapshot</h3><div class="label">Samples</div><div class="value">${escapeHtml((lastHistory || []).length)}</div><div class="label">Latest score</div><div class="value">${escapeHtml(latest.score ?? '-')}%</div><div class="label">Latest RAM</div><div class="value">${escapeHtml(latest.ram ?? '-')}%</div><div class="label">Latest CPU temp</div><div class="value">${escapeHtml(latest.temperature ?? '-')}</div><div class="label">Latest root disk</div><div class="value">${escapeHtml(latest.root_disk ?? '-')}%</div></div></div>${placeholderList(['Selectable time ranges','CPU temp/load trend','RAM trend','Disk trend','Service failure timeline'])}`);
+  const serviceNames = [...new Set((lastHistory || []).flatMap(row => (row.service_metrics || []).map(item => item.name)))];
+  const serviceTrend = (name, key, color) => {
+    const values = (lastHistory || []).flatMap(row => row.service_metrics || []).filter(item => item.name === name).map(item => Number(item[key])).filter(value => Number.isFinite(value)).slice(-30);
+    if (!values.length) return '<span class="muted">No samples yet</span>';
+    const max = Math.max(1, ...values);
+    return `<div class="trend-bars" title="Last ${values.length} retained samples">${values.map(value => `<span class="trend-bar" style="height:${Math.max(4, Math.round((value / max) * 30))}px;background:${color}" title="${value}"></span>`).join('')}</div>`;
+  };
+  const serviceRows = serviceNames.map(name => `<tr><td>${escapeHtml(name)}</td><td>${serviceTrend(name, 'cpu_percent', 'var(--blue)')}</td><td>${serviceTrend(name, 'memory_mb', 'var(--green)')}</td></tr>`).join('');
+  const serviceHistory = `<div class="card"><h3>Service History</h3><p class="muted">CPU and memory samples retained with the normal history interval. New samples appear after the watchdog has completed a history interval.</p><table><thead><tr><th>Service</th><th>CPU trend</th><th>Memory trend</th></tr></thead><tbody>${serviceRows || '<tr><td colspan="3">No service history has been captured yet.</td></tr>'}</tbody></table></div>`;
+  return renderSimplePage('History', `<div class="detail-grid"><div><h3>Health Score</h3>${renderHistoryChart(lastHistory, 'score')}</div><div><h3>Recent Snapshot</h3><div class="label">Samples</div><div class="value">${escapeHtml((lastHistory || []).length)}</div><div class="label">Latest score</div><div class="value">${escapeHtml(latest.score ?? '-')}%</div><div class="label">Latest RAM</div><div class="value">${escapeHtml(latest.ram ?? '-')}%</div><div class="label">Latest CPU temp</div><div class="value">${escapeHtml(latest.temperature ?? '-')}</div><div class="label">Latest root disk</div><div class="value">${escapeHtml(latest.root_disk ?? '-')}%</div></div></div>${serviceHistory}${placeholderList(['Selectable time ranges','CPU temp/load trend','RAM trend','Disk trend','Service failure timeline'])}`);
 }
 
 function renderPage(status, updateStatus, events){
