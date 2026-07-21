@@ -100,7 +100,7 @@ body { font-family:"Trebuchet MS", "DejaVu Sans", sans-serif; background:var(--b
 .brand small { display:block; margin-top:calc(5px * var(--scale)); color:var(--muted); font-size:calc(10px * var(--scale)); font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
 .nav { display:grid; gap:calc(6px * var(--scale)); }
 .nav button, .nav a { width:100%; text-align:left; background:transparent; color:var(--muted); border:1px solid transparent; border-radius:6px; padding:calc(10px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-size:inherit; text-decoration:none; display:block; }
-.nav button.active, .nav a.active { color:var(--text); background:#0f2d59; border-color:#235a9e; }
+.nav button.active, .nav a.active { color:#fff; background:var(--blue); border-color:var(--blue); font-weight:700; }
 .mode-switcher { display:grid; grid-template-columns:1fr; gap:calc(4px * var(--scale)); margin-bottom:calc(12px * var(--scale)); padding:calc(4px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel); }
 .nav .mode-tab { padding:calc(7px * var(--scale)) calc(8px * var(--scale)); text-align:left; font-size:calc(10px * var(--scale)); font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
 .nav .mode-tab.active { background:var(--blue); border-color:var(--blue); color:#fff; }
@@ -157,10 +157,14 @@ input[type="radio"] { width:18px; height:18px; }
 .events { display:grid; gap:calc(8px * var(--scale)); }
 .event { display:grid; grid-template-columns: calc(82px * var(--scale)) 1fr; gap:calc(8px * var(--scale)); border-top:1px solid var(--line); padding-top:calc(8px * var(--scale)); }
 .event-time { color:var(--muted); font-size:calc(12px * var(--scale)); }
-.event-card { border:1px solid var(--line); border-radius:6px; padding:calc(10px * var(--scale)); background:rgba(255,255,255,.025); }
+.event-card { border:1px solid var(--line); border-radius:6px; padding:calc(8px * var(--scale)); background:rgba(255,255,255,.025); }
 .event-card .event-head { display:flex; justify-content:space-between; gap:calc(10px * var(--scale)); align-items:center; margin-bottom:calc(6px * var(--scale)); }
 .event-card summary { cursor:pointer; list-style:none; }
 .event-card summary::-webkit-details-marker { display:none; }
+.event-summary { display:grid; grid-template-columns:calc(76px * var(--scale)) minmax(0, 1fr) auto; gap:calc(10px * var(--scale)); align-items:center; }
+.event-summary .event-message { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.event-card[open] .event-summary .event-message { white-space:normal; }
+.event-detail { margin-top:calc(8px * var(--scale)); padding-top:calc(8px * var(--scale)); border-top:1px solid var(--line); }
 .event-source { color:var(--muted); font-size:calc(12px * var(--scale)); }
 .event-message { font-weight:700; }
 .event-data { margin-top:calc(6px * var(--scale)); max-height:calc(130px * var(--scale)); }
@@ -259,6 +263,8 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   .page-intro { align-items:flex-start; }
   .quick-actions { grid-template-columns:1fr; }
   .summary-strip, .tool-grid, .settings-grid { grid-template-columns:1fr; }
+  .event-summary { grid-template-columns:auto 1fr; }
+  .event-summary .event-time { grid-column:2; }
 }
 </style>
 </head>
@@ -487,6 +493,7 @@ function setRefreshInterval(value){
     clearInterval(refreshTimer);
     refreshTimer = null;
   }
+  if (currentPage === 'Events') return;
   const ms = Number(value);
   if (ms > 0) {
     refreshTimer = setInterval(load, ms);
@@ -494,8 +501,21 @@ function setRefreshInterval(value){
 }
 
 function initRefresh(){
-  const saved = localStorage.getItem('va_watchdog_refresh_ms') || '5000';
+  let saved = localStorage.getItem('va_watchdog_refresh_ms');
+  if (!saved || saved === '5000') {
+    saved = '30000';
+    localStorage.setItem('va_watchdog_refresh_ms', saved);
+  }
   const select = document.getElementById('refresh-select');
+  if (currentPage === 'Events') {
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = null;
+    select.value = '0';
+    select.disabled = true;
+    select.title = 'Automatic refresh is paused while reviewing events';
+    return;
+  }
+  select.disabled = false;
   select.value = saved;
   setRefreshInterval(saved);
 }
@@ -575,7 +595,7 @@ function serviceRows(status){
 function renderEvents(events, limit=8){
   const rows = (events || []).slice(0, limit);
   if (!rows.length) return '<div class="event"><div class="event-time">-</div><div>No events yet</div></div>';
-  return rows.map(event => `<details class="event-card"><summary><div class="event-head"><span class="${statusClass(event.level)}">${escapeHtml((event.level || 'info').toUpperCase())}</span><span class="event-time">${escapeHtml(fmtTime(event.time))}</span></div><div class="event-message">${escapeHtml(event.message || '')}</div></summary><div class="event-source">Source: ${escapeHtml(event.source || '-')}</div>${event.data ? `<pre class="event-data">${escapeHtml(JSON.stringify(event.data, null, 2))}</pre>` : ''}</details>`).join('');
+  return rows.map(event => `<details class="event-card"><summary class="event-summary"><span class="${statusClass(event.level)}">${escapeHtml((event.level || 'info').toUpperCase())}</span><span class="event-message">${escapeHtml(event.message || '')}</span><span class="event-time">${escapeHtml(fmtTime(event.time))}</span></summary><div class="event-detail"><div class="event-source">Source: ${escapeHtml(event.source || '-')}</div>${event.data ? `<pre class="event-data">${escapeHtml(JSON.stringify(event.data, null, 2))}</pre>` : '<p class="muted">No additional event data.</p>'}</div></details>`).join('');
 }
 
 function filteredEvents(){
@@ -875,7 +895,7 @@ function renderEventsPage(){
   const matching = filteredEvents();
   const visible = matching.slice(0, eventDisplayLimit);
   const more = visible.length < matching.length ? `<div class="button-row"><button class="ghost" onclick="showMoreEvents()">Load 50 more</button></div>` : '';
-  return renderSimplePage('Events', `<div class="toolbar"><label>Level <select id="event-level-filter" onchange="setEventLevel(this.value)"><option value="all" ${eventLevelFilter === 'all' ? 'selected' : ''}>All</option><option value="critical" ${eventLevelFilter === 'critical' ? 'selected' : ''}>Critical</option><option value="degraded" ${eventLevelFilter === 'degraded' ? 'selected' : ''}>Degraded</option><option value="warning" ${eventLevelFilter === 'warning' ? 'selected' : ''}>Warning</option><option value="info" ${eventLevelFilter === 'info' ? 'selected' : ''}>Info</option><option value="healthy" ${eventLevelFilter === 'healthy' ? 'selected' : ''}>Healthy</option></select></label><label>Search <input id="event-search" value="${escapeHtml(eventSearch)}" oninput="setEventSearch(this.value)" placeholder="service, storage, watchdog"></label><label>From <input type="datetime-local" value="${escapeHtml(eventFrom)}" onchange="setEventDate('from', this.value)"></label><label>To <input type="datetime-local" value="${escapeHtml(eventTo)}" onchange="setEventDate('to', this.value)"></label><button class="ghost" onclick="clearEventFilters()">Clear filters</button><button class="action" onclick="exportEvents()">Export JSON</button><button class="ghost" onclick="exportEventsCsv()">Export CSV</button></div><p class="muted">Showing ${visible.length} of ${matching.length} matching events (${lastEvents.length} loaded). Times are shown in this browser's local time.</p><div class="events">${renderEvents(visible, visible.length)}</div>${more}<details class="advanced-disclosure"><summary>Event retention and cleanup</summary><p class="muted">These controls remove event records only. Status, history, configuration, diagnostics and CCTV recordings are not changed.</p><div class="button-row"><button class="ghost" onclick="purgeFilteredEvents()" ${eventTo ? '' : 'disabled'}>Delete events before To date</button><button class="danger" onclick="purgeAllEvents()">Clear all events</button></div></details>`);
+  return renderSimplePage('Events', `<p class="pill warning">Automatic refresh paused while you review events</p><p class="muted">Use Refresh now when you want the latest events. The normal dashboard refresh returns when you leave this page.</p><div class="toolbar"><label>Level <select id="event-level-filter" onchange="setEventLevel(this.value)"><option value="all" ${eventLevelFilter === 'all' ? 'selected' : ''}>All</option><option value="critical" ${eventLevelFilter === 'critical' ? 'selected' : ''}>Critical</option><option value="degraded" ${eventLevelFilter === 'degraded' ? 'selected' : ''}>Degraded</option><option value="warning" ${eventLevelFilter === 'warning' ? 'selected' : ''}>Warning</option><option value="info" ${eventLevelFilter === 'info' ? 'selected' : ''}>Info</option><option value="healthy" ${eventLevelFilter === 'healthy' ? 'selected' : ''}>Healthy</option></select></label><label>Search <input id="event-search" value="${escapeHtml(eventSearch)}" oninput="setEventSearch(this.value)" placeholder="service, storage, watchdog"></label><label>From <input type="datetime-local" value="${escapeHtml(eventFrom)}" onchange="setEventDate('from', this.value)"></label><label>To <input type="datetime-local" value="${escapeHtml(eventTo)}" onchange="setEventDate('to', this.value)"></label><button class="ghost" onclick="clearEventFilters()">Clear filters</button><button class="action" onclick="exportEvents()">Export JSON</button><button class="ghost" onclick="exportEventsCsv()">Export CSV</button></div><p class="muted">Showing ${visible.length} of ${matching.length} matching events (${lastEvents.length} loaded). Times are shown in this browser's local time.</p><div class="events">${renderEvents(visible, visible.length)}</div>${more}<details class="advanced-disclosure"><summary>Event retention and cleanup</summary><p class="muted">These controls remove event records only. Status, history, configuration, diagnostics and CCTV recordings are not changed.</p><div class="button-row"><button class="ghost" onclick="purgeFilteredEvents()" ${eventTo ? '' : 'disabled'}>Delete events before To date</button><button class="danger" onclick="purgeAllEvents()">Clear all events</button></div></details>`);
 }
 
 function renderHistoryPage(){
