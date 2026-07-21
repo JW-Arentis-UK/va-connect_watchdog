@@ -584,11 +584,16 @@ function tile(title, check, value, detail){
 }
 
 function serviceRows(status){
-  const services = (status.checks || []).filter(c => String(c.name || '').endsWith('.service'));
-  return services.map(c => {
-    const value = c.value || {};
-    const live = (lastServiceInfo.services || []).find(item => item.name === c.name) || {};
-    return `<tr><td>${escapeHtml(c.name)}</td><td><span class="pill">${escapeHtml((value.active || c.state || '-').toUpperCase())}</span></td><td>${escapeHtml(live.cpu_percent ?? '-')}</td><td>${escapeHtml(live.memory_mb !== undefined ? `${live.memory_mb} MB` : '-')}</td><td>${escapeHtml(value.restarts ?? live.restarts ?? '-')}</td><td>${escapeHtml(live.uptime || '-')}</td></tr>`;
+  const checks = (status.checks || []).filter(c => String(c.name || '').endsWith('.service'));
+  const liveServices = lastServiceInfo.services || [];
+  const names = [...new Set([...checks.map(c => c.name), ...liveServices.map(item => item.name)])];
+  return names.map(name => {
+    const check = checks.find(c => c.name === name) || {};
+    const value = check.value || {};
+    const live = liveServices.find(item => item.name === name) || {};
+    const active = value.active || live.active || check.state || '-';
+    const state = String(active).toLowerCase() === 'active' ? 'healthy' : 'warning';
+    return `<tr><td>${escapeHtml(name)}</td><td><span class="pill ${state}">${escapeHtml(String(active).toUpperCase())}</span></td><td>${escapeHtml(live.cpu_percent ?? '-')}</td><td>${escapeHtml(live.memory_mb !== undefined && live.memory_mb !== '-' ? `${live.memory_mb} MB` : '-')}</td><td>${escapeHtml(value.restarts ?? live.restarts ?? '-')}</td><td>${escapeHtml(live.uptime || '-')}</td></tr>`;
   }).join('');
 }
 
@@ -949,7 +954,10 @@ async function load(){
   if (core[3].status === 'fulfilled') lastSystemInfo = core[3].value;
   if (core[4].status === 'fulfilled') lastSettings = core[4].value;
   if (core[5].status === 'fulfilled') lastRetention = core[5].value;
-  if (core[6].status === 'fulfilled') lastVersion = core[6].value;
+  if (core[6].status === 'fulfilled') {
+    lastVersion = core[6].value;
+    if (lastVersion.commit && lastVersion.build_at) lastVersion.commit = `${lastVersion.commit} (${fmtTime(lastVersion.build_at)})`;
+  }
 
   const pageFetches = [];
   if (currentPage === 'Overview' || currentPage === 'Services') {
@@ -1235,12 +1243,15 @@ def start_web(cfg):
     def version_info():
         root = repo_root()
         commit = _quick_run(["git", "rev-parse", "--short", "HEAD"], cwd=root)
+        build_at = _quick_run(["git", "show", "-s", "--format=%cI", "HEAD"], cwd=root)
         branch = _quick_run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=root)
         remote = _quick_run(["git", "config", "--get", "remote.origin.url"], cwd=root)
         return {
             "name": "VA-Connect Watchdog",
             "branch": branch,
             "commit": commit,
+            "commit_id": commit,
+            "build_at": build_at,
             "remote": remote,
             "repo_root": str(root),
             "config_path": str(active_config_path()),
@@ -4736,6 +4747,7 @@ def start_web(cfg):
         services = []
         for item in cfg.get("services", []):
             services.append(service_snapshot(item))
+        services.insert(0, service_snapshot({"name": "va-watchdog", "critical": True, "restart": False}))
         return {"services": services}
 
     def service_detail(name):
