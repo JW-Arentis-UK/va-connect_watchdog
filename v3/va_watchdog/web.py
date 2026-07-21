@@ -2475,7 +2475,7 @@ def start_web(cfg):
                 f"{multi_history_chart(samples, [('cpu_load', 'CPU load'), ('ram', 'RAM')], 0, 100, '%')}"
                 "</div></div>"
                 + disclosure("Temperature and disk trends", extra_charts)
-                + disclosure("Service history", service_history_detail, opened=True)
+                + disclosure("Service history", service_history_detail)
                 + disclosure("History storage and state counts", storage_detail)
                 + disclosure("Recent sample data", samples_detail)
             )
