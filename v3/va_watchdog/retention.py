@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import time
+import json
+import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -88,8 +91,14 @@ def purge_data(cfg: dict[str, Any], mode: str = "old", older_than_days: int | No
     if older_than_days is not None:
         cutoff = time.time() - max(0, int(older_than_days)) * 86400
     removed = []
+    trimmed = []
     for path in data_files(cfg):
         if not path.exists() or path.name == "status.json":
+            continue
+        if mode != "all" and cutoff is not None and path.suffix == ".jsonl":
+            result = _trim_jsonl_before(path, cutoff)
+            if result["removed_rows"]:
+                trimmed.append(result)
             continue
         if mode == "all" or (cutoff is not None and path.stat().st_mtime < cutoff):
             try:
@@ -98,7 +107,7 @@ def purge_data(cfg: dict[str, Any], mode: str = "old", older_than_days: int | No
                 removed.append({"path": str(path), "size_bytes": size})
             except OSError:
                 pass
-    return {"removed": removed, "retention": retention_status(cfg)}
+    return {"removed": removed, "trimmed": trimmed, "retention": retention_status(cfg)}
 
 
 def enforce_retention(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -133,6 +142,12 @@ def enforce_retention(cfg: dict[str, Any]) -> dict[str, Any]:
             if dir_size(data_dir(cfg)) <= max_bytes:
                 break
             try:
+                if path.suffix == ".jsonl":
+                    excess = dir_size(data_dir(cfg)) - max_bytes
+                    result = _trim_jsonl_bytes(path, excess)
+                    if result["removed_rows"]:
+                        actions.append({"action": "trim_oldest_rows", **result})
+                    continue
                 size = file_size(path)
                 path.unlink()
                 actions.append({"action": "remove_oldest", "path": str(path), "size_bytes": size})
@@ -140,3 +155,50 @@ def enforce_retention(cfg: dict[str, Any]) -> dict[str, Any]:
                 continue
 
     return {"ok": True, "actions": actions, "over_budget": dir_size(data_dir(cfg)) > max_bytes, "retention": retention_status(cfg)}
+
+
+def _json_timestamp(line: str) -> float | None:
+    try:
+        payload = json.loads(line)
+        value = payload.get("time") if isinstance(payload, dict) else None
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp() if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _write_lines_atomic(path: Path, lines: list[str]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _trim_jsonl_before(path: Path, cutoff: float) -> dict[str, Any]:
+    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    kept = []
+    removed = 0
+    for line in lines:
+        timestamp = _json_timestamp(line)
+        if timestamp is not None and timestamp < cutoff:
+            removed += 1
+        else:
+            kept.append(line)
+    if removed:
+        _write_lines_atomic(path, kept)
+    return {"path": str(path), "removed_rows": removed, "remaining_rows": len(kept)}
+
+
+def _trim_jsonl_bytes(path: Path, minimum_bytes: int) -> dict[str, Any]:
+    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    removed_rows = 0
+    removed_bytes = 0
+    while lines and removed_bytes < max(1, minimum_bytes):
+        removed_bytes += len(lines.pop(0).encode("utf-8")) + 1
+        removed_rows += 1
+    if removed_rows:
+        _write_lines_atomic(path, lines)
+    return {
+        "path": str(path),
+        "removed_rows": removed_rows,
+        "remaining_rows": len(lines),
+        "removed_bytes": removed_bytes,
+    }

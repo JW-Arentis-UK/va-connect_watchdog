@@ -1,8 +1,72 @@
 from __future__ import annotations
 
 import json
+import os
+from datetime import datetime
 from pathlib import Path
+from threading import RLock
 from .common import now_iso
+
+EVENTS_LOCK = RLock()
+
+
+def _timestamp(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def read_events(path: str | Path, limit: int = 500) -> list[dict]:
+    target = Path(path)
+    if not target.exists():
+        return []
+    safe_limit = max(1, min(int(limit), 5000))
+    rows = []
+    with EVENTS_LOCK:
+        lines = target.read_text(encoding="utf-8", errors="ignore").splitlines()
+    for line in lines:
+        try:
+            payload = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(payload, dict):
+            rows.append(payload)
+    return list(reversed(rows[-safe_limit:]))
+
+
+def purge_events(path: str | Path, before: str | None = None, purge_all: bool = False) -> dict:
+    """Remove event rows atomically without touching any other watchdog data."""
+    target = Path(path)
+    if not target.exists():
+        return {"ok": True, "removed": 0, "remaining": 0}
+
+    cutoff = _timestamp(before) if before else None
+    if not purge_all and cutoff is None:
+        raise ValueError("A valid before timestamp is required")
+
+    kept = []
+    removed = 0
+    with EVENTS_LOCK:
+        for line in target.read_text(encoding="utf-8", errors="ignore").splitlines():
+            try:
+                payload = json.loads(line)
+            except (TypeError, ValueError):
+                kept.append(line)
+                continue
+            event_time = _timestamp(payload.get("time")) if isinstance(payload, dict) else None
+            should_remove = purge_all or (event_time is not None and event_time < cutoff)
+            if should_remove:
+                removed += 1
+            else:
+                kept.append(line)
+
+        temporary = target.with_suffix(target.suffix + ".tmp")
+        temporary.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+        os.replace(temporary, target)
+    return {"ok": True, "removed": removed, "remaining": len(kept)}
 
 class EventLog:
     def __init__(self, path: str):
@@ -18,8 +82,9 @@ class EventLog:
             "message": message,
             "data": data or {}
         }
-        with self.path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event) + "\n")
+        with EVENTS_LOCK:
+            with self.path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(event) + "\n")
 
     def add_state_changes(self, checks):
         for check in checks:

@@ -18,6 +18,8 @@ class RecoveryEngine:
         self.cfg = cfg
         self.event_log = event_log
         self.restart_attempts = defaultdict(int)
+        self.restart_limit_logged = set()
+        self.reboot_suppressed_logged = False
         self.critical_since = None
         self.last_action = {
             "state": "disabled",
@@ -53,11 +55,15 @@ class RecoveryEngine:
             self.critical_since = time.time()
         if not critical:
             self.critical_since = None
+            self.reboot_suppressed_logged = False
 
         actions = []
         if recovery.get("restart_failed_services"):
             service_names = {s["name"]: s for s in self.cfg["services"]}
             for c in checks:
+                if c.name in service_names and c.state == "healthy":
+                    self.restart_attempts[c.name] = 0
+                    self.restart_limit_logged.discard(c.name)
                 if c.name in service_names and c.state == "critical":
                     svc_cfg = service_names[c.name]
                     if svc_cfg.get("restart", False) and svc_cfg.get("critical", False):
@@ -91,7 +97,7 @@ class RecoveryEngine:
                     actions,
                     reason,
                 )
-            if not recovery.get("allow_reboot"):
+            if not recovery.get("allow_reboot") and not self.reboot_suppressed_logged:
                 self.event_log.add(
                     "warning",
                     "recovery",
@@ -102,6 +108,7 @@ class RecoveryEngine:
                         "critical_checks": [c.to_dict() for c in critical],
                     },
                 )
+                self.reboot_suppressed_logged = True
 
         if actions:
             return self._set_summary(
@@ -122,9 +129,23 @@ class RecoveryEngine:
     def _restart_service(self, name):
         limit = self.cfg["recovery"]["max_restart_attempts"]
         if self.restart_attempts[name] >= limit:
-            self.event_log.add("critical", "recovery", f"Restart limit reached for {name}")
+            if name not in self.restart_limit_logged:
+                self.event_log.add("critical", "recovery", f"Restart limit reached for {name}")
+                self.restart_limit_logged.add(name)
             return False
         self.restart_attempts[name] += 1
         self.event_log.add("warning", "recovery", f"Restarting {name}")
-        subprocess.run(["systemctl", "restart", name], timeout=20, check=False)
+        try:
+            result = subprocess.run(["systemctl", "restart", name], timeout=20, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            self.event_log.add("critical", "recovery", f"Restart failed for {name}", {"error": str(exc)})
+            return False
+        if result.returncode != 0:
+            self.event_log.add(
+                "critical",
+                "recovery",
+                f"Restart failed for {name}",
+                {"returncode": result.returncode},
+            )
+            return False
         return True

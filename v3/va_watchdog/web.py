@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, quote, unquote
 from .blackbox import blackbox_summary, read_blackbox
 from .config import active_config_path, deep_merge, load_raw_config, save_raw_config
 from .history import history_path, read_history
+from .events import purge_events, read_events
 from .retention import purge_data as retention_purge_data
 from .retention import retention_status as retention_status_for_cfg
 from .storage import apply_recording_service_mount_guards, configure_recording_storage, prepare_blank_recording_disk, recording_storage_candidates, recording_storage_status
@@ -408,6 +409,9 @@ let lastVersion = {};
 let refreshTimer = null;
 let eventLevelFilter = 'all';
 let eventSearch = '';
+let eventFrom = '';
+let eventTo = '';
+let eventDisplayLimit = 50;
 
 function escapeHtml(value){
   return String(value)
@@ -574,21 +578,52 @@ function renderEvents(events, limit=8){
   return rows.map(event => `<details class="event-card"><summary><div class="event-head"><span class="${statusClass(event.level)}">${escapeHtml((event.level || 'info').toUpperCase())}</span><span class="event-time">${escapeHtml(fmtTime(event.time))}</span></div><div class="event-message">${escapeHtml(event.message || '')}</div></summary><div class="event-source">Source: ${escapeHtml(event.source || '-')}</div>${event.data ? `<pre class="event-data">${escapeHtml(JSON.stringify(event.data, null, 2))}</pre>` : ''}</details>`).join('');
 }
 
-function filteredEvents(limit=50){
+function filteredEvents(){
   return (lastEvents || []).filter(event => {
     const levelOk = eventLevelFilter === 'all' || String(event.level || '').toLowerCase() === eventLevelFilter;
     const text = `${event.source || ''} ${event.message || ''}`.toLowerCase();
-    return levelOk && (!eventSearch || text.includes(eventSearch));
-  }).slice(0, limit);
+    const timestamp = new Date(event.time || '').getTime();
+    const fromOk = !eventFrom || (!Number.isNaN(timestamp) && timestamp >= new Date(eventFrom).getTime());
+    const toOk = !eventTo || (!Number.isNaN(timestamp) && timestamp <= new Date(eventTo).getTime());
+    return levelOk && fromOk && toOk && (!eventSearch || text.includes(eventSearch));
+  });
 }
 
 function setEventLevel(value){
   eventLevelFilter = value;
+  eventDisplayLimit = 50;
   render();
 }
 
 function setEventSearch(value){
   eventSearch = String(value || '').toLowerCase();
+  eventDisplayLimit = 50;
+  render();
+  const input = document.getElementById('event-search');
+  if (input) {
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+}
+
+function setEventDate(which, value){
+  if (which === 'from') eventFrom = value || '';
+  if (which === 'to') eventTo = value || '';
+  eventDisplayLimit = 50;
+  render();
+}
+
+function clearEventFilters(){
+  eventLevelFilter = 'all';
+  eventSearch = '';
+  eventFrom = '';
+  eventTo = '';
+  eventDisplayLimit = 50;
+  render();
+}
+
+function showMoreEvents(){
+  eventDisplayLimit += 50;
   render();
 }
 
@@ -837,8 +872,10 @@ function renderStoragePage(grouped){
 }
 
 function renderEventsPage(){
-  const events = filteredEvents(50);
-  return renderSimplePage('Events', `<div class="toolbar"><label>Level <select id="event-level-filter" onchange="setEventLevel(this.value)"><option value="all" ${eventLevelFilter === 'all' ? 'selected' : ''}>All</option><option value="critical" ${eventLevelFilter === 'critical' ? 'selected' : ''}>Critical</option><option value="degraded" ${eventLevelFilter === 'degraded' ? 'selected' : ''}>Degraded</option><option value="warning" ${eventLevelFilter === 'warning' ? 'selected' : ''}>Warning</option><option value="info" ${eventLevelFilter === 'info' ? 'selected' : ''}>Info</option><option value="healthy" ${eventLevelFilter === 'healthy' ? 'selected' : ''}>Healthy</option></select></label><label>Search <input id="event-search" value="${escapeHtml(eventSearch)}" oninput="setEventSearch(this.value)" placeholder="service, storage, watchdog"></label><button class="action" onclick="exportEvents()">Export JSON</button><button class="ghost" onclick="exportEventsCsv()">Export CSV</button></div><div class="events">${renderEvents(events, 50)}</div>${placeholderList(['Date range filter','Clear/purge events with confirmation'])}`);
+  const matching = filteredEvents();
+  const visible = matching.slice(0, eventDisplayLimit);
+  const more = visible.length < matching.length ? `<div class="button-row"><button class="ghost" onclick="showMoreEvents()">Load 50 more</button></div>` : '';
+  return renderSimplePage('Events', `<div class="toolbar"><label>Level <select id="event-level-filter" onchange="setEventLevel(this.value)"><option value="all" ${eventLevelFilter === 'all' ? 'selected' : ''}>All</option><option value="critical" ${eventLevelFilter === 'critical' ? 'selected' : ''}>Critical</option><option value="degraded" ${eventLevelFilter === 'degraded' ? 'selected' : ''}>Degraded</option><option value="warning" ${eventLevelFilter === 'warning' ? 'selected' : ''}>Warning</option><option value="info" ${eventLevelFilter === 'info' ? 'selected' : ''}>Info</option><option value="healthy" ${eventLevelFilter === 'healthy' ? 'selected' : ''}>Healthy</option></select></label><label>Search <input id="event-search" value="${escapeHtml(eventSearch)}" oninput="setEventSearch(this.value)" placeholder="service, storage, watchdog"></label><label>From <input type="datetime-local" value="${escapeHtml(eventFrom)}" onchange="setEventDate('from', this.value)"></label><label>To <input type="datetime-local" value="${escapeHtml(eventTo)}" onchange="setEventDate('to', this.value)"></label><button class="ghost" onclick="clearEventFilters()">Clear filters</button><button class="action" onclick="exportEvents()">Export JSON</button><button class="ghost" onclick="exportEventsCsv()">Export CSV</button></div><p class="muted">Showing ${visible.length} of ${matching.length} matching events (${lastEvents.length} loaded). Times are shown in this browser's local time.</p><div class="events">${renderEvents(visible, visible.length)}</div>${more}<details class="advanced-disclosure"><summary>Event retention and cleanup</summary><p class="muted">These controls remove event records only. Status, history, configuration, diagnostics and CCTV recordings are not changed.</p><div class="button-row"><button class="ghost" onclick="purgeFilteredEvents()" ${eventTo ? '' : 'disabled'}>Delete events before To date</button><button class="danger" onclick="purgeAllEvents()">Clear all events</button></div></details>`);
 }
 
 function renderHistoryPage(){
@@ -869,7 +906,7 @@ async function load(){
 
   const core = await Promise.allSettled([
     fetchJson('/api/update-status', lastUpdateStatus || {}),
-    fetchJson('/api/events', lastEvents || []),
+    fetchJson(currentPage === 'Events' ? '/api/events?limit=5000' : '/api/events?limit=10', lastEvents || []),
     fetchJson('/api/config-summary', lastConfigSummary || {}),
     fetchJson('/api/system-info', lastSystemInfo || {}),
     fetchJson('/api/settings-summary', lastSettings || {}),
@@ -982,6 +1019,43 @@ async function exportEventsCsv(){
   URL.revokeObjectURL(url);
 }
 
+async function requestEventPurge(payload){
+  const response = await fetch('/api/events/purge', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.ok) throw new Error(result.error || 'Event purge failed');
+  lastEvents = await fetchJson('/api/events?limit=500', []);
+  render();
+  return result;
+}
+
+async function purgeFilteredEvents(){
+  if (!eventTo) return;
+  const before = new Date(eventTo);
+  if (Number.isNaN(before.getTime())) return;
+  if (!confirm(`Delete event records before ${before.toLocaleString()}? This cannot be undone.`)) return;
+  try {
+    const result = await requestEventPurge({before: before.toISOString()});
+    alert(`${result.removed} event record(s) removed.`);
+  } catch (error) {
+    alert(`Event purge failed: ${error.message || error}`);
+  }
+}
+
+async function purgeAllEvents(){
+  if (!confirm('Clear ALL watchdog event records? This cannot be undone.')) return;
+  if (!confirm('Final confirmation: clear the complete Events list?')) return;
+  try {
+    const result = await requestEventPurge({purge_all: true});
+    alert(`${result.removed} event record(s) removed.`);
+  } catch (error) {
+    alert(`Event purge failed: ${error.message || error}`);
+  }
+}
+
 function linesFromTextarea(id){
   return String(document.getElementById(id)?.value || '')
     .split(/\\r?\\n/)
@@ -1081,6 +1155,11 @@ window.exportEvents = exportEvents;
 window.exportEventsCsv = exportEventsCsv;
 window.setEventLevel = setEventLevel;
 window.setEventSearch = setEventSearch;
+window.setEventDate = setEventDate;
+window.clearEventFilters = clearEventFilters;
+window.showMoreEvents = showMoreEvents;
+window.purgeFilteredEvents = purgeFilteredEvents;
+window.purgeAllEvents = purgeAllEvents;
 window.saveSettings = saveSettings;
 window.purgeOldData = purgeOldData;
 window.purgeAllData = purgeAllData;
@@ -2536,6 +2615,7 @@ def start_web(cfg):
 
     def storage_purge_result_html(result, mode):
         removed = result.get("removed", [])
+        trimmed = result.get("trimmed", [])
         rows = []
         for item in removed:
             if isinstance(item, dict):
@@ -2547,6 +2627,13 @@ def start_web(cfg):
                 )
             else:
                 rows.append(f"<tr><td>{escape(str(item))}</td><td>-</td></tr>")
+        for item in trimmed:
+            rows.append(
+                "<tr>"
+                f"<td>{escape(str(item.get('path', '-')))}</td>"
+                f"<td>{escape(str(item.get('removed_rows', 0)))} old row(s)</td>"
+                "</tr>"
+            )
         if not rows:
             rows.append("<tr><td colspan=\"2\">No files matched the purge rule.</td></tr>")
         retention = result.get("retention", {})
@@ -4760,18 +4847,8 @@ def start_web(cfg):
             "restart_required": False,
         }
 
-    def recent_events(limit=10):
-        if not events_path.exists():
-            return []
-        events = []
-        for line in events_path.read_text(encoding="utf-8", errors="ignore").splitlines()[-200:]:
-            try:
-                payload = json.loads(line)
-            except Exception:
-                continue
-            if isinstance(payload, dict):
-                events.append(payload)
-        return list(reversed(events))[:limit]
+    def recent_events(limit=500):
+        return read_events(events_path, limit=limit)
 
     def events_csv(limit=200):
         rows = recent_events(limit=limit)
@@ -4936,7 +5013,7 @@ def start_web(cfg):
             "hardware_watchdog": {
                 "enabled": bool(hardware.get("enabled", False)),
                 "device": str(hardware.get("device", "")),
-                "timeout_seconds": hardware.get("feed_interval_seconds"),
+                "timeout_seconds": hardware.get("timeout_seconds"),
             }
         }
 
@@ -5165,7 +5242,12 @@ def start_web(cfg):
                 self._send_json(load_update_status(cfg))
                 return
             if route_path == "/api/events":
-                self._send_json(recent_events())
+                query = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                try:
+                    limit = int(query.get("limit", ["500"])[0])
+                except (TypeError, ValueError):
+                    limit = 500
+                self._send_json(recent_events(limit=limit))
                 return
             if route_path == "/api/config-summary":
                 self._send_json(config_summary())
@@ -5189,10 +5271,10 @@ def start_web(cfg):
                 self._send_json(retention_status())
                 return
             if route_path == "/api/events/export":
-                self._send_json({"events": recent_events(limit=200)})
+                self._send_json({"events": recent_events(limit=5000)})
                 return
             if route_path == "/api/events/export.csv":
-                self._send_text(events_csv(limit=200), content_type="text/csv")
+                self._send_text(events_csv(limit=5000), content_type="text/csv")
                 return
             if route_path == "/api/history":
                 self._send_json(read_history(cfg, limit=288))
@@ -5262,6 +5344,20 @@ def start_web(cfg):
                 self._send_no_cache_headers()
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if route_path == "/api/events/purge":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else "{}"
+                    payload = json.loads(raw_body)
+                    result = purge_events(
+                        events_path,
+                        before=payload.get("before"),
+                        purge_all=payload.get("purge_all") is True,
+                    )
+                    self._send_json(result)
+                except Exception as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=400)
                 return
             if route_path == "/storage-purge-old":
                 try:
