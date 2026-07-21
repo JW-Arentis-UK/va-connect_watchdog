@@ -2433,14 +2433,13 @@ def start_web(cfg):
                 service_trend_rows.append(
                     "<tr>"
                     f"<td>{escape(name)}</td>"
-                    f"<td>{service_history_chart(samples, name, 'cpu_percent', 'CPU', '%')}</td>"
-                    f"<td>{service_history_chart(samples, name, 'memory_mb', 'Memory', ' MB')}</td>"
+                    f"<td>{service_combined_history_chart(samples, name)}</td>"
                     "</tr>"
                 )
             if not service_trend_rows:
-                service_trend_rows.append('<tr><td colspan="3">No service history samples have been captured yet. New samples appear after the configured history interval.</td></tr>')
+                service_trend_rows.append('<tr><td colspan="2">No service history samples have been captured yet. New samples appear after the configured history interval.</td></tr>')
             service_history_detail = (
-                '<div class="table-scroll"><table><thead><tr><th>Service</th><th>CPU trend</th><th>Memory trend</th></tr></thead>'
+                '<div class="table-scroll"><table><thead><tr><th>Service</th><th>CPU and RAM trend</th></tr></thead>'
                 f"<tbody>{''.join(service_trend_rows)}</tbody></table></div>"
             )
             storage_detail = (
@@ -3975,6 +3974,62 @@ def start_web(cfg):
                     service_rows.append({"time": row.get("time"), key: metric.get(key)})
         scale_max = 100 if key == "cpu_percent" else 512
         return f'<div class="service-trend"><div class="label">{escape(label)}</div>{multi_history_chart(service_rows, [(key, label)], 0, scale_max, suffix)}</div>'
+
+    def service_combined_history_chart(rows, service_name):
+        points = []
+        for row in rows:
+            metric = next(
+                (
+                    item for item in (row.get("service_metrics") or [])
+                    if isinstance(item, dict) and item.get("name") == service_name
+                ),
+                None,
+            )
+            if not metric:
+                continue
+            try:
+                cpu = float(metric.get("cpu_percent")) if metric.get("cpu_percent") is not None else None
+            except (TypeError, ValueError):
+                cpu = None
+            try:
+                memory = float(metric.get("memory_mb")) if metric.get("memory_mb") is not None else None
+            except (TypeError, ValueError):
+                memory = None
+            if cpu is not None or memory is not None:
+                points.append((cpu, memory))
+        points = points[-160:]
+        if not points:
+            return '<div class="history-box">No CPU/RAM history yet</div>'
+        width, height = 640, 190
+        left, right, top, bottom = 42, 42, 18, 32
+        plot_w, plot_h = width - left - right, height - top - bottom
+        cpu_max = max(1.0, max((point[0] or 0) for point in points))
+        memory_max = max(1.0, max((point[1] or 0) for point in points))
+        cpu_coords, memory_coords = [], []
+        for index, (cpu, memory) in enumerate(points):
+            x = left + (index / max(1, len(points) - 1)) * plot_w
+            if cpu is not None:
+                cpu_coords.append(f"{x:.1f},{top + (1 - min(1, cpu / cpu_max)) * plot_h:.1f}")
+            if memory is not None:
+                memory_coords.append(f"{x:.1f},{top + (1 - min(1, memory / memory_max)) * plot_h:.1f}")
+        cpu_latest = next((point[0] for point in reversed(points) if point[0] is not None), None)
+        memory_latest = next((point[1] for point in reversed(points) if point[1] is not None), None)
+        legend = (
+            f'<span style="color:var(--green)">CPU: {escape(str(round(cpu_latest, 1) if cpu_latest is not None else "-"))}% '
+            f'(max {escape(str(round(cpu_max, 1)))}%)</span> '
+            f'<span style="color:var(--blue)">RAM: {escape(str(round(memory_latest, 1) if memory_latest is not None else "-"))} MB '
+            f'(max {escape(str(round(memory_max, 1)))} MB)</span>'
+        )
+        svg = (
+            f'<svg class="chart" viewBox="0 0 {width} {height}" preserveAspectRatio="none">'
+            f'<line class="grid-line" x1="{left}" y1="{top}" x2="{width-right}" y2="{top}"></line>'
+            f'<line class="grid-line" x1="{left}" y1="{height-bottom}" x2="{width-right}" y2="{height-bottom}"></line>'
+            f'<text x="4" y="{top + 4}">100%</text><text x="4" y="{height-bottom}">0</text>'
+            f'<polyline points="{" ".join(cpu_coords)}" style="stroke:var(--green)"></polyline>'
+            f'<polyline points="{" ".join(memory_coords)}" style="stroke:var(--blue)"></polyline>'
+            "</svg>"
+        )
+        return f'<div class="service-trend"><div class="chart-legend">{legend}</div>{svg}</div>'
 
     def multi_history_chart(rows, series, min_value=0, max_value=100, suffix=""):
         width = 640
