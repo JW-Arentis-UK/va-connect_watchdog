@@ -19,7 +19,7 @@ Working plan:
 - [`docs/stage4_dashboard.md`](docs/stage4_dashboard.md)
 - [`scripts/stage1_reboot_check.sh`](scripts/stage1_reboot_check.sh)
 
-The web page now includes a watchdog update action that pulls the current branch and restarts the service in the background.
+The web page includes a watchdog update action that pulls the configured/current branch in a separate transient systemd unit. This allows the updater to restart `va-watchdog` without being terminated with the service, then records the final result in the Updates page and update log.
 
 Default monitored services:
 - esg.service

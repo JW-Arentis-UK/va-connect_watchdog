@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_URL="${1:-https://github.com/JW-Arentis-UK/va-connect_watchdog.git}"
-REPO_REF="${2:-codex/v3-gateway-ready}"
+REPO_REF="${2:-codex/gui-refresh}"
 INSTALL_DIR="${3:-/opt/va-connect-watchdog-v3}"
 
 if ! command -v git >/dev/null 2>&1; then

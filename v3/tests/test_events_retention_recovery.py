@@ -10,6 +10,7 @@ from unittest.mock import patch
 from va_watchdog.events import purge_events, read_events
 from va_watchdog.recovery import RecoveryEngine
 from va_watchdog.retention import purge_data
+from va_watchdog.update import launch_update_job
 
 
 class FakeEventLog:
@@ -90,6 +91,36 @@ class RecoveryTests(unittest.TestCase):
 
         self.assertEqual(engine.restart_attempts["esg.service"], 0)
         self.assertNotIn("esg.service", engine.restart_limit_logged)
+
+
+class UpdateTests(unittest.TestCase):
+    @patch("va_watchdog.update._git_value", side_effect=["abc1234", "codex/gui-refresh"])
+    @patch("va_watchdog.update.subprocess.run")
+    @patch("va_watchdog.update.shutil.which", return_value="/usr/bin/systemd-run")
+    def test_update_runs_in_separate_systemd_unit(self, _which, run, _git):
+        run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cfg = {
+                "events_path": str(root / "events.jsonl"),
+                "update": {
+                    "remote": "origin",
+                    "branch": "",
+                    "state_path": str(root / "update-state.json"),
+                    "log_path": str(root / "update.log"),
+                },
+            }
+
+            result = launch_update_job(cfg)
+
+            self.assertTrue(result["ok"])
+            command = run.call_args.args[0]
+            self.assertEqual(command[0], "/usr/bin/systemd-run")
+            self.assertIn("--collect", command)
+            self.assertIn("--no-block", command)
+            self.assertTrue(any(item.startswith("--unit=va-watchdog-update-") for item in command))
+            state = json.loads((root / "update-state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["state"], "queued")
 
 
 if __name__ == "__main__":

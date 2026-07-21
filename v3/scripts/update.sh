@@ -2,13 +2,15 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_DIR="$(cd "$ROOT_DIR/.." && pwd)"
 STATE_DIR="${VA_WATCHDOG_STATE_DIR:-/var/lib/va-watchdog}"
-STATE_FILE="$STATE_DIR/update-state.json"
-LOG_FILE="$STATE_DIR/update.log"
+STATE_FILE="${VA_WATCHDOG_STATE_FILE:-$STATE_DIR/update-state.json}"
+LOG_FILE="${VA_WATCHDOG_LOG_FILE:-$STATE_DIR/update.log}"
 REMOTE="${1:-origin}"
-BRANCH="${2:-$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD)}"
+GIT=(git -c "safe.directory=$REPO_DIR" -C "$REPO_DIR")
+BRANCH="${2:-$("${GIT[@]}" rev-parse --abbrev-ref HEAD)}"
 
-mkdir -p "$STATE_DIR"
+mkdir -p "$(dirname "$STATE_FILE")" "$(dirname "$LOG_FILE")"
 
 write_state() {
   local state="$1"
@@ -41,19 +43,29 @@ log() {
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" | tee -a "$LOG_FILE"
 }
 
-trap 'write_state "failed" "update failed"; log "update failed"; exit 1' ERR
+update_failed() {
+  local exit_code=$?
+  local line_number="${1:-unknown}"
+  local message="update failed at line $line_number (exit $exit_code)"
+  write_state "failed" "$message"
+  log "$message"
+  exit "$exit_code"
+}
+trap 'update_failed "$LINENO"' ERR
 
-commit_before="$(git -C "$ROOT_DIR" rev-parse --short HEAD)"
+commit_before="$("${GIT[@]}" rev-parse --short HEAD)"
 write_state "running" "update started" "$commit_before"
 log "update started branch=$BRANCH remote=$REMOTE commit=$commit_before"
 
-git -C "$ROOT_DIR" fetch "$REMOTE" "$BRANCH"
-git -C "$ROOT_DIR" pull --ff-only "$REMOTE" "$BRANCH"
-commit_after="$(git -C "$ROOT_DIR" rev-parse --short HEAD)"
+"${GIT[@]}" fetch "$REMOTE" "$BRANCH"
+"${GIT[@]}" pull --ff-only "$REMOTE" "$BRANCH"
+commit_after="$("${GIT[@]}" rev-parse --short HEAD)"
 log "update pulled commit=$commit_after"
 
 systemctl restart va-watchdog
 log "service restart requested"
+sleep 2
+systemctl is-active --quiet va-watchdog
 
 write_state "completed" "update completed" "$commit_after"
 log "update completed commit=$commit_after"
