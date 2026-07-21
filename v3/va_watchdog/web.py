@@ -2422,6 +2422,27 @@ def start_web(cfg):
                 f"{multi_history_chart(samples, [('root_disk', 'Root'), ('recordings_disk', 'Recordings')], 0, 100, '%')}"
                 "</div></div>"
             )
+            service_names = sorted({
+                str(metric.get("name"))
+                for sample in samples
+                for metric in (sample.get("service_metrics") or [])
+                if isinstance(metric, dict) and metric.get("name")
+            })
+            service_trend_rows = []
+            for name in service_names:
+                service_trend_rows.append(
+                    "<tr>"
+                    f"<td>{escape(name)}</td>"
+                    f"<td>{service_history_chart(samples, name, 'cpu_percent', 'CPU', '%')}</td>"
+                    f"<td>{service_history_chart(samples, name, 'memory_mb', 'Memory', ' MB')}</td>"
+                    "</tr>"
+                )
+            if not service_trend_rows:
+                service_trend_rows.append('<tr><td colspan="3">No service history samples have been captured yet. New samples appear after the configured history interval.</td></tr>')
+            service_history_detail = (
+                '<div class="table-scroll"><table><thead><tr><th>Service</th><th>CPU trend</th><th>Memory trend</th></tr></thead>'
+                f"<tbody>{''.join(service_trend_rows)}</tbody></table></div>"
+            )
             storage_detail = (
                 "<div class=\"grid lower-grid\"><div>"
                 "<h3>State Counts</h3><table><thead><tr><th>State</th><th>Samples</th></tr></thead>"
@@ -2454,6 +2475,7 @@ def start_web(cfg):
                 f"{multi_history_chart(samples, [('cpu_load', 'CPU load'), ('ram', 'RAM')], 0, 100, '%')}"
                 "</div></div>"
                 + disclosure("Temperature and disk trends", extra_charts)
+                + disclosure("Service history", service_history_detail, opened=True)
                 + disclosure("History storage and state counts", storage_detail)
                 + disclosure("Recent sample data", samples_detail)
             )
@@ -3944,6 +3966,15 @@ def start_web(cfg):
 
     def history_chart(rows, key, min_value=0, max_value=100, suffix=""):
         return multi_history_chart(rows, [(key, key)], min_value, max_value, suffix)
+
+    def service_history_chart(rows, service_name, key, label, suffix=""):
+        service_rows = []
+        for row in rows:
+            for metric in row.get("service_metrics", []) or []:
+                if isinstance(metric, dict) and metric.get("name") == service_name:
+                    service_rows.append({"time": row.get("time"), key: metric.get(key)})
+        scale_max = 100 if key == "cpu_percent" else 512
+        return f'<div class="service-trend"><div class="label">{escape(label)}</div>{multi_history_chart(service_rows, [(key, label)], 0, scale_max, suffix)}</div>'
 
     def multi_history_chart(rows, series, min_value=0, max_value=100, suffix=""):
         width = 640
