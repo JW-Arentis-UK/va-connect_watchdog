@@ -28,6 +28,7 @@ from .services import _runtime_stats
 from .watchdog_grace import arm_current_boot, delay_current_boot, startup_grace_status
 from .watchdog_test import arm_trip_test, confirm_trip_test, read_trip_test_state, trip_test_summary
 from .update import launch_update_job, load_update_status
+from .speedtest import run_speed_test
 
 HTML = """<!doctype html>
 <html>
@@ -2316,6 +2317,13 @@ def start_web(cfg):
                 f"<div class=\"label\">LAN neighbours</div><pre>{escape(str(info.get('neighbours', '-')))}</pre>"
                 f"<div class=\"label\">Listening TCP sockets</div><pre>{escape(str(info.get('listening_sockets', 'ss output not available')))}</pre>"
             )
+            speed_test_card = (
+                "<div class=\"card\"><h2>Internet Speed Test</h2>"
+                "<p class=\"section-lead\">Runs a short manual test for latency, download and upload speed. "
+                "It does not run during normal health checks and does not change the gateway health score.</p>"
+                "<form class=\"inline\" method=\"post\" action=\"/network-speed-test\">"
+                "<button class=\"action\" type=\"submit\">Run speed test</button></form></div>"
+            )
             return (
                 summary_strip([
                     ("Gateway", info.get("hostname", "-"), info.get("ip_addresses", "-") or "-", "healthy"),
@@ -2333,11 +2341,34 @@ def start_web(cfg):
                 f"<tbody>{''.join(remote_rows)}</tbody></table></div>"
                 "<p class=\"muted\">TeamViewer or other support tooling can be tracked here by adding the systemd service name in Settings.</p>"
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/settings\">Edit network targets</a></div></div>"
+                + speed_test_card
                 + disclosure("Interfaces and default route", interface_detail)
                 + disclosure("Support URLs and DNS", support_detail)
                 + disclosure("Routes, neighbours, and listening sockets", route_detail)
                 + disclosure("Health-engine network check", all_checks_table("Network Check", {"network_module"}))
             )
+
+        def speed_test_result_html(result):
+            status = "HEALTHY" if result.get("ok") else "WARNING"
+            status_class = "healthy" if result.get("ok") else "warning"
+            errors = result.get("errors") or []
+            error_html = "" if not errors else "<div class=\"notice warning\"><strong>Some measurements failed:</strong><ul>" + "".join(
+                f"<li>{escape(str(error))}</li>" for error in errors
+            ) + "</ul></div>"
+            body = (
+                "<div class=\"card\"><h2>Internet Speed Test</h2>"
+                f"<p class=\"{status_class}\"><strong>{status}</strong></p>"
+                "<div class=\"table-scroll\"><table><tbody>"
+                f"<tr><th>Latency</th><td>{escape(str(result.get('latency_ms') if result.get('latency_ms') is not None else '-'))} ms</td></tr>"
+                f"<tr><th>Download</th><td>{escape(str(result.get('download_mbps') if result.get('download_mbps') is not None else '-'))} Mbps</td></tr>"
+                f"<tr><th>Upload</th><td>{escape(str(result.get('upload_mbps') if result.get('upload_mbps') is not None else '-'))} Mbps</td></tr>"
+                f"<tr><th>Test duration</th><td>{escape(str(result.get('duration_seconds', '-')))} seconds</td></tr>"
+                f"<tr><th>Test time</th><td>{escape(str(result.get('tested_at', '-')))}</td></tr>"
+                "</tbody></table></div>"
+                f"{error_html}<p class=\"muted\">The test used a small, bounded transfer through speed.cloudflare.com.</p>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/network\">Back to Network</a></div></div>"
+            )
+            return page_shell(body, "Network")
 
         def recovery_page():
             recovery = status.get("recovery", {}) if isinstance(status.get("recovery", {}), dict) else {}
@@ -5518,6 +5549,27 @@ def start_web(cfg):
         def do_POST(self):
             request_context.theme = self._request_theme()
             route_path = self.path.split("?", 1)[0]
+            if route_path == "/network-speed-test":
+                try:
+                    result = run_speed_test()
+                except Exception as exc:
+                    result = {
+                        "ok": False,
+                        "tested_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                        "latency_ms": None,
+                        "download_mbps": None,
+                        "upload_mbps": None,
+                        "duration_seconds": 0,
+                        "errors": [str(exc)],
+                    }
+                body = speed_test_result_html(result).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path == "/update-now":
                 result = launch_update_job(cfg)
                 body = update_started_html(result).encode("utf-8")
