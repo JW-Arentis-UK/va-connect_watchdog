@@ -58,8 +58,10 @@ def _runtime_stats(name):
             cpu_percent = round(max(0.0, (cpu_ticks - previous[1]) / os.sysconf("SC_CLK_TCK") / elapsed * 100), 1)
         if cpu_ticks is not None:
             _CPU_SAMPLES[name] = (pid, cpu_ticks, now)
+        system_cpu_percent = round(cpu_percent / max(1, os.cpu_count() or 1), 1) if cpu_percent is not None else None
         return {
             "cpu_percent": cpu_percent,
+            "cpu_system_percent": system_cpu_percent,
             "memory_mb": round(int(parts[0]) / 1024, 1),
             "uptime_seconds": int(parts[1]),
         }

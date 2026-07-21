@@ -158,6 +158,7 @@ def _service_metrics(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "state": check.get("state"),
             "active": value.get("active"),
             "cpu_percent": value.get("cpu_percent"),
+            "cpu_system_percent": value.get("cpu_system_percent"),
             "memory_mb": value.get("memory_mb"),
             "restarts": value.get("restarts"),
         })

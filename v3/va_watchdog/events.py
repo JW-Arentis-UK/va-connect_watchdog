@@ -123,6 +123,7 @@ class EventLog:
             data = {
                 "service": name,
                 "cpu_percent": cpu,
+                "cpu_system_percent": round(cpu / max(1, os.cpu_count() or 1), 1) if cpu is not None else None,
                 "memory_mb": memory,
                 "cpu_warning_percent": cpu_warning,
                 "cpu_critical_percent": cpu_critical,
@@ -132,7 +133,7 @@ class EventLog:
             if state != "healthy":
                 resources = []
                 if cpu_high:
-                    resources.append(f"CPU {cpu:.1f}%")
+                    resources.append(f"CPU {cpu:.1f}% per core / {data['cpu_system_percent']:.1f}% system")
                 if memory_high:
                     resources.append(f"RAM {memory:.1f} MB")
                 self.add(state, name, f"{name} high resource usage: {', '.join(resources)}", data)

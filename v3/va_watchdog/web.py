@@ -345,6 +345,26 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
       items[i].style.display = 'none';
     }
   }
+  function restoreDisclosureState(){
+    var details = document.querySelectorAll('details.section-disclosure');
+    for (var i = 0; i < details.length; i++) {
+      var summary = details[i].querySelector('summary');
+      if (!summary) continue;
+      var key = 'va_watchdog_disclosure_' + location.pathname + '_' + summary.textContent.trim();
+      try {
+        var saved = localStorage.getItem(key);
+        if (saved === 'open') details[i].open = true;
+        if (saved === 'closed') details[i].open = false;
+      } catch (e) {}
+      details[i].addEventListener('toggle', function(){
+        var item = this.querySelector('summary');
+        if (!item) return;
+        try {
+          localStorage.setItem('va_watchdog_disclosure_' + location.pathname + '_' + item.textContent.trim(), this.open ? 'open' : 'closed');
+        } catch (e) {}
+      });
+    }
+  }
   window.vaWatchdogCompatibilityLoad = function(){
     request('/api/status', function(error, status){
       if (error) {
@@ -379,6 +399,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   var themeSelect = document.getElementById('theme-select');
   if (themeSelect) themeSelect.value = initialTheme;
   hideAdvancedControls();
+  restoreDisclosureState();
   window.vaWatchdogCompatibilityLoad();
 }());
 </script>
@@ -1630,7 +1651,7 @@ def start_web(cfg):
                     f"<td class=\"{'healthy' if active == 'active' else 'critical' if svc.get('critical') else 'warning'}\">{escape(active.upper())}</td>"
                     f"<td>{escape(str(svc.get('sub_state', '-')))}</td>"
                     f"<td>{escape(str(svc.get('unit_file_state', '-')))}</td>"
-                    f"<td>{escape(str(svc.get('cpu_percent', '-')))}</td>"
+                    f"<td>{escape(str(svc.get('cpu_percent', '-')))}% / {escape(str(svc.get('cpu_system_percent', '-')))}% system</td>"
                     f"<td>{escape(str(svc.get('memory_mb', '-')))} MB</td>"
                     f"<td>{escape(str(svc.get('restarts', '-')))}</td>"
                     f"<td>{escape(str(svc.get('uptime', '-')))}</td>"
@@ -1640,19 +1661,22 @@ def start_web(cfg):
                 )
             if not rows:
                 rows.append("<tr><td colspan=\"10\">No configured services found.</td></tr>")
-            active_count = sum(1 for svc in live if str(svc.get("active", "")) == "active")
+            videosoft = [svc for svc in live if svc.get("name") != "va-watchdog"]
+            active_count = sum(1 for svc in videosoft if str(svc.get("active", "")) == "active")
+            watchdog_service = next((svc for svc in live if svc.get("name") == "va-watchdog"), {})
             critical_failures = sum(1 for svc in live if svc.get("critical") and str(svc.get("active", "")) != "active")
             restart_count = sum(int(svc.get("restarts") or 0) for svc in live)
             return (
                 summary_strip([
-                    ("Videosoft services", f"{active_count}/{len(live)}", "Running now", "healthy" if live and active_count == len(live) else "warning"),
+                    ("Videosoft services", f"{active_count}/{len(videosoft)}", "Running now", "healthy" if videosoft and active_count == len(videosoft) else "warning"),
+                    ("Watchdog service", str(watchdog_service.get("active", "unknown")).upper(), "Process monitor", "healthy" if watchdog_service.get("active") == "active" else "critical"),
                     ("Critical failures", critical_failures, "Require attention", "critical" if critical_failures else "healthy"),
                     ("Service restarts", restart_count, "Since service start", "warning" if restart_count else "healthy"),
                     ("Monitoring", "ACTIVE", "Four configured units", "healthy"),
                 ])
                 + "<div class=\"card\"><h2>Videosoft Services</h2>"
-                "<p class=\"muted\">Restart actions require confirmation. A service CPU value is relative to one CPU core, so it can be higher than the whole-gateway CPU percentage.</p>"
-                "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Active</th><th>Substate</th><th>Enabled</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th><th>Critical</th><th>Actions</th></tr></thead>"
+                "<p class=\"muted\">CPU shows per-core usage followed by its whole-system equivalent. For example, 93% per core on a 4-core gateway is about 23% of total CPU capacity.</p>"
+                "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Active</th><th>Substate</th><th>Enabled</th><th>CPU / system</th><th>Memory</th><th>Restarts</th><th>Uptime</th><th>Critical</th><th>Actions</th></tr></thead>"
                 f"<tbody>{''.join(rows)}</tbody></table></div></div>"
             )
 
@@ -2581,6 +2605,7 @@ def start_web(cfg):
             + operational_alerts_card()
             + quick_actions_card()
             + "</div>"
+            + disclosure("Services", services_card())
         )
 
         if page == "Overview":
