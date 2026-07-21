@@ -16,10 +16,12 @@ from .history import append_history
 from .recovery import RecoveryEngine
 from .retention import enforce_retention
 from .systemd_notify import notify as systemd_notify
-from .watchdog_device import HardwareWatchdog
 from .watchdog_grace import startup_grace_status
 from .watchdog_test import trip_test_active
 from .web import start_web
+from .heartbeat import heartbeat_paths, read_state, write_heartbeat
+from .reboot_evidence import create as create_reboot_evidence
+from .kernel_faults import scan as scan_kernel_faults
 
 def atomic_write_json(path: str, data):
     p = Path(path)
@@ -125,14 +127,32 @@ def add_hardware_feed_check(status, cfg):
     return status
 
 
-def hardware_feed_status(hw, startup_grace, trip_active=False, trip_summary=None, fed=False):
+def hardware_feed_status(cfg, startup_grace, trip_active=False, trip_summary=None, fed=False):
+    feed_path = Path(cfg.get("hardware_watchdog_feed_state_path") or Path(cfg["events_path"]).parent / "hardware-watchdog-feed.json")
+    feed = {}
+    try:
+        feed = json.loads(feed_path.read_text(encoding="utf-8")) if feed_path.exists() else {}
+    except Exception:
+        feed = {}
+    hw_cfg = cfg.get("hardware_watchdog", {})
+    last_feed_unix = feed.get("last_feed_unix")
+    try:
+        feed_age = round(max(0.0, time.time() - float(last_feed_unix)), 1) if last_feed_unix else None
+    except (TypeError, ValueError):
+        feed_age = None
     return {
-        "enabled": hw.enabled,
-        "device": hw.device,
-        "opened": hw.opened,
-        "last_feed_unix": hw.last_feed,
-        "feed_count": hw.feed_count,
-        "timeout_seconds": hw.get_timeout(),
+        "enabled": bool(hw_cfg.get("enabled")),
+        "device": feed.get("device") or hw_cfg.get("device", "/dev/watchdog0"),
+        "opened": feed.get("process_status") in {"running", "feeding", "paused_stale_heartbeat", "paused_trip_test"},
+        "last_feed_unix": last_feed_unix,
+        "feed_age_seconds": feed_age,
+        "last_feed_utc": feed.get("last_feed_utc", ""),
+        "feed_count": feed.get("feed_count", 0),
+        "timeout_seconds": feed.get("timeout_seconds") or hw_cfg.get("timeout_seconds", 30),
+        "feed_process_status": feed.get("process_status", "unknown"),
+        "feed_last_error": feed.get("last_error", ""),
+        "feed_error_count": feed.get("error_count", 0),
+        "stale_heartbeat_seconds": feed.get("stale_heartbeat_seconds") or hw_cfg.get("stale_heartbeat_seconds", 15),
         "fed_this_cycle": fed,
         "trip_test_active": trip_active,
         "trip_test": trip_summary or {},
@@ -145,21 +165,19 @@ def main():
     recovery = RecoveryEngine(cfg, event_log)
     last_trip_active = False
     boot_change = check_unexpected_boot(cfg, event_log)
-
-    hw = HardwareWatchdog(
-        enabled=cfg["hardware_watchdog"]["enabled"],
-        device=cfg["hardware_watchdog"]["device"],
-        feed_interval=cfg["hardware_watchdog"]["feed_interval_seconds"],
-        event_log=event_log,
-        timeout_seconds=cfg["hardware_watchdog"].get("timeout_seconds", 30),
-    )
+    reboot_evidence = create_reboot_evidence(cfg, boot_change)
+    if reboot_evidence and boot_change.get("changed"):
+        event_log.add(
+            "warning" if reboot_evidence.get("confidence") != "High" else "critical",
+            "reboot_evidence",
+            f"Previous reboot classified as {reboot_evidence.get('reset_mechanism', 'Unknown')}",
+            reboot_evidence,
+        )
 
     event_log.add("info", "watchdog", "VA-Connect Watchdog starting")
     trip_active, trip_summary = trip_test_active(cfg)
     startup_grace = startup_grace_status(cfg, trip_summary)
-    if not startup_grace.get("active") and not trip_active:
-        hw.open()
-    elif startup_grace.get("active"):
+    if startup_grace.get("active"):
         event_log.add(
             "info",
             "hardware_watchdog",
@@ -169,7 +187,7 @@ def main():
 
     status, checks = collect_health(cfg)
     status["hardware_watchdog_feed"] = hardware_feed_status(
-        hw,
+        cfg,
         startup_grace,
         trip_active=trip_active,
         trip_summary=trip_summary,
@@ -177,6 +195,7 @@ def main():
     add_hardware_feed_check(status, cfg)
     status["recovery"] = recovery.summary()
     status["boot_change"] = boot_change
+    status["reboot_evidence"] = reboot_evidence
     event_log.add(
         "info",
         "watchdog",
@@ -184,13 +203,18 @@ def main():
         status["startup_summary"],
     )
     atomic_write_json(cfg["status_path"], status)
+    status["heartbeat"] = write_heartbeat(cfg, 0, status["hardware_watchdog_feed"].get("last_feed_utc", ""), True)
+    atomic_write_json(cfg["status_path"], status)
     append_history(cfg, status)
     maybe_capture_blackbox(cfg, status, force=True)
     start_web(cfg)
     systemd_notify("READY=1\nSTATUS=VA-Connect Watchdog running")
 
+    health_sequence = 0
+    last_kernel_scan = 0.0
     while True:
         try:
+            health_sequence += 1
             status, checks = collect_health(cfg)
             event_log.add_state_changes(checks)
             event_log.add_service_resource_changes(checks, cfg)
@@ -198,9 +222,6 @@ def main():
             recovery.process(checks)
             trip_active, trip_summary = trip_test_active(cfg)
             startup_grace = startup_grace_status(cfg, trip_summary)
-            hw.enabled = bool(cfg.get("hardware_watchdog", {}).get("enabled"))
-            if hw.enabled and not hw.opened and not startup_grace.get("active") and not trip_active:
-                hw.open()
             if trip_active and not last_trip_active:
                 event_log.add(
                     "warning",
@@ -208,18 +229,21 @@ def main():
                     "Deliberate watchdog trip test active; hardware feed paused for this boot",
                     trip_summary,
                 )
-            feed_allowed = not status["critical_failed"] and not trip_active and not startup_grace.get("active")
-            fed = hw.feed_if_due(feed_allowed)
             status["hardware_watchdog_feed"] = hardware_feed_status(
-                hw,
+                cfg,
                 startup_grace,
                 trip_active=trip_active,
                 trip_summary=trip_summary,
-                fed=fed,
+                fed=False,
             )
             add_hardware_feed_check(status, cfg)
             status["recovery"] = recovery.summary()
+            if time.time() - last_kernel_scan >= 30:
+                status["kernel_faults"] = scan_kernel_faults(cfg, event_log)
+                last_kernel_scan = time.time()
             status["blackbox"] = maybe_capture_blackbox(cfg, status)
+            atomic_write_json(cfg["status_path"], status)
+            status["heartbeat"] = write_heartbeat(cfg, health_sequence, status["hardware_watchdog_feed"].get("last_feed_utc", ""), True)
             atomic_write_json(cfg["status_path"], status)
             append_history(cfg, status)
             retention_result = enforce_retention(cfg)

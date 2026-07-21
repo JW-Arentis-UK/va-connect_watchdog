@@ -29,6 +29,11 @@ def data_files(cfg: dict[str, Any]) -> list[Path]:
         base / "history.jsonl",
         base / "blackbox.jsonl",
         base / "blackbox-state.json",
+        base / "heartbeat-state.json",
+        base / "heartbeat.jsonl",
+        base / "reboot-evidence.jsonl",
+        base / "kernel-fault-state.json",
+        base / "hardware-watchdog-feed.json",
     ]
     custom_history = history_path(cfg)
     if custom_history not in files:

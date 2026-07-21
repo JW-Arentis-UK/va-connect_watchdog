@@ -29,6 +29,8 @@ from .watchdog_grace import arm_current_boot, delay_current_boot, startup_grace_
 from .watchdog_test import arm_trip_test, confirm_trip_test, read_trip_test_state, trip_test_summary
 from .update import launch_update_job, load_update_status
 from .speedtest import run_speed_test
+from .heartbeat import heartbeat_paths, read_state, read_tail, heartbeat_age_seconds
+from .journal import persistent_status, enable_persistent
 
 HTML = """<!doctype html>
 <html>
@@ -2569,9 +2571,30 @@ def start_web(cfg):
                     ("RTSP probe", "Planned: verify stream access and response timing.", "", ""),
                 ])
                 + "</div>"
+                + f"<div class=\"card\"><h2>Persistent Journal</h2><p class=\"{'healthy' if persistent_status().get('enabled') else 'warning'}\">{'Enabled' if persistent_status().get('enabled') else 'Disabled or unavailable'}</p><p class=\"muted\">Persistent journals preserve kernel and service evidence across reboot.</p><div class=\"button-row\"><a class=\"ghost\" href=\"/journal-enable-confirm\">Enable persistent logging</a></div></div>"
                 + disclosure("Useful terminal commands", commands)
                 + disclosure("All health-engine checks", all_checks_table("Diagnostics Checks"))
             )
+
+        def journal_enable_confirm_html():
+            current = persistent_status()
+            body = (
+                "<div class=\"card\"><h2>Enable Persistent Journald</h2>"
+                "<p>Current journal persistence status: <strong>" + escape("Enabled" if current.get("enabled") else "Disabled or unavailable") + "</strong></p>"
+                "<p class=\"muted\">This creates /var/log/journal if required, preserves unrelated settings, flushes journald and restarts only systemd-journald.</p>"
+                "<form method=\"post\" action=\"/journal-enable\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> I understand this changes system logging storage.</label>"
+                "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Enable persistent logging</button><a class=\"ghost\" href=\"/diagnostics\">Cancel</a></div></form></div>"
+            )
+            return page_shell(body, "Diagnostics")
+
+        def journal_action_result_html(result):
+            body = (
+                "<div class=\"card\"><h2>Persistent Journald</h2>"
+                f"<p class=\"{'healthy' if result.get('ok') else 'warning'}\">{escape(str(result.get('message', 'Action completed')))}</p>"
+                f"<pre>{escape(json.dumps(result, indent=2))}</pre>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/diagnostics\">Back to Diagnostics</a></div></div>"
+            )
+            return page_shell(body, "Diagnostics")
 
         error_html = ""
         if status.get("error"):
@@ -2587,6 +2610,9 @@ def start_web(cfg):
         service_checks = [check for check in checks if str(check.get("name", "")).endswith(".service")]
         healthy_service_count = sum(1 for check in service_checks if check.get("state") == "healthy")
         feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
+        heartbeat = status.get("heartbeat", {}) if isinstance(status.get("heartbeat", {}), dict) else {}
+        reboot_evidence = status.get("reboot_evidence", {}) if isinstance(status.get("reboot_evidence", {}), dict) else {}
+        journal = persistent_status()
         startup_grace = feed.get("startup_grace", {}) if isinstance(feed.get("startup_grace", {}), dict) else {}
         if startup_grace.get("active"):
             grace_seconds = int(startup_grace.get("remaining_seconds", 0) or 0)
@@ -2632,6 +2658,15 @@ def start_web(cfg):
             "<div class=\"breakdown-row\"><span>View</span><strong>Operations</strong></div>"
             "</div></div>"
             + metric_tiles()
+            + "<div class=\"card\"><h2>Stability Evidence</h2><div class=\"table-scroll\"><table><tbody>"
+            + f"<tr><th>Last health sample</th><td>{escape(local_time(status.get('time')))}</td></tr>"
+            + f"<tr><th>Last watchdog feed</th><td>{escape(str(feed.get('last_feed_utc') or '-'))}</td></tr>"
+            + f"<tr><th>Feed status</th><td>{escape(str(feed.get('feed_process_status') or 'unknown'))}; age {escape(str(feed.get('feed_age_seconds') if feed.get('feed_age_seconds') is not None else '-'))}s; threshold {escape(str(feed.get('stale_heartbeat_seconds') or '-'))}s</td></tr>"
+            + f"<tr><th>Last heartbeat</th><td>{escape(local_time(heartbeat.get('time')))}</td></tr>"
+            + f"<tr><th>Heartbeat age</th><td>{escape(str(heartbeat_age_seconds(heartbeat) if heartbeat else '-'))}s</td></tr>"
+            + f"<tr><th>Previous reboot</th><td>{escape(str(reboot_evidence.get('reset_mechanism') or 'No previous reboot evidence'))}; confidence {escape(str(reboot_evidence.get('confidence') or '-'))}</td></tr>"
+            + f"<tr><th>Persistent journal</th><td class=\"{'healthy' if journal.get('enabled') else 'warning'}\">{'Yes' if journal.get('enabled') else 'No'}</td></tr>"
+            + "</tbody></table></div></div>"
             + "<div class=\"grid operations-grid\">"
             + operational_alerts_card()
             + quick_actions_card()
@@ -4523,7 +4558,21 @@ def start_web(cfg):
             "uptime_seconds": uptime_seconds,
             "timezone": time.tzname,
             "rtc": rtc_status(),
+            "heartbeat": {
+                "state": read_state(cfg),
+                "age_seconds": heartbeat_age_seconds(read_state(cfg)),
+                "history_tail": read_tail(cfg, 5),
+            },
+            "persistent_journal": persistent_status(),
+            "reboot_evidence": _read_json_file(Path(cfg.get("reboot_evidence_path") or data_dir / "reboot-evidence.jsonl").with_name("last-reboot-evidence.json")),
         }
+
+    def _read_json_file(path):
+        try:
+            value = json.loads(Path(path).read_text(encoding="utf-8")) if Path(path).exists() else {}
+            return value if isinstance(value, dict) else {}
+        except Exception:
+            return {}
 
     def network_info():
         network_cfg = cfg.get("network", {})
@@ -5162,6 +5211,9 @@ def start_web(cfg):
             "journal_tail": journal["stdout"] or journal["stderr"],
             "install_status": install,
             "blackbox": blackbox_summary(cfg),
+            "persistent_journal": persistent_status(),
+            "heartbeat": {"state": read_state(cfg), "age_seconds": heartbeat_age_seconds(read_state(cfg))},
+            "reboot_evidence": _read_json_file(Path(cfg.get("reboot_evidence_path") or data_dir / "reboot-evidence.jsonl").with_name("last-reboot-evidence.json")),
             "generated_at_unix": time.time(),
         }
 
@@ -5170,7 +5222,7 @@ def start_web(cfg):
         status = status_snapshot()
         services = cfg.get("services", []) if isinstance(cfg.get("services", []), list) else []
         service_names = [str(item.get("name", "")).strip() for item in services if isinstance(item, dict) and item.get("name")]
-        watched_services = ["va-watchdog"] + service_names
+        watched_services = ["va-watchdog", "va-watchdog-feed"] + service_names
         service_status_cmd = ["systemctl", "status", *watched_services, "--no-pager", "-l"]
         bundle = {
             "generated_utc": generated,
@@ -5184,6 +5236,7 @@ def start_web(cfg):
         command_outputs = {
             "systemctl-status.txt": _run(service_status_cmd, timeout=10),
             "va-watchdog-journal.txt": _run(["journalctl", "-u", "va-watchdog", "--since", "7 days ago", "--no-pager"], timeout=15),
+            "va-watchdog-feed-journal.txt": _run(["journalctl", "-u", "va-watchdog-feed", "--since", "7 days ago", "--no-pager"], timeout=15),
             "kernel-journal.txt": _run(["journalctl", "-k", "--since", "7 days ago", "--no-pager"], timeout=15),
             "reboots-last-x.txt": _run(["last", "-x"], timeout=10),
             "disk-lsblk.txt": _run(["lsblk", "-o", "NAME,PATH,TYPE,SIZE,FSTYPE,LABEL,MOUNTPOINT,MODEL,SERIAL"], timeout=5),
@@ -5191,6 +5244,8 @@ def start_web(cfg):
             "watchdog-wdctl.txt": _run(["wdctl", str(cfg.get("hardware_watchdog", {}).get("device") or "/dev/watchdog0")], timeout=5),
             "network-ip-addr.txt": _run(["ip", "-4", "addr", "show"], timeout=5),
             "network-routes.txt": _run(["ip", "route"], timeout=5),
+            "kernel-previous-boot.txt": _run(["journalctl", "-b", "-1", "-k", "--no-pager"], timeout=15),
+            "journal-persistent-status.txt": {"stdout": json.dumps(persistent_status(), indent=2), "stderr": "", "returncode": 0},
         }
         file_sources = {
             "status.json": status_path,
@@ -5202,6 +5257,12 @@ def start_web(cfg):
             "last-reboot-reason.json": Path(cfg.get("last_reboot_reason_path") or data_dir / "last-reboot-reason.json"),
             "hardware-watchdog-control.json": Path(cfg.get("hardware_watchdog_control_path") or data_dir / "hardware-watchdog-control.json"),
             "watchdog-trip-test.json": Path(cfg.get("trip_test_path") or data_dir / "watchdog-trip-test.json"),
+            "heartbeat-state.json": Path(cfg.get("heartbeat_state_path") or data_dir / "heartbeat-state.json"),
+            "heartbeat.jsonl": Path(cfg.get("heartbeat_path") or data_dir / "heartbeat.jsonl"),
+            "reboot-evidence.jsonl": Path(cfg.get("reboot_evidence_path") or data_dir / "reboot-evidence.jsonl"),
+            "last-reboot-evidence.json": Path(cfg.get("reboot_evidence_path") or data_dir / "reboot-evidence.jsonl").with_name("last-reboot-evidence.json"),
+            "hardware-watchdog-feed.json": Path(cfg.get("hardware_watchdog_feed_state_path") or data_dir / "hardware-watchdog-feed.json"),
+            "kernel-fault-state.json": Path(cfg.get("kernel_fault_state_path") or data_dir / "kernel-fault-state.json"),
         }
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -5329,6 +5390,15 @@ def start_web(cfg):
                 return
             if route_path == "/storage-purge-confirm":
                 body = storage_purge_confirm_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/journal-enable-confirm":
+                body = journal_enable_confirm_html().encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
@@ -5564,6 +5634,18 @@ def start_web(cfg):
                     }
                 body = speed_test_result_html(result).encode("utf-8")
                 self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/journal-enable":
+                length = int(self.headers.get("Content-Length", "0"))
+                form = parse_qs(self.rfile.read(length).decode("utf-8") if length else "", keep_blank_values=True)
+                result = enable_persistent() if form.get("ack", [""])[0] == "1" else {"ok": False, "message": "Confirmation was not selected."}
+                body = journal_action_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 400)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()

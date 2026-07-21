@@ -1,0 +1,18 @@
+[Unit]
+Description=VA-Connect Hardware Watchdog Feeder
+After=local-fs.target
+Before=va-watchdog.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m va_watchdog.watchdog_feed
+WorkingDirectory=/opt/va-connect-watchdog-v3/v3
+Restart=on-failure
+RestartSec=3
+User=root
+Group=root
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

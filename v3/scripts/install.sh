@@ -13,8 +13,11 @@ if [ ! -f "$CONFIG_DIR/config.json" ]; then
 fi
 
 sudo cp "$APP_DIR/systemd/va-watchdog.service" /etc/systemd/system/va-watchdog.service
+sudo cp "$APP_DIR/systemd/va-watchdog-feed.service" /etc/systemd/system/va-watchdog-feed.service
 sudo systemctl daemon-reload
+sudo systemctl enable va-watchdog-feed.service
 sudo systemctl enable va-watchdog.service
+sudo systemctl restart va-watchdog-feed.service
 sudo systemctl restart va-watchdog.service
 
 echo "Installed VA-Connect Watchdog"

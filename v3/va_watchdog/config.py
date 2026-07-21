@@ -12,6 +12,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "events_path": "/var/lib/va-watchdog/events.jsonl",
     "history_path": "/var/lib/va-watchdog/history.jsonl",
     "last_reboot_reason_path": "/var/lib/va-watchdog/last-reboot-reason.json",
+    "heartbeat_state_path": "/var/lib/va-watchdog/heartbeat-state.json",
+    "heartbeat_path": "/var/lib/va-watchdog/heartbeat.jsonl",
+    "reboot_evidence_path": "/var/lib/va-watchdog/reboot-evidence.jsonl",
+    "kernel_fault_state_path": "/var/lib/va-watchdog/kernel-fault-state.json",
+    "hardware_watchdog_feed_state_path": "/var/lib/va-watchdog/hardware-watchdog-feed.json",
+    "hardware_watchdog_lock_path": "/var/lib/va-watchdog/hardware-watchdog.lock",
     "blackbox": {
         "enabled": True,
         "path": "/var/lib/va-watchdog/blackbox.jsonl",
@@ -31,6 +37,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "device": "/dev/watchdog0",
         "feed_interval_seconds": 10,
         "timeout_seconds": 30,
+        "stale_heartbeat_seconds": 15,
+        "magic_close": False,
         "startup_grace_seconds": 300,
         "post_trip_grace_seconds": 900
     },
@@ -134,7 +142,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "history_retention_days": 30,
         "history_sample_seconds": 60,
         "history_max_rows": 50000,
-        "exports_retention_days": 14
+        "exports_retention_days": 14,
+        "heartbeat_max_rows": 3600,
+        "heartbeat_max_mb": 5
     }
 }
 
