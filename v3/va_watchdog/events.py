@@ -93,6 +93,53 @@ class EventLog:
                 self.add(check.state, check.name, f"{check.name} changed from {old} to {check.state}", check.to_dict())
             self.previous_states[check.name] = check.state
 
+    def add_service_resource_changes(self, checks, cfg=None):
+        limits = (cfg or {}).get("service_resource_limits", {})
+        cpu_warning = float(limits.get("cpu_warning_percent", 80) or 80)
+        cpu_critical = float(limits.get("cpu_critical_percent", 95) or 95)
+        memory_warning = float(limits.get("memory_warning_mb", 512) or 512)
+        memory_critical = float(limits.get("memory_critical_mb", 1024) or 1024)
+        for check in checks:
+            name = str(getattr(check, "name", ""))
+            if not name.endswith(".service"):
+                continue
+            value = getattr(check, "value", {}) if isinstance(getattr(check, "value", {}), dict) else {}
+            try:
+                cpu = float(value.get("cpu_percent")) if value.get("cpu_percent") is not None else None
+            except (TypeError, ValueError):
+                cpu = None
+            try:
+                memory = float(value.get("memory_mb")) if value.get("memory_mb") is not None else None
+            except (TypeError, ValueError):
+                memory = None
+            cpu_high = cpu is not None and cpu >= cpu_warning
+            memory_high = memory is not None and memory >= memory_warning
+            critical = (cpu is not None and cpu >= cpu_critical) or (memory is not None and memory >= memory_critical)
+            state = "critical" if critical else ("warning" if cpu_high or memory_high else "healthy")
+            key = f"__service_resource__{name}"
+            previous = self.previous_states.get(key)
+            if previous == state:
+                continue
+            data = {
+                "service": name,
+                "cpu_percent": cpu,
+                "memory_mb": memory,
+                "cpu_warning_percent": cpu_warning,
+                "cpu_critical_percent": cpu_critical,
+                "memory_warning_mb": memory_warning,
+                "memory_critical_mb": memory_critical,
+            }
+            if state != "healthy":
+                resources = []
+                if cpu_high:
+                    resources.append(f"CPU {cpu:.1f}%")
+                if memory_high:
+                    resources.append(f"RAM {memory:.1f} MB")
+                self.add(state, name, f"{name} high resource usage: {', '.join(resources)}", data)
+            elif previous and previous != "healthy":
+                self.add("healthy", name, f"{name} resource usage returned to normal", data)
+            self.previous_states[key] = state
+
     def add_recording_storage_change(self, status):
         if not isinstance(status, dict):
             return

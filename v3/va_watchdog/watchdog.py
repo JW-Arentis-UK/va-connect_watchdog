@@ -193,6 +193,7 @@ def main():
         try:
             status, checks = collect_health(cfg)
             event_log.add_state_changes(checks)
+            event_log.add_service_resource_changes(checks, cfg)
             event_log.add_recording_storage_change(status.get("recording_storage"))
             recovery.process(checks)
             trip_active, trip_summary = trip_test_active(cfg)

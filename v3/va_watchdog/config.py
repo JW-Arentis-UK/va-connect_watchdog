@@ -44,6 +44,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "memory_critical_mb": 200,
         "sustained_seconds": 300
     },
+    "service_resource_limits": {
+        "cpu_warning_percent": 80,
+        "cpu_critical_percent": 95,
+        "memory_warning_mb": 512,
+        "memory_critical_mb": 1024
+    },
     "thresholds": {
         "cpu_temp_warning_c": 75,
         "cpu_temp_critical_c": 90,

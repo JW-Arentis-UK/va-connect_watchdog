@@ -35,6 +35,12 @@
     "memory_critical_mb": 200,
     "sustained_seconds": 300
   },
+  "service_resource_limits": {
+    "cpu_warning_percent": 80,
+    "cpu_critical_percent": 95,
+    "memory_warning_mb": 512,
+    "memory_critical_mb": 1024
+  },
   "retention": {
     "max_total_mb": 100,
     "events_retention_days": 30,

@@ -4887,6 +4887,7 @@ def start_web(cfg):
             "web": cfg.get("web", {}),
             "hardware_watchdog": cfg.get("hardware_watchdog", {}),
             "process_monitor": cfg.get("process_monitor", {}),
+            "service_resource_limits": cfg.get("service_resource_limits", {}),
             "recording_storage": cfg.get("recording_storage", {}),
             "storage": cfg.get("storage", {}),
             "thresholds": cfg.get("thresholds", {}),
