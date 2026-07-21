@@ -173,6 +173,8 @@ input[type="radio"] { width:18px; height:18px; }
 .donut span { width:calc(86px * var(--scale)); height:calc(86px * var(--scale)); display:grid; place-items:center; border-radius:50%; background:var(--panel); font-size:calc(26px * var(--scale)); font-weight:800; }
 .breakdown-row { display:flex; justify-content:space-between; gap:calc(12px * var(--scale)); margin:calc(8px * var(--scale)) 0; color:var(--muted); }
 .history-box { height:calc(160px * var(--scale)); border:1px solid var(--line); border-radius:6px; background:linear-gradient(180deg, rgba(54,209,95,.18), rgba(54,209,95,.04)); display:flex; align-items:center; justify-content:center; color:var(--muted); }
+.trend-bars { display:flex; align-items:flex-end; gap:2px; height:34px; min-width:150px; padding:4px 0; }
+.trend-bar { flex:1; min-width:2px; background:var(--blue); border-radius:2px 2px 0 0; opacity:.8; }
 pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale)); background:var(--input); border:1px solid var(--line); border-radius:6px; padding:calc(12px * var(--scale)); }
 .detail-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:calc(10px * var(--scale)); }
 .mini-card { border:1px solid var(--line); border-radius:6px; padding:calc(10px * var(--scale)); background:rgba(255,255,255,.03); min-width:0; }
@@ -810,7 +812,16 @@ function renderMetricTiles(status){
 }
 
 function renderServices(status){
-  return `<div class="card"><h2>Services</h2><p class="muted">Service CPU is process CPU from ps and can differ from the instant whole-system CPU tile, especially on multi-core systems.</p><table><thead><tr><th>Service</th><th>Status</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th></tr></thead><tbody>${serviceRows(status)}</tbody></table></div>`;
+  const names = [...new Set([...(status.checks || []).filter(c => String(c.name || '').endsWith('.service')).map(c => c.name), ...(lastServiceInfo.services || []).map(item => item.name)])];
+  const trend = (name, key, color) => {
+    const values = (lastHistory || []).flatMap(row => row.service_metrics || []).filter(item => item.name === name).map(item => Number(item[key])).filter(value => Number.isFinite(value)).slice(-30);
+    if (!values.length) return '<span class="muted">No history yet</span>';
+    const max = Math.max(1, ...values);
+    return `<div class="trend-bars" title="Last ${values.length} retained samples">${values.map(value => `<span class="trend-bar" style="height:${Math.max(4, Math.round((value / max) * 30))}px;background:${color}" title="${value}"></span>`).join('')}</div>`;
+  };
+  const trendRows = names.map(name => `<tr><td>${escapeHtml(name)}</td><td>${trend(name, 'cpu_percent', 'var(--blue)')}</td><td>${trend(name, 'memory_mb', 'var(--green)')}</td></tr>`).join('');
+  const serviceEvents = (lastEvents || []).filter(event => names.some(name => `${event.source || ''} ${event.message || ''}`.includes(name))).slice(0, 5);
+  return `<div class="card"><h2>Services</h2><p class="muted">CPU is the service process reading and may differ from whole-system CPU, especially on a multi-core gateway.</p><table><thead><tr><th>Service</th><th>Status</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th></tr></thead><tbody>${serviceRows(status)}</tbody></table></div><div class="grid lower-grid"><div class="card"><h2>Service Trends</h2><p class="muted">Retained samples, normally one per history interval. Blue is CPU; green is memory. Taller bars mean higher usage.</p><table><thead><tr><th>Service</th><th>CPU trend</th><th>Memory trend</th></tr></thead><tbody>${trendRows || '<tr><td colspan="3">No service history captured yet.</td></tr>'}</tbody></table></div><div class="card"><h2>Recent Service Faults</h2>${serviceEvents.length ? renderEvents(serviceEvents, 5) : '<p class="healthy">No recent service-specific events.</p>'}<a class="ghost" href="/events">Open full event history</a></div></div>`;
 }
 
 function renderOperationalAlerts(status){
@@ -962,6 +973,7 @@ async function load(){
   const pageFetches = [];
   if (currentPage === 'Overview' || currentPage === 'Services') {
     pageFetches.push(fetchJson('/api/services-info', lastServiceInfo || {}).then(value => { lastServiceInfo = value; }));
+    pageFetches.push(fetchJson('/api/history', lastHistory || []).then(value => { lastHistory = value; }));
   }
   if (currentPage === 'Hardware') {
     pageFetches.push(fetchJson('/api/hardware-info', lastHardwareInfo || {}).then(value => { lastHardwareInfo = value; }));

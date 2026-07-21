@@ -43,6 +43,7 @@ def append_history(cfg: dict[str, Any], status: dict[str, Any]) -> None:
         "degraded_checks": _check_names(checks, "degraded"),
         "critical_checks": _check_names(checks, "critical"),
         "service_states": _service_states(checks),
+        "service_metrics": _service_metrics(checks),
         "hardware_watchdog_present": _check_value(checks, "hardware_watchdog_present"),
         "hardware_watchdog_feed_status": _check_state(checks, "hardware_watchdog_feed_status"),
         "hardware_watchdog_feed_message": _check_message(checks, "hardware_watchdog_feed_status"),
@@ -143,6 +144,24 @@ def _service_states(checks: list[dict[str, Any]]) -> str:
         for check in checks
         if str(check.get("name", "")).endswith(".service")
     )
+
+
+def _service_metrics(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    metrics = []
+    for check in checks:
+        name = str(check.get("name", ""))
+        if not name.endswith(".service"):
+            continue
+        value = check.get("value") if isinstance(check.get("value"), dict) else {}
+        metrics.append({
+            "name": name,
+            "state": check.get("state"),
+            "active": value.get("active"),
+            "cpu_percent": value.get("cpu_percent"),
+            "memory_mb": value.get("memory_mb"),
+            "restarts": value.get("restarts"),
+        })
+    return metrics
 
 
 def _disk_value(checks: list[dict[str, Any]], name: str) -> Any:
