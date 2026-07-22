@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "poll_interval_seconds": 5,
+    "heartbeat_interval_seconds": 5,
     "status_path": "/var/lib/va-watchdog/status.json",
     "events_path": "/var/lib/va-watchdog/events.jsonl",
     "history_path": "/var/lib/va-watchdog/history.jsonl",
@@ -55,8 +56,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "service_resource_limits": {
         "cpu_warning_percent": 80,
         "cpu_critical_percent": 95,
+        "cpu_system_warning_percent": 60,
+        "cpu_system_critical_percent": 85,
         "memory_warning_mb": 512,
-        "memory_critical_mb": 1024
+        "memory_critical_mb": 1024,
+        "warning_sustained_seconds": 120,
+        "critical_sustained_seconds": 60,
+        "recovery_sustained_seconds": 60,
+        "cpu_recovery_hysteresis_percent": 5
     },
     "thresholds": {
         "cpu_temp_warning_c": 75,

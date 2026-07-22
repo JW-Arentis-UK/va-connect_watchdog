@@ -113,8 +113,11 @@ def trim_blackbox(cfg: dict[str, Any]) -> None:
         return
     max_rows = max(50, int(bb_cfg["max_rows"]))
     lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    if len(lines) > max_rows:
-        path.write_text("\n".join(lines[-max_rows:]) + "\n", encoding="utf-8")
+    compact_batch = max(50, max_rows // 10)
+    if len(lines) > max_rows + compact_batch:
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text("\n".join(lines[-max_rows:]) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
 
 
 def build_snapshot(cfg: dict[str, Any], status: dict[str, Any]) -> dict[str, Any]:

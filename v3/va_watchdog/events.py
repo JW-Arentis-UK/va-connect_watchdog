@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from threading import RLock
@@ -73,6 +74,7 @@ class EventLog:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.previous_states = {}
+        self.resource_candidates = {}
 
     def add(self, level: str, source: str, message: str, data=None):
         event = {
@@ -97,8 +99,15 @@ class EventLog:
         limits = (cfg or {}).get("service_resource_limits", {})
         cpu_warning = float(limits.get("cpu_warning_percent", 80) or 80)
         cpu_critical = float(limits.get("cpu_critical_percent", 95) or 95)
+        cpu_system_warning = float(limits.get("cpu_system_warning_percent", 60) or 60)
+        cpu_system_critical = float(limits.get("cpu_system_critical_percent", 85) or 85)
         memory_warning = float(limits.get("memory_warning_mb", 512) or 512)
         memory_critical = float(limits.get("memory_critical_mb", 1024) or 1024)
+        warning_sustained = max(0.0, float(limits.get("warning_sustained_seconds", 120) or 0))
+        critical_sustained = max(0.0, float(limits.get("critical_sustained_seconds", 60) or 0))
+        recovery_sustained = max(0.0, float(limits.get("recovery_sustained_seconds", 60) or 0))
+        cpu_hysteresis = max(0.0, float(limits.get("cpu_recovery_hysteresis_percent", 5) or 0))
+        cpu_count = max(1, os.cpu_count() or 1)
         for check in checks:
             name = str(getattr(check, "name", ""))
             if not name.endswith(".service"):
@@ -112,23 +121,42 @@ class EventLog:
                 memory = float(value.get("memory_mb")) if value.get("memory_mb") is not None else None
             except (TypeError, ValueError):
                 memory = None
-            cpu_high = cpu is not None and cpu >= cpu_warning
+            cpu_system = round(cpu / cpu_count, 1) if cpu is not None else None
+            cpu_high = cpu_system is not None and cpu_system >= cpu_system_warning
             memory_high = memory is not None and memory >= memory_warning
-            critical = (cpu is not None and cpu >= cpu_critical) or (memory is not None and memory >= memory_critical)
+            critical = (cpu_system is not None and cpu_system >= cpu_system_critical) or (memory is not None and memory >= memory_critical)
             state = "critical" if critical else ("warning" if cpu_high or memory_high else "healthy")
             key = f"__service_resource__{name}"
-            previous = self.previous_states.get(key)
+            previous = self.previous_states.get(key, "healthy")
+            if previous != "healthy" and state == "healthy":
+                cpu_recovered = cpu_system is None or cpu_system < max(0.0, cpu_system_warning - cpu_hysteresis)
+                memory_recovered = memory is None or memory < memory_warning * 0.9
+                if not cpu_recovered or not memory_recovered:
+                    state = previous
             if previous == state:
+                self.resource_candidates.pop(key, None)
+                self.previous_states.setdefault(key, previous)
+                continue
+            now = time.monotonic()
+            candidate = self.resource_candidates.get(key)
+            if not candidate or candidate.get("state") != state:
+                candidate = {"state": state, "since": now}
+                self.resource_candidates[key] = candidate
+            required = critical_sustained if state == "critical" else recovery_sustained if state == "healthy" else warning_sustained
+            if now - float(candidate.get("since", now)) < required:
                 continue
             data = {
                 "service": name,
                 "cpu_percent": cpu,
-                "cpu_system_percent": round(cpu / max(1, os.cpu_count() or 1), 1) if cpu is not None else None,
+                "cpu_system_percent": cpu_system,
                 "memory_mb": memory,
                 "cpu_warning_percent": cpu_warning,
                 "cpu_critical_percent": cpu_critical,
+                "cpu_system_warning_percent": cpu_system_warning,
+                "cpu_system_critical_percent": cpu_system_critical,
                 "memory_warning_mb": memory_warning,
                 "memory_critical_mb": memory_critical,
+                "sustained_seconds": required,
             }
             if state != "healthy":
                 resources = []
@@ -140,6 +168,7 @@ class EventLog:
             elif previous and previous != "healthy":
                 self.add("healthy", name, f"{name} resource usage returned to normal", data)
             self.previous_states[key] = state
+            self.resource_candidates.pop(key, None)
 
     def add_recording_storage_change(self, status):
         if not isinstance(status, dict):

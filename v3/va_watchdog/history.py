@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
+
+
+_LAST_TRIM_UNIX: dict[str, float] = {}
+_TRIM_INTERVAL_SECONDS = 3600
 
 
 def history_path(cfg: dict[str, Any]) -> Path:
@@ -85,11 +90,16 @@ def trim_history(cfg: dict[str, Any]) -> None:
     path = history_path(cfg)
     if not path.exists():
         return
+    key = str(path)
+    now = time.time()
+    if now - _LAST_TRIM_UNIX.get(key, 0.0) < _TRIM_INTERVAL_SECONDS:
+        return
     retention = cfg.get("retention", {})
     days = int(retention.get("history_retention_days", 30) or 30)
     cutoff = time.time() - max(1, days) * 86400
+    original = path.read_text(encoding="utf-8", errors="ignore").splitlines()
     kept = []
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+    for line in original:
         try:
             payload = json.loads(line)
             timestamp = payload.get("time", "")
@@ -100,7 +110,11 @@ def trim_history(cfg: dict[str, Any]) -> None:
             continue
     max_rows = int(retention.get("history_max_rows", 50000) or 50000)
     kept = kept[-max_rows:]
-    path.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+    if kept != original:
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+        os.replace(temporary, path)
+    _LAST_TRIM_UNIX[key] = now
 
 
 def _should_sample(cfg: dict[str, Any], path: Path) -> bool:

@@ -5,6 +5,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Event, Lock, Thread
 from typing import Any
 
 
@@ -44,15 +45,24 @@ def read_state(cfg: dict[str, Any]) -> dict[str, Any]:
         return {}
 
 
-def write_heartbeat(cfg: dict[str, Any], sequence: int, last_feed_utc: str = "", feed_allowed: bool = True) -> dict[str, Any]:
+def write_heartbeat(
+    cfg: dict[str, Any],
+    sequence: int,
+    last_feed_utc: str = "",
+    feed_allowed: bool = True,
+    last_health_sample: str | None = None,
+    last_health_sample_uptime: float | None = None,
+) -> dict[str, Any]:
     state_path, history_path = heartbeat_paths(cfg)
     state_path.parent.mkdir(parents=True, exist_ok=True)
+    now = utc_now()
     record = {
-        "time": utc_now(),
+        "time": now,
         "monotonic_uptime": monotonic_uptime(),
         "boot_id": boot_id(),
         "health_sequence": int(sequence),
-        "last_health_sample": utc_now(),
+        "last_health_sample": last_health_sample or now,
+        "last_health_sample_monotonic_uptime": last_health_sample_uptime,
         "last_hardware_watchdog_feed": last_feed_utc or "",
         "feed_allowed": bool(feed_allowed),
     }
@@ -68,6 +78,95 @@ def write_heartbeat(cfg: dict[str, Any], sequence: int, last_feed_utc: str = "",
         os.fsync(handle.fileno())
     trim_heartbeat_history(cfg)
     return record
+
+
+class HeartbeatPublisher:
+    """Publish process liveness independently from slow health collectors."""
+
+    def __init__(self, cfg: dict[str, Any], interval_seconds: float | None = None):
+        self.cfg = cfg
+        configured = interval_seconds if interval_seconds is not None else cfg.get("heartbeat_interval_seconds", 5)
+        self.interval_seconds = max(1.0, float(configured or 5))
+        self._lock = Lock()
+        self._stop = Event()
+        self._thread: Thread | None = None
+        self._sequence = 0
+        self._last_health_sample = utc_now()
+        self._last_health_sample_uptime = monotonic_uptime()
+        self._last_feed_utc = ""
+        self._feed_allowed = True
+        self._last_record: dict[str, Any] = {}
+        self._last_error = ""
+
+    def mark_health_sample(
+        self,
+        sequence: int,
+        last_feed_utc: str = "",
+        feed_allowed: bool = True,
+        sampled_at: str | None = None,
+    ) -> None:
+        with self._lock:
+            self._sequence = int(sequence)
+            self._last_health_sample = sampled_at or utc_now()
+            self._last_health_sample_uptime = monotonic_uptime()
+            self._last_feed_utc = last_feed_utc or ""
+            self._feed_allowed = bool(feed_allowed)
+
+    def publish_once(self) -> dict[str, Any]:
+        with self._lock:
+            sequence = self._sequence
+            last_health_sample = self._last_health_sample
+            last_health_sample_uptime = self._last_health_sample_uptime
+            last_feed_utc = self._last_feed_utc
+            feed_allowed = self._feed_allowed
+        try:
+            record = write_heartbeat(
+                self.cfg,
+                sequence,
+                last_feed_utc,
+                feed_allowed,
+                last_health_sample=last_health_sample,
+                last_health_sample_uptime=last_health_sample_uptime,
+            )
+            with self._lock:
+                self._last_record = dict(record)
+                self._last_error = ""
+            return record
+        except Exception as exc:
+            with self._lock:
+                self._last_error = str(exc)
+            return {}
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            record = dict(self._last_record)
+            error = self._last_error
+        if error:
+            record["publisher_error"] = error
+        record["publisher_running"] = bool(self._thread and self._thread.is_alive())
+        return record
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = Thread(target=self._run, name="va-watchdog-heartbeat", daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=max(0.0, timeout))
+
+    def _run(self) -> None:
+        next_deadline = time.monotonic() + self.interval_seconds
+        while not self._stop.is_set():
+            if self._stop.wait(max(0.0, next_deadline - time.monotonic())):
+                break
+            self.publish_once()
+            next_deadline += self.interval_seconds
+            if next_deadline <= time.monotonic():
+                next_deadline = time.monotonic() + self.interval_seconds
 
 
 def trim_heartbeat_history(cfg: dict[str, Any]) -> None:

@@ -58,6 +58,18 @@ cgroup_io_sample() {
   fi
 }
 
+unit_systemd_sample() {
+  systemctl show "$1" -p CPUUsageNSec -p MemoryCurrent -p TasksCurrent 2>/dev/null | tr '\t\r\n' '   '
+}
+
+diskstats_sample() {
+  awk '$3 ~ /^(sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme[0-9]+n[0-9]+|mmcblk[0-9]+)$/ {$1=$1; printf "%s;", $0}' /proc/diskstats 2>/dev/null
+}
+
+vmstat_sample() {
+  awk '/^(pgpgin|pgpgout|pswpin|pswpout|nr_dirty|nr_writeback|nr_dirtied|nr_written) / {printf "%s=%s,", $1, $2}' /proc/vmstat 2>/dev/null
+}
+
 unit_pid() {
   systemctl show "$1" -p MainPID --value 2>/dev/null || true
 }
@@ -84,6 +96,8 @@ run_capture mounts findmnt
 run_capture filesystem df -hT
 run_capture boot-id cat /proc/sys/kernel/random/boot_id
 run_capture uptime cat /proc/uptime
+run_capture start-diskstats cat /proc/diskstats
+run_capture start-vmstat cat /proc/vmstat
 run_capture git-state git -C /opt/va-connect-watchdog-v3 status --short --branch
 run_capture git-commit git -C /opt/va-connect-watchdog-v3 log -1 --format=fuller
 run_capture main-unit systemctl cat va-watchdog.service
@@ -95,6 +109,7 @@ run_capture feed-enabled systemctl is-enabled va-watchdog-feed.service
 run_capture main-properties systemctl show va-watchdog.service -p ActiveState -p SubState -p MainPID -p NRestarts -p CPUUsageNSec -p MemoryCurrent -p MemoryPeak -p TasksCurrent -p WatchdogUSec -p WatchdogTimestampMonotonic
 run_capture feed-properties systemctl show va-watchdog-feed.service -p ActiveState -p SubState -p MainPID -p NRestarts -p CPUUsageNSec -p MemoryCurrent -p MemoryPeak -p TasksCurrent
 run_capture journal-disk-usage journalctl --disk-usage
+run_capture journald-config systemd-analyze cat-config systemd/journald.conf
 if [[ -d /var/log/journal ]]; then
   echo "persistent_journal_directory=yes" >>"$OUT/manifest.txt"
 else
@@ -142,8 +157,8 @@ done
 START_DATA_BYTES="$(data_bytes)"
 echo "start_data_bytes=$START_DATA_BYTES" >>"$OUT/manifest.txt"
 
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-  utc epoch uptime loadavg proc_stat mem_available_kb psi_cpu psi_memory psi_io main_process feed_process main_systemd feed_systemd main_process_io feed_process_io main_cgroup_io feed_cgroup_io >"$SAMPLES"
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  utc epoch uptime loadavg proc_stat mem_available_kb psi_cpu psi_memory psi_io diskstats vmstat main_process feed_process main_systemd feed_systemd main_process_io feed_process_io main_cgroup_io feed_cgroup_io >"$SAMPLES"
 
 START_EPOCH="$(date +%s)"
 END_EPOCH=$((START_EPOCH + DURATION_SECONDS))
@@ -153,10 +168,10 @@ while [[ "$(date +%s)" -lt "$END_EPOCH" ]]; do
   NOW_EPOCH="$(date +%s)"
   MAIN_PID="$(unit_pid va-watchdog.service)"
   FEED_PID="$(unit_pid va-watchdog-feed.service)"
-  MAIN_SYSTEMD="$(systemctl show va-watchdog.service -p CPUUsageNSec -p MemoryCurrent -p TasksCurrent --value 2>/dev/null | paste -sd, -)"
-  FEED_SYSTEMD="$(systemctl show va-watchdog-feed.service -p CPUUsageNSec -p MemoryCurrent -p TasksCurrent --value 2>/dev/null | paste -sd, -)"
+  MAIN_SYSTEMD="$(unit_systemd_sample va-watchdog.service)"
+  FEED_SYSTEMD="$(unit_systemd_sample va-watchdog-feed.service)"
   MEM_AVAILABLE="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null)"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" \
     "$NOW_EPOCH" \
     "$(awk '{print $1}' /proc/uptime 2>/dev/null)" \
@@ -166,6 +181,8 @@ while [[ "$(date +%s)" -lt "$END_EPOCH" ]]; do
     "$(read_one_line /proc/pressure/cpu)" \
     "$(read_one_line /proc/pressure/memory)" \
     "$(read_one_line /proc/pressure/io)" \
+    "$(diskstats_sample)" \
+    "$(vmstat_sample)" \
     "$(proc_sample "$MAIN_PID")" \
     "$(proc_sample "$FEED_PID")" \
     "$MAIN_SYSTEMD" \
@@ -195,10 +212,14 @@ for path in heartbeat-state.json hardware-watchdog-feed.json status.json; do
   fi
 done
 
-tail -n 500 /var/lib/va-watchdog/heartbeat.jsonl >"$OUT/heartbeat-tail.jsonl" 2>/dev/null || true
+tail -n 2000 /var/lib/va-watchdog/heartbeat.jsonl >"$OUT/heartbeat-tail.jsonl" 2>/dev/null || true
 tail -n 500 /var/lib/va-watchdog/events.jsonl >"$OUT/events-tail.jsonl" 2>/dev/null || true
 run_capture main-journal journalctl -u va-watchdog.service --since "@$START_EPOCH" --no-pager
 run_capture feed-journal journalctl -u va-watchdog-feed.service --since "@$START_EPOCH" --no-pager
+run_capture kernel-journal journalctl -k --since "@$START_EPOCH" --no-pager
+run_capture warning-journal journalctl -p warning --since "@$START_EPOCH" --no-pager
+run_capture end-diskstats cat /proc/diskstats
+run_capture end-vmstat cat /proc/vmstat
 run_capture final-data-files find /var/lib/va-watchdog -maxdepth 2 -type f -printf '%s\t%TY-%Tm-%TdT%TH:%TM:%TS\t%p\n'
 
 ARCHIVE="$OUT.tar.gz"

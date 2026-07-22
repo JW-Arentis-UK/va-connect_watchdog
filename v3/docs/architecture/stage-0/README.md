@@ -13,6 +13,7 @@ Stage 0 freezes the migration inputs and approval decisions before production re
 - [Branch and rollback strategy](04-branch-and-rollback-strategy.md)
 - [Architecture conformance review](05-architecture-conformance.md)
 - [POC-451VTC baseline results](06-poc-baseline-results.md)
+- [Ellingers production comparison and retest](07-production-comparison-and-retest.md)
 
 ## Completion Checklist
 

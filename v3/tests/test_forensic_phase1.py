@@ -2,12 +2,45 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from va_watchdog.heartbeat import heartbeat_age_seconds, read_state
+from va_watchdog.heartbeat import HeartbeatPublisher, heartbeat_age_seconds, read_state
 from va_watchdog.reboot_evidence import classify
 from va_watchdog.watchdog_feed import FeedWorker
 
 
 class ForensicPhase1Tests(unittest.TestCase):
+    def test_heartbeat_publisher_keeps_process_liveness_separate_from_health_sequence(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temporary:
+            cfg = {"events_path": str(Path(temporary) / "events.jsonl")}
+            publisher = HeartbeatPublisher(cfg)
+            publisher.mark_health_sample(7, sampled_at="2026-01-01T00:00:00+00:00")
+            first = publisher.publish_once()
+            second = publisher.publish_once()
+
+        self.assertEqual(first["health_sequence"], 7)
+        self.assertEqual(second["health_sequence"], 7)
+        self.assertEqual(second["last_health_sample"], "2026-01-01T00:00:00+00:00")
+        self.assertGreaterEqual(second["monotonic_uptime"], first["monotonic_uptime"])
+
+    def test_heartbeat_thread_publishes_without_new_health_sample(self):
+        import tempfile
+        import time
+
+        with tempfile.TemporaryDirectory() as temporary:
+            cfg = {"events_path": str(Path(temporary) / "events.jsonl")}
+            publisher = HeartbeatPublisher(cfg, interval_seconds=1)
+            publisher.mark_health_sample(11, sampled_at="2026-01-01T00:00:00+00:00")
+            first = publisher.publish_once()
+            publisher.start()
+            time.sleep(1.15)
+            publisher.stop()
+            state = read_state(cfg)
+
+        self.assertEqual(state["health_sequence"], 11)
+        self.assertEqual(state["last_health_sample"], "2026-01-01T00:00:00+00:00")
+        self.assertGreater(state["monotonic_uptime"], first["monotonic_uptime"])
+
     def test_heartbeat_age_uses_monotonic_uptime(self):
         state = {"monotonic_uptime": 100.0, "time": "1970-01-01T00:00:00+00:00"}
         self.assertEqual(heartbeat_age_seconds(state, current_uptime=112.5), 12.5)

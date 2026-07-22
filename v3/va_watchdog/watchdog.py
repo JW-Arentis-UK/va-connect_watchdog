@@ -19,7 +19,7 @@ from .systemd_notify import notify as systemd_notify
 from .watchdog_grace import startup_grace_status
 from .watchdog_test import trip_test_active
 from .web import start_web
-from .heartbeat import heartbeat_paths, read_state, write_heartbeat
+from .heartbeat import HeartbeatPublisher
 from .reboot_evidence import create as create_reboot_evidence
 from .kernel_faults import scan as scan_kernel_faults
 
@@ -202,11 +202,13 @@ def main():
         status["startup_summary"]["headline"],
         status["startup_summary"],
     )
-    atomic_write_json(cfg["status_path"], status)
-    status["heartbeat"] = write_heartbeat(cfg, 0, status["hardware_watchdog_feed"].get("last_feed_utc", ""), True)
+    heartbeat = HeartbeatPublisher(cfg)
+    heartbeat.mark_health_sample(0, status["hardware_watchdog_feed"].get("last_feed_utc", ""), True, status.get("time"))
+    status["heartbeat"] = heartbeat.publish_once()
     atomic_write_json(cfg["status_path"], status)
     append_history(cfg, status)
     maybe_capture_blackbox(cfg, status, force=True)
+    heartbeat.start()
     start_web(cfg)
     systemd_notify("READY=1\nSTATUS=VA-Connect Watchdog running")
 
@@ -242,8 +244,13 @@ def main():
                 status["kernel_faults"] = scan_kernel_faults(cfg, event_log)
                 last_kernel_scan = time.time()
             status["blackbox"] = maybe_capture_blackbox(cfg, status)
-            atomic_write_json(cfg["status_path"], status)
-            status["heartbeat"] = write_heartbeat(cfg, health_sequence, status["hardware_watchdog_feed"].get("last_feed_utc", ""), True)
+            heartbeat.mark_health_sample(
+                health_sequence,
+                status["hardware_watchdog_feed"].get("last_feed_utc", ""),
+                True,
+                status.get("time"),
+            )
+            status["heartbeat"] = heartbeat.snapshot()
             atomic_write_json(cfg["status_path"], status)
             append_history(cfg, status)
             retention_result = enforce_retention(cfg)
