@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+DURATION_SECONDS="${1:-900}"
+INTERVAL_SECONDS="${2:-5}"
+OUTPUT_ROOT="${3:-/tmp}"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+HOST="$(hostname 2>/dev/null || echo unknown)"
+OUT="${OUTPUT_ROOT%/}/va-watchdog-stage0-${HOST}-${STAMP}"
+SAMPLES="$OUT/samples.tsv"
+
+case "$DURATION_SECONDS:$INTERVAL_SECONDS" in
+  *[!0-9:]*|:*|*:0) echo "Duration and interval must be positive whole seconds." >&2; exit 2 ;;
+esac
+if (( DURATION_SECONDS <= 0 || INTERVAL_SECONDS <= 0 )); then
+  echo "Duration and interval must be positive whole seconds." >&2
+  exit 2
+fi
+
+mkdir -p "$OUT"
+
+run_capture() {
+  local name="$1"
+  shift
+  {
+    echo "# command: $*"
+    timeout 15 "$@"
+  } >"$OUT/$name.txt" 2>&1 || true
+}
+
+read_one_line() {
+  local path="$1"
+  if [[ -r "$path" ]]; then
+    tr '\t\r\n' '   ' <"$path"
+  fi
+}
+
+proc_sample() {
+  local pid="$1"
+  if [[ -n "$pid" && "$pid" != "0" && -r "/proc/$pid/stat" ]]; then
+    ps -p "$pid" -o pid=,pcpu=,rss=,nlwp=,etimes= 2>/dev/null | awk '{$1=$1; print}' | tr '\t\r\n' '   '
+  fi
+}
+
+unit_pid() {
+  systemctl show "$1" -p MainPID --value 2>/dev/null || true
+}
+
+data_bytes() {
+  du -sb /var/lib/va-watchdog 2>/dev/null | awk '{print $1}' || echo 0
+}
+
+{
+  echo "VA-Connect Watchdog Stage 0 baseline"
+  echo "started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "host=$HOST"
+  echo "duration_seconds=$DURATION_SECONDS"
+  echo "interval_seconds=$INTERVAL_SECONDS"
+  echo "user=$(id 2>/dev/null || true)"
+} >"$OUT/manifest.txt"
+
+run_capture uname uname -a
+run_capture os-release cat /etc/os-release
+run_capture lscpu lscpu
+run_capture memory-free free -m
+run_capture disks lsblk -o NAME,PATH,TYPE,SIZE,FSTYPE,LABEL,MOUNTPOINT,MODEL,SERIAL
+run_capture mounts findmnt
+run_capture filesystem df -hT
+run_capture boot-id cat /proc/sys/kernel/random/boot_id
+run_capture uptime cat /proc/uptime
+run_capture git-state git -C /opt/va-connect-watchdog-v3 status --short --branch
+run_capture git-commit git -C /opt/va-connect-watchdog-v3 log -1 --format=fuller
+run_capture main-unit systemctl cat va-watchdog.service
+run_capture feed-unit systemctl cat va-watchdog-feed.service
+run_capture main-properties systemctl show va-watchdog.service -p ActiveState -p SubState -p MainPID -p NRestarts -p CPUUsageNSec -p MemoryCurrent -p MemoryPeak -p TasksCurrent -p WatchdogUSec -p WatchdogTimestampMonotonic
+run_capture feed-properties systemctl show va-watchdog-feed.service -p ActiveState -p SubState -p MainPID -p NRestarts -p CPUUsageNSec -p MemoryCurrent -p MemoryPeak -p TasksCurrent
+run_capture config-stat stat /etc/va-watchdog/config.json
+run_capture data-files find /var/lib/va-watchdog -maxdepth 2 -type f -printf '%s\t%TY-%Tm-%TdT%TH:%TM:%TS\t%p\n'
+run_capture healthz wget -qO- http://127.0.0.1:9110/api/healthz
+run_capture version wget -qO- http://127.0.0.1:9110/api/version
+
+if [[ -r /etc/va-watchdog/config.json ]] && command -v python3 >/dev/null 2>&1; then
+  python3 - /etc/va-watchdog/config.json "$OUT/config-redacted.json" <<'PY' 2>/dev/null || true
+import json
+import sys
+
+source, destination = sys.argv[1:3]
+sensitive = {"password", "passphrase", "token", "secret", "api_key", "private_key"}
+
+
+def redact(value):
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]" if str(key).lower() in sensitive else redact(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact(item) for item in value]
+    return value
+
+
+with open(source, "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+with open(destination, "w", encoding="utf-8") as handle:
+    json.dump(redact(payload), handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
+fi
+
+for path in heartbeat-state.json hardware-watchdog-feed.json status.json; do
+  if [[ -r "/var/lib/va-watchdog/$path" ]]; then
+    cp "/var/lib/va-watchdog/$path" "$OUT/start-$path" 2>/dev/null || true
+  fi
+done
+
+START_DATA_BYTES="$(data_bytes)"
+echo "start_data_bytes=$START_DATA_BYTES" >>"$OUT/manifest.txt"
+
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  utc epoch uptime loadavg proc_stat mem_available_kb psi_cpu psi_memory psi_io main_process feed_process main_systemd feed_systemd >"$SAMPLES"
+
+START_EPOCH="$(date +%s)"
+END_EPOCH=$((START_EPOCH + DURATION_SECONDS))
+NEXT_EPOCH="$START_EPOCH"
+
+while [[ "$(date +%s)" -lt "$END_EPOCH" ]]; do
+  NOW_EPOCH="$(date +%s)"
+  MAIN_PID="$(unit_pid va-watchdog.service)"
+  FEED_PID="$(unit_pid va-watchdog-feed.service)"
+  MAIN_SYSTEMD="$(systemctl show va-watchdog.service -p CPUUsageNSec -p MemoryCurrent -p TasksCurrent --value 2>/dev/null | paste -sd, -)"
+  FEED_SYSTEMD="$(systemctl show va-watchdog-feed.service -p CPUUsageNSec -p MemoryCurrent -p TasksCurrent --value 2>/dev/null | paste -sd, -)"
+  MEM_AVAILABLE="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" \
+    "$NOW_EPOCH" \
+    "$(awk '{print $1}' /proc/uptime 2>/dev/null)" \
+    "$(read_one_line /proc/loadavg)" \
+    "$(head -n 5 /proc/stat 2>/dev/null | tr '\t\r\n' '   ')" \
+    "$MEM_AVAILABLE" \
+    "$(read_one_line /proc/pressure/cpu)" \
+    "$(read_one_line /proc/pressure/memory)" \
+    "$(read_one_line /proc/pressure/io)" \
+    "$(proc_sample "$MAIN_PID")" \
+    "$(proc_sample "$FEED_PID")" \
+    "$MAIN_SYSTEMD" \
+    "$FEED_SYSTEMD" >>"$SAMPLES"
+
+  NEXT_EPOCH=$((NEXT_EPOCH + INTERVAL_SECONDS))
+  SLEEP_SECONDS=$((NEXT_EPOCH - $(date +%s)))
+  if (( SLEEP_SECONDS > 0 )); then
+    sleep "$SLEEP_SECONDS"
+  fi
+done
+
+END_DATA_BYTES="$(data_bytes)"
+{
+  echo "finished_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "end_data_bytes=$END_DATA_BYTES"
+  echo "data_growth_bytes=$((END_DATA_BYTES - START_DATA_BYTES))"
+} >>"$OUT/manifest.txt"
+
+for path in heartbeat-state.json hardware-watchdog-feed.json status.json; do
+  if [[ -r "/var/lib/va-watchdog/$path" ]]; then
+    cp "/var/lib/va-watchdog/$path" "$OUT/end-$path" 2>/dev/null || true
+  fi
+done
+
+tail -n 500 /var/lib/va-watchdog/heartbeat.jsonl >"$OUT/heartbeat-tail.jsonl" 2>/dev/null || true
+tail -n 500 /var/lib/va-watchdog/events.jsonl >"$OUT/events-tail.jsonl" 2>/dev/null || true
+run_capture main-journal journalctl -u va-watchdog.service --since "@$START_EPOCH" --no-pager
+run_capture feed-journal journalctl -u va-watchdog-feed.service --since "@$START_EPOCH" --no-pager
+run_capture final-data-files find /var/lib/va-watchdog -maxdepth 2 -type f -printf '%s\t%TY-%Tm-%TdT%TH:%TM:%TS\t%p\n'
+
+ARCHIVE="$OUT.tar.gz"
+tar -C "$(dirname "$OUT")" -czf "$ARCHIVE" "$(basename "$OUT")"
+echo "Baseline complete: $ARCHIVE"
