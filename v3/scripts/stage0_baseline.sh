@@ -42,6 +42,22 @@ proc_sample() {
   fi
 }
 
+proc_io_sample() {
+  local pid="$1"
+  if [[ -n "$pid" && "$pid" != "0" && -r "/proc/$pid/io" ]]; then
+    awk '/^(rchar|wchar|read_bytes|write_bytes|cancelled_write_bytes):/ {printf "%s=%s,", $1, $2}' "/proc/$pid/io" 2>/dev/null
+  fi
+}
+
+cgroup_io_sample() {
+  local unit="$1"
+  local control_group
+  control_group="$(systemctl show "$unit" -p ControlGroup --value 2>/dev/null || true)"
+  if [[ -n "$control_group" && -r "/sys/fs/cgroup$control_group/io.stat" ]]; then
+    tr '\t\r\n' '   ' <"/sys/fs/cgroup$control_group/io.stat"
+  fi
+}
+
 unit_pid() {
   systemctl show "$1" -p MainPID --value 2>/dev/null || true
 }
@@ -72,8 +88,18 @@ run_capture git-state git -C /opt/va-connect-watchdog-v3 status --short --branch
 run_capture git-commit git -C /opt/va-connect-watchdog-v3 log -1 --format=fuller
 run_capture main-unit systemctl cat va-watchdog.service
 run_capture feed-unit systemctl cat va-watchdog-feed.service
+run_capture main-status systemctl status va-watchdog.service --no-pager -l
+run_capture feed-status systemctl status va-watchdog-feed.service --no-pager -l
+run_capture main-enabled systemctl is-enabled va-watchdog.service
+run_capture feed-enabled systemctl is-enabled va-watchdog-feed.service
 run_capture main-properties systemctl show va-watchdog.service -p ActiveState -p SubState -p MainPID -p NRestarts -p CPUUsageNSec -p MemoryCurrent -p MemoryPeak -p TasksCurrent -p WatchdogUSec -p WatchdogTimestampMonotonic
 run_capture feed-properties systemctl show va-watchdog-feed.service -p ActiveState -p SubState -p MainPID -p NRestarts -p CPUUsageNSec -p MemoryCurrent -p MemoryPeak -p TasksCurrent
+run_capture journal-disk-usage journalctl --disk-usage
+if [[ -d /var/log/journal ]]; then
+  echo "persistent_journal_directory=yes" >>"$OUT/manifest.txt"
+else
+  echo "persistent_journal_directory=no" >>"$OUT/manifest.txt"
+fi
 run_capture config-stat stat /etc/va-watchdog/config.json
 run_capture data-files find /var/lib/va-watchdog -maxdepth 2 -type f -printf '%s\t%TY-%Tm-%TdT%TH:%TM:%TS\t%p\n'
 run_capture healthz wget -qO- http://127.0.0.1:9110/api/healthz
@@ -116,8 +142,8 @@ done
 START_DATA_BYTES="$(data_bytes)"
 echo "start_data_bytes=$START_DATA_BYTES" >>"$OUT/manifest.txt"
 
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-  utc epoch uptime loadavg proc_stat mem_available_kb psi_cpu psi_memory psi_io main_process feed_process main_systemd feed_systemd >"$SAMPLES"
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  utc epoch uptime loadavg proc_stat mem_available_kb psi_cpu psi_memory psi_io main_process feed_process main_systemd feed_systemd main_process_io feed_process_io main_cgroup_io feed_cgroup_io >"$SAMPLES"
 
 START_EPOCH="$(date +%s)"
 END_EPOCH=$((START_EPOCH + DURATION_SECONDS))
@@ -130,7 +156,7 @@ while [[ "$(date +%s)" -lt "$END_EPOCH" ]]; do
   MAIN_SYSTEMD="$(systemctl show va-watchdog.service -p CPUUsageNSec -p MemoryCurrent -p TasksCurrent --value 2>/dev/null | paste -sd, -)"
   FEED_SYSTEMD="$(systemctl show va-watchdog-feed.service -p CPUUsageNSec -p MemoryCurrent -p TasksCurrent --value 2>/dev/null | paste -sd, -)"
   MEM_AVAILABLE="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null)"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" \
     "$NOW_EPOCH" \
     "$(awk '{print $1}' /proc/uptime 2>/dev/null)" \
@@ -143,7 +169,11 @@ while [[ "$(date +%s)" -lt "$END_EPOCH" ]]; do
     "$(proc_sample "$MAIN_PID")" \
     "$(proc_sample "$FEED_PID")" \
     "$MAIN_SYSTEMD" \
-    "$FEED_SYSTEMD" >>"$SAMPLES"
+    "$FEED_SYSTEMD" \
+    "$(proc_io_sample "$MAIN_PID")" \
+    "$(proc_io_sample "$FEED_PID")" \
+    "$(cgroup_io_sample va-watchdog.service)" \
+    "$(cgroup_io_sample va-watchdog-feed.service)" >>"$SAMPLES"
 
   NEXT_EPOCH=$((NEXT_EPOCH + INTERVAL_SECONDS))
   SLEEP_SECONDS=$((NEXT_EPOCH - $(date +%s)))

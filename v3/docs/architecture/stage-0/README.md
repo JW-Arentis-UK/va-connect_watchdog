@@ -12,6 +12,7 @@ Stage 0 freezes the migration inputs and approval decisions before production re
 - [POC performance baseline](03-poc-performance-baseline.md)
 - [Branch and rollback strategy](04-branch-and-rollback-strategy.md)
 - [Architecture conformance review](05-architecture-conformance.md)
+- [POC-451VTC baseline results](06-poc-baseline-results.md)
 
 ## Completion Checklist
 
@@ -22,10 +23,10 @@ Stage 0 freezes the migration inputs and approval decisions before production re
 - [x] Refactor branch, deployment, and rollback procedure documented.
 - [x] Pull-request architecture review checklist added.
 - [x] Repeatable architecture size report added.
-- [ ] POC baseline bundle collected and reviewed.
+- [x] POC baseline bundle collected and reviewed.
+- [ ] Feeder and actual write-I/O follow-up baseline collected.
 - [ ] Architecture approval record completed.
 - [ ] Safety decisions in the risk assessment approved.
 - [ ] Pre-refactor release commit tagged after the documentation is committed.
 
 Stage 1 must not begin until the final four items are complete.
-

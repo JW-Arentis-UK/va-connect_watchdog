@@ -1,6 +1,6 @@
 # POC Performance Baseline
 
-Status: Collection tool ready; gateway capture pending
+Status: Initial one-hour capture complete; feeder and write-I/O follow-up pending
 
 ## Purpose
 
@@ -45,16 +45,17 @@ It does not run SMART, speed tests, broad pings, or destructive actions.
 
 | Measurement | Current baseline | Target |
 |---|---:|---:|
-| Main watchdog average machine CPU | Pending | below 0.5% Core after refactor |
-| Hardware feeder average machine CPU | Pending | below 0.1% |
-| Main RSS p95 | Pending | contributes to below 75 MB combined |
-| Feeder RSS p95 | Pending | minimal and stable |
-| Main task/thread maximum | Pending | bounded |
-| Heartbeat interval p50/p95/p99/max | Pending | p99 jitter below 1 second |
-| Status sample interval p50/p95/p99/max | Pending | no critical-path delay |
-| Data-directory growth per day estimate | Pending | below 10 MB/day normal writes |
-| Event rows per hour | Pending | transitions only; no flooding |
-| Subprocess activity | Pending | minimal in target normal mode |
+| Main watchdog average machine CPU | 0.83% | below 0.5% Core after refactor |
+| Hardware feeder average machine CPU | Not measured: service inactive | below 0.1% |
+| Main RSS p95 | 62.35 MB | contributes to below 75 MB combined |
+| Feeder RSS p95 | Not measured: service inactive | minimal and stable |
+| Main task/thread maximum | 4 threads/tasks observed | bounded |
+| Heartbeat interval p50/p95/p99/max | 5.35/5.62/5.63/5.64 seconds | p99 jitter below 1 second |
+| Baseline sample interval p50/p95/p99/max | 5.05/5.06/5.07/5.07 seconds | measurement tool stable |
+| Net data-directory growth | 6.7 MB/day extrapolated | below 10 MB/day retained data |
+| Estimated application writes | 7.9 GB/day | redesign required; actual I/O follow-up pending |
+| Event rows per hour | 0 | transitions only; no flooding |
+| Subprocess contribution | Cgroup CPU materially above Python process CPU | minimal in target normal mode |
 
 ## Baseline Conditions
 
@@ -71,10 +72,11 @@ Record alongside the bundle:
 
 ## Acceptance
 
-Stage 0 baseline is complete when:
+The initial baseline is reviewed in [POC-451VTC baseline results](06-poc-baseline-results.md). Stage 0 baseline is complete when:
 
-- A bundle has been collected on POC-451VTC.
-- CPU, memory, timing, task, and disk-growth values are summarised in this document.
+- A bundle has been collected on POC-451VTC. Complete.
+- CPU, memory, timing, task, and disk-growth values are summarised in this document. Complete.
+- Feeder CPU/RSS and actual I/O counters are captured after the inactive feeder is resolved.
 - Any unexplained spikes are noted.
 - The raw bundle is stored outside the gateway.
 - The refactor performance targets are confirmed or revised with reasons.
