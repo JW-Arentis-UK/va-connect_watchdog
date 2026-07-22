@@ -31,6 +31,7 @@ from .update import launch_update_job, load_update_status
 from .speedtest import run_speed_test
 from .heartbeat import heartbeat_paths, read_state, read_tail, heartbeat_age_seconds
 from .journal import persistent_status, enable_persistent
+from .baseline_capture import baseline_paths, baseline_status, completed_archive, start_baseline
 
 HTML = """<!doctype html>
 <html>
@@ -2541,8 +2542,55 @@ def start_web(cfg):
             service_status = _run(["systemctl", "is-active", "va-watchdog"], timeout=3)
             service_enabled = _run(["systemctl", "is-enabled", "va-watchdog"], timeout=3)
             bb = blackbox_summary(cfg)
+            baseline = baseline_status(cfg)
             active_value = str(service_status.get("stdout") or service_status.get("stderr") or "unknown")
             enabled_value = str(service_enabled.get("stdout") or service_enabled.get("stderr") or "unknown")
+            baseline_state = str(baseline.get("state") or "idle")
+            baseline_class = "healthy" if baseline_state == "complete" else "critical" if baseline_state == "failed" else "warning" if baseline_state in {"queued", "running"} else "muted"
+            readiness = baseline.get("readiness") if isinstance(baseline.get("readiness"), dict) else {}
+            readiness_rows = []
+            for item in readiness.get("checks", []):
+                advisory = bool(item.get("advisory"))
+                item_ok = bool(item.get("ok"))
+                item_class = "healthy" if item_ok else "warning" if advisory else "critical"
+                item_status = "Ready" if item_ok else "Attention" if advisory else "Blocked"
+                readiness_rows.append(
+                    "<tr>"
+                    f"<td>{escape(str(item.get('name', '-')))}</td>"
+                    f"<td class=\"{item_class}\">{item_status}</td>"
+                    f"<td>{escape(str(item.get('detail', '-')))}</td>"
+                    "</tr>"
+                )
+            archive = baseline.get("archive") if isinstance(baseline.get("archive"), dict) else {}
+            download_button = (
+                "<a class=\"action\" href=\"/api/diagnostics/stage0-baseline.tar.gz\">Download completed baseline</a>"
+                if baseline.get("download_ready") else ""
+            )
+            form_disabled = " disabled" if baseline.get("running") or not readiness.get("ready") else ""
+            baseline_refresh = "<script>setTimeout(function(){window.location.reload();},10000);</script>" if baseline.get("running") else ""
+            baseline_card = (
+                "<div class=\"card\"><h2>Stage 0 System Baseline</h2>"
+                "<p class=\"section-lead\">Runs a low-impact performance and evidence capture in a separate systemd unit. It does not restart the watchdog or change monitoring configuration.</p>"
+                f"<p class=\"{baseline_class}\"><strong>{escape(baseline_state.upper())}</strong> - {escape(str(baseline.get('message', 'No status available.')))}</p>"
+                "<div class=\"detail-grid\"><div>"
+                f"<div class=\"label\">Started</div><div class=\"value\">{escape(local_time(baseline.get('started_utc')))}</div>"
+                f"<div class=\"label\">Duration</div><div class=\"value\">{escape(str(baseline.get('duration_label') or baseline.get('duration_seconds') or '-'))}</div>"
+                f"<div class=\"label\">Elapsed</div><div class=\"value\">{escape(str(baseline.get('elapsed_seconds', 0)))} seconds</div>"
+                "</div><div>"
+                f"<div class=\"label\">Systemd unit</div><div class=\"value\">{escape(str(baseline.get('unit') or '-'))}</div>"
+                f"<div class=\"label\">Archive</div><div class=\"value\">{escape(str(archive.get('name') or '-'))}</div>"
+                f"<div class=\"label\">Archive size</div><div class=\"value\">{escape(human_size(archive.get('size_bytes', 0))) if archive else '-'}</div>"
+                "</div></div>"
+                "<form method=\"post\" action=\"/stage0-baseline-start\">"
+                "<label class=\"label\">Capture duration</label><select name=\"duration\"><option value=\"900\">15 minutes</option><option value=\"3600\" selected>1 hour</option></select>"
+                "<label class=\"option-row\"><input type=\"checkbox\" name=\"ack\" value=\"1\"> <span>I understand this starts a temporary low-impact diagnostic capture.</span></label>"
+                f"<div class=\"button-row\"><button class=\"action\" type=\"submit\"{form_disabled}>Start baseline capture</button>{download_button}<a class=\"ghost\" href=\"/api/diagnostics/stage0-baseline\">Raw capture status</a></div>"
+                "</form>"
+                "<details><summary>Capture readiness checks</summary><table><thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>"
+                f"<tbody>{''.join(readiness_rows)}</tbody></table></details>"
+                "<p class=\"muted\">Up to three completed baseline bundles are retained for seven days. CCTV recordings are never included.</p>"
+                f"{baseline_refresh}</div>"
+            )
             commands = (
                 "<pre>systemctl status va-watchdog\n"
                 "journalctl -u va-watchdog -n 80 --no-pager\n"
@@ -2571,30 +2619,11 @@ def start_web(cfg):
                     ("RTSP probe", "Planned: verify stream access and response timing.", "", ""),
                 ])
                 + "</div>"
+                + baseline_card
                 + f"<div class=\"card\"><h2>Persistent Journal</h2><p class=\"{'healthy' if persistent_status().get('enabled') else 'warning'}\">{'Enabled' if persistent_status().get('enabled') else 'Disabled or unavailable'}</p><p class=\"muted\">Persistent journals preserve kernel and service evidence across reboot.</p><div class=\"button-row\"><a class=\"ghost\" href=\"/journal-enable-confirm\">Enable persistent logging</a></div></div>"
                 + disclosure("Useful terminal commands", commands)
                 + disclosure("All health-engine checks", all_checks_table("Diagnostics Checks"))
             )
-
-        def journal_enable_confirm_html():
-            current = persistent_status()
-            body = (
-                "<div class=\"card\"><h2>Enable Persistent Journald</h2>"
-                "<p>Current journal persistence status: <strong>" + escape("Enabled" if current.get("enabled") else "Disabled or unavailable") + "</strong></p>"
-                "<p class=\"muted\">This creates /var/log/journal if required, preserves unrelated settings, flushes journald and restarts only systemd-journald.</p>"
-                "<form method=\"post\" action=\"/journal-enable\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> I understand this changes system logging storage.</label>"
-                "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Enable persistent logging</button><a class=\"ghost\" href=\"/diagnostics\">Cancel</a></div></form></div>"
-            )
-            return page_shell(body, "Diagnostics")
-
-        def journal_action_result_html(result):
-            body = (
-                "<div class=\"card\"><h2>Persistent Journald</h2>"
-                f"<p class=\"{'healthy' if result.get('ok') else 'warning'}\">{escape(str(result.get('message', 'Action completed')))}</p>"
-                f"<pre>{escape(json.dumps(result, indent=2))}</pre>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/diagnostics\">Back to Diagnostics</a></div></div>"
-            )
-            return page_shell(body, "Diagnostics")
 
         error_html = ""
         if status.get("error"):
@@ -2715,6 +2744,40 @@ def start_web(cfg):
                 "</div>"
             )
         return page_shell(body, page)
+
+    def baseline_action_result_html(result):
+        current = result.get("status") if isinstance(result.get("status"), dict) else baseline_status(cfg)
+        state = str(current.get("state") or "unknown")
+        body = (
+            "<div class=\"card\"><h2>Stage 0 System Baseline</h2>"
+            f"<p class=\"{'healthy' if result.get('ok') else 'critical'}\">{escape(str(result.get('message', 'Baseline request processed.')))}</p>"
+            f"<p>Current state: <strong>{escape(state.upper())}</strong></p>"
+            "<p class=\"muted\">The capture runs independently. You can leave this page and return to Diagnostics later.</p>"
+            "<div class=\"button-row\"><a class=\"action\" href=\"/diagnostics\">Back to Diagnostics</a></div>"
+            "<script>setTimeout(function(){window.location.href='/diagnostics';},5000);</script>"
+            "</div>"
+        )
+        return page_shell(body, "Diagnostics")
+
+    def journal_enable_confirm_html():
+        current = persistent_status()
+        body = (
+            "<div class=\"card\"><h2>Enable Persistent Journald</h2>"
+            "<p>Current journal persistence status: <strong>" + escape("Enabled" if current.get("enabled") else "Disabled or unavailable") + "</strong></p>"
+            "<p class=\"muted\">This creates /var/log/journal if required, preserves unrelated settings, flushes journald and restarts only systemd-journald.</p>"
+            "<form method=\"post\" action=\"/journal-enable\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> I understand this changes system logging storage.</label>"
+            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Enable persistent logging</button><a class=\"ghost\" href=\"/diagnostics\">Cancel</a></div></form></div>"
+        )
+        return page_shell(body, "Diagnostics")
+
+    def journal_action_result_html(result):
+        body = (
+            "<div class=\"card\"><h2>Persistent Journald</h2>"
+            f"<p class=\"{'healthy' if result.get('ok') else 'warning'}\">{escape(str(result.get('message', 'Action completed')))}</p>"
+            f"<pre>{escape(json.dumps(result, indent=2))}</pre>"
+            "<div class=\"button-row\"><a class=\"ghost\" href=\"/diagnostics\">Back to Diagnostics</a></div></div>"
+        )
+        return page_shell(body, "Diagnostics")
 
     def update_confirm_html():
         current = version_info()
@@ -5263,6 +5326,7 @@ def start_web(cfg):
             "last-reboot-evidence.json": Path(cfg.get("reboot_evidence_path") or data_dir / "reboot-evidence.jsonl").with_name("last-reboot-evidence.json"),
             "hardware-watchdog-feed.json": Path(cfg.get("hardware_watchdog_feed_state_path") or data_dir / "hardware-watchdog-feed.json"),
             "kernel-fault-state.json": Path(cfg.get("kernel_fault_state_path") or data_dir / "kernel-fault-state.json"),
+            "stage0-baseline-state.json": baseline_paths(cfg)[1],
         }
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -5355,6 +5419,25 @@ def start_web(cfg):
             self._send_no_cache_headers()
             self.end_headers()
             self.wfile.write(data)
+
+        def _send_file(self, path, content_type="application/octet-stream", filename=None):
+            target = Path(path)
+            size = target.stat().st_size
+            with target.open("rb") as handle:
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(size))
+                self.send_header("Content-Disposition", f"attachment; filename=\"{filename or target.name}\"")
+                self._send_no_cache_headers()
+                self.end_headers()
+                while True:
+                    chunk = handle.read(64 * 1024)
+                    if not chunk:
+                        break
+                    try:
+                        self.wfile.write(chunk)
+                    except OSError:
+                        break
 
         def _request_theme(self):
             cookie = self.headers.get("Cookie", "")
@@ -5588,6 +5671,19 @@ def start_web(cfg):
             if route_path == "/api/diagnostics":
                 self._send_json(diagnostics_summary())
                 return
+            if route_path == "/api/diagnostics/stage0-baseline":
+                self._send_json(baseline_status(cfg))
+                return
+            if route_path == "/api/diagnostics/stage0-baseline.tar.gz":
+                archive = completed_archive(cfg)
+                if not archive:
+                    self._send_json({"error": "No completed Stage 0 baseline is available."}, status=404)
+                    return
+                try:
+                    self._send_file(archive, content_type="application/gzip")
+                except OSError as exc:
+                    self._send_json({"error": str(exc)}, status=500)
+                return
             if route_path == "/api/blackbox":
                 self._send_json({"summary": blackbox_summary(cfg), "snapshots": read_blackbox(cfg, limit=100)})
                 return
@@ -5619,6 +5715,28 @@ def start_web(cfg):
         def do_POST(self):
             request_context.theme = self._request_theme()
             route_path = self.path.split("?", 1)[0]
+            if route_path == "/stage0-baseline-start":
+                length = int(self.headers.get("Content-Length", "0"))
+                form = parse_qs(self.rfile.read(length).decode("utf-8") if length else "", keep_blank_values=True)
+                if form.get("ack", [""])[0] != "1":
+                    result = {"ok": False, "message": "Confirmation was not selected."}
+                else:
+                    result = start_baseline(cfg, form.get("duration", [""])[0])
+                    if result.get("ok"):
+                        append_web_event(
+                            "info",
+                            "diagnostics",
+                            "Stage 0 baseline capture started",
+                            {"duration_seconds": int(form.get("duration", ["0"])[0])},
+                        )
+                body = baseline_action_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 400)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path == "/network-speed-test":
                 try:
                     result = run_speed_test()

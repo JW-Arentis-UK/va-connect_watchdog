@@ -30,6 +30,8 @@ These capabilities require compatibility during the refactor. A schema version m
 | GET | `/api/history` | Normal history | History API |
 | GET | `/api/history/export.csv` | CSV history export | History API |
 | GET | `/api/diagnostics/support-bundle.zip` | Download evidence | Diagnostics export |
+| GET | `/api/diagnostics/stage0-baseline` | Temporary Stage 0 capture status | Diagnostics migration adapter |
+| GET | `/api/diagnostics/stage0-baseline.tar.gz` | Download latest completed Stage 0 bundle | Diagnostics migration adapter |
 
 ## Transitional Read Contracts
 
@@ -78,6 +80,7 @@ No current mutation route is automatically accepted as a future public API. Ever
 
 ### Diagnostics and Explicit Recovery Actions
 
+- `/stage0-baseline-start` (temporary Stage 0 migration measurement)
 - `/network-speed-test`
 - `/watchdog-hardware-probe-now`
 - `/service-restart-now`
@@ -198,4 +201,3 @@ The current main service runs as root, uses `Type=notify`, has `WatchdogSec=30`,
 - Teltonika/Videosoft forwarding browser behaviour.
 
 Optional tools must remain optional in the target architecture.
-

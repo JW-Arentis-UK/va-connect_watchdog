@@ -134,3 +134,4 @@ Architecture implication: Stage 0 branch/tag policy must be applied before refac
 5. Normalise the gateway deployment branch during a controlled release step.
 6. Retain the current CPU, memory, heartbeat, and write estimates as the pre-refactor comparison.
 
+The updated capture can now be started from `Diagnostics > Stage 0 System Baseline` for either 15 minutes or one hour. Progress survives a Web page or main-service restart because the collector runs in a transient systemd unit. The latest completed `.tar.gz` bundle can be downloaded from the same panel; no remote filesystem transfer is required.

@@ -70,3 +70,8 @@ Each architecture-affecting pull request is classified:
 - `Exception requested`: justified deviation awaiting approval.
 - `Rejected`: adds unsupported continuous cost, coupling, or duplication.
 
+## Temporary Stage 0 Baseline Adapter
+
+The Diagnostics page may start the bounded `stage0_baseline.sh` measurement through a separate low-priority transient systemd unit. The Web process only validates an allow-listed duration, starts the unit, reads its state, and streams the completed archive. It does not perform the measurement, alter health, or run a new continuous collector.
+
+This adapter retains at most three archives for seven days and is reviewed for removal or replacement when Stage 4 Diagnostics is extracted from the legacy Web module.

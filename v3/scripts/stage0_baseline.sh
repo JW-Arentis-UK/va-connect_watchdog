@@ -202,5 +202,14 @@ run_capture feed-journal journalctl -u va-watchdog-feed.service --since "@$START
 run_capture final-data-files find /var/lib/va-watchdog -maxdepth 2 -type f -printf '%s\t%TY-%Tm-%TdT%TH:%TM:%TS\t%p\n'
 
 ARCHIVE="$OUT.tar.gz"
-tar -C "$(dirname "$OUT")" -czf "$ARCHIVE" "$(basename "$OUT")"
-echo "Baseline complete: $ARCHIVE"
+if tar -C "$(dirname "$OUT")" -czf "$ARCHIVE" "$(basename "$OUT")"; then
+  ROOT_REAL="$(readlink -f "$OUTPUT_ROOT")"
+  OUT_REAL="$(readlink -f "$OUT")"
+  case "$OUT_REAL" in
+    "$ROOT_REAL"/va-watchdog-stage0-*) rm -rf -- "$OUT_REAL" ;;
+  esac
+  echo "Baseline complete: $ARCHIVE"
+else
+  echo "Baseline archive failed; uncompressed evidence retained at $OUT" >&2
+  exit 1
+fi
