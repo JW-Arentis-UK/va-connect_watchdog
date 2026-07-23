@@ -4,9 +4,16 @@ set -uo pipefail
 DURATION_SECONDS="${1:-900}"
 INTERVAL_SECONDS="${2:-5}"
 OUTPUT_ROOT="${3:-/tmp}"
+IDENTITY_SLUG="${4:-}"
+SITE_NAME="${5:-}"
+ASSET_ID="${6:-}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 HOST="$(hostname 2>/dev/null || echo unknown)"
-OUT="${OUTPUT_ROOT%/}/va-watchdog-stage0-${HOST}-${STAMP}"
+if [[ -n "$IDENTITY_SLUG" ]]; then
+  OUT="${OUTPUT_ROOT%/}/va-watchdog-stage0-${IDENTITY_SLUG}-${HOST}-${STAMP}"
+else
+  OUT="${OUTPUT_ROOT%/}/va-watchdog-stage0-${HOST}-${STAMP}"
+fi
 SAMPLES="$OUT/samples.tsv"
 
 case "$DURATION_SECONDS:$INTERVAL_SECONDS" in
@@ -82,6 +89,8 @@ data_bytes() {
   echo "VA-Connect Watchdog Stage 0 baseline"
   echo "started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "host=$HOST"
+  echo "site_name=$SITE_NAME"
+  echo "asset_id=$ASSET_ID"
   echo "duration_seconds=$DURATION_SECONDS"
   echo "interval_seconds=$INTERVAL_SECONDS"
   echo "user=$(id 2>/dev/null || true)"

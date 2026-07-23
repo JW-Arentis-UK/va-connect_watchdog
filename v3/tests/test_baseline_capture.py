@@ -12,7 +12,10 @@ from va_watchdog.baseline_capture import baseline_status, completed_archive, sta
 
 class BaselineCaptureTests(unittest.TestCase):
     def _cfg(self, root: Path):
-        return {"events_path": str(root / "events.jsonl")}
+        return {
+            "events_path": str(root / "events.jsonl"),
+            "identity": {"site_name": "Ellingers", "asset_id": "GW-017"},
+        }
 
     def test_rejects_unapproved_duration(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -82,7 +85,8 @@ class BaselineCaptureTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[0], "/usr/bin/systemd-run")
         self.assertIn("--property=Nice=10", command)
-        self.assertEqual(command[-3:], ["900", "5", str(Path(temporary) / "stage0-baselines")])
+        self.assertEqual(command[-6:-3], ["900", "5", str(Path(temporary) / "stage0-baselines")])
+        self.assertEqual(command[-3:], ["Ellingers", "Ellingers", "GW-017"])
 
 
 if __name__ == "__main__":

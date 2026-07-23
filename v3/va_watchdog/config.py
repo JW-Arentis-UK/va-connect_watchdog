@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import Any, Dict
 
 DEFAULT_CONFIG: Dict[str, Any] = {
+    "identity": {
+        "site_name": "",
+        "asset_id": ""
+    },
     "poll_interval_seconds": 5,
     "heartbeat_interval_seconds": 5,
     "status_path": "/var/lib/va-watchdog/status.json",

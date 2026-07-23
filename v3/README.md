@@ -54,6 +54,16 @@ Web page:
 http://<gateway-ip>:9110/
 ```
 
+After installing or restoring a cloned gateway image, open **Settings > Gateway identity** and set:
+
+- **Site name**: the operator-facing location, for example `Ellingers`.
+- **Asset ID**: an optional physical gateway identifier.
+
+The page also shows the hostname, hardware fingerprint, OS disk serial, and recording
+disk serial. Confirm these before changing a remote unit because cloned gateways may
+share the same hostname. The site identity is included in page headers, APIs, CSV
+exports, support bundles, and new Stage 0 baseline archive names.
+
 Recording storage is mounted by Linux through `/etc/fstab`; the watchdog monitors and can safely configure the labelled entry, but it is not required for the mount to exist. Intended entry:
 
 ```fstab

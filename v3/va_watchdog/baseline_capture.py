@@ -10,6 +10,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from .identity import configured_identity, identity_slug
+
 
 ALLOWED_DURATIONS = {900: "15 minutes", 3600: "1 hour"}
 MINIMUM_FREE_MB = 100
@@ -142,6 +144,9 @@ def start_baseline(cfg: dict[str, Any], duration_seconds: int) -> dict[str, Any]
             str(duration),
             "5",
             str(output_dir),
+            identity_slug(cfg),
+            configured_identity(cfg)["site_name"],
+            configured_identity(cfg)["asset_id"],
         ]
         result = _run(command, timeout=15)
         if result["returncode"] != 0:
@@ -158,6 +163,7 @@ def start_baseline(cfg: dict[str, Any], duration_seconds: int) -> dict[str, Any]
             "started_utc": started_utc,
             "output_dir": str(output_dir),
             "command": [str(item) for item in command],
+            "identity": configured_identity(cfg),
         }
         _write_json_atomic(state_path, state)
         return {"ok": True, "message": f"{ALLOWED_DURATIONS[duration]} baseline capture started.", "status": baseline_status(cfg)}

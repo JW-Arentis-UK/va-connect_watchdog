@@ -32,13 +32,14 @@ from .speedtest import run_speed_test
 from .heartbeat import heartbeat_paths, read_state, read_tail, heartbeat_age_seconds
 from .journal import persistent_status, enable_persistent
 from .baseline_capture import baseline_paths, baseline_status, completed_archive, start_baseline
+from .identity import configured_identity, identity_slug, identity_summary
 
 HTML = """<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>VA-Connect Watchdog</title>
+<title>__SITE_NAME__ - VA-Connect Watchdog</title>
 <style>
 :root {
   --bg: #080b0f;
@@ -279,12 +280,12 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
 <body data-theme="__BODY_THEME__">
 <div class="shell">
   <aside class="sidebar">
-    <div class="brand">VA-Connect Watchdog<small>Gateway resilience</small></div>
+    <div class="brand">VA-Connect Watchdog<small>__SITE_NAME__</small></div>
     <nav class="nav" id="nav">__SERVER_NAV__</nav>
   </aside>
   <main class="main">
     <header class="topbar">
-      <div id="page-title">__PAGE_MODE__ / __PAGE_TITLE__</div>
+      <div id="page-title">__SITE_NAME__ / __PAGE_MODE__ / __PAGE_TITLE__</div>
       <div class="topbar-right">
         <div class="top-watchdog"><span>Watchdog</span><strong id="side-state" class="value">Loading</strong><span class="label">Build</span><strong>__BUILD_ID__</strong></div>
         <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="light">Light</option><option value="dark">Dark</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
@@ -708,7 +709,9 @@ function renderGatewaySummary(status){
   const graceCountdown = `${Math.floor(graceRemaining / 60)}:${String(graceRemaining % 60).padStart(2, '0')}`;
   const protection = startupGrace.active ? `Waiting ${graceCountdown}` : (feed.enabled && feed.opened ? 'Active' : (wdt.value ? 'Detected, not active' : 'Not available'));
   const protectionState = startupGrace.active ? 'waiting' : (feed.enabled && feed.opened ? 'healthy' : 'warning');
-  return `<div class="card summary-card"><div><div class="label">Gateway status</div><div class="status-word ${state}">${displayWord(status)}</div><div class="score">${escapeHtml(status.score ?? '-')}%</div><span class="pill ${state}">${escapeHtml(pill)}</span></div><div><div class="label">Gateway</div><div class="value">POC-451VTC</div><div class="label">Last check</div><div class="value">${escapeHtml(fmtTime(status.time))}</div><div class="label">Build</div><div class="build-badge">${escapeHtml(lastVersion.commit || '-')}</div><div class="value">${escapeHtml(lastVersion.branch || lastUpdateStatus?.branch || '-')}</div></div><div><div class="label">Gateway monitor</div><div class="value healthy">ONLINE</div><div class="label">Videosoft services</div><div class="value ${healthyServices === services.length && services.length ? 'healthy' : 'warning'}">${escapeHtml(healthyServices)}/${escapeHtml(services.length)} running</div><div class="label">Hardware recovery</div><div class="value ${protectionState}">${escapeHtml(protection)}</div></div></div>`;
+  const identity = lastSystemInfo.identity || lastVersion.identity || {};
+  const gatewayName = identity.display_name || identity.site_name || lastSystemInfo.hostname || 'Site not configured';
+  return `<div class="card summary-card"><div><div class="label">Gateway status</div><div class="status-word ${state}">${displayWord(status)}</div><div class="score">${escapeHtml(status.score ?? '-')}%</div><span class="pill ${state}">${escapeHtml(pill)}</span></div><div><div class="label">Site</div><div class="value">${escapeHtml(gatewayName)}</div><div class="label">Asset ID</div><div class="value">${escapeHtml(identity.asset_id || '-')}</div><div class="label">Last check</div><div class="value">${escapeHtml(fmtTime(status.time))}</div><div class="label">Build</div><div class="build-badge">${escapeHtml(lastVersion.commit || '-')}</div><div class="value">${escapeHtml(lastVersion.branch || lastUpdateStatus?.branch || '-')}</div></div><div><div class="label">Gateway monitor</div><div class="value healthy">ONLINE</div><div class="label">Videosoft services</div><div class="value ${healthyServices === services.length && services.length ? 'healthy' : 'warning'}">${escapeHtml(healthyServices)}/${escapeHtml(services.length)} running</div><div class="label">Hardware recovery</div><div class="value ${protectionState}">${escapeHtml(protection)}</div></div></div>`;
 }
 
 function pageHelp(page){
@@ -873,6 +876,11 @@ function placeholderList(items){
   return `<ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
 }
 
+function renderIdentitySettingsCard(){
+  const identity = lastSettings.identity || {};
+  return `<div class="card"><h2>Gateway Identity</h2><div class="detail-grid"><div><label class="label">Site name</label><input id="set-site-name" maxlength="80" value="${escapeHtml(identity.site_name || '')}" placeholder="e.g. Ellingers"><p class="muted">Shown throughout the watchdog and included in downloaded evidence.</p><label class="label">Asset ID (optional)</label><input id="set-asset-id" maxlength="64" value="${escapeHtml(identity.asset_id || '')}" placeholder="e.g. GW-017"></div><div><div class="label">Hostname</div><div class="value">${escapeHtml(identity.hostname || '-')}</div><div class="label">Hardware fingerprint</div><div class="value">${escapeHtml(identity.hardware_fingerprint || '-')}</div><div class="label">OS disk serial</div><div class="value">${escapeHtml(identity.os_disk?.serial || '-')}</div><div class="label">Recording disk serial</div><div class="value">${escapeHtml(identity.recording_disk?.serial || '-')}</div></div></div><p class="warning">Confirm these serials before changing a remote gateway. Cloned units may share the same hostname.</p></div>`;
+}
+
 function renderSettingsPage(){
   const t = lastSettings.thresholds || {};
   const r = lastSettings.retention || {};
@@ -971,7 +979,7 @@ function renderPage(status, updateStatus, events){
   if (currentPage === 'Recovery') return `${pageHelp('Recovery')}${renderSimplePage('Recovery', `<p class="${escapeHtml(status.recovery?.state || 'unknown')}">${escapeHtml((status.recovery?.state || 'unknown').toUpperCase())}</p><p>${escapeHtml(status.recovery?.message || 'No recovery state available.')}</p>${placeholderList(['Enable/disable recovery','Restart service policy','Reboot grace period','Install/configure hardware watchdog','Last reboot reason'])}`)}`;
   if (currentPage === 'Events') return `${pageHelp('Events')}${renderEventsPage()}`;
   if (currentPage === 'History') return `${pageHelp('History')}${renderHistoryPage()}`;
-  if (currentPage === 'Settings') return `${pageHelp('Settings')}${renderSettingsPage()}`;
+  if (currentPage === 'Settings') return `${pageHelp('Settings')}${renderIdentitySettingsCard()}${renderSettingsPage()}`;
   if (currentPage === 'Updates') return `${pageHelp('Updates')}${renderUpdatesPage(updateStatus)}`;
   if (currentPage === 'Diagnostics') return `${pageHelp('Diagnostics')}${renderDiagnosticsPage(status, updateStatus)}`;
   return renderOverview(status, events);
@@ -1160,6 +1168,10 @@ async function saveSettings(){
     return;
   }
   const payload = {
+    identity: {
+      site_name: String(document.getElementById('set-site-name')?.value || '').trim(),
+      asset_id: String(document.getElementById('set-asset-id')?.value || '').trim(),
+    },
     poll_interval_seconds: numberValue('set-poll'),
     thresholds: {
       root_disk_warning_percent: numberValue('set-root-warn'),
@@ -1208,7 +1220,7 @@ async function saveSettings(){
       return;
     }
     feedback.textContent = `Saved to ${result.path}. Backup created if a config already existed.`;
-    await load();
+    window.location.reload();
   } catch (error) {
     feedback.textContent = `Settings save failed: ${error}`;
   }
@@ -1299,6 +1311,7 @@ def start_web(cfg):
             "repo_root": str(root),
             "config_path": str(active_config_path()),
             "data_dir": str(data_dir),
+            "identity": configured_identity(cfg),
         }
 
     page_modes = [
@@ -1333,12 +1346,14 @@ def start_web(cfg):
     def page_shell(body, page):
         theme = current_theme_name()
         build = version_info().get("commit") or "-"
+        site_name = configured_identity(cfg)["display_name"]
         return (
             HTML.replace("__BASIC_DASHBOARD__", body)
             .replace("__SERVER_NAV__", server_nav_html(page))
             .replace("__PAGE_TITLE__", page)
             .replace("__PAGE_MODE__", mode_for_page(page))
             .replace("__BUILD_ID__", escape(str(build)))
+            .replace("__SITE_NAME__", escape(str(site_name)))
             .replace("__BODY_THEME__", theme)
         )
 
@@ -1752,6 +1767,7 @@ def start_web(cfg):
             )
 
         def settings_card():
+            gateway_identity = identity_summary(cfg)
             thresholds = cfg.get("thresholds", {})
             retention = cfg.get("retention", {})
             network = cfg.get("network", {})
@@ -1781,6 +1797,19 @@ def start_web(cfg):
                 f"<div><label class=\"label\">History retention</label><input name=\"history_retention_days\" type=\"number\" min=\"1\" max=\"365\" value=\"{escape(str(retention.get('history_retention_days', 30)))}\"><p class=\"muted\">Days of historical samples to retain.</p></div>"
                 f"<div><label class=\"label\">Maximum watchdog data</label><input name=\"max_total_mb\" type=\"number\" min=\"10\" max=\"4096\" value=\"{escape(str(retention.get('max_total_mb', 100)))}\"><p class=\"muted\">Self-purge starts when this limit is reached.</p></div>"
                 "</div>"
+            )
+            identity_settings = (
+                "<div class=\"settings-grid\">"
+                f"<div><label class=\"label\">Site name</label><input name=\"site_name\" maxlength=\"80\" value=\"{escape(str(gateway_identity.get('site_name', '')))}\" placeholder=\"e.g. Ellingers\"><p class=\"muted\">Shown throughout the watchdog and included in downloaded evidence.</p></div>"
+                f"<div><label class=\"label\">Asset ID (optional)</label><input name=\"asset_id\" maxlength=\"64\" value=\"{escape(str(gateway_identity.get('asset_id', '')))}\" placeholder=\"e.g. GW-017\"><p class=\"muted\">Use the number printed on the physical gateway when available.</p></div>"
+                "</div>"
+                "<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>"
+                f"<tr><th>Hostname</th><td>{escape(str(gateway_identity.get('hostname') or '-'))}</td></tr>"
+                f"<tr><th>Hardware fingerprint</th><td>{escape(str(gateway_identity.get('hardware_fingerprint') or '-'))}</td></tr>"
+                f"<tr><th>OS disk</th><td>{escape(str(gateway_identity.get('os_disk', {}).get('model') or '-'))} / serial {escape(str(gateway_identity.get('os_disk', {}).get('serial') or '-'))}</td></tr>"
+                f"<tr><th>Recording disk</th><td>{escape(str(gateway_identity.get('recording_disk', {}).get('model') or '-'))} / serial {escape(str(gateway_identity.get('recording_disk', {}).get('serial') or '-'))}</td></tr>"
+                "</tbody></table></div>"
+                "<p class=\"warning\">Confirm these serials before changing a remote gateway. Cloned units may share the same hostname.</p>"
             )
             storage_settings = (
                 "<div class=\"settings-grid\">"
@@ -1838,6 +1867,7 @@ def start_web(cfg):
                 + "<div class=\"card\"><h2>Gateway Settings</h2>"
                 "<p class=\"section-lead\">Settings are grouped by purpose. Saving creates a backup before the new configuration is applied.</p>"
                 "<form method=\"post\" action=\"/settings-save\">"
+                + disclosure("Gateway identity", identity_settings, opened=True)
                 + disclosure("General and monitoring", general_settings, opened=True)
                 + disclosure("Watchdog startup safety", watchdog_settings, opened=True)
                 + disclosure("Storage alerts", storage_settings, opened=True)
@@ -2667,7 +2697,8 @@ def start_web(cfg):
             f"{issue_pill}"
             "</div>"
             "<div>"
-            "<div class=\"label\">Gateway</div><div class=\"value\">POC-451VTC</div>"
+            f"<div class=\"label\">Site</div><div class=\"value\">{escape(str(version.get('identity', {}).get('display_name') or 'Site not configured'))}</div>"
+            f"<div class=\"label\">Asset ID</div><div class=\"value\">{escape(str(version.get('identity', {}).get('asset_id') or '-'))}</div>"
             f"<div class=\"label\">Last check</div><div class=\"value\">{escape(local_time(status.get('time')))}</div>"
             "<div class=\"label\">Build</div>"
             f"<div class=\"build-badge\">{escape(str(version.get('commit', '-')))}</div>"
@@ -3590,6 +3621,10 @@ def start_web(cfg):
             return [line.strip() for line in first(name).splitlines() if line.strip()]
 
         return {
+            "identity": {
+                "site_name": first("site_name", ""),
+                "asset_id": first("asset_id", ""),
+            },
             "poll_interval_seconds": first("poll_interval_seconds", "5"),
             "thresholds": {
                 "root_disk_warning_percent": first("root_disk_warning_percent", "80"),
@@ -4613,6 +4648,7 @@ def start_web(cfg):
         except Exception:
             pass
         return {
+            "identity": identity_summary(cfg),
             "hostname": platform.node(),
             "os": platform.platform(),
             "kernel": platform.release(),
@@ -5047,6 +5083,7 @@ def start_web(cfg):
     def settings_summary():
         return {
             "config_path": str(active_config_path()),
+            "identity": identity_summary(cfg),
             "poll_interval_seconds": cfg.get("poll_interval_seconds"),
             "web": cfg.get("web", {}),
             "hardware_watchdog": cfg.get("hardware_watchdog", {}),
@@ -5093,6 +5130,14 @@ def start_web(cfg):
                 cleaned.append(text)
         return cleaned[:50]
 
+    def _identity_text(value, name, maximum):
+        text = str(value or "").strip()
+        if any(ord(character) < 32 for character in text):
+            raise ValueError(f"{name} must be a single line")
+        if len(text) > maximum:
+            raise ValueError(f"{name} must be {maximum} characters or fewer")
+        return text
+
     def apply_settings(payload):
         if not isinstance(payload, dict):
             raise ValueError("settings payload must be an object")
@@ -5104,8 +5149,15 @@ def start_web(cfg):
         process_monitor = payload.get("process_monitor", {})
         recording_storage = payload.get("recording_storage", {})
         recovery = payload.get("recovery", {})
+        identity = payload.get("identity", cfg.get("identity", {}))
+        if not isinstance(identity, dict):
+            raise ValueError("identity must be an object")
 
         updates = {
+            "identity": {
+                "site_name": _identity_text(identity.get("site_name", ""), "site_name", 80),
+                "asset_id": _identity_text(identity.get("asset_id", ""), "asset_id", 64),
+            },
             "poll_interval_seconds": _int_range(payload, "poll_interval_seconds", 2, 300),
             "thresholds": {
                 "root_disk_warning_percent": _int_range(thresholds, "root_disk_warning_percent", 1, 100),
@@ -5176,12 +5228,28 @@ def start_web(cfg):
         if rs_warning is not None and rs_critical is not None and rs_warning <= rs_critical:
             raise ValueError("recording storage warning free MB must be higher than critical free MB")
 
+        previous_identity = configured_identity(cfg)
         raw = load_raw_config()
         merged_raw = deep_merge(raw, updates)
         saved_path = save_raw_config(merged_raw)
         live_cfg = deep_merge(cfg, updates)
         cfg.clear()
         cfg.update(live_cfg)
+        current_identity = configured_identity(cfg)
+        if (
+            previous_identity["site_name"] != current_identity["site_name"]
+            or previous_identity["asset_id"] != current_identity["asset_id"]
+        ):
+            append_web_event(
+                "info",
+                "identity",
+                "Gateway identity updated",
+                {
+                    "previous_site_name": previous_identity["site_name"],
+                    "site_name": current_identity["site_name"],
+                    "asset_id": current_identity["asset_id"],
+                },
+            )
         return {
             "ok": True,
             "path": str(saved_path),
@@ -5194,9 +5262,12 @@ def start_web(cfg):
 
     def events_csv(limit=200):
         rows = recent_events(limit=limit)
-        lines = ["time,level,source,message"]
+        identity = configured_identity(cfg)
+        lines = ["site_name,asset_id,time,level,source,message"]
         for event in rows:
             values = [
+                identity["site_name"],
+                identity["asset_id"],
                 event.get("time", ""),
                 event.get("level", ""),
                 event.get("source", ""),
@@ -5208,6 +5279,8 @@ def start_web(cfg):
     def history_csv(limit=1000):
         rows = read_history(cfg, limit=limit)
         columns = [
+            "site_name",
+            "asset_id",
             "time",
             "state",
             "display_state",
@@ -5243,8 +5316,14 @@ def start_web(cfg):
             "recording_storage_minimum_free_mb_critical",
         ]
         lines = [",".join(columns)]
+        identity = configured_identity(cfg)
         for row in rows:
-            lines.append(",".join(_csv_cell(row.get(column, "")) for column in columns))
+            exported = {
+                **row,
+                "site_name": identity["site_name"],
+                "asset_id": identity["asset_id"],
+            }
+            lines.append(",".join(_csv_cell(exported.get(column, "")) for column in columns))
         return "\n".join(lines) + "\n"
 
     def _csv_cell(value):
@@ -5283,12 +5362,14 @@ def start_web(cfg):
     def support_bundle_bytes():
         generated = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
         status = status_snapshot()
+        gateway_identity = identity_summary(cfg)
         services = cfg.get("services", []) if isinstance(cfg.get("services", []), list) else []
         service_names = [str(item.get("name", "")).strip() for item in services if isinstance(item, dict) and item.get("name")]
         watched_services = ["va-watchdog", "va-watchdog-feed"] + service_names
         service_status_cmd = ["systemctl", "status", *watched_services, "--no-pager", "-l"]
         bundle = {
             "generated_utc": generated,
+            "identity": gateway_identity,
             "version": version_info(),
             "active_config_path": str(active_config_path()),
             "data_dir": str(data_dir),
@@ -5332,6 +5413,9 @@ def start_web(cfg):
         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             archive.writestr("README.txt", "\n".join([
                 "VA-Connect Watchdog support bundle",
+                f"Site: {gateway_identity.get('display_name') or 'Site not configured'}",
+                f"Asset ID: {gateway_identity.get('asset_id') or '-'}",
+                f"Hardware fingerprint: {gateway_identity.get('hardware_fingerprint') or '-'}",
                 f"Generated UTC: {generated}",
                 "",
                 "Use this bundle to investigate lockups, service failures, storage issues, network faults, and watchdog feed state.",
@@ -5339,6 +5423,7 @@ def start_web(cfg):
                 "",
             ]))
             archive.writestr("bundle-summary.json", json.dumps(bundle, indent=2))
+            archive.writestr("identity.json", json.dumps(gateway_identity, indent=2))
             archive.writestr("current-status.json", json.dumps(status, indent=2))
             archive.writestr("diagnostics-summary.json", json.dumps(diagnostics_summary(), indent=2))
             archive.writestr("storage-info.json", json.dumps(storage_info(), indent=2))
@@ -5360,11 +5445,12 @@ def start_web(cfg):
                         archive.writestr(f"raw-files/{name}.missing.txt", f"{target} was not present")
                 except Exception as exc:
                     archive.writestr(f"raw-files/{name}.error.txt", str(exc))
-        return buffer.getvalue(), f"va-watchdog-support-{generated}.zip"
+        return buffer.getvalue(), f"va-watchdog-support-{identity_slug(cfg)}-{generated}.zip"
 
     def config_summary():
         hardware = cfg.get("hardware_watchdog", {})
         return {
+            "identity": configured_identity(cfg),
             "hardware_watchdog": {
                 "enabled": bool(hardware.get("enabled", False)),
                 "device": str(hardware.get("device", "")),
@@ -5638,6 +5724,9 @@ def start_web(cfg):
             if route_path == "/api/version":
                 self._send_json(version_info())
                 return
+            if route_path == "/api/identity":
+                self._send_json(identity_summary(cfg))
+                return
             if route_path == "/api/healthz":
                 self._send_json(healthz())
                 return
@@ -5654,7 +5743,10 @@ def start_web(cfg):
                 self._send_json(retention_status())
                 return
             if route_path == "/api/events/export":
-                self._send_json({"events": recent_events(limit=5000)})
+                self._send_json({
+                    "identity": configured_identity(cfg),
+                    "events": recent_events(limit=5000),
+                })
                 return
             if route_path == "/api/events/export.csv":
                 self._send_text(events_csv(limit=5000), content_type="text/csv")
