@@ -13,6 +13,8 @@ from .common import CheckResult
 
 DEFAULT_RECORDING_STORAGE = {
     "enabled": True,
+    "mode": "dedicated_mount",
+    "directory_path": "",
     "expected_label": "CCTV_STORAGE",
     "mountpoint": "/media/vsuser/Storage",
     "filesystem": "ext4",
@@ -141,6 +143,17 @@ def _findmnt(mountpoint):
         return {}
     return filesystems[0]
 
+def _findmnt_for_path(path):
+    result = _run(["findmnt", "-J", "-T", str(path), "-o", "SOURCE,TARGET,FSTYPE,OPTIONS"], timeout=5)
+    if not result["ok"]:
+        return {}
+    try:
+        payload = json.loads(result["stdout"])
+    except Exception:
+        return {}
+    filesystems = payload.get("filesystems", [])
+    return filesystems[0] if filesystems else {}
+
 def _blkid_value(device, key):
     if not device:
         return ""
@@ -215,6 +228,8 @@ def _recording_writable(mountpoint):
 
 def recording_storage_recordings_path(cfg: dict[str, Any]) -> str:
     rec_cfg = recording_storage_cfg(cfg)
+    if str(rec_cfg.get("mode") or "dedicated_mount") == "system_directory":
+        return str(rec_cfg.get("directory_path") or "").rstrip("/")
     mountpoint = str(rec_cfg.get("mountpoint") or "/media/vsuser/Storage").rstrip("/")
     subdir = str(rec_cfg.get("recording_subdir") or "recordings").strip().strip("/")
     return posixpath.join(mountpoint, subdir) if subdir else mountpoint
@@ -252,13 +267,19 @@ def _prepare_recording_directories(cfg: dict[str, Any]) -> dict[str, Any]:
 
 def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
     rec_cfg = recording_storage_cfg(cfg)
+    mode = str(rec_cfg.get("mode") or "dedicated_mount")
+    directory_mode = mode == "system_directory"
     expected_label = str(rec_cfg.get("expected_label") or "CCTV_STORAGE")
-    mountpoint = str(rec_cfg.get("mountpoint") or "/media/vsuser/Storage")
+    configured_mountpoint = str(rec_cfg.get("mountpoint") or "/media/vsuser/Storage")
+    recordings_path = recording_storage_recordings_path(cfg)
+    monitored_path = recordings_path if directory_mode else configured_mountpoint
     expected_fs = str(rec_cfg.get("filesystem") or "ext4")
     checked_at = _now_iso()
-    mounted_info = _findmnt(mountpoint)
-    mounted = bool(mounted_info)
-    label_device = _device_by_label(expected_label)
+    mounted_info = _findmnt_for_path(monitored_path) if directory_mode else _findmnt(configured_mountpoint)
+    mountpoint = str(mounted_info.get("target") or configured_mountpoint)
+    path_present = Path(monitored_path).is_dir() if monitored_path else False
+    mounted = bool(mounted_info) and (path_present if directory_mode else True)
+    label_device = None if directory_mode else _device_by_label(expected_label)
     device = mounted_info.get("source") or label_device
     if str(device or "").startswith("LABEL="):
         device = _device_by_label(str(device).split("=", 1)[1]) or device
@@ -270,18 +291,18 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
         except OSError:
             pass
     row = _row_for_device(device) if device else {}
-    present = bool(device and Path(device).exists())
+    present = bool(device and (path_present if directory_mode else Path(device).exists()))
     filesystem = mounted_info.get("fstype") or row.get("fstype") or _blkid_value(device, "TYPE")
     label = row.get("label") or _blkid_value(device, "LABEL")
-    label_ok = label == expected_label
+    label_ok = True if directory_mode else label == expected_label
     options = str(mounted_info.get("options", ""))
     option_set = {item.strip() for item in options.split(",") if item.strip()}
     read_only = mounted and "ro" in option_set
-    writable = bool(mounted and not read_only and _recording_writable(mountpoint))
+    writable = bool(mounted and not read_only and _recording_writable(monitored_path))
     total_gb = free_gb = free_mb = used_percent = free_percent = None
     if mounted:
         try:
-            total, used, free = shutil.disk_usage(mountpoint)
+            total, used, free = shutil.disk_usage(monitored_path)
             total_gb = round(total / 1024 / 1024 / 1024, 1)
             free_gb = round(free / 1024 / 1024 / 1024, 1)
             free_mb = round(free / 1024 / 1024, 1)
@@ -307,7 +328,10 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
 
     status = "healthy"
     message = "Recording storage healthy"
-    if not present:
+    if directory_mode and not path_present:
+        status = "critical"
+        message = "Recording directory missing"
+    elif not present:
         status = "critical"
         message = "Recording storage missing"
     elif not mounted:
@@ -316,7 +340,7 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
     elif filesystem != expected_fs:
         status = "critical"
         message = f"Recording storage filesystem is {filesystem or 'unknown'}, expected {expected_fs}"
-    elif not label_ok:
+    elif not directory_mode and not label_ok:
         status = "critical"
         message = f"Recording storage label is {label or 'missing'}, expected {expected_label}"
     elif read_only:
@@ -351,10 +375,12 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
         message = "Recording storage temperature high"
 
     return {
+        "mode": mode,
         "device": device or "-",
         "mountpoint": mountpoint,
+        "monitored_path": monitored_path,
         "label": label or "-",
-        "expected_label": expected_label,
+        "expected_label": "Not required (system disk)" if directory_mode else expected_label,
         "label_ok": label_ok,
         "filesystem": filesystem or "-",
         "expected_filesystem": expected_fs,
@@ -381,15 +407,80 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
         "message": message,
         "checked_at": checked_at,
         "last_successful_check": checked_at if status in ("healthy", "warning") else "",
-        "fstab_entry": f"LABEL={expected_label} {mountpoint} {expected_fs} {rec_cfg.get('fstab_options')} 0 2",
-        "recordings_path": recording_storage_recordings_path(cfg),
+        "fstab_entry": "Not used - recording directory is on the OS filesystem" if directory_mode else f"LABEL={expected_label} {configured_mountpoint} {expected_fs} {rec_cfg.get('fstab_options')} 0 2",
+        "recordings_path": recordings_path,
         "owner": rec_cfg.get("owner") or "",
         "group": rec_cfg.get("group") or "primary group",
         "recording_service_mount_guards": recording_service_mount_guards(cfg),
     }
 
+def validate_system_recording_directory(path: str, owner: str = "") -> dict[str, Any]:
+    requested = str(path or "").strip()
+    if not requested.startswith("/"):
+        return {"ok": False, "message": "Recording path must be an absolute Linux path.", "path": requested}
+    try:
+        resolved = os.path.realpath(requested)
+    except OSError:
+        resolved = requested
+    protected = {"/", "/boot", "/boot/efi", "/etc", "/var", "/var/lib", "/var/lib/va-watchdog"}
+    if resolved in protected:
+        return {"ok": False, "message": f"{resolved} is a protected system path.", "path": resolved}
+    if not (resolved.startswith("/home/") or resolved.startswith("/srv/") or resolved.startswith("/opt/")):
+        return {
+            "ok": False,
+            "message": "One-drive recording folders must be below /home, /srv, or /opt.",
+            "path": resolved,
+        }
+    target = Path(resolved)
+    if not target.is_dir():
+        return {"ok": False, "message": "Recording directory does not exist.", "path": resolved}
+    mounted_info = _findmnt_for_path(resolved)
+    if not mounted_info:
+        return {"ok": False, "message": "Could not determine the filesystem containing this directory.", "path": resolved}
+    device = str(mounted_info.get("source") or "")
+    root_parent = _root_parent_disk()
+    selected_parent = _parent_disk(device) or device
+    if root_parent and os.path.realpath(selected_parent) != os.path.realpath(root_parent):
+        return {
+            "ok": False,
+            "message": "This folder is not on the operating-system disk. Use existing mounted storage instead.",
+            "path": resolved,
+        }
+    filesystem = str(mounted_info.get("fstype") or "")
+    if filesystem != "ext4":
+        return {
+            "ok": False,
+            "message": f"Containing filesystem is {filesystem or 'unknown'}, expected ext4.",
+            "path": resolved,
+        }
+    if not _recording_writable(resolved):
+        return {"ok": False, "message": "Recording directory is not writable.", "path": resolved}
+    owner = str(owner or "").strip()
+    if owner:
+        account = _run(["id", owner], timeout=5)
+        if not account["ok"]:
+            return {"ok": False, "message": f"Configured recording user does not exist: {owner}", "path": resolved}
+        owner_write = _run(["runuser", "-u", owner, "--", "test", "-w", resolved], timeout=5)
+        if not owner_write["ok"]:
+            return {
+                "ok": False,
+                "message": f"Recording directory is not writable by {owner}.",
+                "path": resolved,
+            }
+    return {
+        "ok": True,
+        "message": "Recording directory is on the OS disk and is writable.",
+        "path": resolved,
+        "device": device,
+        "mountpoint": str(mounted_info.get("target") or "/"),
+        "filesystem": filesystem,
+        "owner": owner,
+    }
+
 def recording_service_mount_guards(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     rec_cfg = recording_storage_cfg(cfg)
+    if str(rec_cfg.get("mode") or "dedicated_mount") == "system_directory":
+        return []
     mountpoint = str(rec_cfg.get("mountpoint") or "/media/vsuser/Storage")
     guards = []
     for service in rec_cfg.get("recording_services", []) or []:
@@ -415,6 +506,12 @@ def apply_recording_service_mount_guards(cfg: dict[str, Any], ack: bool) -> dict
     if not ack:
         return {"ok": False, "message": "Confirmation checkbox was not ticked.", "output": ""}
     rec_cfg = recording_storage_cfg(cfg)
+    if str(rec_cfg.get("mode") or "dedicated_mount") == "system_directory":
+        return {
+            "ok": False,
+            "message": "A mount guard is not required when recordings share the operating-system filesystem.",
+            "output": "",
+        }
     services = [str(item).strip() for item in rec_cfg.get("recording_services", []) or [] if str(item).strip()]
     mountpoint = str(rec_cfg.get("mountpoint") or "/media/vsuser/Storage")
     if not services:

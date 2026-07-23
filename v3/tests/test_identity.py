@@ -84,6 +84,22 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(summary["os_disk"]["serial"], "")
         self.assertEqual(summary["recording_disk"]["serial"], "")
 
+    @patch("va_watchdog.identity.platform.node", return_value="POC-451VTC")
+    def test_one_drive_mode_uses_os_disk_as_recording_disk(self, _node):
+        summary = identity_summary(
+            {
+                "identity": {"site_name": "Stamford Station"},
+                "recording_storage": {
+                    "mode": "system_directory",
+                    "directory_path": "/home/vsuser/recordings",
+                },
+            },
+            runner=lambda _command: json.dumps(LSBLK),
+            machine_id_path=Path("/path/that/does/not/exist"),
+        )
+        self.assertEqual(summary["os_disk"]["serial"], "OS-123")
+        self.assertEqual(summary["recording_disk"]["serial"], "OS-123")
+
 
 if __name__ == "__main__":
     unittest.main()

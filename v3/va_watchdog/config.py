@@ -108,6 +108,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "recording_storage": {
         "enabled": True,
+        "mode": "dedicated_mount",
+        "directory_path": "",
         "expected_label": "CCTV_STORAGE",
         "mountpoint": "/media/vsuser/Storage",
         "filesystem": "ext4",

@@ -99,6 +99,8 @@
   },
   "recording_storage": {
     "enabled": true,
+    "mode": "dedicated_mount",
+    "directory_path": "",
     "expected_label": "CCTV_STORAGE",
     "mountpoint": "/media/vsuser/Storage",
     "filesystem": "ext4",

@@ -23,7 +23,7 @@ from .history import history_path, read_history
 from .events import purge_events, read_events
 from .retention import purge_data as retention_purge_data
 from .retention import retention_status as retention_status_for_cfg
-from .storage import apply_recording_service_mount_guards, configure_recording_storage, prepare_blank_recording_disk, recording_storage_candidates, recording_storage_status
+from .storage import apply_recording_service_mount_guards, configure_recording_storage, prepare_blank_recording_disk, recording_storage_candidates, recording_storage_status, validate_system_recording_directory
 from .services import _runtime_stats
 from .watchdog_grace import arm_current_boot, delay_current_boot, startup_grace_status
 from .watchdog_test import arm_trip_test, confirm_trip_test, read_trip_test_state, trip_test_summary
@@ -923,6 +923,7 @@ function renderStoragePage(grouped){
   const recStatus = rec.status || 'unknown';
   const recRows = [
     ['Status', recStatus.toUpperCase()],
+    ['Mode', rec.mode === 'system_directory' ? 'One drive / OS filesystem' : 'Dedicated recording storage'],
     ['Device', rec.device || '-'],
     ['Mountpoint', rec.mountpoint || '-'],
     ['Recordings folder', rec.recordings_path || '-'],
@@ -2203,6 +2204,7 @@ def start_web(cfg):
             recording = status_snapshot().get("recording_storage") or recording_storage_status(cfg)
             rec_rows = [
                 ("Status", str(recording.get("status", "unknown")).upper()),
+                ("Mode", "One drive / OS filesystem" if recording.get("mode") == "system_directory" else "Dedicated recording storage"),
                 ("Device", recording.get("device", "-")),
                 ("Mountpoint", recording.get("mountpoint", "-")),
                 ("Recordings folder", recording.get("recordings_path", "-")),
@@ -2976,7 +2978,20 @@ def start_web(cfg):
             blank_rows.append("<tr><td colspan=\"9\">No whole disks detected.</td></tr>")
         rec = recording_storage_status(cfg)
         fstab_entry = rec.get("fstab_entry", "LABEL=CCTV_STORAGE /media/vsuser/Storage ext4 defaults,nofail,x-systemd.device-timeout=5 0 2")
+        current_directory = rec.get("recordings_path") if rec.get("mode") == "system_directory" else "/home/vsuser/recordings"
         body = (
+            "<div class=\"card\">"
+            "<h2>One Drive: Monitor Existing Recording Folder</h2>"
+            "<p class=\"section-lead\">Use this when the operating system and Videosoft recordings share the same physical drive. "
+            "The OS disk remains protected and is never relabelled, repartitioned, formatted, mounted, or added to /etc/fstab.</p>"
+            "<form method=\"post\" action=\"/recording-storage-system-directory\">"
+            "<label class=\"label\">Existing Videosoft recording folder</label>"
+            f"<input name=\"recording_path\" value=\"{escape(str(current_directory))}\" placeholder=\"/home/vsuser/recordings\">"
+            "<label><input type=\"checkbox\" name=\"ack\" value=\"1\"> Monitor this folder without changing the operating-system disk</label>"
+            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Monitor one-drive recording folder</button><a class=\"ghost\" href=\"/storage\">Cancel</a></div>"
+            "</form>"
+            "<p class=\"muted\">Enter the path selected in Videosoft. It must already exist and be writable. The watchdog only performs a temporary write test.</p>"
+            "</div>"
             "<div class=\"card\">"
             "<h2>Configure Recording Storage</h2>"
             "<p class=\"warning\">Existing filesystem setup does not format, erase, unmount, or automatically repair a drive. It only labels the selected ext4 partition or whole-disk ext4 filesystem after confirmation and writes a labelled /etc/fstab entry.</p>"
@@ -3138,6 +3153,8 @@ def start_web(cfg):
         updates = {
             "recording_storage": {
                 "enabled": True,
+                "mode": "existing_mount",
+                "directory_path": "",
                 "expected_label": label,
                 "mountpoint": str(selected.get("mountpoint")),
                 "filesystem": str(selected.get("filesystem") or "ext4"),
@@ -3156,6 +3173,51 @@ def start_web(cfg):
             "output": "No disk, label, mount, ownership, or fstab changes were made.",
             "backup": f"Config backup created automatically beside {saved_path}",
             "status": recording_storage_status(cfg),
+        }
+
+    def monitor_system_recording_directory(path, ack):
+        if not ack:
+            return {"ok": False, "message": "Confirmation checkbox was not ticked.", "output": ""}
+        recording_cfg = cfg.get("recording_storage", {}) if isinstance(cfg.get("recording_storage", {}), dict) else {}
+        validation = validate_system_recording_directory(path, recording_cfg.get("owner") or "vsuser")
+        if not validation.get("ok"):
+            return {
+                "ok": False,
+                "message": validation.get("message", "Recording directory validation failed."),
+                "output": f"Requested path: {validation.get('path') or path}",
+                "status": recording_storage_status(cfg),
+            }
+        updates = {
+            "recording_storage": {
+                "enabled": True,
+                "mode": "system_directory",
+                "directory_path": str(validation["path"]),
+                "managed_fstab": False,
+                "filesystem": str(validation.get("filesystem") or "ext4"),
+            },
+            "storage": {
+                "recordings_path": str(validation["path"]),
+            },
+        }
+        raw = load_raw_config()
+        merged_raw = deep_merge(raw, updates)
+        saved_path = save_raw_config(merged_raw)
+        live_cfg = deep_merge(cfg, updates)
+        cfg.clear()
+        cfg.update(live_cfg)
+        status = recording_storage_status(cfg)
+        return {
+            "ok": status.get("status") in {"healthy", "warning"},
+            "message": "Watchdog is now monitoring the recording folder on the OS disk.",
+            "output": (
+                f"Path: {validation['path']}\n"
+                f"Containing device: {validation.get('device') or '-'}\n"
+                f"Filesystem mountpoint: {validation.get('mountpoint') or '-'}\n"
+                "No partition, label, mount, ownership, or fstab changes were made."
+            ),
+            "backup": f"Config backup created automatically beside {saved_path}",
+            "fstab_entry": "Not used - recording directory is on the OS filesystem",
+            "status": status,
         }
 
     def recording_storage_result_html(result):
@@ -6011,6 +6073,30 @@ def start_web(cfg):
                     ack = form.get("ack", [""])[0] in {"1", "on", "true", "True", "yes"}
                     result = monitor_existing_recording_storage(device, ack)
                     append_web_event("healthy" if result.get("ok") else "warning", "recording_storage", result.get("message", "Recording storage monitor-only processed"), result)
+                except Exception as exc:
+                    result = {"ok": False, "message": str(exc), "output": ""}
+                body = recording_storage_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 400)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/recording-storage-system-directory":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    recording_path = form.get("recording_path", [""])[0]
+                    ack = form.get("ack", [""])[0] in {"1", "on", "true", "True", "yes"}
+                    result = monitor_system_recording_directory(recording_path, ack)
+                    append_web_event(
+                        "healthy" if result.get("ok") else "warning",
+                        "recording_storage",
+                        result.get("message", "One-drive recording directory configuration processed"),
+                        result,
+                    )
                 except Exception as exc:
                     result = {"ok": False, "message": str(exc), "output": ""}
                 body = recording_storage_result_html(result).encode("utf-8")

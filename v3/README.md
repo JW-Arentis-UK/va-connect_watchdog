@@ -108,6 +108,12 @@ The Storage page includes a Recording Storage panel and guarded setup flows. Exi
 
 For an already-working recorder mount that must not be changed, use Storage > Configure recording storage > Monitor only. This updates watchdog monitoring to the current mountpoint/label without relabelling, remounting, editing `/etc/fstab`, or changing permissions. Candidate lists hide devices smaller than 10 GB.
 
+For a gateway where the operating system and recordings share one physical drive,
+use **Storage > Configure recording storage > One Drive: Monitor Existing Recording
+Folder**. Enter the existing path selected in Videosoft, such as
+`/home/vsuser/recordings`. This mode keeps the system disk protected and makes no
+partition, label, mount, ownership, or `/etc/fstab` changes.
+
 Hardware watchdog is disabled by default. Enable only after testing:
 For POC-451VTC / Intel Atom x6425E gateways, first expose the Intel TCO watchdog:
 

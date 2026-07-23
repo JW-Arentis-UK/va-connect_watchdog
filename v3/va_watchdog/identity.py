@@ -50,7 +50,10 @@ def identity_summary(
         if isinstance(recording_cfg, dict)
         else ""
     )
-    recording_disk = _disk_for_mount(devices, recording_mountpoint) if recording_mountpoint else None
+    if isinstance(recording_cfg, dict) and recording_cfg.get("mode") == "system_directory":
+        recording_disk = os_disk
+    else:
+        recording_disk = _disk_for_mount(devices, recording_mountpoint) if recording_mountpoint else None
     machine_id = _read_text(machine_id_path)
     fingerprint_source = "|".join(
         part
