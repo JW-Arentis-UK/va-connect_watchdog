@@ -12,6 +12,14 @@ The v3 line now has its own entrypoint and notes:
 - [`bootstrap_v3_gateway.sh`](bootstrap_v3_gateway.sh)
 - Pinned gateway download: `https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/1758091/bootstrap_v3_gateway.sh`
 
+For a complete current V3 install on a clean Ubuntu 22.04 gateway:
+
+```bash
+cd ~/Desktop
+wget -O install_v3_gateway.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/codex/gui-refresh/install_v3_gateway.sh
+bash ./install_v3_gateway.sh
+```
+
 ## What is included
 
 - `tools/ubuntu/va_connect_watchdog.sh`

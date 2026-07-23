@@ -27,12 +27,46 @@ Default monitored services:
 - sysops.service
 - esg-config.service
 
-Install on target:
+## Full installation on a gateway
+
+For a clean Ubuntu 22.04 Videosoft gateway, download and run the full installer:
+
+```bash
+cd ~/Desktop
+wget -O install_v3_gateway.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/codex/gui-refresh/install_v3_gateway.sh
+bash ./install_v3_gateway.sh
+```
+
+The installer:
+
+- prompts for the site name and optional asset ID
+- explicitly offers persistent journald for post-crash evidence
+- installs Python, Git, SMART, sensor, network, and performance tools
+- clones or safely updates `/opt/va-connect-watchdog-v3`
+- backs up an existing configuration and preserves the previous Git commit
+- installs and enables both watchdog systemd services
+- verifies the local health and identity APIs
+
+Hardware watchdog feeding is deliberately not enabled on a clean install. Configure
+and test it from the Watchdog page after confirming `/dev/watchdog0` is correct.
+
+For an unattended install:
+
+```bash
+bash ./install_v3_gateway.sh \
+  --site-name "Ellingers" \
+  --asset-id "GW-017" \
+  --persistent-journal \
+  --non-interactive
+```
+
+Manual install on target:
+
 ```bash
 cd /opt
 sudo git clone <YOUR_REPO_URL> va-connect-watchdog-v3
 cd /opt/va-connect-watchdog-v3
-sudo ./scripts/install.sh
+sudo ./v3/scripts/install.sh
 ```
 
 Or bootstrap from a downloaded script on the gateway:
