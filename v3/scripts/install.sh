@@ -82,10 +82,14 @@ if [[ "$ENABLE_PERSISTENT_JOURNAL" == "1" ]]; then
   cat > /etc/systemd/journald.conf.d/va-watchdog-persistent.conf <<'EOF'
 [Journal]
 Storage=persistent
+SystemMaxUse=512M
+SystemKeepFree=1G
+MaxRetentionSec=30day
 EOF
   systemd-tmpfiles --create --prefix /var/log/journal || true
   systemctl restart systemd-journald
   journalctl --flush || true
+  journalctl --vacuum-size=512M --vacuum-time=30d || true
 fi
 
 install -m 0644 "$APP_DIR/systemd/va-watchdog.service" /etc/systemd/system/va-watchdog.service

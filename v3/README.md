@@ -135,4 +135,29 @@ Only enable feeding after `/dev/watchdog0` exists and `wdctl /dev/watchdog0` rep
 }
 ```
 
-When hardware feeding is enabled, VA-Connect intentionally leaves `/dev/watchdog0` closed for five minutes after a normal reboot. A reboot caused by the deliberate trip test receives a 15-minute safety window. This gives remote support time to reconnect and disable hardware feeding before it is armed again. The Watchdog page shows the countdown and provides guarded controls to extend the current window, arm immediately, or disable feeding before the device is opened. Once armed, the hardware timeout remains 30 seconds.
+When hardware feeding is enabled, the independent feeder opens and feeds
+`/dev/watchdog0` during the startup safety window. Stale-heartbeat enforcement is
+deferred for five minutes after a normal boot and 15 minutes after a deliberate trip
+test, allowing the main application and remote access to initialise without causing a
+reboot loop. The Watchdog page shows the countdown and provides guarded controls to
+extend the window, end it immediately, or disable feeding. Once grace ends, a stale
+main heartbeat stops feeding and the configured hardware timeout applies.
+
+## Preserved crash evidence
+
+When a new boot ID is detected, V3 freezes the previous boot's evidence before live
+retention can overwrite it. Each incident archive is stored below
+`/var/lib/va-watchdog/incidents` and is included in the downloadable support bundle.
+It contains matching heartbeat, Black Box, and history rows, the last status and feed
+state, previous-boot kernel journal, `last -x`, recent events, reboot classification,
+and any available `pstore` records.
+
+Incident archives are bounded independently to 10 incidents and 25 MB by default.
+The newest archive is always retained. Reboot classification only reports a watchdog
+or kernel reset when direct evidence supports it; informational messages such as
+`NMI watchdog: Enabled` do not establish a reset cause.
+
+The explicit persistent-journal action writes a separate
+`/etc/systemd/journald.conf.d/va-watchdog-persistent.conf` drop-in. It limits journal
+storage to 512 MB, reserves 1 GB free on the OS disk, and retains up to 30 days
+without editing unrelated journald configuration.

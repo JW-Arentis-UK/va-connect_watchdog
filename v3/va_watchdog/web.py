@@ -31,6 +31,8 @@ from .update import launch_update_job, load_update_status
 from .speedtest import run_speed_test
 from .heartbeat import heartbeat_paths, read_state, read_tail, heartbeat_age_seconds
 from .journal import persistent_status, enable_persistent
+from .crash_evidence import pstore_status
+from .incident_archive import archive_config, list_archives
 from .baseline_capture import baseline_paths, baseline_status, completed_archive, start_baseline
 from .identity import configured_identity, identity_slug, identity_summary
 
@@ -2574,6 +2576,8 @@ def start_web(cfg):
             service_status = _run(["systemctl", "is-active", "va-watchdog"], timeout=3)
             service_enabled = _run(["systemctl", "is-enabled", "va-watchdog"], timeout=3)
             bb = blackbox_summary(cfg)
+            incident_archives = list_archives(cfg)
+            pstore = pstore_status()
             baseline = baseline_status(cfg)
             active_value = str(service_status.get("stdout") or service_status.get("stderr") or "unknown")
             enabled_value = str(service_enabled.get("stdout") or service_enabled.get("stderr") or "unknown")
@@ -2635,6 +2639,7 @@ def start_web(cfg):
                     ("Current health", str(status.get("state", "unknown")).upper(), f"Score {status.get('score', '-')}%", str(status.get("state", "unknown"))),
                     ("Black-box recorder", "Enabled" if bb.get("enabled") else "Disabled", f"{bb.get('rows', 0)} snapshots", "healthy" if bb.get("enabled") else "warning"),
                     ("Latest snapshot", local_time(bb.get("last_time")), "Hang investigation evidence", "healthy" if bb.get("last_time") else "warning"),
+                    ("Preserved incidents", str(len(incident_archives)), "Previous-boot evidence protected from rolling retention", "healthy" if incident_archives else "muted"),
                 ])
                 + "<div class=\"card\"><h2>Diagnostic Toolbox</h2>"
                 "<p class=\"section-lead\">Start with the support bundle after a lockup. The other tools expose focused live evidence without changing gateway configuration.</p>"
@@ -2652,7 +2657,8 @@ def start_web(cfg):
                 ])
                 + "</div>"
                 + baseline_card
-                + f"<div class=\"card\"><h2>Persistent Journal</h2><p class=\"{'healthy' if persistent_status().get('enabled') else 'warning'}\">{'Enabled' if persistent_status().get('enabled') else 'Disabled or unavailable'}</p><p class=\"muted\">Persistent journals preserve kernel and service evidence across reboot.</p><div class=\"button-row\"><a class=\"ghost\" href=\"/journal-enable-confirm\">Enable persistent logging</a></div></div>"
+                + f"<div class=\"card\"><h2>Persistent Journal</h2><p class=\"{'healthy' if persistent_status().get('enabled') else 'warning'}\">{'Enabled' if persistent_status().get('enabled') else 'Disabled or unavailable'}</p><p class=\"muted\">Persistent journals preserve kernel and service evidence across reboot. VA-Watchdog-managed logging is capped at 512 MB and reserves 1 GB free on the OS disk.</p><div class=\"button-row\"><a class=\"ghost\" href=\"/journal-enable-confirm\">Enable or apply safe limits</a></div></div>"
+                + f"<div class=\"card\"><h2>Crash Evidence</h2><p class=\"{'healthy' if incident_archives else 'muted'}\">{len(incident_archives)} preserved incident archive(s)</p><p class=\"muted\">A new archive is frozen at startup before heartbeat and Black Box retention can overwrite the previous boot. {escape(str(pstore.get('message') or 'pstore status unavailable'))}.</p></div>"
                 + disclosure("Useful terminal commands", commands)
                 + disclosure("All health-engine checks", all_checks_table("Diagnostics Checks"))
             )
@@ -2797,7 +2803,7 @@ def start_web(cfg):
         body = (
             "<div class=\"card\"><h2>Enable Persistent Journald</h2>"
             "<p>Current journal persistence status: <strong>" + escape("Enabled" if current.get("enabled") else "Disabled or unavailable") + "</strong></p>"
-            "<p class=\"muted\">This creates /var/log/journal if required, preserves unrelated settings, flushes journald and restarts only systemd-journald.</p>"
+            "<p class=\"muted\">This creates /var/log/journal if required and writes a separate VA-Watchdog drop-in without editing unrelated journald settings. It caps journals at 512 MB, reserves 1 GB free on the OS disk, retains up to 30 days, flushes journald, and restarts only systemd-journald.</p>"
             "<form method=\"post\" action=\"/journal-enable\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> I understand this changes system logging storage.</label>"
             "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Enable persistent logging</button><a class=\"ghost\" href=\"/diagnostics\">Cancel</a></div></form></div>"
         )
@@ -5416,6 +5422,8 @@ def start_web(cfg):
             "install_status": install,
             "blackbox": blackbox_summary(cfg),
             "persistent_journal": persistent_status(),
+            "pstore": pstore_status(),
+            "incident_archives": list_archives(cfg),
             "heartbeat": {"state": read_state(cfg), "age_seconds": heartbeat_age_seconds(read_state(cfg))},
             "reboot_evidence": _read_json_file(Path(cfg.get("reboot_evidence_path") or data_dir / "reboot-evidence.jsonl").with_name("last-reboot-evidence.json")),
             "generated_at_unix": time.time(),
@@ -5452,6 +5460,7 @@ def start_web(cfg):
             "network-routes.txt": _run(["ip", "route"], timeout=5),
             "kernel-previous-boot.txt": _run(["journalctl", "-b", "-1", "-k", "--no-pager"], timeout=15),
             "journal-persistent-status.txt": {"stdout": json.dumps(persistent_status(), indent=2), "stderr": "", "returncode": 0},
+            "pstore-status.txt": {"stdout": json.dumps(pstore_status(), indent=2), "stderr": "", "returncode": 0},
         }
         file_sources = {
             "status.json": status_path,
@@ -5507,6 +5516,25 @@ def start_web(cfg):
                         archive.writestr(f"raw-files/{name}.missing.txt", f"{target} was not present")
                 except Exception as exc:
                     archive.writestr(f"raw-files/{name}.error.txt", str(exc))
+            incidents_dir = archive_config(cfg)["path"]
+            if incidents_dir.is_dir():
+                for incident_file in incidents_dir.rglob("*"):
+                    if incident_file.is_file():
+                        try:
+                            archive.write(incident_file, f"incident-archives/{incident_file.relative_to(incidents_dir)}")
+                        except OSError as exc:
+                            archive.writestr(f"incident-archives/{incident_file.name}.error.txt", str(exc))
+            pstore_dir = Path("/sys/fs/pstore")
+            archived_pstore_dir = Path("/var/lib/systemd/pstore")
+            for pstore_name, pstore_source in (("live", pstore_dir), ("archived", archived_pstore_dir)):
+                if not pstore_source.is_dir():
+                    continue
+                try:
+                    for pstore_file in pstore_source.iterdir():
+                        if pstore_file.is_file():
+                            archive.write(pstore_file, f"pstore/{pstore_name}/{pstore_file.name}")
+                except OSError as exc:
+                    archive.writestr(f"pstore/{pstore_name}/read-error.txt", str(exc))
         return buffer.getvalue(), f"va-watchdog-support-{identity_slug(cfg)}-{generated}.zip"
 
     def config_summary():

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .heartbeat import heartbeat_paths, read_tail
+from .incident_archive import archive_previous_boot
 
 
 def _run(command, timeout=10):
@@ -28,14 +29,14 @@ def _write(path: Path, payload: dict[str, Any]):
 
 def _faults(kernel_text: str) -> list[dict[str, str]]:
     patterns = {
-        "oom": r"oom-killer|out of memory",
-        "hung_task": r"hung task|blocked for more than",
-        "soft_lockup": r"soft lockup",
-        "hard_lockup": r"hard lockup|nmi watchdog",
-        "kernel_panic": r"kernel panic|not syncing",
-        "storage_io": r"i/o error|blk_update_request|buffer i/o error|ext[234]-fs error|xfs .* error",
-        "device_reset": r"sata.*reset|usb .*reset|link is down|firmware.*reset",
-        "watchdog": r"watchdog|itco",
+        "oom": r"\boom-killer\b|\bout of memory\b|\bkilled process\b.*\bout of memory\b",
+        "hung_task": r"\bhung task\b|\bblocked for more than \d+ seconds\b",
+        "soft_lockup": r"\bsoft lockup\b",
+        "hard_lockup": r"\bhard lockup\b|\bwatchdog:\s+bug:.*lockup\b",
+        "kernel_panic": r"\bkernel panic\b|\bpanic - not syncing\b",
+        "storage_io": r"\bi/o error\b|\bblk_update_request\b|\bbuffer i/o error\b|\bext[234]-fs error\b|\bxfs .* error\b",
+        "device_reset": r"\bata\d+.*(?:hard resetting|reset failed)\b|\breset (?:high|full|super)-speed usb device\b|\bnetdev watchdog\b|\btransmit queue.*timed out\b|\bfirmware.*reset\b",
+        "watchdog_reset": r"\bwatchdog\b.*\b(?:reset|reboot|bootstatus|triggered|bite)\b|\bitco.*\bbootstatus\b",
     }
     result = []
     for line in kernel_text.splitlines():
@@ -69,10 +70,11 @@ def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], prev
     last_heartbeat = previous_rows[-1] if previous_rows else (heartbeats[-1] if heartbeats else {})
     faults = _faults(kernel_text)
     requested = bool(previous_reboot_reason)
-    watchdog_evidence = bool(reset_reason and "watchdog" in reset_reason.lower()) or any(item["category"] == "watchdog" for item in faults)
+    watchdog_evidence = bool(reset_reason and "watchdog" in reset_reason.lower()) or any(item["category"] == "watchdog_reset" for item in faults)
     kernel_fault = any(item["category"] in {"oom", "hung_task", "soft_lockup", "hard_lockup", "kernel_panic"} for item in faults)
     storage_fault = any(item["category"] == "storage_io" for item in faults)
-    clean = bool(re.search(r"shutdown|reboot|systemd-shutdown", last_x.lower())) and not faults and not requested
+    recent_session = _previous_session_lines(last_x)
+    clean = any("shutdown system down" in line.lower() for line in recent_session) and not any("crash" in line.lower() for line in recent_session)
     if requested:
         mechanism = "Requested reboot"
         confidence = "High"
@@ -96,6 +98,21 @@ def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], prev
             gap = round(max(0.0, after - before), 3)
         except (TypeError, ValueError, KeyError):
             gap = None
+    evidence_used = []
+    if requested:
+        evidence_used.append("A watchdog-requested reboot reason was preserved before shutdown.")
+    if reset_reason:
+        evidence_used.append(f"Platform reset reason: {reset_reason}")
+    if watchdog_evidence:
+        evidence_used.append("The platform or previous-boot kernel log explicitly reported a watchdog reset.")
+    if clean:
+        evidence_used.append("The immediately preceding last -x session contains a clean shutdown record.")
+    if kernel_fault:
+        evidence_used.append("The previous-boot kernel log contains an explicit kernel fault signature.")
+    if storage_fault:
+        evidence_used.append("The previous-boot kernel log contains a storage I/O fault signature.")
+    if not evidence_used:
+        evidence_used.append("No direct reset-cause evidence was found; classification remains Unknown.")
     return {
         "reset_mechanism": mechanism,
         "probable_preceding_fault": "storage I/O" if storage_fault else ("kernel fault" if kernel_fault else "none identified"),
@@ -107,10 +124,21 @@ def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], prev
         "heartbeat_gap_seconds": gap,
         "previous_reboot_reason": previous_reboot_reason,
         "kernel_findings": faults,
+        "evidence_used": evidence_used,
+        "previous_session_last_x": recent_session,
+        "unclean_shutdown_detected": any("crash" in line.lower() for line in recent_session),
         "last_x": last_x[-5000:],
         "reset_reason": reset_reason,
         "created_at": time.time(),
     }
+
+
+def _previous_session_lines(last_x: str) -> list[str]:
+    lines = [line for line in last_x.splitlines() if line.strip()]
+    reboot_indexes = [index for index, line in enumerate(lines) if "reboot   system boot" in line.lower()]
+    if len(reboot_indexes) >= 2:
+        return lines[reboot_indexes[0] + 1:reboot_indexes[1]]
+    return lines[:12]
 
 
 def create(cfg: dict[str, Any], boot_change: dict[str, Any], feed_state: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -132,6 +160,13 @@ def create(cfg: dict[str, Any], boot_change: dict[str, Any], feed_state: dict[st
     kernel = _run(["journalctl", "-b", "-1", "-k", "--no-pager"], timeout=15)
     last_x = _run(["last", "-x"], timeout=10)
     evidence = classify(boot_change, heartbeats, reason if isinstance(reason, dict) else {}, kernel, last_x, str((feed_state or {}).get("reset_reason") or _reset_reason()))
+    try:
+        archive = archive_previous_boot(cfg, boot_change, evidence, kernel, last_x)
+    except Exception as exc:
+        archive = {"created": False, "reason": f"archive failed without blocking startup: {exc}"}
+    evidence["incident_archive"] = archive
+    if archive.get("path"):
+        _write(Path(str(archive["path"])) / "reboot-evidence.json", evidence)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(evidence, separators=(",", ":")) + "\n")
         handle.flush()

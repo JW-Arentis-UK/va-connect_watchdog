@@ -32,6 +32,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "top_process_count": 8,
         "journal_lines": 30
     },
+    "incident_archive": {
+        "enabled": True,
+        "path": "/var/lib/va-watchdog/incidents",
+        "max_incidents": 10,
+        "max_total_mb": 25,
+        "event_tail_rows": 1000,
+        "pstore_file_max_mb": 5
+    },
     "web": {
         "enabled": True,
         "host": "0.0.0.0",

@@ -4,8 +4,11 @@ import os
 import socket
 
 
+_NOTIFY_SOCKET = os.environ.pop("NOTIFY_SOCKET", "")
+
+
 def notify(message: str) -> bool:
-    notify_socket = os.environ.get("NOTIFY_SOCKET")
+    notify_socket = _NOTIFY_SOCKET
     if not notify_socket:
         return False
     address = notify_socket

@@ -23,6 +23,14 @@
     "top_process_count": 8,
     "journal_lines": 30
   },
+  "incident_archive": {
+    "enabled": true,
+    "path": "/var/lib/va-watchdog/incidents",
+    "max_incidents": 10,
+    "max_total_mb": 25,
+    "event_tail_rows": 1000,
+    "pstore_file_max_mb": 5
+  },
   "web": {
     "enabled": true,
     "host": "0.0.0.0",

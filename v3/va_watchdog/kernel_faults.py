@@ -9,17 +9,17 @@ from typing import Any
 
 
 PATTERNS = {
-    "oom": r"oom-killer|out of memory|killed process .* out of memory",
-    "hung_task": r"hung task|blocked for more than",
-    "soft_lockup": r"soft lockup",
-    "hard_lockup": r"hard lockup|nmi watchdog",
-    "kernel_panic": r"kernel panic|not syncing",
-    "filesystem_error": r"ext[234]-fs error|xfs .* error|I/O error",
-    "block_io": r"blk_update_request|buffer i/o error|end_request",
-    "sata_reset": r"ata[0-9].*(reset|hard resetting)|sata.*reset",
-    "usb_reset": r"usb .*reset|usb .*disconnect",
-    "nic_reset": r"nic.*reset|link is down|firmware.*reset|watchdog timeout",
-    "watchdog": r"iTCO|watchdog",
+    "oom": r"\boom-killer\b|\bout of memory\b|\bkilled process\b.*\bout of memory\b",
+    "hung_task": r"\bhung task\b|\bblocked for more than \d+ seconds\b",
+    "soft_lockup": r"\bsoft lockup\b",
+    "hard_lockup": r"\bhard lockup\b|\bwatchdog:\s+bug:.*lockup\b",
+    "kernel_panic": r"\bkernel panic\b|\bpanic - not syncing\b",
+    "filesystem_error": r"\bext[234]-fs error\b|\bxfs .* error\b",
+    "block_io": r"\bblk_update_request\b|\bbuffer i/o error\b|\bend_request\b|\bcritical medium error\b",
+    "sata_reset": r"\bata[0-9].*(?:hard resetting|reset failed)\b|\bsata.*reset failed\b",
+    "usb_reset": r"\breset (?:high|full|super)-speed usb device\b|\busb .*reset device\b",
+    "nic_reset": r"\bnetdev watchdog\b|\btransmit queue.*timed out\b|\b(?:igc|e1000e?|r8169).*(?:adapter reset|resetting)\b|\bfirmware.*reset\b",
+    "watchdog_reset": r"\bwatchdog\b.*\b(?:reset|reboot|bootstatus|triggered|bite)\b|\bitco.*\bbootstatus\b",
 }
 
 

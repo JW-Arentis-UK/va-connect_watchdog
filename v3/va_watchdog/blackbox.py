@@ -51,7 +51,9 @@ def check_unexpected_boot(cfg: dict[str, Any], event_log=None) -> dict[str, Any]
         "detected_at": _now_iso(),
     }
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps({"boot_id": current, "updated_at": result["detected_at"]}, indent=2), encoding="utf-8")
+    temporary = state_path.with_suffix(state_path.suffix + ".tmp")
+    temporary.write_text(json.dumps({"boot_id": current, "updated_at": result["detected_at"]}, indent=2), encoding="utf-8")
+    os.replace(temporary, state_path)
     if changed and event_log:
         event_log.add("warning", "blackbox", "Unexpected reboot detected", result)
     return result
