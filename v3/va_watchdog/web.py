@@ -791,7 +791,7 @@ function renderWatchdogPage(status){
   const pageState = ready ? 'healthy' : (legacyProblem ? 'critical' : 'warning');
   const pageTitle = ready ? 'Hardware watchdog ready' : (legacyProblem ? 'Existing watchdog conflict found' : 'Watchdog needs setup');
   const pageMessage = ready ? 'The watchdog service owns /dev/watchdog0 and is feeding it. The deliberate trip test is available.' : (legacyProblem ? 'A legacy watchdog service may own the device. Clean legacy watchdogs, then run one-click setup.' : 'Run the one-click setup to load the driver, clean old watchdog daemons, enable hardware feed, and restart the service.');
-  const primaryAction = ready ? '<a class="action" href="/watchdog-trip-confirm">Start deliberate trip test</a>' : (legacyProblem ? '<a class="danger" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs</a>' : '<a class="action" href="/hardware-watchdog-prepare-confirm">Run one-click setup</a>');
+  const primaryAction = ready ? `<a class="action" href="/watchdog-trip-confirm">${tripTest.armed ? 'Continue armed trip confirmation' : 'Start deliberate trip test'}</a>` : (legacyProblem ? '<a class="danger" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs</a>' : '<a class="action" href="/hardware-watchdog-prepare-confirm">Run one-click setup</a>');
   const feedState = feed.enabled && feed.opened ? 'healthy' : 'warning';
   return `${pageHelp('Watchdog')}<div class="card action-panel ${pageState}"><h2>${escapeHtml(pageTitle)}</h2><p class="${pageState}">${escapeHtml(pageMessage)}</p><div class="button-row">${primaryAction}<a class="ghost" href="/hardware-watchdog-prepare-confirm">Run full setup/cleanup</a><a class="ghost" href="/watchdog-hardware-probe-confirm">Run probe</a></div></div><div class="status-strip"><div class="status-box"><div class="label">Driver</div><div class="big ${modules.iTCO_wdt ? 'healthy' : 'warning'}">${modules.iTCO_wdt ? 'Loaded' : 'Needs setup'}</div><div class="step-detail">Intel TCO hardware watchdog driver</div></div><div class="status-box"><div class="label">Device</div><div class="big ${wdctl.device ? 'healthy' : 'warning'}">${escapeHtml(hwCfg.device || '/dev/watchdog0')}</div><div class="step-detail">${escapeHtml(wdctl.identity || 'No identity yet')}</div></div><div class="status-box"><div class="label">Hardware feed</div><div class="big ${feedState}">${feed.enabled && feed.opened ? 'Feeding' : 'Not feeding'}</div><div class="step-detail">${escapeHtml(lastFeed)}</div></div><div class="status-box"><div class="label">Legacy watchdogs</div><div class="big ${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Conflict' : 'Clear'}</div><div class="step-detail">${escapeHtml(legacyProblem ? 'Cleanup needed' : 'Removed/disabled')}</div></div></div><div class="grid lower-grid"><div class="card"><h2>Setup Checklist</h2><p class="muted">Work from top to bottom. Green means that layer is ready; amber/red shows the part to fix next.</p><div class="setup-steps">${checkCards}</div></div><div class="card"><h2>Existing Watchdogs and Cleanup</h2><p class="${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Another watchdog may still be installed or enabled.' : 'No conflicting legacy watchdog services detected.'}</p><table class="compact-table"><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead><tbody>${legacyRows}</tbody></table><p class="muted">This service should be the only process feeding the hardware watchdog.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs only</a><a class="ghost" href="/hardware">Hardware details</a></div></div></div><div class="grid lower-grid"><div class="card"><h2>Current Watchdog Configuration</h2><table class="compact-table"><tbody>${configRows}</tbody></table></div><div class="card"><h2>What the Layers Mean</h2><ul><li><strong>Hardware watchdog</strong> reboots the whole gateway if Linux stops feeding /dev/watchdog0.</li><li><strong>Hardware feed</strong> is this service opening and feeding the hardware device.</li><li><strong>Process watchdog</strong> is systemd restarting va-watchdog if the Python process hangs.</li><li><strong>Legacy watchdogs</strong> are old daemons/packages that should not also control the device.</li></ul></div></div><div class="grid lower-grid"><div class="card"><h2>Safe Watchdog Test</h2><p class="muted">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-test-arm"><button class="action" type="submit">Arm safe test</button></form></div><div class="label">Feed enabled</div><div class="value">${feed.enabled ? 'Enabled' : 'Disabled'}</div><div class="label">Last feed</div><div class="value">${escapeHtml(lastFeed)}</div></div><div class="card"><h2>Deliberate Watchdog Trip Test</h2><p class="warning">This stops hardware feeding and may reboot the gateway.</p><p class="muted">Triple confirmation: arm the test, check the risk box, and type TRIP on the confirm page.</p><div class="button-row">${tripAction}</div>${ready ? '' : '<p class="warning">Trip test is blocked until setup is complete and the service has a recent hardware feed.</p>'}<div class="label">State</div><div class="value">${escapeHtml(tripTest.triggered ? 'Triggered this boot' : (tripTest.completed_previous_boot ? 'Completed on previous boot' : (tripTest.armed ? 'Armed' : 'Not armed')))}</div><div class="label">Countdown verification</div><div class="value">${escapeHtml(tripCountdown.status || 'inactive')}${tripCountdown.current_timeleft == null ? '' : `; ${escapeHtml(tripCountdown.current_timeleft)}s remaining`}</div><div class="label">Last result</div><div class="value">${escapeHtml(tripTest.last_result_message || 'No trip test recorded yet')}</div></div><div class="card"><h2>Extend Timeout</h2><p class="muted">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p><form method="post" action="/watchdog-timeout-set"><label class="label">Timeout seconds</label><select name="timeout_seconds"><option value="30" ${timeout === 30 ? 'selected' : ''}>30</option><option value="60" ${timeout === 60 ? 'selected' : ''}>60</option><option value="120" ${timeout === 120 ? 'selected' : ''}>120</option><option value="180" ${timeout === 180 ? 'selected' : ''}>180</option><option value="300" ${timeout === 300 ? 'selected' : ''}>300</option></select><div class="button-row"><button class="action" type="submit">Apply timeout</button></div></form><p class="muted">Use a longer timeout while diagnosing reboot loops. Put it back to 30s once stable.</p></div></div><div class="card"><h2>Advanced Tools</h2><p class="muted">Use these only when the guided setup cannot complete.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy only</a><a class="ghost" href="/hardware-watchdog-enable-confirm">Enable feed only</a><a class="ghost" href="/hardware">Hardware details</a><a class="ghost" href="/diagnostics">Diagnostics</a></div></div>`;
 }
@@ -1993,9 +1993,14 @@ def start_web(cfg):
                 )
             elif setup.get("ready"):
                 page_state = "healthy"
-                page_title = "Hardware watchdog ready"
-                page_message = "The watchdog service owns /dev/watchdog0 and is feeding it. The deliberate trip test is available."
-                primary_action = "<a class=\"action\" href=\"/watchdog-trip-confirm\">Start deliberate trip test</a>"
+                if trip_test.get("armed"):
+                    page_title = "Trip test armed; final confirmation required"
+                    page_message = "Hardware feeding continues until you tick the risk box, type TRIP, and submit the final trigger."
+                    primary_action = "<a class=\"action\" href=\"/watchdog-trip-confirm\">Continue armed trip confirmation</a>"
+                else:
+                    page_title = "Hardware watchdog ready"
+                    page_message = "The watchdog service owns /dev/watchdog0 and is feeding it. The deliberate trip test is available."
+                    primary_action = "<a class=\"action\" href=\"/watchdog-trip-confirm\">Start deliberate trip test</a>"
             elif legacy_problem:
                 page_state = "critical"
                 page_title = "Existing watchdog conflict found"
@@ -2101,18 +2106,24 @@ def start_web(cfg):
                 f"<option value=\"{value}\" {'selected' if post_trip_grace == value else ''}>{label}</option>"
                 for value, label in [(300, "5 minutes"), (900, "15 minutes"), (1800, "30 minutes"), (3600, "60 minutes")]
             )
-            grace_state = "WAITING" if grace_active else ("ARMED" if feed_opened else "INACTIVE")
+            grace_state = "WAITING" if grace_active else ("PROTECTION ACTIVE" if feed_opened else "INACTIVE")
             grace_state_class = "waiting" if grace_active else ("healthy" if feed_opened else "warning")
+            grace_display = grace_countdown if grace_active else "No delay active"
+            grace_explanation = (
+                "During this window the hardware device is not opened, so you can reconnect remotely and disable protection without causing another watchdog reboot."
+                if grace_active
+                else "The startup delay has finished. The independent feeder now owns the hardware watchdog device."
+            )
             grace_controls = (
                 "<div class=\"card\"><h2>Startup Safety Window</h2>"
                 f"<div class=\"status-word {grace_state_class}\">{grace_state}</div>"
-                f"<div class=\"score\" id=\"watchdog-grace-countdown\" data-seconds=\"{remaining_seconds}\">{grace_countdown if grace_active else '-'}</div>"
+                f"<div class=\"score\" id=\"watchdog-grace-countdown\" data-seconds=\"{remaining_seconds}\">{grace_display}</div>"
                 f"<p>{escape(str(startup_grace.get('reason', 'Startup safety state unavailable.')))}</p>"
-                "<p class=\"muted\">During this window the hardware device is not opened, so you can reconnect remotely and disable protection without causing another watchdog reboot.</p>"
+                f"<p class=\"muted\">{escape(grace_explanation)}</p>"
                 "<div class=\"button-row\">"
                 "<form class=\"inline\" method=\"post\" action=\"/watchdog-grace-delay\"><input type=\"hidden\" name=\"delay_seconds\" value=\"900\"><button class=\"action\" type=\"submit\" " + ("" if grace_active else "disabled") + ">Delay another 15 minutes</button></form>"
-                "<a class=\"ghost\" href=\"/watchdog-arm-now-confirm\">Arm now</a>"
-                "<a class=\"danger\" href=\"/hardware-watchdog-disable-confirm\">Disable hardware feed</a>"
+                + ("<a class=\"ghost\" href=\"/watchdog-arm-now-confirm\">End delay and arm now</a>" if grace_active else "")
+                + "<a class=\"danger\" href=\"/hardware-watchdog-disable-confirm\">Disable hardware feed</a>"
                 "</div><form method=\"post\" action=\"/watchdog-grace-config-set\"><div class=\"settings-grid\">"
                 f"<div><label class=\"label\">Normal reboot delay</label><select name=\"startup_grace_seconds\">{normal_grace_options}</select></div>"
                 f"<div><label class=\"label\">After deliberate trip reboot</label><select name=\"post_trip_grace_seconds\">{post_trip_grace_options}</select></div>"
@@ -2156,7 +2167,7 @@ def start_web(cfg):
                 "<p class=\"muted\">Triple confirmation: arm the test, check the risk box, and type TRIP on the confirm page before you trigger it.</p>"
                 f"<div class=\"button-row\">{trip_action}</div>"
                 f"{trip_warning}"
-                f"<div class=\"label\">State</div><div class=\"value\">{escape('Triggered this boot' if trip_test.get('triggered') else ('Completed on previous boot' if trip_test.get('completed_previous_boot') else ('Armed' if trip_test.get('armed') else 'Not armed')))}</div>"
+                f"<div class=\"label\">State</div><div class=\"value\">{escape('Triggered: feeding paused' if trip_test.get('triggered') else ('Completed on previous boot' if trip_test.get('completed_previous_boot') else ('Armed: feeding continues until final confirmation' if trip_test.get('armed') else 'Not armed')))}</div>"
                 f"<div class=\"label\">Last result</div><div class=\"value\">{escape(str(trip_test.get('last_result_message', 'No trip test recorded yet')))}</div>"
                 f"<div class=\"label\">Armed at</div><div class=\"value\">{escape(str(trip_test.get('armed_at', '-')))}</div>"
                 "</div>"
