@@ -9,6 +9,7 @@ from va_watchdog.heartbeat import HeartbeatPublisher, heartbeat_age_seconds, rea
 from va_watchdog.incident_archive import archive_previous_boot, list_archives
 from va_watchdog.reboot_evidence import classify
 from va_watchdog.watchdog_feed import FeedWorker
+from va_watchdog.watchdog_test import read_trip_test_state, trigger_trip_test
 
 
 class ForensicPhase1Tests(unittest.TestCase):
@@ -77,6 +78,19 @@ class ForensicPhase1Tests(unittest.TestCase):
             "hardware_watchdog": {"timeout_seconds": 30, "stale_heartbeat_seconds": 15},
         })
         self.assertFalse(worker.heartbeat_allows_feed({}, {"active": True, "boot_id": "boot"}, trip_active=True))
+
+    def test_simple_trip_requires_checkbox_and_triggers_without_token(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cfg = {"events_path": str(Path(temporary) / "events.jsonl")}
+            rejected = trigger_trip_test(cfg, ack_risk=False)
+            with patch("va_watchdog.watchdog_test.current_boot_id", return_value="boot"):
+                accepted = trigger_trip_test(cfg, ack_risk=True)
+            state = read_trip_test_state(cfg)
+
+        self.assertFalse(rejected["ok"])
+        self.assertTrue(accepted["ok"])
+        self.assertTrue(state["triggered"])
+        self.assertEqual(state["triggered_boot_id"], "boot")
 
     def test_paused_state_preserves_actual_last_feed_timestamp(self):
         with tempfile.TemporaryDirectory() as temporary:

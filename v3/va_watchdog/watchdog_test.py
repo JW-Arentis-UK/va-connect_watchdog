@@ -119,7 +119,26 @@ def confirm_trip_test(cfg: dict[str, Any], token: str, ack_risk: bool, confirm_p
             "tested_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
         }
 
+    return trigger_trip_test(cfg, ack_risk=True)
+
+
+def trigger_trip_test(cfg: dict[str, Any], ack_risk: bool) -> dict[str, Any]:
+    now = time.time()
+    state = read_trip_test_state(cfg)
+    if not ack_risk:
+        return {
+            "ok": False,
+            "message": "Trip test not started: confirm that the gateway may reboot.",
+            "tested_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
+        }
     boot_id = current_boot_id()
+    if bool(state.get("triggered")) and str(state.get("triggered_boot_id", "")) == boot_id:
+        return {
+            "ok": False,
+            "message": "Trip test is already active for this boot.",
+            "tested_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
+            "triggered_boot_id": boot_id,
+        }
     state["armed"] = {}
     state["triggered"] = True
     state["triggered_at_unix"] = now
