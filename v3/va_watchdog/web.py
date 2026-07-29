@@ -440,6 +440,7 @@ let lastHistory = [];
 let lastUpdateLog = {};
 let lastDiagnostics = {};
 let lastVersion = {};
+let lastRecordingActivity = {};
 let refreshTimer = null;
 let eventLevelFilter = 'all';
 let eventSearch = '';
@@ -823,7 +824,9 @@ function renderMetricTiles(status){
   };
   const recStorageValue = recStorage.mounted ? fmtPercent(recStorage.used_percent) : String(recStorage.status || 'missing').toUpperCase();
   const recStorageFree = `${recStorage.free_gb ?? '-'} GB free at ${recStorage.mountpoint || '-'}`;
-  const recStorageDetail = recStorage.mounted && recStorage.status === 'healthy' ? recStorageFree : (recStorage.message || recStorageFree || recStorage.mountpoint || '-');
+  const oldestRecording = lastRecordingActivity.oldest?.display_local ? `Oldest: ${lastRecordingActivity.oldest.display_local}` : '';
+  const storageStateDetail = recStorage.mounted && recStorage.status === 'healthy' ? recStorageFree : (recStorage.message || recStorageFree || recStorage.mountpoint || '-');
+  const recStorageDetail = [storageStateDetail, oldestRecording].filter(Boolean).join(' | ');
   const wdt = findCheck(status, 'hardware_watchdog_present');
   const wdtFeedCheck = findCheck(status, 'hardware_watchdog_feed_status');
   const wdtFeed = status.hardware_watchdog_feed || {};
@@ -1019,6 +1022,9 @@ async function load(){
   if (currentPage === 'Overview' || currentPage === 'Services') {
     pageFetches.push(fetchJson('/api/services-info', lastServiceInfo || {}).then(value => { lastServiceInfo = value; }));
     pageFetches.push(fetchJson('/api/history', lastHistory || []).then(value => { lastHistory = value; }));
+  }
+  if (currentPage === 'Overview' || currentPage === 'Storage') {
+    pageFetches.push(fetchJson('/api/recording-activity', lastRecordingActivity || {}).then(value => { lastRecordingActivity = value; }));
   }
   if (currentPage === 'Hardware') {
     pageFetches.push(fetchJson('/api/hardware-info', lastHardwareInfo || {}).then(value => { lastHardwareInfo = value; }));
@@ -1436,6 +1442,7 @@ def start_web(cfg):
         status = status_snapshot()
         version = version_info()
         update_status = load_update_status(cfg)
+        overview_recording_activity = recording_activity(cfg) if page == "Overview" else {}
         critical = bool(status.get("critical_failed", False))
         checks = [check for check in status.get("checks", []) or [] if isinstance(check, dict)]
         check_map = {str(check.get("name", "")): check for check in checks}
@@ -1534,6 +1541,16 @@ def start_web(cfg):
                 watchdog_value = "Not feeding" if check_value("hardware_watchdog_present", False) else "Not present"
                 watchdog_state = check_state("hardware_watchdog_feed_status", check_state("hardware_watchdog_present", "warning"))
             rec_storage_state = str(rec_storage.get("status") or check_state("recording_storage", "unknown"))
+            oldest_recording = (
+                overview_recording_activity.get("oldest", {})
+                if isinstance(overview_recording_activity.get("oldest", {}), dict)
+                else {}
+            )
+            oldest_recording_detail = (
+                f"Oldest: {oldest_recording.get('display_local')}"
+                if oldest_recording.get("display_local")
+                else ""
+            )
             if rec_storage.get("mounted"):
                 rec_storage_value = f"{escape(str(rec_storage.get('used_percent', '-')))}%"
                 rec_storage_free = f"{escape(str(rec_storage.get('free_gb', '-')))} GB free at {escape(str(rec_storage.get('mountpoint', '-')))}"
@@ -1541,6 +1558,8 @@ def start_web(cfg):
             else:
                 rec_storage_value = escape(str(rec_storage.get("status", "missing")).upper())
                 rec_storage_detail = escape(str(rec_storage.get("message") or rec_storage.get("mountpoint") or "-"))
+            if oldest_recording_detail:
+                rec_storage_detail = f"{rec_storage_detail} | {oldest_recording_detail}"
             return (
                 "<div class=\"grid metric-grid\">"
                 + tile("CPU Temp", check_value("temperature", "-"), check_message("temperature", ""), check_state("temperature", "healthy"))
@@ -2219,38 +2238,40 @@ def start_web(cfg):
             default_days = retention.get("events_retention_days") or 30
             recording = status_snapshot().get("recording_storage") or recording_storage_status(cfg)
             activity = recording_activity(cfg)
-            latest_activity = activity.get("latest") if isinstance(activity.get("latest"), dict) else {}
-            activity_age_seconds = activity.get("latest_age_seconds")
+            oldest_activity = activity.get("oldest") if isinstance(activity.get("oldest"), dict) else {}
+            activity_age_seconds = activity.get("oldest_age_seconds")
             if activity_age_seconds is None:
                 activity_age = "-"
             elif activity_age_seconds < 120:
                 activity_age = f"{int(activity_age_seconds)} seconds"
             elif activity_age_seconds < 7200:
                 activity_age = f"{round(activity_age_seconds / 60, 1)} minutes"
-            else:
+            elif activity_age_seconds < 172800:
                 activity_age = f"{round(activity_age_seconds / 3600, 1)} hours"
-            recent_recording_rows = "".join(
+            else:
+                activity_age = f"{round(activity_age_seconds / 86400, 1)} days"
+            oldest_recording_rows = "".join(
                 "<tr>"
                 f"<td>{escape(str(item.get('display_local', '-')))}</td>"
                 f"<td>{escape(str(item.get('utc', '-')))}</td>"
                 f"<td>{escape(str(item.get('unix', '-')))}</td>"
                 "</tr>"
-                for item in activity.get("recent", [])
+                for item in activity.get("oldest_recordings", [])
             )
-            if not recent_recording_rows:
-                recent_recording_rows = "<tr><td colspan=\"3\">No Unix-timestamped .data recordings were found.</td></tr>"
+            if not oldest_recording_rows:
+                oldest_recording_rows = "<tr><td colspan=\"3\">No Unix-timestamped .data recordings were found.</td></tr>"
             activity_detail = (
                 f"<p class=\"{'healthy' if activity.get('available') else 'warning'}\">{escape(str(activity.get('message', 'Recording activity unavailable')))}</p>"
                 "<div class=\"settings-grid\">"
                 f"<div><div class=\"label\">Recordings folder</div><div class=\"value\">{escape(str(activity.get('recordings_path', '-')))}</div></div>"
-                f"<div><div class=\"label\">Latest recording age</div><div class=\"value\">{escape(activity_age)}</div></div>"
-                f"<div><div class=\"label\">Latest recording (local)</div><div class=\"value\">{escape(str(latest_activity.get('display_local', '-')))}</div></div>"
-                f"<div><div class=\"label\">Latest Unix timestamp</div><div class=\"value\">{escape(str(latest_activity.get('unix', '-')))}</div></div>"
+                f"<div><div class=\"label\">Oldest recording age</div><div class=\"value\">{escape(activity_age)}</div></div>"
+                f"<div><div class=\"label\">Oldest recording (local)</div><div class=\"value\">{escape(str(oldest_activity.get('display_local', '-')))}</div></div>"
+                f"<div><div class=\"label\">Oldest Unix timestamp</div><div class=\"value\">{escape(str(oldest_activity.get('unix', '-')))}</div></div>"
                 "</div>"
-                "<h3>Most Recent Recording Files</h3>"
+                "<h3>Oldest Recording Files</h3>"
                 "<div class=\"table-scroll\"><table><thead><tr><th>Local time</th><th>UTC</th><th>Unix filename</th></tr></thead>"
-                f"<tbody>{recent_recording_rows}</tbody></table></div>"
-                "<p class=\"muted\">Times are decoded from Videosoft's numeric .data filenames. Only the newest timestamp folders are inspected.</p>"
+                f"<tbody>{oldest_recording_rows}</tbody></table></div>"
+                "<p class=\"muted\">Times are decoded from Videosoft's numeric .data filenames. The oldest timestamp folders are inspected to show recording retention.</p>"
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/api/recording-activity\">Raw recording activity</a></div>"
             )
             rec_rows = [

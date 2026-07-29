@@ -25,9 +25,13 @@ class RecordingActivityTests(unittest.TestCase):
             result = recording_activity(cfg, now_unix=1784246860)
 
         self.assertTrue(result["available"])
+        self.assertEqual(result["oldest"]["unix"], 1784210205)
+        self.assertEqual(result["oldest_age_seconds"], 36655.0)
+        self.assertEqual([item["unix"] for item in result["oldest_recordings"]], [1784210205, 1784246500, 1784246800])
         self.assertEqual(result["latest"]["unix"], 1784246800)
         self.assertEqual(result["latest_age_seconds"], 60.0)
         self.assertEqual([item["unix"] for item in result["recent"][:2]], [1784246800, 1784246500])
+        self.assertEqual(result["oldest_bucket_unix"], 1784160000)
         self.assertEqual(result["newest_bucket_unix"], 1784246400)
 
     def test_missing_timestamp_files_is_reported_without_error(self):
@@ -43,6 +47,7 @@ class RecordingActivityTests(unittest.TestCase):
             result = recording_activity(cfg)
 
         self.assertFalse(result["available"])
+        self.assertEqual(result["oldest_recordings"], [])
         self.assertEqual(result["recent"], [])
 
 
