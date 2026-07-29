@@ -43,6 +43,25 @@ def write_trip_test_state(cfg: dict[str, Any], payload: dict[str, Any]) -> Path:
     return path
 
 
+def fail_trip_test(cfg: dict[str, Any], message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
+    now = time.time()
+    state = read_trip_test_state(cfg)
+    result = {
+        "ok": False,
+        "message": str(message),
+        "tested_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
+        "triggered_boot_id": state.get("triggered_boot_id", ""),
+    }
+    if details:
+        result["details"] = details
+    state["armed"] = {}
+    state["triggered"] = False
+    state["cancelled_at_unix"] = now
+    state["last_result"] = result
+    write_trip_test_state(cfg, state)
+    return result
+
+
 def arm_trip_test(cfg: dict[str, Any]) -> dict[str, Any]:
     now = time.time()
     state = read_trip_test_state(cfg)

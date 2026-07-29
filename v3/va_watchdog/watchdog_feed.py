@@ -15,7 +15,7 @@ from .config import load_config
 from .heartbeat import heartbeat_age_seconds, read_state
 from .watchdog_device import HardwareWatchdog
 from .watchdog_grace import startup_grace_status
-from .watchdog_test import trip_test_active
+from .watchdog_test import fail_trip_test, trip_test_active
 
 
 class FeedWorker:
@@ -37,6 +37,13 @@ class FeedWorker:
         self.error_count = 0
         self.magic_close = bool(hw_cfg.get("magic_close", False))
         self.nowayout = self._read_nowayout()
+        configured_verify = float(hw_cfg.get("trip_countdown_verify_seconds", 8) or 8)
+        self.trip_verify_seconds = max(3.0, min(configured_verify, float(self.timeout) - 5.0))
+        self.trip_started_monotonic = None
+        self.trip_initial_timeleft = None
+        self.trip_current_timeleft = None
+        self.trip_countdown_status = "inactive"
+        self.trip_countdown_confirmed = False
 
     def heartbeat_allows_feed(self, heartbeat, grace, trip_active=False, current_uptime=None):
         if trip_active:
@@ -54,7 +61,11 @@ class FeedWorker:
     def stop(self, *_args):
         self.stop_requested = True
 
-    def write_state(self, status, last_feed=None):
+    def write_state(self, status):
+        last_feed_unix = self.hw.last_feed
+        last_feed_utc = ""
+        if last_feed_unix is not None:
+            last_feed_utc = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.gmtime(last_feed_unix))
         payload = {
             "pid": os.getpid(),
             "process_status": status,
@@ -65,17 +76,108 @@ class FeedWorker:
             "magic_close_requested": self.magic_close,
             "shutdown_behavior": "write V before close" if self.magic_close else "driver close semantics; nowayout may keep timer armed",
             "nowayout": self.nowayout,
-            "last_feed_utc": last_feed or "",
-            "last_feed_unix": time.time() if last_feed else None,
+            "last_feed_utc": last_feed_utc,
+            "last_feed_unix": last_feed_unix,
             "feed_count": self.hw.feed_count,
             "last_error": self.last_error,
             "error_count": self.error_count,
+            "trip_countdown": {
+                "status": self.trip_countdown_status,
+                "verify_seconds": self.trip_verify_seconds,
+                "initial_timeleft": self.trip_initial_timeleft,
+                "current_timeleft": self.trip_current_timeleft,
+                "confirmed": self.trip_countdown_confirmed,
+            },
             "updated_at": time.time(),
         }
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
         temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         os.replace(temporary, self.state_path)
+
+    def _read_timeleft(self):
+        path = Path(f"/sys/class/watchdog/{Path(self.device).name}/timeleft")
+        try:
+            return int(path.read_text(encoding="utf-8").strip())
+        except (OSError, TypeError, ValueError):
+            return None
+
+    def evaluate_trip_countdown(self, trip_active, current_monotonic=None, timeleft=None):
+        if not trip_active:
+            self.trip_started_monotonic = None
+            self.trip_initial_timeleft = None
+            self.trip_current_timeleft = None
+            self.trip_countdown_status = "inactive"
+            self.trip_countdown_confirmed = False
+            return False
+
+        now = time.monotonic() if current_monotonic is None else float(current_monotonic)
+        current = self._read_timeleft() if timeleft is None else timeleft
+        self.trip_current_timeleft = current
+
+        if self.trip_started_monotonic is None:
+            self.trip_started_monotonic = now
+            self.trip_initial_timeleft = current
+            self.trip_countdown_status = "verifying" if current is not None else "unavailable"
+            return True
+
+        if (
+            current is not None
+            and self.trip_initial_timeleft is not None
+            and current < self.trip_initial_timeleft
+        ):
+            self.trip_countdown_confirmed = True
+            self.trip_countdown_status = "countdown_confirmed"
+
+        elapsed = max(0.0, now - self.trip_started_monotonic)
+        if current is None or self.trip_initial_timeleft is None:
+            # Some watchdog drivers do not expose timeleft. Preserve the existing
+            # deliberate trip behavior rather than masking a potentially valid test.
+            self.trip_countdown_status = "unavailable"
+            return True
+
+        if not self.trip_countdown_confirmed and elapsed >= self.trip_verify_seconds:
+            message = (
+                "Trip test failed safely: the hardware watchdog counter did not decrease; "
+                "feeding resumed and the gateway was not expected to reboot."
+            )
+            fail_trip_test(
+                self.cfg,
+                message,
+                {
+                    "device": self.device,
+                    "initial_timeleft": self.trip_initial_timeleft,
+                    "current_timeleft": current,
+                    "verification_seconds": round(elapsed, 1),
+                },
+            )
+            self.last_error = message
+            self.error_count += 1
+            self.trip_countdown_status = "failed_static_counter"
+            return False
+
+        if self.trip_countdown_confirmed and elapsed >= float(self.timeout) + 5.0:
+            message = (
+                "Trip test failed safely: the counter decreased but the gateway did not reboot "
+                "within the watchdog timeout; feeding resumed."
+            )
+            fail_trip_test(
+                self.cfg,
+                message,
+                {
+                    "device": self.device,
+                    "initial_timeleft": self.trip_initial_timeleft,
+                    "current_timeleft": current,
+                    "elapsed_seconds": round(elapsed, 1),
+                },
+            )
+            self.last_error = message
+            self.error_count += 1
+            self.trip_countdown_status = "failed_no_reset"
+            return False
+
+        self.trip_countdown_status = "countdown_confirmed" if self.trip_countdown_confirmed else "verifying"
+        return True
 
     def acquire_lock(self):
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -134,36 +236,35 @@ class FeedWorker:
             if not self.hw.opened:
                 self.write_state("device_unavailable")
                 return 1
-            last_feed = ""
-            self.write_state("running", last_feed)
+            self.write_state("running")
             while not self.stop_requested:
                 if not bool(load_config().get("hardware_watchdog", {}).get("enabled", False)):
                     self.stop_requested = True
                     break
                 trip_active, trip_summary = trip_test_active(self.cfg)
+                effective_trip_active = self.evaluate_trip_countdown(trip_active)
                 grace = startup_grace_status(self.cfg, trip_summary)
                 heartbeat = read_state(self.cfg)
                 age = heartbeat_age_seconds(heartbeat)
                 # Startup grace protects boot: feed while the application starts.
                 # After grace, only a fresh main-loop heartbeat permits feeding.
-                allowed = self.heartbeat_allows_feed(heartbeat, grace, trip_active=trip_active)
+                allowed = self.heartbeat_allows_feed(heartbeat, grace, trip_active=effective_trip_active)
                 if allowed and (self.hw.last_feed is None or time.time() - self.hw.last_feed >= self.interval):
                     try:
                         self.hw.handle.write(b"\0")
                         self.hw.last_feed = time.time()
                         self.hw.feed_count += 1
-                        last_feed = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.gmtime(self.hw.last_feed))
                         self.last_error = ""
-                        self.write_state("feeding", last_feed)
+                        self.write_state("feeding")
                     except Exception as exc:
                         self.last_error = str(exc)
                         self.error_count += 1
-                        self.write_state("feed_error", last_feed)
+                        self.write_state("feed_error")
                 elif not allowed:
-                    self.write_state("paused_stale_heartbeat" if not trip_active else "paused_trip_test", last_feed)
+                    self.write_state("paused_stale_heartbeat" if not effective_trip_active else "paused_trip_test")
                 time.sleep(min(1, self.interval))
         finally:
-            self.write_state("stopping", last_feed if 'last_feed' in locals() else "")
+            self.write_state("stopping")
             self.hw.close(magic_close=bool(self.cfg.get("hardware_watchdog", {}).get("magic_close", False)))
             if self.lock_handle:
                 if fcntl is not None:

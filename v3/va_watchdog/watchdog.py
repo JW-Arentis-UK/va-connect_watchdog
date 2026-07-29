@@ -152,6 +152,7 @@ def hardware_feed_status(cfg, startup_grace, trip_active=False, trip_summary=Non
         "feed_process_status": feed.get("process_status", "unknown"),
         "feed_last_error": feed.get("last_error", ""),
         "feed_error_count": feed.get("error_count", 0),
+        "trip_countdown": feed.get("trip_countdown", {}),
         "stale_heartbeat_seconds": feed.get("stale_heartbeat_seconds") or hw_cfg.get("stale_heartbeat_seconds", 15),
         "fed_this_cycle": fed,
         "trip_test_active": trip_active,

@@ -78,6 +78,70 @@ class ForensicPhase1Tests(unittest.TestCase):
         })
         self.assertFalse(worker.heartbeat_allows_feed({}, {"active": True, "boot_id": "boot"}, trip_active=True))
 
+    def test_paused_state_preserves_actual_last_feed_timestamp(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "feed.json"
+            worker = FeedWorker({
+                "events_path": str(Path(temporary) / "events.jsonl"),
+                "hardware_watchdog_feed_state_path": str(state_path),
+                "hardware_watchdog": {"timeout_seconds": 30},
+            })
+            worker.hw.last_feed = 1234.5
+            worker.write_state("paused_trip_test")
+            first = json.loads(state_path.read_text(encoding="utf-8"))
+            worker.write_state("paused_trip_test")
+            second = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(first["last_feed_unix"], 1234.5)
+        self.assertEqual(second["last_feed_unix"], 1234.5)
+
+    def test_trip_countdown_decrease_keeps_trip_active(self):
+        worker = FeedWorker({
+            "events_path": "/tmp/events.jsonl",
+            "hardware_watchdog": {"timeout_seconds": 30, "trip_countdown_verify_seconds": 8},
+        })
+
+        self.assertTrue(worker.evaluate_trip_countdown(True, current_monotonic=100, timeleft=30))
+        self.assertTrue(worker.evaluate_trip_countdown(True, current_monotonic=104, timeleft=26))
+        self.assertEqual(worker.trip_countdown_status, "countdown_confirmed")
+
+    def test_static_trip_counter_fails_safely(self):
+        worker = FeedWorker({
+            "events_path": "/tmp/events.jsonl",
+            "hardware_watchdog": {"timeout_seconds": 30, "trip_countdown_verify_seconds": 8},
+        })
+
+        self.assertTrue(worker.evaluate_trip_countdown(True, current_monotonic=100, timeleft=30))
+        with patch("va_watchdog.watchdog_feed.fail_trip_test") as fail:
+            self.assertFalse(worker.evaluate_trip_countdown(True, current_monotonic=108, timeleft=30))
+
+        fail.assert_called_once()
+        self.assertEqual(worker.trip_countdown_status, "failed_static_counter")
+
+    def test_unavailable_trip_counter_preserves_trip_behavior(self):
+        worker = FeedWorker({
+            "events_path": "/tmp/events.jsonl",
+            "hardware_watchdog": {"timeout_seconds": 30, "trip_countdown_verify_seconds": 8},
+        })
+
+        self.assertTrue(worker.evaluate_trip_countdown(True, current_monotonic=100, timeleft=None))
+        self.assertTrue(worker.evaluate_trip_countdown(True, current_monotonic=120, timeleft=None))
+        self.assertEqual(worker.trip_countdown_status, "unavailable")
+
+    def test_decreasing_counter_that_does_not_reset_fails_safely(self):
+        worker = FeedWorker({
+            "events_path": "/tmp/events.jsonl",
+            "hardware_watchdog": {"timeout_seconds": 30, "trip_countdown_verify_seconds": 8},
+        })
+
+        self.assertTrue(worker.evaluate_trip_countdown(True, current_monotonic=100, timeleft=30))
+        self.assertTrue(worker.evaluate_trip_countdown(True, current_monotonic=104, timeleft=26))
+        with patch("va_watchdog.watchdog_feed.fail_trip_test") as fail:
+            self.assertFalse(worker.evaluate_trip_countdown(True, current_monotonic=136, timeleft=0))
+
+        fail.assert_called_once()
+        self.assertEqual(worker.trip_countdown_status, "failed_no_reset")
+
     def test_reboot_classification_separates_watchdog_and_storage_fault(self):
         change = {"changed": True, "previous_boot_id": "old", "current_boot_id": "new"}
         heartbeats = [{"boot_id": "old", "monotonic_uptime": 100, "time": "2026-01-01T00:00:00+00:00"}]
