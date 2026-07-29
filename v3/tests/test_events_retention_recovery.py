@@ -122,6 +122,12 @@ class UpdateTests(unittest.TestCase):
             state = json.loads((root / "update-state.json").read_text(encoding="utf-8"))
             self.assertEqual(state["state"], "queued")
 
+    def test_update_restarts_independent_hardware_feeder(self):
+        script = Path(__file__).parents[1] / "scripts" / "update.sh"
+        source = script.read_text(encoding="utf-8")
+        self.assertIn("systemctl restart va-watchdog-feed", source)
+        self.assertIn("systemctl is-active --quiet va-watchdog-feed", source)
+
 
 if __name__ == "__main__":
     unittest.main()

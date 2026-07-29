@@ -64,13 +64,20 @@ log "update pulled commit=$commit_after"
 
 if [ -f "$ROOT_DIR/systemd/va-watchdog.service" ]; then
   install -m 0644 "$ROOT_DIR/systemd/va-watchdog.service" /etc/systemd/system/va-watchdog.service
-  systemctl daemon-reload
   log "installed current va-watchdog systemd unit"
 fi
+if [ -f "$ROOT_DIR/systemd/va-watchdog-feed.service" ]; then
+  install -m 0644 "$ROOT_DIR/systemd/va-watchdog-feed.service" /etc/systemd/system/va-watchdog-feed.service
+  log "installed current va-watchdog-feed systemd unit"
+fi
+systemctl daemon-reload
 
+systemctl restart va-watchdog-feed
+log "hardware feeder restart requested"
 systemctl restart va-watchdog
-log "service restart requested"
+log "main service restart requested"
 sleep 2
+systemctl is-active --quiet va-watchdog-feed
 systemctl is-active --quiet va-watchdog
 
 write_state "completed" "update completed" "$commit_after"
