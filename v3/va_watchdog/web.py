@@ -822,11 +822,11 @@ function renderMetricTiles(status){
     state: recStorage.status || findCheck(status, 'recording_storage').state || 'unknown',
     message: recStorage.message || findCheck(status, 'recording_storage').message || 'Recording storage status unavailable',
   };
-  const recStorageValue = recStorage.mounted ? fmtPercent(recStorage.used_percent) : String(recStorage.status || 'missing').toUpperCase();
+  const recStorageValue = lastRecordingActivity.oldest?.display_local || (recStorage.mounted ? 'No recording found' : String(recStorage.status || 'missing').toUpperCase());
   const recStorageFree = `${recStorage.free_gb ?? '-'} GB free at ${recStorage.mountpoint || '-'}`;
-  const oldestRecording = lastRecordingActivity.oldest?.display_local ? `Oldest: ${lastRecordingActivity.oldest.display_local}` : '';
+  const recStorageUsed = recStorage.mounted ? `${recStorage.used_percent ?? '-'}% used` : '';
   const storageStateDetail = recStorage.mounted && recStorage.status === 'healthy' ? recStorageFree : (recStorage.message || recStorageFree || recStorage.mountpoint || '-');
-  const recStorageDetail = [storageStateDetail, oldestRecording].filter(Boolean).join(' | ');
+  const recStorageDetail = [recStorageUsed, storageStateDetail].filter(Boolean).join(' | ');
   const wdt = findCheck(status, 'hardware_watchdog_present');
   const wdtFeedCheck = findCheck(status, 'hardware_watchdog_feed_status');
   const wdtFeed = status.hardware_watchdog_feed || {};
@@ -1546,20 +1546,14 @@ def start_web(cfg):
                 if isinstance(overview_recording_activity.get("oldest", {}), dict)
                 else {}
             )
-            oldest_recording_detail = (
-                f"Oldest: {oldest_recording.get('display_local')}"
-                if oldest_recording.get("display_local")
-                else ""
-            )
             if rec_storage.get("mounted"):
-                rec_storage_value = f"{escape(str(rec_storage.get('used_percent', '-')))}%"
+                rec_storage_value = str(oldest_recording.get("display_local") or "No recording found")
                 rec_storage_free = f"{escape(str(rec_storage.get('free_gb', '-')))} GB free at {escape(str(rec_storage.get('mountpoint', '-')))}"
-                rec_storage_detail = rec_storage_free if rec_storage_state == "healthy" else escape(str(rec_storage.get("message") or rec_storage_free))
+                rec_storage_used = f"{escape(str(rec_storage.get('used_percent', '-')))}% used"
+                rec_storage_detail = f"{rec_storage_used} | {rec_storage_free}" if rec_storage_state == "healthy" else escape(str(rec_storage.get("message") or rec_storage_free))
             else:
                 rec_storage_value = escape(str(rec_storage.get("status", "missing")).upper())
                 rec_storage_detail = escape(str(rec_storage.get("message") or rec_storage.get("mountpoint") or "-"))
-            if oldest_recording_detail:
-                rec_storage_detail = f"{rec_storage_detail} | {oldest_recording_detail}"
             return (
                 "<div class=\"grid metric-grid\">"
                 + tile("CPU Temp", check_value("temperature", "-"), check_message("temperature", ""), check_state("temperature", "healthy"))
@@ -2239,41 +2233,6 @@ def start_web(cfg):
             recording = status_snapshot().get("recording_storage") or recording_storage_status(cfg)
             activity = recording_activity(cfg)
             oldest_activity = activity.get("oldest") if isinstance(activity.get("oldest"), dict) else {}
-            activity_age_seconds = activity.get("oldest_age_seconds")
-            if activity_age_seconds is None:
-                activity_age = "-"
-            elif activity_age_seconds < 120:
-                activity_age = f"{int(activity_age_seconds)} seconds"
-            elif activity_age_seconds < 7200:
-                activity_age = f"{round(activity_age_seconds / 60, 1)} minutes"
-            elif activity_age_seconds < 172800:
-                activity_age = f"{round(activity_age_seconds / 3600, 1)} hours"
-            else:
-                activity_age = f"{round(activity_age_seconds / 86400, 1)} days"
-            oldest_recording_rows = "".join(
-                "<tr>"
-                f"<td>{escape(str(item.get('display_local', '-')))}</td>"
-                f"<td>{escape(str(item.get('utc', '-')))}</td>"
-                f"<td>{escape(str(item.get('unix', '-')))}</td>"
-                "</tr>"
-                for item in activity.get("oldest_recordings", [])
-            )
-            if not oldest_recording_rows:
-                oldest_recording_rows = "<tr><td colspan=\"3\">No Unix-timestamped .data recordings were found.</td></tr>"
-            activity_detail = (
-                f"<p class=\"{'healthy' if activity.get('available') else 'warning'}\">{escape(str(activity.get('message', 'Recording activity unavailable')))}</p>"
-                "<div class=\"settings-grid\">"
-                f"<div><div class=\"label\">Recordings folder</div><div class=\"value\">{escape(str(activity.get('recordings_path', '-')))}</div></div>"
-                f"<div><div class=\"label\">Oldest recording age</div><div class=\"value\">{escape(activity_age)}</div></div>"
-                f"<div><div class=\"label\">Oldest recording (local)</div><div class=\"value\">{escape(str(oldest_activity.get('display_local', '-')))}</div></div>"
-                f"<div><div class=\"label\">Oldest Unix timestamp</div><div class=\"value\">{escape(str(oldest_activity.get('unix', '-')))}</div></div>"
-                "</div>"
-                "<h3>Oldest Recording Files</h3>"
-                "<div class=\"table-scroll\"><table><thead><tr><th>Local time</th><th>UTC</th><th>Unix filename</th></tr></thead>"
-                f"<tbody>{oldest_recording_rows}</tbody></table></div>"
-                "<p class=\"muted\">Times are decoded from Videosoft's numeric .data filenames. The oldest timestamp folders are inspected to show recording retention.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/api/recording-activity\">Raw recording activity</a></div>"
-            )
             rec_rows = [
                 ("Status", str(recording.get("status", "unknown")).upper()),
                 ("Mode", "One drive / OS filesystem" if recording.get("mode") == "system_directory" else "Dedicated recording storage"),
@@ -2342,7 +2301,7 @@ def start_web(cfg):
                     ("Mounted", "Yes" if recording.get("mounted") else "No", recording.get("mountpoint", "-"), "healthy" if recording.get("mounted") else "critical"),
                     ("Writable", "Yes" if recording.get("writable") else "No", recording.get("recordings_path", "-"), "healthy" if recording.get("writable") else "critical"),
                     ("Free space", f"{recording.get('free_gb', '-')} GB", f"{recording.get('used_percent', '-')}% used", rec_state),
-                    ("Last recording", latest_activity.get("display_local", "Not found"), f"{activity_age} ago" if activity.get("available") else activity.get("recordings_path", "-"), "healthy" if activity.get("available") else "warning"),
+                    ("Oldest recording", oldest_activity.get("display_local", "Not found"), "Oldest footage currently available", "healthy" if activity.get("available") else "warning"),
                     ("SMART", recording.get("smart_status", "-"), f"{recording.get('temperature_c', '-')} C", "warning" if str(recording.get("smart_status", "")).lower() == "unavailable" else rec_state),
                 ])
                 + "<div class=\"card\"><h2>Recording Storage</h2>"
@@ -2356,7 +2315,6 @@ def start_web(cfg):
                 "<div class=\"button-row\"><a class=\"action\" href=\"/recording-storage-configure\">Configure recording storage</a><a class=\"ghost\" href=\"/api/status\">Raw status</a></div>"
                 "<form class=\"inline\" method=\"post\" action=\"/recording-storage-guard-apply\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> Apply RequiresMountsFor to configured recording services</label> <button class=\"ghost\" type=\"submit\">Apply service guard</button></form>"
                 "</div>"
-                + disclosure("Recording activity", activity_detail, opened=True)
                 + disclosure("Configured storage limits", limits_detail)
                 + disclosure("Watchdog data retention and purge", retention_detail)
                 + disclosure("Watchdog data files", files_detail)
