@@ -139,7 +139,18 @@ label { display:block; margin:calc(6px * var(--scale)) 0; }
 .bottom-grid { grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr); }
 .card, .tile { background:linear-gradient(145deg, var(--panel), var(--panel-2)); border:1px solid var(--line); border-radius:8px; padding:calc(14px * var(--scale)); min-width:0; }
 .card h2, .card h3, .tile h3 { margin:0 0 calc(10px * var(--scale)); font-size:calc(16px * var(--scale)); }
-.summary-card { display:grid; grid-template-columns: calc(130px * var(--scale)) 1fr 1fr; gap:calc(18px * var(--scale)); align-items:center; }
+.summary-card { display:grid; grid-template-columns:minmax(calc(145px * var(--scale)), .8fr) minmax(calc(210px * var(--scale)), 1.25fr) minmax(calc(170px * var(--scale)), 1fr); gap:calc(10px * var(--scale)); align-items:stretch; }
+.summary-panel { padding:calc(14px * var(--scale)); border:1px solid var(--line); border-radius:7px; background:rgba(255,255,255,.025); }
+.summary-status { display:flex; flex-direction:column; justify-content:center; background:linear-gradient(145deg, rgba(59,130,246,.11), rgba(255,255,255,.025)); }
+.summary-panel-title { color:var(--muted); font-size:calc(11px * var(--scale)); font-weight:800; letter-spacing:.1em; text-transform:uppercase; margin-bottom:calc(8px * var(--scale)); }
+.summary-primary { font-size:calc(19px * var(--scale)); font-weight:800; line-height:1.2; overflow-wrap:anywhere; }
+.summary-pairs { display:grid; grid-template-columns:1fr 1fr; gap:calc(8px * var(--scale)) calc(14px * var(--scale)); }
+.summary-pairs .label { margin-top:0; }
+.breakdown-card { display:flex; flex-direction:column; }
+.breakdown-layout { display:grid; grid-template-columns:auto minmax(0,1fr); gap:calc(14px * var(--scale)); align-items:center; flex:1; }
+.breakdown-layout .donut { width:calc(128px * var(--scale)); height:calc(128px * var(--scale)); margin:0; }
+.breakdown-layout .donut span { width:calc(78px * var(--scale)); height:calc(78px * var(--scale)); }
+.breakdown-list .breakdown-row { margin:calc(6px * var(--scale)) 0; }
 .score { font-size:calc(38px * var(--scale)); font-weight:800; margin:calc(6px * var(--scale)) 0; }
 .build-badge { display:inline-block; font-size:calc(18px * var(--scale)); font-weight:800; border:1px solid var(--line); border-radius:8px; padding:calc(8px * var(--scale)) calc(10px * var(--scale)); margin:calc(6px * var(--scale)) 0; background:rgba(59,130,246,.16); color:var(--text); }
 .status-word { font-size:calc(22px * var(--scale)); font-weight:800; }
@@ -156,6 +167,12 @@ label { display:block; margin:calc(6px * var(--scale)) 0; }
 .value { font-weight:700; overflow-wrap:anywhere; }
 .tile-value { font-size:calc(24px * var(--scale)); font-weight:800; margin:calc(8px * var(--scale)) 0 calc(4px * var(--scale)); }
 .tile-detail { color:var(--green); font-size:calc(13px * var(--scale)); overflow-wrap:anywhere; }
+.overview-page .tile { min-height:calc(116px * var(--scale)); }
+.overview-page .tile h3 { font-size:calc(17px * var(--scale)); }
+.overview-page .tile-value { font-size:calc(28px * var(--scale)); line-height:1.08; }
+.recording-tile { border-color:rgba(59,130,246,.55); background:linear-gradient(145deg, rgba(59,130,246,.14), var(--panel-2)); }
+.recording-tile .tile-value { color:var(--blue); font-size:calc(27px * var(--scale)); }
+.recording-tile .tile-detail { color:var(--muted); }
 table { width:100%; border-collapse:collapse; }
 th, td { padding:calc(9px * var(--scale)) calc(6px * var(--scale)); border-top:1px solid var(--line); text-align:left; white-space:nowrap; }
 th { color:var(--muted); font-weight:600; font-size:calc(12px * var(--scale)); }
@@ -271,6 +288,8 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   .metric-grid { grid-template-columns: repeat(2, minmax(calc(130px * var(--scale)), 1fr)); }
   .status-strip { grid-template-columns: 1fr; }
   .summary-card { grid-template-columns: 1fr; }
+  .summary-pairs { grid-template-columns:1fr 1fr; }
+  .breakdown-layout { grid-template-columns:auto 1fr; }
   .overview-top, .operations-grid { grid-template-columns:1fr; }
   .page-intro { align-items:flex-start; }
   .quick-actions { grid-template-columns:1fr; }
@@ -607,9 +626,9 @@ function groupChecks(checks){
   return groups;
 }
 
-function tile(title, check, value, detail){
+function tile(title, check, value, detail, extraClass = ''){
   const state = statusClass(check.state);
-  return `<div class="tile"><h3>${escapeHtml(title)}</h3><div class="tile-value ${state}">${escapeHtml(value)}</div><div class="tile-detail">${escapeHtml(detail || check.message || '')}</div></div>`;
+  return `<div class="tile ${escapeHtml(extraClass)}"><h3>${escapeHtml(title)}</h3><div class="tile-value ${state}">${escapeHtml(value)}</div><div class="tile-detail">${escapeHtml(detail || check.message || '')}</div></div>`;
 }
 
 function serviceRows(status){
@@ -701,10 +720,13 @@ function renderHistoryChart(rows, key='score'){
 
 function renderGatewaySummary(status){
   const state = displayState(status);
-  const hasNonFeedCritical = (status.checks || []).some(c => c.state === 'critical');
-  const warningCount = (status.checks || []).filter(c => c.state === 'warning' || c.state === 'unknown').length;
-  const pill = status.critical_failed ? 'Critical issue blocking feed' : (hasNonFeedCritical ? 'Attention needed, feed safe' : (warningCount ? `${warningCount} active warning${warningCount === 1 ? '' : 's'}` : 'No active alerts'));
   const wdt = findCheck(status, 'hardware_watchdog_present');
+  const hasNonFeedCritical = (status.checks || []).some(c => c.state === 'critical');
+  const warningCount = (status.checks || []).filter(c =>
+    (c.state === 'warning' || c.state === 'unknown')
+    && !(c.name === 'hardware_watchdog_feed_status' && !wdt.value)
+  ).length;
+  const pill = status.critical_failed ? 'Critical issue blocking feed' : (hasNonFeedCritical ? 'Attention needed, feed safe' : (warningCount ? `${warningCount} active warning${warningCount === 1 ? '' : 's'}` : 'No active alerts'));
   const feed = status.hardware_watchdog_feed || {};
   const services = (status.checks || []).filter(c => String(c.name || '').endsWith('.service'));
   const healthyServices = services.filter(c => c.state === 'healthy').length;
@@ -715,7 +737,7 @@ function renderGatewaySummary(status){
   const protectionState = startupGrace.active ? 'waiting' : (feed.enabled && feed.opened ? 'healthy' : 'warning');
   const identity = lastSystemInfo.identity || lastVersion.identity || {};
   const gatewayName = identity.display_name || identity.site_name || lastSystemInfo.hostname || 'Site not configured';
-  return `<div class="card summary-card"><div><div class="label">Gateway status</div><div class="status-word ${state}">${displayWord(status)}</div><div class="score">${escapeHtml(status.score ?? '-')}%</div><span class="pill ${state}">${escapeHtml(pill)}</span></div><div><div class="label">Site</div><div class="value">${escapeHtml(gatewayName)}</div><div class="label">Asset ID</div><div class="value">${escapeHtml(identity.asset_id || '-')}</div><div class="label">Last check</div><div class="value">${escapeHtml(fmtTime(status.time))}</div><div class="label">Build</div><div class="build-badge">${escapeHtml(lastVersion.commit || '-')}</div><div class="value">${escapeHtml(lastVersion.branch || lastUpdateStatus?.branch || '-')}</div></div><div><div class="label">Gateway monitor</div><div class="value healthy">ONLINE</div><div class="label">Videosoft services</div><div class="value ${healthyServices === services.length && services.length ? 'healthy' : 'warning'}">${escapeHtml(healthyServices)}/${escapeHtml(services.length)} running</div><div class="label">Hardware recovery</div><div class="value ${protectionState}">${escapeHtml(protection)}</div></div></div>`;
+  return `<div class="card summary-card"><div class="summary-panel summary-status"><div class="summary-panel-title">Gateway status</div><div class="status-word ${state}">${displayWord(status)}</div><div class="score">${escapeHtml(status.score ?? '-')}%</div><span class="pill ${state}">${escapeHtml(pill)}</span></div><div class="summary-panel"><div class="summary-panel-title">Gateway identity</div><div class="summary-primary">${escapeHtml(gatewayName)}</div><div class="summary-pairs"><div><div class="label">Asset ID</div><div class="value">${escapeHtml(identity.asset_id || '-')}</div></div><div><div class="label">Last check</div><div class="value">${escapeHtml(fmtTime(status.time))}</div></div></div><div class="label">Build</div><div class="build-badge">${escapeHtml(lastVersion.commit || '-')}</div><div class="value">${escapeHtml(lastVersion.branch || lastUpdateStatus?.branch || '-')}</div></div><div class="summary-panel"><div class="summary-panel-title">Operational readiness</div><div class="summary-pairs"><div><div class="label">Gateway monitor</div><div class="value healthy">ONLINE</div></div><div><div class="label">Videosoft services</div><div class="value ${healthyServices === services.length && services.length ? 'healthy' : 'warning'}">${escapeHtml(healthyServices)}/${escapeHtml(services.length)} running</div></div></div><div class="label">Hardware recovery</div><div class="summary-primary ${protectionState}">${escapeHtml(protection)}</div></div></div>`;
 }
 
 function pageHelp(page){
@@ -809,7 +831,7 @@ function renderBreakdown(status){
     ['Network', sectionScore(grouped.system)],
     ['Recovery', status.recovery ? (status.recovery.state === 'disabled' ? null : 100) : null],
   ];
-  return `<div class="card"><h2>Health Breakdown</h2><div class="donut" style="--score:${score}"><span>${escapeHtml(score)}%</span></div>${rows.map(([name, value]) => `<div class="breakdown-row"><span>${escapeHtml(name)}</span><strong>${value === null ? 'N/A' : `${value}%`}</strong></div>`).join('')}</div>`;
+  return `<div class="card breakdown-card"><h2>Health Breakdown</h2><div class="breakdown-layout"><div class="donut" style="--score:${score}"><span>${escapeHtml(score)}%</span></div><div class="breakdown-list">${rows.map(([name, value]) => `<div class="breakdown-row"><span>${escapeHtml(name)}</span><strong>${value === null ? 'N/A' : `${value}%`}</strong></div>`).join('')}</div></div></div>`;
 }
 
 function renderMetricTiles(status){
@@ -836,12 +858,12 @@ function renderMetricTiles(status){
   const graceCountdown = `${Math.floor(graceRemaining / 60)}:${String(graceRemaining % 60).padStart(2, '0')}`;
   const wdtState = startupGrace.active ? 'waiting' : (wdtFeedCheck.state || wdt.state || 'unknown');
   const wdtValue = startupGrace.active ? `Waiting ${graceCountdown}` : (wdtFeed.enabled && wdtFeed.opened ? 'Feeding' : (wdt.value ? 'Not feeding' : 'Not present'));
-  const wdtDetails = [
-    startupGrace.active ? `Startup safety window: ${graceCountdown} remaining` : (wdtFeedCheck.message || wdt.message || ''),
-    wdtConfig.timeout_seconds ? `${wdtConfig.timeout_seconds}s timeout` : 'Timeout unknown',
-    wdtFeed.enabled && wdtFeed.last_feed_unix ? `Last feed ${wdtFeed.last_feed_unix}` : '',
-  ].filter(Boolean).join(' | ');
-  return `<div class="grid metric-grid">${tile('CPU Temp', temp, fmtValue(temp.value, ' C'), temp.message)}${tile('CPU Load', cpu, fmtPercent(cpu.value), cpu.message)}${tile('RAM', ram, fmtPercent(ram.value), ram.message)}${tile('Root Disk', root, fmtPercent(root.value?.used_percent), `${root.value?.free_gb ?? '-'} GB free`)}${tile('Recording Storage', recStorageCheck, recStorageValue, recStorageDetail)}${tile('Hardware WDT', {state: wdtState, message: wdtDetails}, wdtValue, wdtDetails)}</div>`;
+  const wdtDetails = startupGrace.active
+    ? `Safety window: ${graceCountdown} remaining`
+    : (wdtFeed.enabled && wdtFeed.opened
+      ? `${wdtConfig.timeout_seconds || '-'}s timeout`
+      : (wdt.value ? 'Device detected; feed inactive' : 'No verified hardware watchdog'));
+  return `<div class="grid metric-grid">${tile('CPU Temp', temp, fmtValue(temp.value, ' C'), temp.message)}${tile('CPU Load', cpu, fmtPercent(cpu.value), cpu.message)}${tile('RAM', ram, fmtPercent(ram.value), ram.message)}${tile('Root Disk', root, fmtPercent(root.value?.used_percent), `${root.value?.free_gb ?? '-'} GB free`)}${tile('Oldest Recording', recStorageCheck, recStorageValue, recStorageDetail, 'recording-tile')}${tile('Hardware Recovery', {state: wdtState, message: wdtDetails}, wdtValue, wdtDetails)}</div>`;
 }
 
 function renderServices(status){
@@ -858,13 +880,15 @@ function renderServices(status){
 }
 
 function renderOperationalAlerts(status){
-  const issues = (status.checks || []).filter(check => check.state !== 'healthy').slice(0, 6);
-  const rows = issues.length ? issues.map(check => `<div class="issue-row"><span class="pill ${statusClass(check.state)}">${escapeHtml(String(check.state || 'unknown').toUpperCase())}</span><div><div class="value">${escapeHtml(check.name || 'Unknown check')}</div><div class="muted">${escapeHtml(check.message || 'No detail')}</div></div></div>`).join('') : '<div class="issue-row"><span class="pill">CLEAR</span><div><div class="value">No active alerts</div><div class="muted">All current checks are healthy.</div></div></div>';
+  const hardwarePresent = Boolean(findCheck(status, 'hardware_watchdog_present').value);
+  const issues = (status.checks || []).filter(check => check.state !== 'healthy' && !(check.name === 'hardware_watchdog_feed_status' && !hardwarePresent)).slice(0, 6);
+  const alertName = name => name === 'hardware_watchdog_present' ? 'Hardware recovery unavailable' : String(name || 'Unknown check').replaceAll('_', ' ');
+  const rows = issues.length ? issues.map(check => `<div class="issue-row"><span class="pill ${statusClass(check.state)}">${escapeHtml(String(check.state || 'unknown').toUpperCase())}</span><div><div class="value">${escapeHtml(alertName(check.name))}</div><div class="muted">${escapeHtml(check.message || 'No detail')}</div></div></div>`).join('') : '<div class="issue-row"><span class="pill">CLEAR</span><div><div class="value">No active alerts</div><div class="muted">All current checks are healthy.</div></div></div>';
   return `<div class="card"><h2>Active Alerts</h2><div class="issue-list">${rows}</div><div class="button-row"><a class="ghost" href="/events">Open event history</a></div></div>`;
 }
 
 function renderQuickActions(){
-  return `<div class="card"><h2>Quick Actions</h2><div class="quick-actions"><a class="action" href="/service-restart-confirm/bridge.service">Restart Bridge<span>Requires confirmation</span></a><a class="ghost" href="/events">Review Alerts<span>Recent state changes</span></a><a class="ghost" href="/api/diagnostics/support-bundle.zip">Support Bundle<span>Download investigation logs</span></a><a class="ghost" href="/recovery">Recovery Tools<span>Repair and update controls</span></a></div><details class="advanced-disclosure"><summary>Planned gateway controls</summary><p class="muted">Relay control, snapshots, and direct remote-session launch remain visible in the roadmap but are not connected in this build.</p></details></div>`;
+  return `<div class="card"><h2>Quick Actions</h2><div class="quick-actions"><a class="action" href="/service-restart-confirm/bridge.service">Restart Bridge<span>Requires confirmation</span></a><a class="ghost" href="/events">Review Alerts<span>Recent state changes</span></a><a class="ghost" href="/api/diagnostics/support-bundle.zip">Support Bundle<span>Download investigation logs</span></a><a class="ghost" href="/recovery">Recovery Tools<span>Repair and update controls</span></a></div></div>`;
 }
 
 function renderSystemInfo(status){
@@ -873,7 +897,7 @@ function renderSystemInfo(status){
 }
 
 function renderOverview(status, events){
-  return `${pageHelp('Overview')}<div class="grid overview-top">${renderGatewaySummary(status)}${renderBreakdown(status)}</div>${renderMetricTiles(status)}<div class="grid operations-grid">${renderOperationalAlerts(status)}${renderQuickActions()}</div>`;
+  return `${pageHelp('Overview')}<div class="overview-page"><div class="grid overview-top">${renderGatewaySummary(status)}${renderBreakdown(status)}</div>${renderMetricTiles(status)}<div class="grid operations-grid">${renderOperationalAlerts(status)}${renderQuickActions()}</div></div>`;
 }
 
 function renderSimplePage(title, content){
@@ -1480,9 +1504,9 @@ def start_web(cfg):
                 return f"{escape(str(value.get('free_gb', '-')))} GB free"
             return escape(str(check_message(name, "")))
 
-        def tile(title, value, detail, tile_state="healthy"):
+        def tile(title, value, detail, tile_state="healthy", tile_class=""):
             return (
-                "<div class=\"tile\">"
+                f"<div class=\"tile {escape(str(tile_class))}\">"
                 f"<h3>{escape(str(title))}</h3>"
                 f"<div class=\"tile-value {escape(str(tile_state))}\">{escape(str(value))}</div>"
                 f"<div class=\"tile-detail\">{escape(str(detail))}</div>"
@@ -1560,11 +1584,19 @@ def start_web(cfg):
                 + tile("CPU Load", f"{escape(str(check_value('cpu_load', '-')))}%", check_message("cpu_load", ""), check_state("cpu_load", "healthy"))
                 + tile("RAM", f"{escape(str(check_value('ram', '-')))}%", check_message("ram", ""), check_state("ram", "healthy"))
                 + tile("Root Disk", disk_used("root_disk"), disk_free("root_disk"), check_state("root_disk", "healthy"))
-                + tile("Recording Storage", rec_storage_value, rec_storage_detail, rec_storage_state)
+                + tile("Oldest Recording", rec_storage_value, rec_storage_detail, rec_storage_state, "recording-tile")
                 + tile(
-                    "Hardware WDT",
+                    "Hardware Recovery",
                     watchdog_value,
-                    check_message("hardware_watchdog_feed_status", check_message("hardware_watchdog_present", "")),
+                    (
+                        f"Safety window: {watchdog_minutes}:{watchdog_remainder:02d} remaining"
+                        if startup_grace.get("active")
+                        else (
+                            f"{cfg.get('hardware_watchdog', {}).get('timeout_seconds', '-')}s timeout"
+                            if watchdog_feed.get("enabled") and watchdog_feed.get("opened")
+                            else ("Device detected; feed inactive" if check_value("hardware_watchdog_present", False) else "No verified hardware watchdog")
+                        )
+                    ),
                     watchdog_state,
                 )
                 + "</div>"
@@ -1719,15 +1751,23 @@ def start_web(cfg):
             )
 
         def operational_alerts_card():
-            issues = [check for check in checks if str(check.get("state", "unknown")) != "healthy"][:6]
+            hardware_present = bool(check_value("hardware_watchdog_present", False))
+            issues = [
+                check
+                for check in checks
+                if str(check.get("state", "unknown")) != "healthy"
+                and not (str(check.get("name", "")) == "hardware_watchdog_feed_status" and not hardware_present)
+            ][:6]
             rows = []
             for check in issues:
                 item_state = str(check.get("state", "unknown"))
+                check_name = str(check.get("name", "Unknown check"))
+                display_name = "Hardware recovery unavailable" if check_name == "hardware_watchdog_present" else check_name.replace("_", " ")
                 rows.append(
                     "<div class=\"issue-row\">"
                     f"<span class=\"pill {escape(item_state)}\">{escape(item_state.upper())}</span>"
                     "<div>"
-                    f"<div class=\"value\">{escape(str(check.get('name', 'Unknown check')))}</div>"
+                    f"<div class=\"value\">{escape(display_name)}</div>"
                     f"<div class=\"muted\">{escape(str(check.get('message', 'No detail')))}</div>"
                     "</div></div>"
                 )
@@ -1750,9 +1790,7 @@ def start_web(cfg):
                 "<a class=\"ghost\" href=\"/events\">Review Alerts<span>Recent state changes</span></a>"
                 "<a class=\"ghost\" href=\"/api/diagnostics/support-bundle.zip\">Support Bundle<span>Download investigation logs</span></a>"
                 "<a class=\"ghost\" href=\"/recovery\">Recovery Tools<span>Repair and update controls</span></a>"
-                "</div><details class=\"advanced-disclosure\"><summary>Planned gateway controls</summary>"
-                "<p class=\"muted\">Relay control, snapshots, and direct remote-session launch remain in the roadmap but are not connected in this build.</p>"
-                "</details></div>"
+                "</div></div>"
             )
 
         def updates_card():
@@ -2728,33 +2766,40 @@ def start_web(cfg):
         overview_html = (
             "<div class=\"grid overview-top\">"
             "<div class=\"card summary-card\">"
-            "<div>"
-            "<div class=\"label\">Gateway status</div>"
+            "<div class=\"summary-panel summary-status\">"
+            "<div class=\"summary-panel-title\">Gateway status</div>"
             f"<div class=\"status-word {state}\">{word}</div>"
             f"<div class=\"score\">{escape(str(status.get('score', '-')))}%</div>"
             f"{issue_pill}"
+            f"{error_html}"
             "</div>"
-            "<div>"
-            f"<div class=\"label\">Site</div><div class=\"value\">{escape(str(version.get('identity', {}).get('display_name') or 'Site not configured'))}</div>"
-            f"<div class=\"label\">Asset ID</div><div class=\"value\">{escape(str(version.get('identity', {}).get('asset_id') or '-'))}</div>"
-            f"<div class=\"label\">Last check</div><div class=\"value\">{escape(local_time(status.get('time')))}</div>"
+            "<div class=\"summary-panel\">"
+            "<div class=\"summary-panel-title\">Gateway identity</div>"
+            f"<div class=\"summary-primary\">{escape(str(version.get('identity', {}).get('display_name') or 'Site not configured'))}</div>"
+            "<div class=\"summary-pairs\">"
+            f"<div><div class=\"label\">Asset ID</div><div class=\"value\">{escape(str(version.get('identity', {}).get('asset_id') or '-'))}</div></div>"
+            f"<div><div class=\"label\">Last check</div><div class=\"value\">{escape(local_time(status.get('time')))}</div></div>"
+            "</div>"
             "<div class=\"label\">Build</div>"
             f"<div class=\"build-badge\">{escape(str(version.get('commit', '-')))}</div>"
             f"<div class=\"value\">{escape(str(version.get('branch', '-')))}</div>"
             "</div>"
-            "<div>"
-            "<div class=\"label\">Gateway monitor</div><div class=\"value healthy\">ONLINE</div>"
-            f"<div class=\"label\">Videosoft services</div><div class=\"value {'healthy' if service_checks and healthy_service_count == len(service_checks) else 'warning'}\">{healthy_service_count}/{len(service_checks)} running</div>"
-            f"<div class=\"label\">Hardware recovery</div><div class=\"value {protection_state}\">{protection_text}</div>"
+            "<div class=\"summary-panel\">"
+            "<div class=\"summary-panel-title\">Operational readiness</div>"
+            "<div class=\"summary-pairs\">"
+            "<div><div class=\"label\">Gateway monitor</div><div class=\"value healthy\">ONLINE</div></div>"
+            f"<div><div class=\"label\">Videosoft services</div><div class=\"value {'healthy' if service_checks and healthy_service_count == len(service_checks) else 'warning'}\">{healthy_service_count}/{len(service_checks)} running</div></div>"
             "</div>"
-            f"{error_html}"
+            f"<div class=\"label\">Hardware recovery</div><div class=\"summary-primary {protection_state}\">{protection_text}</div>"
             "</div>"
-            "<div class=\"card\"><h2>Health Breakdown</h2>"
+            "</div>"
+            "<div class=\"card breakdown-card\"><h2>Health Breakdown</h2><div class=\"breakdown-layout\">"
             f"<div class=\"donut\" style=\"--score:{escape(str(status.get('score', 0)))}\"><span>{escape(str(status.get('score', '-')))}%</span></div>"
+            "<div class=\"breakdown-list\">"
             "<div class=\"breakdown-row\"><span>Critical failed</span><strong>" + escape(str(critical).lower()) + "</strong></div>"
             "<div class=\"breakdown-row\"><span>Total checks</span><strong>" + escape(str(len(checks))) + "</strong></div>"
             "<div class=\"breakdown-row\"><span>View</span><strong>Operations</strong></div>"
-            "</div></div>"
+            "</div></div></div></div>"
             + metric_tiles()
             + "<div class=\"card\"><h2>Stability Evidence</h2><div class=\"table-scroll\"><table><tbody>"
             + f"<tr><th>Last health sample</th><td>{escape(local_time(status.get('time')))}</td></tr>"
@@ -2773,7 +2818,7 @@ def start_web(cfg):
         )
 
         if page == "Overview":
-            return page_help_html(page) + overview_html
+            return page_help_html(page) + "<div class=\"overview-page\">" + overview_html + "</div>"
         if page == "Hardware":
             return page_help_html(page) + hardware_page()
         if page == "Watchdog":
