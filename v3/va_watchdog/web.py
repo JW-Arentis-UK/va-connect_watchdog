@@ -37,6 +37,21 @@ from .baseline_capture import baseline_paths, baseline_status, completed_archive
 from .identity import configured_identity, identity_slug, identity_summary
 from .recording_activity import recording_activity
 
+VISIBLE_PAGE_GROUPS = (
+    ("Operations", (("Overview", "/"), ("Events", "/events"))),
+    ("System", (("Hardware", "/hardware"), ("Network", "/network"), ("Services", "/services"))),
+    ("Administration", (("Settings", "/settings"),)),
+)
+
+LEGACY_PAGE_REDIRECTS = {
+    "/storage": "/hardware#storage",
+    "/watchdog": "/services#watchdog",
+    "/history": "/events#history",
+    "/diagnostics": "/events#evidence",
+    "/recovery": "/settings#recovery",
+    "/updates": "/settings#software-update",
+}
+
 HTML = """<!doctype html>
 <html>
 <head>
@@ -114,6 +129,11 @@ body { font-family:"Trebuchet MS", "DejaVu Sans", sans-serif; background:var(--b
 .nav .mode-tab { padding:calc(7px * var(--scale)) calc(8px * var(--scale)); text-align:left; font-size:calc(10px * var(--scale)); font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
 .nav .mode-tab.active { background:var(--blue); border-color:var(--blue); color:#fff; }
 .nav-section { padding:calc(4px * var(--scale)) calc(10px * var(--scale)); color:var(--muted); font-size:calc(10px * var(--scale)); font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+.nav-section:not(:first-child) { margin-top:calc(12px * var(--scale)); }
+.moved-section { margin-top:calc(18px * var(--scale)); scroll-margin-top:calc(72px * var(--scale)); }
+.moved-section-heading { margin:0 0 calc(10px * var(--scale)); padding:0 calc(2px * var(--scale)); }
+.moved-section-heading h2 { margin:0 0 calc(3px * var(--scale)); }
+.moved-section-heading p { margin:0; color:var(--muted); }
 .side-status { margin-top:auto; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:calc(12px * var(--scale)); color:var(--muted); }
 .main { min-width:0; }
 .topbar { height:calc(58px * var(--scale)); border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; padding:0 calc(18px * var(--scale)); color:var(--muted); }
@@ -433,14 +453,12 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
 <script type="module">
 const PAGE_MODES = {
   Operations: ['Overview', 'Events'],
-  Engineering: ['Hardware', 'Storage', 'Network', 'Services', 'Watchdog', 'History', 'Settings', 'Diagnostics'],
-  Recovery: ['Recovery', 'Updates'],
+  System: ['Hardware', 'Network', 'Services'],
+  Administration: ['Settings'],
 };
-const MODE_LANDING = { Operations: 'Overview', Engineering: 'Hardware', Recovery: 'Recovery' };
 const PATH_PAGES = {
-  '/': 'Overview', '/hardware': 'Hardware', '/storage': 'Storage', '/network': 'Network',
-  '/services': 'Services', '/watchdog': 'Watchdog', '/events': 'Events', '/history': 'History',
-  '/settings': 'Settings', '/diagnostics': 'Diagnostics', '/recovery': 'Recovery', '/updates': 'Updates',
+  '/': 'Overview', '/events': 'Events', '/hardware': 'Hardware', '/network': 'Network',
+  '/services': 'Services', '/settings': 'Settings',
 };
 const PAGES = Object.keys(PAGE_MODES).reduce((pages, mode) => pages.concat(PAGE_MODES[mode]), []);
 let currentPage = PATH_PAGES[window.location.pathname] || '__PAGE_TITLE__';
@@ -521,10 +539,10 @@ function fmtTime(value){
 
 function buildNav(){
   const nav = document.getElementById('nav');
-  const currentMode = modeForPage(currentPage);
-  const modeTabs = Object.keys(PAGE_MODES).map(mode => `<a class="mode-tab ${mode === currentMode ? 'active' : ''}" href="${pathForPage(MODE_LANDING[mode])}">${escapeHtml(mode)}</a>`).join('');
-  const pageLinks = PAGE_MODES[currentMode].map(page => `<a class="${page === currentPage ? 'active' : ''}" href="${pathForPage(page)}">${escapeHtml(page)}</a>`).join('');
-  nav.innerHTML = `<div class="mode-switcher">${modeTabs}</div><div class="nav-section">${escapeHtml(currentMode)}</div>${pageLinks}`;
+  nav.innerHTML = Object.keys(PAGE_MODES).map(mode => {
+    const pageLinks = PAGE_MODES[mode].map(page => `<a class="${page === currentPage ? 'active' : ''}" href="${pathForPage(page)}">${escapeHtml(page)}</a>`).join('');
+    return `<div class="nav-section">${escapeHtml(mode)}</div>${pageLinks}`;
+  }).join('');
 }
 
 function modeForPage(page){
@@ -817,7 +835,7 @@ function renderWatchdogPage(status){
   const pageMessage = ready ? 'The watchdog service owns /dev/watchdog0 and is feeding it. The deliberate trip test is available.' : (legacyProblem ? 'A legacy watchdog service may own the device. Clean legacy watchdogs, then run one-click setup.' : 'Run the one-click setup to load the driver, clean old watchdog daemons, enable hardware feed, and restart the service.');
   const primaryAction = ready ? `<a class="action" href="/watchdog-trip-confirm">${tripTest.armed ? 'Continue armed trip confirmation' : 'Start deliberate trip test'}</a>` : (legacyProblem ? '<a class="danger" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs</a>' : '<a class="action" href="/hardware-watchdog-prepare-confirm">Run one-click setup</a>');
   const feedState = feed.enabled && feed.opened ? 'healthy' : 'warning';
-  return `${pageHelp('Watchdog')}<div class="card action-panel ${pageState}"><h2>${escapeHtml(pageTitle)}</h2><p class="${pageState}">${escapeHtml(pageMessage)}</p><div class="button-row">${primaryAction}<a class="ghost" href="/hardware-watchdog-prepare-confirm">Run full setup/cleanup</a><a class="ghost" href="/watchdog-hardware-probe-confirm">Run probe</a></div></div><div class="status-strip"><div class="status-box"><div class="label">Driver</div><div class="big ${modules.iTCO_wdt ? 'healthy' : 'warning'}">${modules.iTCO_wdt ? 'Loaded' : 'Needs setup'}</div><div class="step-detail">Intel TCO hardware watchdog driver</div></div><div class="status-box"><div class="label">Device</div><div class="big ${wdctl.device ? 'healthy' : 'warning'}">${escapeHtml(hwCfg.device || '/dev/watchdog0')}</div><div class="step-detail">${escapeHtml(wdctl.identity || 'No identity yet')}</div></div><div class="status-box"><div class="label">Hardware feed</div><div class="big ${feedState}">${feed.enabled && feed.opened ? 'Feeding' : 'Not feeding'}</div><div class="step-detail">${escapeHtml(lastFeed)}</div></div><div class="status-box"><div class="label">Legacy watchdogs</div><div class="big ${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Conflict' : 'Clear'}</div><div class="step-detail">${escapeHtml(legacyProblem ? 'Cleanup needed' : 'Removed/disabled')}</div></div></div><div class="grid lower-grid"><div class="card"><h2>Setup Checklist</h2><p class="muted">Work from top to bottom. Green means that layer is ready; amber/red shows the part to fix next.</p><div class="setup-steps">${checkCards}</div></div><div class="card"><h2>Existing Watchdogs and Cleanup</h2><p class="${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Another watchdog may still be installed or enabled.' : 'No conflicting legacy watchdog services detected.'}</p><table class="compact-table"><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead><tbody>${legacyRows}</tbody></table><p class="muted">This service should be the only process feeding the hardware watchdog.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs only</a><a class="ghost" href="/hardware">Hardware details</a></div></div></div><div class="grid lower-grid"><div class="card"><h2>Current Watchdog Configuration</h2><table class="compact-table"><tbody>${configRows}</tbody></table></div><div class="card"><h2>What the Layers Mean</h2><ul><li><strong>Hardware watchdog</strong> reboots the whole gateway if Linux stops feeding /dev/watchdog0.</li><li><strong>Hardware feed</strong> is this service opening and feeding the hardware device.</li><li><strong>Process watchdog</strong> is systemd restarting va-watchdog if the Python process hangs.</li><li><strong>Legacy watchdogs</strong> are old daemons/packages that should not also control the device.</li></ul></div></div><div class="grid lower-grid"><div class="card"><h2>Safe Watchdog Test</h2><p class="muted">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-test-arm"><button class="action" type="submit">Arm safe test</button></form></div><div class="label">Feed enabled</div><div class="value">${feed.enabled ? 'Enabled' : 'Disabled'}</div><div class="label">Last feed</div><div class="value">${escapeHtml(lastFeed)}</div></div><div class="card"><h2>Deliberate Watchdog Trip Test</h2><p class="warning">This stops hardware feeding and may reboot the gateway.</p><p class="muted">Open the test, tick the acknowledgement box, then run it.</p><div class="button-row">${tripAction}</div>${ready ? '' : '<p class="warning">Trip test is blocked until setup is complete and the service has a recent hardware feed.</p>'}<div class="label">State</div><div class="value">${escapeHtml(tripTest.triggered ? 'Triggered this boot' : (tripTest.completed_previous_boot ? 'Completed on previous boot' : 'Ready'))}</div><div class="label">Countdown verification</div><div class="value">${escapeHtml(tripCountdown.status || 'inactive')}${tripCountdown.current_timeleft == null ? '' : `; ${escapeHtml(tripCountdown.current_timeleft)}s remaining`}</div><div class="label">Last result</div><div class="value">${escapeHtml(tripTest.last_result_message || 'No trip test recorded yet')}</div></div><div class="card"><h2>Extend Timeout</h2><p class="muted">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p><form method="post" action="/watchdog-timeout-set"><label class="label">Timeout seconds</label><select name="timeout_seconds"><option value="30" ${timeout === 30 ? 'selected' : ''}>30</option><option value="60" ${timeout === 60 ? 'selected' : ''}>60</option><option value="120" ${timeout === 120 ? 'selected' : ''}>120</option><option value="180" ${timeout === 180 ? 'selected' : ''}>180</option><option value="300" ${timeout === 300 ? 'selected' : ''}>300</option></select><div class="button-row"><button class="action" type="submit">Apply timeout</button></div></form><p class="muted">Use a longer timeout while diagnosing reboot loops. Put it back to 30s once stable.</p></div></div><div class="card"><h2>Advanced Tools</h2><p class="muted">Use these only when the guided setup cannot complete.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy only</a><a class="ghost" href="/hardware-watchdog-enable-confirm">Enable feed only</a><a class="ghost" href="/hardware">Hardware details</a><a class="ghost" href="/diagnostics">Diagnostics</a></div></div>`;
+  return `${pageHelp('Watchdog')}<div class="card action-panel ${pageState}"><h2>${escapeHtml(pageTitle)}</h2><p class="${pageState}">${escapeHtml(pageMessage)}</p><div class="button-row">${primaryAction}<a class="ghost" href="/hardware-watchdog-prepare-confirm">Run full setup/cleanup</a><a class="ghost" href="/watchdog-hardware-probe-confirm">Run probe</a></div></div><div class="status-strip"><div class="status-box"><div class="label">Driver</div><div class="big ${modules.iTCO_wdt ? 'healthy' : 'warning'}">${modules.iTCO_wdt ? 'Loaded' : 'Needs setup'}</div><div class="step-detail">Intel TCO hardware watchdog driver</div></div><div class="status-box"><div class="label">Device</div><div class="big ${wdctl.device ? 'healthy' : 'warning'}">${escapeHtml(hwCfg.device || '/dev/watchdog0')}</div><div class="step-detail">${escapeHtml(wdctl.identity || 'No identity yet')}</div></div><div class="status-box"><div class="label">Hardware feed</div><div class="big ${feedState}">${feed.enabled && feed.opened ? 'Feeding' : 'Not feeding'}</div><div class="step-detail">${escapeHtml(lastFeed)}</div></div><div class="status-box"><div class="label">Legacy watchdogs</div><div class="big ${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Conflict' : 'Clear'}</div><div class="step-detail">${escapeHtml(legacyProblem ? 'Cleanup needed' : 'Removed/disabled')}</div></div></div><div class="grid lower-grid"><div class="card"><h2>Setup Checklist</h2><p class="muted">Work from top to bottom. Green means that layer is ready; amber/red shows the part to fix next.</p><div class="setup-steps">${checkCards}</div></div><div class="card"><h2>Existing Watchdogs and Cleanup</h2><p class="${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Another watchdog may still be installed or enabled.' : 'No conflicting legacy watchdog services detected.'}</p><table class="compact-table"><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead><tbody>${legacyRows}</tbody></table><p class="muted">This service should be the only process feeding the hardware watchdog.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs only</a><a class="ghost" href="/hardware">Hardware details</a></div></div></div><div class="grid lower-grid"><div class="card"><h2>Current Watchdog Configuration</h2><table class="compact-table"><tbody>${configRows}</tbody></table></div><div class="card"><h2>What the Layers Mean</h2><ul><li><strong>Hardware watchdog</strong> reboots the whole gateway if Linux stops feeding /dev/watchdog0.</li><li><strong>Hardware feed</strong> is this service opening and feeding the hardware device.</li><li><strong>Process watchdog</strong> is systemd restarting va-watchdog if the Python process hangs.</li><li><strong>Legacy watchdogs</strong> are old daemons/packages that should not also control the device.</li></ul></div></div><div class="grid lower-grid"><div class="card"><h2>Safe Watchdog Test</h2><p class="muted">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-test-arm"><button class="action" type="submit">Arm safe test</button></form></div><div class="label">Feed enabled</div><div class="value">${feed.enabled ? 'Enabled' : 'Disabled'}</div><div class="label">Last feed</div><div class="value">${escapeHtml(lastFeed)}</div></div><div class="card"><h2>Deliberate Watchdog Trip Test</h2><p class="warning">This stops hardware feeding and may reboot the gateway.</p><p class="muted">Open the test, tick the acknowledgement box, then run it.</p><div class="button-row">${tripAction}</div>${ready ? '' : '<p class="warning">Trip test is blocked until setup is complete and the service has a recent hardware feed.</p>'}<div class="label">State</div><div class="value">${escapeHtml(tripTest.triggered ? 'Triggered this boot' : (tripTest.completed_previous_boot ? 'Completed on previous boot' : 'Ready'))}</div><div class="label">Countdown verification</div><div class="value">${escapeHtml(tripCountdown.status || 'inactive')}${tripCountdown.current_timeleft == null ? '' : `; ${escapeHtml(tripCountdown.current_timeleft)}s remaining`}</div><div class="label">Last result</div><div class="value">${escapeHtml(tripTest.last_result_message || 'No trip test recorded yet')}</div></div><div class="card"><h2>Extend Timeout</h2><p class="muted">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p><form method="post" action="/watchdog-timeout-set"><label class="label">Timeout seconds</label><select name="timeout_seconds"><option value="30" ${timeout === 30 ? 'selected' : ''}>30</option><option value="60" ${timeout === 60 ? 'selected' : ''}>60</option><option value="120" ${timeout === 120 ? 'selected' : ''}>120</option><option value="180" ${timeout === 180 ? 'selected' : ''}>180</option><option value="300" ${timeout === 300 ? 'selected' : ''}>300</option></select><div class="button-row"><button class="action" type="submit">Apply timeout</button></div></form><p class="muted">Use a longer timeout while diagnosing reboot loops. Put it back to 30s once stable.</p></div></div><div class="card"><h2>Advanced Tools</h2><p class="muted">Use these only when the guided setup cannot complete.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy only</a><a class="ghost" href="/hardware-watchdog-enable-confirm">Enable feed only</a><a class="ghost" href="/hardware">Hardware details</a><a class="ghost" href="/events#evidence">Diagnostics</a></div></div>`;
 }
 
 function renderBreakdown(status){
@@ -888,7 +906,7 @@ function renderOperationalAlerts(status){
 }
 
 function renderQuickActions(){
-  return `<div class="card"><h2>Quick Actions</h2><div class="quick-actions"><a class="action" href="/service-restart-confirm/bridge.service">Restart Bridge<span>Requires confirmation</span></a><a class="ghost" href="/events">Review Alerts<span>Recent state changes</span></a><a class="ghost" href="/api/diagnostics/support-bundle.zip">Support Bundle<span>Download investigation logs</span></a><a class="ghost" href="/recovery">Recovery Tools<span>Repair and update controls</span></a></div></div>`;
+  return `<div class="card"><h2>Quick Actions</h2><div class="quick-actions"><a class="action" href="/service-restart-confirm/bridge.service">Restart Bridge<span>Requires confirmation</span></a><a class="ghost" href="/events">Review Alerts<span>Recent state changes</span></a><a class="ghost" href="/api/diagnostics/support-bundle.zip">Support Bundle<span>Download investigation logs</span></a><a class="ghost" href="/settings#recovery">Recovery Tools<span>Repair and update controls</span></a></div></div>`;
 }
 
 function renderSystemInfo(status){
@@ -1292,7 +1310,7 @@ window.purgeAllEvents = purgeAllEvents;
 window.saveSettings = saveSettings;
 window.purgeOldData = purgeOldData;
 window.purgeAllData = purgeAllData;
-const LIVE_RENDERED_PAGES = ['Overview', 'Events'];
+const LIVE_RENDERED_PAGES = ['Overview'];
 initTheme();
 if (LIVE_RENDERED_PAGES.includes(currentPage)) {
   buildNav();
@@ -1350,22 +1368,16 @@ def start_web(cfg):
             "identity": configured_identity(cfg),
         }
 
-    page_modes = [
-        ("Operations", [("Overview", "/"), ("Events", "/events")]),
-        ("Engineering", [
-            ("Hardware", "/hardware"),
-            ("Storage", "/storage"),
-            ("Network", "/network"),
-            ("Services", "/services"),
-            ("Watchdog", "/watchdog"),
-            ("History", "/history"),
-            ("Settings", "/settings"),
-            ("Diagnostics", "/diagnostics"),
-        ]),
-        ("Recovery", [("Recovery", "/recovery"), ("Updates", "/updates")]),
-    ]
+    page_modes = VISIBLE_PAGE_GROUPS
     server_pages = [item for _, pages in page_modes for item in pages]
-    mode_landing = {"Operations": "/", "Engineering": "/hardware", "Recovery": "/recovery"}
+    legacy_page_names = {
+        "Storage": "Hardware",
+        "Watchdog": "Services",
+        "History": "Events",
+        "Diagnostics": "Events",
+        "Recovery": "Settings",
+        "Updates": "Settings",
+    }
 
     request_context = local()
 
@@ -1374,12 +1386,14 @@ def start_web(cfg):
         return theme if theme in {"dark", "light", "steel", "sand"} else "light"
 
     def mode_for_page(page):
+        page = legacy_page_names.get(page, page)
         for mode, pages in page_modes:
             if any(name == page for name, _ in pages):
                 return mode
         return "Operations"
 
     def page_shell(body, page):
+        page = legacy_page_names.get(page, page)
         theme = current_theme_name()
         build = version_info().get("commit") or "-"
         site_name = configured_identity(cfg)["display_name"]
@@ -1396,17 +1410,11 @@ def start_web(cfg):
     def page_help_html(page):
         help_map = {
             "Overview": ("Is this gateway ready to operate?", "Shows live health, current alerts, the four Videosoft services, and the actions used most often."),
-            "Hardware": ("Is the hardware healthy?", "Read-only sensor, CPU, memory, disk, and device discovery details."),
-            "Watchdog": ("Will the gateway recover itself?", "Configure, verify, and test the hardware and process watchdog protection layers."),
-            "Services": ("Are the Videosoft services running?", "Shows each monitored service and provides confirmed manual restart controls."),
-            "Storage": ("Will recordings continue?", "Shows recording storage, mount health, capacity, permissions, retention, and setup tools."),
+            "Hardware": ("Is the hardware and recording storage healthy?", "Shows sensors, CPU, memory, devices, recording storage health, capacity, permissions, and setup tools."),
+            "Services": ("Are the gateway services and watchdog protection running?", "Shows monitored services, confirmed restart controls, and hardware watchdog setup and testing."),
             "Network": ("Can the gateway communicate?", "Shows interfaces, routes, targets, sockets, and remote-access service status."),
-            "Recovery": ("How can this gateway be recovered?", "Contains service repair, reinstall, reboot policy, and emergency support actions."),
-            "Events": ("What changed recently?", "Review concise event summaries, expand technical detail, or export the event log."),
-            "History": ("Has gateway health changed over time?", "Shows retained health trends and previous state samples."),
-            "Settings": ("What should the watchdog monitor?", "Configure monitoring, display, storage, network, update, and recovery behavior."),
-            "Updates": ("Which build is running?", "Starts a controlled update and shows the branch, commit, result, and log."),
-            "Diagnostics": ("What evidence is available?", "Technical toolbox, raw status, black-box snapshots, and downloadable support bundle."),
+            "Events": ("What changed and what evidence is available?", "Review events, retained history, black-box evidence, diagnostics, and exports."),
+            "Settings": ("How is this gateway configured and recovered?", "Configure monitoring, updates, recovery, identity, storage, network, and watchdog behaviour."),
         }
         question, detail = help_map.get(page, ("What does this page show?", "Page help unavailable."))
         return (
@@ -1427,16 +1435,13 @@ def start_web(cfg):
         return "Overview"
 
     def server_nav_html(current_page):
-        current_mode = mode_for_page(current_page)
-        tabs = []
-        for mode, _ in page_modes:
-            active = "active" if mode == current_mode else ""
-            tabs.append(f"<a class=\"mode-tab {active}\" href=\"{escape(mode_landing[mode])}\">{escape(mode)}</a>")
-        links = [f"<div class=\"mode-switcher\">{''.join(tabs)}</div><div class=\"nav-section\">{escape(current_mode)}</div>"]
-        current_pages = next((pages for mode, pages in page_modes if mode == current_mode), [])
-        for name, path in current_pages:
-            active = "active" if name == current_page else ""
-            links.append(f"<a class=\"{active}\" href=\"{escape(path)}\">{escape(name)}</a>")
+        current_page = legacy_page_names.get(current_page, current_page)
+        links = []
+        for mode, pages in page_modes:
+            links.append(f"<div class=\"nav-section\">{escape(mode)}</div>")
+            for name, path in pages:
+                active = "active" if name == current_page else ""
+                links.append(f"<a class=\"{active}\" href=\"{escape(path)}\">{escape(name)}</a>")
         return "".join(links)
 
     def status_snapshot():
@@ -1789,7 +1794,7 @@ def start_web(cfg):
                 "<a class=\"action\" href=\"/service-restart-confirm/bridge.service\">Restart Bridge<span>Requires confirmation</span></a>"
                 "<a class=\"ghost\" href=\"/events\">Review Alerts<span>Recent state changes</span></a>"
                 "<a class=\"ghost\" href=\"/api/diagnostics/support-bundle.zip\">Support Bundle<span>Download investigation logs</span></a>"
-                "<a class=\"ghost\" href=\"/recovery\">Recovery Tools<span>Repair and update controls</span></a>"
+                "<a class=\"ghost\" href=\"/settings#recovery\">Recovery Tools<span>Repair and update controls</span></a>"
                 "</div></div>"
             )
 
@@ -1845,7 +1850,7 @@ def start_web(cfg):
                 "<p>Update VA-Connect Watchdog from the configured Git branch and restart only the watchdog service.</p>"
                 "<p class=\"warning\">Check the target branch above before continuing. Save any branch change below before starting the update.</p>"
                 "<div class=\"button-row\"><a class=\"action\" href=\"/update-confirm\">Update watchdog</a>"
-                "<a class=\"ghost\" href=\"/updates\">View update details and log</a></div></div>"
+                "<a class=\"ghost\" href=\"/settings#software-update\">View update details and log</a></div></div>"
             )
             general_settings = (
                 "<div class=\"settings-grid\">"
@@ -1977,7 +1982,7 @@ def start_web(cfg):
                 f"<div><div class=\"label\">Driver timeout</div><div class=\"value\">{escape(str(wdctl.get('timeout', '-')))}</div></div>"
                 f"<div><div class=\"label\">Legacy watchdog service</div><div class=\"value {'warning' if legacy.get('active') == 'active' else 'healthy'}\">{escape(str(legacy.get('active', '-')).upper())} / {escape(str(legacy.get('enabled', '-')).upper())}</div></div>"
                 "</div>"
-                "<div class=\"button-row\"><a class=\"action\" href=\"/watchdog\">Open Watchdog setup</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run full probe</a></div>"
+                "<div class=\"button-row\"><a class=\"action\" href=\"/services#watchdog\">Open Watchdog setup</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run full probe</a></div>"
                 f"{disclosure('Raw wdctl output', '<pre>' + escape(str(wdctl.get('raw', 'wdctl not available or watchdog not present'))) + '</pre>')}"
                 f"{disclosure('Setup and probe logs', '<h3>One-click prepare</h3><pre>' + escape(str(watchdog.get('prepare_log', 'No prepare log yet'))) + '</pre><h3>Setup</h3><pre>' + escape(str(watchdog.get('setup_log', 'No setup log yet'))) + '</pre><h3>Full probe</h3><pre>' + escape(str(watchdog.get('probe_log', 'No hardware probe log yet'))) + '</pre>')}"
                 "</div>"
@@ -2234,7 +2239,7 @@ def start_web(cfg):
                 "</div>"
                 "<div class=\"card\"><h2>Advanced Tools</h2>"
                 "<p class=\"muted\">Use these only when the guided setup cannot complete. Diagnostics are intentionally separated from the normal operator path.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">Clean legacy only</a><a class=\"ghost\" href=\"/hardware-watchdog-enable-confirm\">Enable feed only</a><a class=\"ghost\" href=\"/hardware\">Hardware details</a><a class=\"ghost\" href=\"/diagnostics\">Diagnostics</a></div>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">Clean legacy only</a><a class=\"ghost\" href=\"/hardware-watchdog-enable-confirm\">Enable feed only</a><a class=\"ghost\" href=\"/hardware\">Hardware details</a><a class=\"ghost\" href=\"/events#evidence\">Diagnostics</a></div>"
                 "</div>"
             )
 
@@ -2717,8 +2722,8 @@ def start_web(cfg):
                     ("Black-box snapshots", "Short-interval evidence retained around a hang or reboot.", "/api/blackbox", ""),
                     ("Raw health status", "Unchanged /api/status payload used by integrations.", "/api/status", ""),
                     ("Network tests", "Connectivity, interfaces, routes, and remote access.", "/network", ""),
-                    ("Storage tests", "Mount, write, capacity, SMART, and retention checks.", "/storage", ""),
-                    ("Watchdog tests", "Safe and deliberate watchdog validation controls.", "/watchdog", ""),
+                    ("Storage tests", "Mount, write, capacity, SMART, and retention checks.", "/hardware#storage", ""),
+                    ("Watchdog tests", "Safe and deliberate watchdog validation controls.", "/services#watchdog", ""),
                     ("Relay test", "Planned: validate an attached relay output.", "", ""),
                     ("Camera snapshot", "Planned: capture an image from a configured source.", "", ""),
                     ("RTSP probe", "Planned: verify stream access and response timing.", "", ""),
@@ -2820,27 +2825,46 @@ def start_web(cfg):
         if page == "Overview":
             return page_help_html(page) + "<div class=\"overview-page\">" + overview_html + "</div>"
         if page == "Hardware":
-            return page_help_html(page) + hardware_page()
-        if page == "Watchdog":
-            return page_help_html(page) + watchdog_page()
+            return (
+                page_help_html(page)
+                + hardware_page()
+                + "<section id=\"storage\" class=\"moved-section\"><div class=\"moved-section-heading\"><h2>Recording Storage</h2><p>Mount health, recording availability, capacity, permissions, and storage setup.</p></div>"
+                + storage_page()
+                + "</section>"
+            )
         if page == "Services":
-            return page_help_html(page) + services_card()
-        if page == "Storage":
-            return page_help_html(page) + storage_page()
+            return (
+                page_help_html(page)
+                + services_card()
+                + "<section id=\"watchdog\" class=\"moved-section\"><div class=\"moved-section-heading\"><h2>Watchdog Protection</h2><p>Hardware watchdog readiness, setup, ownership, and deliberate test controls.</p></div>"
+                + watchdog_page()
+                + "</section>"
+            )
         if page == "Network":
             return page_help_html(page) + network_page()
-        if page == "Recovery":
-            return page_help_html(page) + recovery_page()
         if page == "Events":
-            return page_help_html(page) + events_page(limit=50)
-        if page == "History":
-            return page_help_html(page) + history_page()
+            return (
+                page_help_html(page)
+                + events_page(limit=50)
+                + "<section id=\"history\" class=\"moved-section\"><div class=\"moved-section-heading\"><h2>History</h2><p>Retained health and service trends leading up to incidents.</p></div>"
+                + history_page()
+                + "</section>"
+                + "<section id=\"evidence\" class=\"moved-section\"><div class=\"moved-section-heading\"><h2>Evidence and Diagnostics</h2><p>Black-box evidence, support bundles, baseline captures, and raw engineering data.</p></div>"
+                + diagnostics_page()
+                + disclosure("Raw status JSON", "<pre>" + escape(json.dumps(status, indent=2)) + "</pre>")
+                + "</section>"
+            )
         if page == "Settings":
-            return page_help_html(page) + settings_card()
-        if page == "Updates":
-            return page_help_html(page) + updates_card()
-        if page == "Diagnostics":
-            return page_help_html(page) + diagnostics_page() + disclosure("Raw status JSON", "<pre>" + escape(json.dumps(status, indent=2)) + "</pre>")
+            return (
+                page_help_html(page)
+                + settings_card()
+                + "<section id=\"software-update\" class=\"moved-section\"><div class=\"moved-section-heading\"><h2>Software Update</h2><p>Running build, configured update target, last result, and update log.</p></div>"
+                + updates_card()
+                + "</section>"
+                + "<section id=\"recovery\" class=\"moved-section\"><div class=\"moved-section-heading\"><h2>Recovery</h2><p>Repair, reinstall, reboot policy, and emergency support actions.</p></div>"
+                + recovery_page()
+                + "</section>"
+            )
         return page_help_html("Overview") + overview_html
 
     def html_page(route_path="/"):
@@ -2853,8 +2877,8 @@ def start_web(cfg):
                 f"<h2>{escape(page)} Page Error</h2>"
                 "<p class=\"critical\">This page hit a runtime error while collecting live gateway details.</p>"
                 f"<pre>{escape(str(exc))}</pre>"
-                "<p class=\"muted\">The watchdog service can still be running even if this page failed. Use Diagnostics or /api/status to check health while this is investigated.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/\">Overview</a><a class=\"ghost\" href=\"/diagnostics\">Diagnostics</a><a class=\"ghost\" href=\"/api/status\">Raw status</a></div>"
+                "<p class=\"muted\">The watchdog service can still be running even if this page failed. Use Evidence and Diagnostics or /api/status to check health while this is investigated.</p>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/\">Overview</a><a class=\"ghost\" href=\"/events#evidence\">Evidence and Diagnostics</a><a class=\"ghost\" href=\"/api/status\">Raw status</a></div>"
                 "</div>"
             )
         return page_shell(body, page)
@@ -2866,9 +2890,9 @@ def start_web(cfg):
             "<div class=\"card\"><h2>Stage 0 System Baseline</h2>"
             f"<p class=\"{'healthy' if result.get('ok') else 'critical'}\">{escape(str(result.get('message', 'Baseline request processed.')))}</p>"
             f"<p>Current state: <strong>{escape(state.upper())}</strong></p>"
-            "<p class=\"muted\">The capture runs independently. You can leave this page and return to Diagnostics later.</p>"
-            "<div class=\"button-row\"><a class=\"action\" href=\"/diagnostics\">Back to Diagnostics</a></div>"
-            "<script>setTimeout(function(){window.location.href='/diagnostics';},5000);</script>"
+            "<p class=\"muted\">The capture runs independently. You can leave this page and return to Evidence and Diagnostics later.</p>"
+            "<div class=\"button-row\"><a class=\"action\" href=\"/events#evidence\">Back to Evidence and Diagnostics</a></div>"
+            "<script>setTimeout(function(){window.location.href='/events#evidence';},5000);</script>"
             "</div>"
         )
         return page_shell(body, "Diagnostics")
@@ -2880,7 +2904,7 @@ def start_web(cfg):
             "<p>Current journal persistence status: <strong>" + escape("Enabled" if current.get("enabled") else "Disabled or unavailable") + "</strong></p>"
             "<p class=\"muted\">This creates /var/log/journal if required and writes a separate VA-Watchdog drop-in without editing unrelated journald settings. It caps journals at 512 MB, reserves 1 GB free on the OS disk, retains up to 30 days, flushes journald, and restarts only systemd-journald.</p>"
             "<form method=\"post\" action=\"/journal-enable\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> I understand this changes system logging storage.</label>"
-            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Enable persistent logging</button><a class=\"ghost\" href=\"/diagnostics\">Cancel</a></div></form></div>"
+            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Enable persistent logging</button><a class=\"ghost\" href=\"/events#evidence\">Cancel</a></div></form></div>"
         )
         return page_shell(body, "Diagnostics")
 
@@ -2889,7 +2913,7 @@ def start_web(cfg):
             "<div class=\"card\"><h2>Persistent Journald</h2>"
             f"<p class=\"{'healthy' if result.get('ok') else 'warning'}\">{escape(str(result.get('message', 'Action completed')))}</p>"
             f"<pre>{escape(json.dumps(result, indent=2))}</pre>"
-            "<div class=\"button-row\"><a class=\"ghost\" href=\"/diagnostics\">Back to Diagnostics</a></div></div>"
+            "<div class=\"button-row\"><a class=\"ghost\" href=\"/events#evidence\">Back to Evidence and Diagnostics</a></div></div>"
         )
         return page_shell(body, "Diagnostics")
 
@@ -2986,7 +3010,7 @@ def start_web(cfg):
             rows.append("<tr><td colspan=\"2\">No files matched the purge rule.</td></tr>")
         retention = result.get("retention", {})
         body = (
-            "<meta http-equiv=\"refresh\" content=\"8;url=/storage\">"
+            "<meta http-equiv=\"refresh\" content=\"8;url=/hardware#storage\">"
             "<div class=\"card\">"
             f"<h2>Storage Purge {'Complete' if mode != 'all' else 'Complete'}</h2>"
             "<p class=\"healthy\">Purge command finished.</p>"
@@ -3305,7 +3329,7 @@ def start_web(cfg):
         ok = bool(result.get("ok"))
         status = result.get("status", {})
         body = (
-            "<meta http-equiv=\"refresh\" content=\"20;url=/storage\">"
+            "<meta http-equiv=\"refresh\" content=\"20;url=/hardware#storage\">"
             "<div class=\"card\">"
             "<h2>Recording Storage Configuration</h2>"
             f"<p class=\"{'healthy' if ok else 'critical'}\">{escape(str(result.get('message', '-')))}</p>"
@@ -3314,7 +3338,7 @@ def start_web(cfg):
             f"<div class=\"label\">Validation status</div><pre>{escape(json.dumps(status, indent=2))}</pre>"
             f"<div class=\"label\">Output</div><pre>{escape(str(result.get('output', '')))}</pre>"
             "<p class=\"muted\">This page returns to Storage automatically in 20 seconds.</p>"
-            "<a class=\"ghost\" href=\"/storage\">Back to Storage</a>"
+            "<a class=\"ghost\" href=\"/hardware#storage\">Back to Recording Storage</a>"
             "</div>"
         )
         return page_shell(body, "Storage")
@@ -3330,7 +3354,7 @@ def start_web(cfg):
             f"<div class=\"label\">Unit path</div><div class=\"value\">{escape(str(install.get('unit_path', '-')))}</div>"
             f"<div class=\"label\">Log path</div><div class=\"value\">{escape(str(install.get('log_path', '-')))}</div>"
             "<form class=\"inline\" method=\"post\" action=\"/recovery-install-now\"><button class=\"action\" type=\"submit\">Confirm reinstall/reconfigure</button></form> "
-            "<a class=\"ghost\" href=\"/recovery\">Cancel</a>"
+            "<a class=\"ghost\" href=\"/settings#recovery\">Cancel</a>"
             "</div>"
         )
         return page_shell(body, "Recovery")
@@ -3338,14 +3362,14 @@ def start_web(cfg):
     def recovery_install_started_html(result):
         status_class = "healthy" if result.get("ok") else "critical"
         body = (
-            "<meta http-equiv=\"refresh\" content=\"20;url=/recovery\">"
+            "<meta http-equiv=\"refresh\" content=\"20;url=/settings#recovery\">"
             "<div class=\"card\">"
             "<h2>Watchdog Reinstall</h2>"
             f"<p class=\"{status_class}\">{escape(str(result.get('message', 'Install request sent.')))}</p>"
             "<p class=\"muted\">This page will return to Recovery automatically in 20 seconds. The watchdog service may restart during this time.</p>"
             f"<div class=\"label\">Command</div><div class=\"value\">{escape(str(result.get('command', '-')))}</div>"
             f"<div class=\"label\">Log</div><div class=\"value\">{escape(str(result.get('log_path', '-')))}</div>"
-            "<a class=\"ghost\" href=\"/recovery\">Back to Recovery</a>"
+            "<a class=\"ghost\" href=\"/settings#recovery\">Back to Recovery</a>"
             "</div>"
         )
         return page_shell(body, "Recovery")
@@ -3360,7 +3384,7 @@ def start_web(cfg):
             "<div class=\"label\">Expected device after success</div><div class=\"value\">/dev/watchdog0</div>"
             "<div class=\"label\">Expected identity</div><div class=\"value\">iTCO_wdt [version 6]</div>"
             "<form class=\"inline\" method=\"post\" action=\"/itco-watchdog-install-now\"><button class=\"action\" type=\"submit\">Confirm install/load Intel TCO</button></form> "
-            "<a class=\"ghost\" href=\"/watchdog\">Cancel</a>"
+            "<a class=\"ghost\" href=\"/services#watchdog\">Cancel</a>"
             "</div>"
         )
         return page_shell(body, "Watchdog")
@@ -3407,7 +3431,7 @@ def start_web(cfg):
             "<p class=\"muted\">This page will return to Watchdog automatically in 20 seconds. Reload Watchdog after that to see module/device status.</p>"
             f"<div class=\"label\">Command</div><div class=\"value\">{escape(str(result.get('command', '-')))}</div>"
             f"<div class=\"label\">Log</div><div class=\"value\">{escape(str(result.get('log_path', '-')))}</div>"
-            "<a class=\"ghost\" href=\"/watchdog\">Back to Watchdog</a>"
+            "<a class=\"ghost\" href=\"/services#watchdog\">Back to Watchdog</a>"
             "</div>"
         )
         return page_shell(body, "Watchdog")
@@ -3419,7 +3443,7 @@ def start_web(cfg):
             "<p class=\"warning\">This will run the full Intel TCO/watchdog diagnostic command set on the gateway.</p>"
             "<p class=\"muted\">It includes sudo modprobe iTCO_wdt, wdctl /dev/watchdog0, dmesg checks, systemd checks, and module/autoload checks. It does not enable VA-Connect hardware feeding.</p>"
             "<form class=\"inline\" method=\"post\" action=\"/watchdog-hardware-probe-now\"><button class=\"action\" type=\"submit\">Run full watchdog probe</button></form> "
-            "<a class=\"ghost\" href=\"/watchdog\">Cancel</a>"
+            "<a class=\"ghost\" href=\"/services#watchdog\">Cancel</a>"
             "</div>"
         )
         return page_shell(body, "Watchdog")
@@ -3427,14 +3451,14 @@ def start_web(cfg):
     def watchdog_probe_started_html(result):
         status_class = "healthy" if result.get("ok") else "critical"
         body = (
-            "<meta http-equiv=\"refresh\" content=\"20;url=/watchdog\">"
+            "<meta http-equiv=\"refresh\" content=\"20;url=/services#watchdog\">"
             "<div class=\"card\">"
             "<h2>Watchdog Hardware Probe</h2>"
             f"<p class=\"{status_class}\">{escape(str(result.get('message', 'Probe request sent.')))}</p>"
             "<p class=\"muted\">This page will return to Watchdog automatically in 20 seconds. Reload Watchdog to see the full probe log.</p>"
             f"<div class=\"label\">Command</div><div class=\"value\">{escape(str(result.get('command', '-')))}</div>"
             f"<div class=\"label\">Log</div><div class=\"value\">{escape(str(result.get('log_path', '-')))}</div>"
-            "<a class=\"ghost\" href=\"/watchdog\">Back to Watchdog</a>"
+            "<a class=\"ghost\" href=\"/services#watchdog\">Back to Watchdog</a>"
             "</div>"
         )
         return page_shell(body, "Watchdog")
@@ -3506,7 +3530,7 @@ def start_web(cfg):
     def watchdog_action_result_html(result):
         ok = bool(result.get("ok"))
         body = (
-            "<meta http-equiv=\"refresh\" content=\"20;url=/watchdog\">"
+            "<meta http-equiv=\"refresh\" content=\"20;url=/services#watchdog\">"
             "<div class=\"card\">"
             "<h2>Watchdog Action</h2>"
             f"<p class=\"{'healthy' if ok else 'critical'}\">{escape(str(result.get('message', '-')))}</p>"
@@ -3606,7 +3630,7 @@ def start_web(cfg):
 
     def watchdog_test_armed_html(result):
         body = (
-            "<meta http-equiv=\"refresh\" content=\"45;url=/watchdog\">"
+            "<meta http-equiv=\"refresh\" content=\"45;url=/services#watchdog\">"
             "<div class=\"card\">"
             "<h2>Safe Watchdog Test Armed</h2>"
             "<p class=\"warning\">Second knock required.</p>"
@@ -3637,7 +3661,7 @@ def start_web(cfg):
         if not rows:
             rows.append("<tr><td colspan=\"3\">No checks were run.</td></tr>")
         body = (
-            "<meta http-equiv=\"refresh\" content=\"12;url=/watchdog\">"
+            "<meta http-equiv=\"refresh\" content=\"12;url=/services#watchdog\">"
             "<div class=\"card\">"
             "<h2>Safe Watchdog Test Result</h2>"
             f"<p class=\"{'healthy' if ok else 'warning'}\">{escape(str(result.get('message', 'Test complete')))}</p>"
@@ -3718,13 +3742,13 @@ def start_web(cfg):
 
     def watchdog_trip_armed_html(result):
         body = (
-            "<meta http-equiv=\"refresh\" content=\"300;url=/watchdog\">"
+            "<meta http-equiv=\"refresh\" content=\"300;url=/services#watchdog\">"
             "<div class=\"card\">"
             "<h2>Trip Test Armed</h2>"
             "<p class=\"warning\">The next page requires a checkbox and a typed TRIP confirmation before the test can be triggered.</p>"
             f"<div class=\"label\">Armed at</div><div class=\"value\">{escape(str(result.get('armed_at', '-')))}</div>"
             f"<div class=\"label\">Expires</div><div class=\"value\">{escape(str(result.get('expires_at_unix', '-')))}</div>"
-            "<div class=\"button-row\"><a class=\"action\" href=\"/watchdog-trip-confirm\">Continue to confirm page</a><a class=\"ghost\" href=\"/watchdog\">Back to Watchdog</a></div>"
+            "<div class=\"button-row\"><a class=\"action\" href=\"/watchdog-trip-confirm\">Continue to confirm page</a><a class=\"ghost\" href=\"/services#watchdog\">Back to Watchdog</a></div>"
             "</div>"
         )
         return page_shell(body, "Watchdog")
@@ -3732,7 +3756,7 @@ def start_web(cfg):
     def watchdog_trip_result_html(result):
         ok = bool(result.get("ok"))
         body = (
-            "<meta http-equiv=\"refresh\" content=\"12;url=/watchdog\">"
+            "<meta http-equiv=\"refresh\" content=\"12;url=/services#watchdog\">"
             "<div class=\"card\">"
             "<h2>Deliberate Watchdog Trip Test</h2>"
             f"<p class=\"{'critical' if ok else 'warning'}\">{escape(str(result.get('message', 'Trip test processed.')))}</p>"
@@ -5691,6 +5715,12 @@ def start_web(cfg):
         def do_GET(self):
             request_context.theme = self._request_theme()
             route_path = self.path.split("?", 1)[0]
+            if route_path in LEGACY_PAGE_REDIRECTS:
+                self.send_response(302)
+                self.send_header("Location", LEGACY_PAGE_REDIRECTS[route_path])
+                self._send_no_cache_headers()
+                self.end_headers()
+                return
             server_paths = {path for _, path in server_pages}
             if route_path in server_paths or route_path.startswith("/index") or route_path.startswith("/basic"):
                 body = html_page(route_path).encode("utf-8")
