@@ -755,7 +755,8 @@ function renderGatewaySummary(status){
   const protectionState = startupGrace.active ? 'waiting' : (feed.enabled && feed.opened ? 'healthy' : 'warning');
   const identity = lastSystemInfo.identity || lastVersion.identity || {};
   const gatewayName = identity.display_name || identity.site_name || lastSystemInfo.hostname || 'Site not configured';
-  return `<div class="card summary-card"><div class="summary-panel summary-status"><div class="summary-panel-title">Gateway status</div><div class="status-word ${state}">${displayWord(status)}</div><div class="score">${escapeHtml(status.score ?? '-')}%</div><span class="pill ${state}">${escapeHtml(pill)}</span></div><div class="summary-panel"><div class="summary-panel-title">Gateway identity</div><div class="summary-primary">${escapeHtml(gatewayName)}</div><div class="summary-pairs"><div><div class="label">Asset ID</div><div class="value">${escapeHtml(identity.asset_id || '-')}</div></div><div><div class="label">Last check</div><div class="value">${escapeHtml(fmtTime(status.time))}</div></div></div><div class="label">Build</div><div class="build-badge">${escapeHtml(lastVersion.commit || '-')}</div><div class="value">${escapeHtml(lastVersion.branch || lastUpdateStatus?.branch || '-')}</div></div><div class="summary-panel"><div class="summary-panel-title">Operational readiness</div><div class="summary-pairs"><div><div class="label">Gateway monitor</div><div class="value healthy">ONLINE</div></div><div><div class="label">Videosoft services</div><div class="value ${healthyServices === services.length && services.length ? 'healthy' : 'warning'}">${escapeHtml(healthyServices)}/${escapeHtml(services.length)} running</div></div></div><div class="label">Hardware recovery</div><div class="summary-primary ${protectionState}">${escapeHtml(protection)}</div></div></div>`;
+  const buildTime = lastVersion.build_at ? fmtTime(lastVersion.build_at) : '-';
+  return `<div class="card summary-card"><div class="summary-panel summary-status"><div class="summary-panel-title">Gateway status</div><div class="status-word ${state}">${displayWord(status)}</div><div class="score">${escapeHtml(status.score ?? '-')}%</div><span class="pill ${state}">${escapeHtml(pill)}</span></div><div class="summary-panel"><div class="summary-panel-title">Gateway identity</div><div class="summary-primary">${escapeHtml(gatewayName)}</div><div class="summary-pairs"><div><div class="label">Asset ID</div><div class="value">${escapeHtml(identity.asset_id || '-')}</div></div><div><div class="label">Last check</div><div class="value">${escapeHtml(fmtTime(status.time))}</div></div></div><div class="label">Build</div><div class="build-badge">${escapeHtml(lastVersion.commit || '-')}</div><div class="label">Build time and date</div><div class="value">${escapeHtml(buildTime)}</div><div class="muted">${escapeHtml(lastVersion.branch || lastUpdateStatus?.branch || '-')}</div></div><div class="summary-panel"><div class="summary-panel-title">Operational readiness</div><div class="summary-pairs"><div><div class="label">Gateway monitor</div><div class="value healthy">ONLINE</div></div><div><div class="label">Videosoft services</div><div class="value ${healthyServices === services.length && services.length ? 'healthy' : 'warning'}">${escapeHtml(healthyServices)}/${escapeHtml(services.length)} running</div></div></div><div class="label">Hardware recovery</div><div class="summary-primary ${protectionState}">${escapeHtml(protection)}</div></div></div>`;
 }
 
 function pageHelp(page){
@@ -862,11 +863,16 @@ function renderMetricTiles(status){
     state: recStorage.status || findCheck(status, 'recording_storage').state || 'unknown',
     message: recStorage.message || findCheck(status, 'recording_storage').message || 'Recording storage status unavailable',
   };
-  const recStorageValue = lastRecordingActivity.oldest?.display_local || (recStorage.mounted ? 'No recording found' : String(recStorage.status || 'missing').toUpperCase());
-  const recStorageFree = `${recStorage.free_gb ?? '-'} GB free at ${recStorage.mountpoint || '-'}`;
-  const recStorageUsed = recStorage.mounted ? `${recStorage.used_percent ?? '-'}% used` : '';
-  const storageStateDetail = recStorage.mounted && recStorage.status === 'healthy' ? recStorageFree : (recStorage.message || recStorageFree || recStorage.mountpoint || '-');
-  const recStorageDetail = [recStorageUsed, storageStateDetail].filter(Boolean).join(' | ');
+  const oldestRecordingFound = Boolean(lastRecordingActivity.oldest?.display_local);
+  const oldestRecordingValue = lastRecordingActivity.oldest?.display_local || (recStorage.mounted ? 'No recording found' : 'Storage unavailable');
+  const oldestRecordingDetail = oldestRecordingFound ? 'Oldest available Videosoft recording' : (recStorage.message || 'No timestamped recording found');
+  const oldestRecordingCheck = {state: oldestRecordingFound ? 'healthy' : (recStorage.mounted ? 'warning' : 'critical')};
+  const dedicatedStorage = recStorage.mode !== 'system_directory';
+  const rootUsed = `${root.value?.used_percent ?? '-'}%`;
+  const storageUsed = `${recStorage.used_percent ?? '-'}%`;
+  const diskValue = dedicatedStorage ? `Root ${rootUsed}` : `Root / Storage ${rootUsed}`;
+  const diskDetail = dedicatedStorage ? (recStorage.mounted ? `Storage ${storageUsed}` : 'Storage unavailable') : `${root.value?.free_gb ?? '-'} GB free`;
+  const diskState = root.state !== 'healthy' ? root.state : (dedicatedStorage ? recStorageCheck.state : root.state);
   const wdt = findCheck(status, 'hardware_watchdog_present');
   const wdtFeedCheck = findCheck(status, 'hardware_watchdog_feed_status');
   const wdtFeed = status.hardware_watchdog_feed || {};
@@ -881,7 +887,7 @@ function renderMetricTiles(status){
     : (wdtFeed.enabled && wdtFeed.opened
       ? `${wdtConfig.timeout_seconds || '-'}s timeout`
       : (wdt.value ? 'Device detected; feed inactive' : 'No verified hardware watchdog'));
-  return `<div class="grid metric-grid">${tile('CPU Temp', temp, fmtValue(temp.value, ' C'), temp.message)}${tile('CPU Load', cpu, fmtPercent(cpu.value), cpu.message)}${tile('RAM', ram, fmtPercent(ram.value), ram.message)}${tile('Root Disk', root, fmtPercent(root.value?.used_percent), `${root.value?.free_gb ?? '-'} GB free`)}${tile('Oldest Recording', recStorageCheck, recStorageValue, recStorageDetail, 'recording-tile')}${tile('Hardware Recovery', {state: wdtState, message: wdtDetails}, wdtValue, wdtDetails)}</div>`;
+  return `<div class="grid metric-grid">${tile('CPU Temp', temp, fmtValue(temp.value, ' C'), temp.message)}${tile('CPU Load', cpu, fmtPercent(cpu.value), cpu.message)}${tile('RAM', ram, fmtPercent(ram.value), ram.message)}${tile('Disk Usage', {state: diskState}, diskValue, diskDetail)}${tile('Oldest Recording', oldestRecordingCheck, oldestRecordingValue, oldestRecordingDetail, 'recording-tile')}${tile('Hardware Recovery', {state: wdtState, message: wdtDetails}, wdtValue, wdtDetails)}</div>`;
 }
 
 function renderServices(status){
@@ -905,17 +911,13 @@ function renderOperationalAlerts(status){
   return `<div class="card"><h2>Active Alerts</h2><div class="issue-list">${rows}</div><div class="button-row"><a class="ghost" href="/events">Open event history</a></div></div>`;
 }
 
-function renderQuickActions(){
-  return `<div class="card"><h2>Quick Actions</h2><div class="quick-actions"><a class="action" href="/service-restart-confirm/bridge.service">Restart Bridge<span>Requires confirmation</span></a><a class="ghost" href="/events">Review Alerts<span>Recent state changes</span></a><a class="ghost" href="/api/diagnostics/support-bundle.zip">Support Bundle<span>Download investigation logs</span></a><a class="ghost" href="/settings#recovery">Recovery Tools<span>Repair and update controls</span></a></div></div>`;
-}
-
 function renderSystemInfo(status){
   const rtc = lastSystemInfo.rtc || {};
   return `<div class="card"><h2>System Information</h2><div class="detail-grid"><div><div class="label">Hostname</div><div class="value">${escapeHtml(lastSystemInfo.hostname || '-')}</div><div class="label">OS</div><div class="value">${escapeHtml(lastSystemInfo.os || '-')}</div><div class="label">Kernel</div><div class="value">${escapeHtml(lastSystemInfo.kernel || '-')}</div><div class="label">Architecture</div><div class="value">${escapeHtml(lastSystemInfo.architecture || '-')}</div><div class="label">Build</div><div class="value">${escapeHtml(lastVersion.branch || '-')} / ${escapeHtml(lastVersion.commit || '-')}</div></div><div><div class="label">Uptime</div><div class="value">${escapeHtml(lastSystemInfo.uptime_seconds ? `${Math.round(lastSystemInfo.uptime_seconds)}s` : '-')}</div><div class="label">Python</div><div class="value">${escapeHtml(lastSystemInfo.python || '-')}</div><div class="label">Timezone</div><div class="value">${escapeHtml((lastSystemInfo.timezone || []).join(' / ') || '-')}</div><div class="label">BIOS/RTC Clock</div><div class="value ${rtc.rtc0_present ? 'healthy' : 'warning'}">${rtc.rtc0_present ? 'RTC present' : 'RTC not confirmed'}</div><div class="label">Config</div><div class="value">${escapeHtml(lastVersion.config_path || '-')}</div></div></div><div class="label">Clock detail</div><pre>${escapeHtml(rtc.hwclock || rtc.timedatectl || 'Clock command output not available')}</pre></div>`;
 }
 
 function renderOverview(status, events){
-  return `${pageHelp('Overview')}<div class="overview-page"><div class="grid overview-top">${renderGatewaySummary(status)}${renderBreakdown(status)}</div>${renderMetricTiles(status)}<div class="grid operations-grid">${renderOperationalAlerts(status)}${renderQuickActions()}</div></div>`;
+  return `${pageHelp('Overview')}<div class="overview-page"><div class="grid overview-top">${renderGatewaySummary(status)}${renderBreakdown(status)}</div>${renderMetricTiles(status)}${renderOperationalAlerts(status)}</div>`;
 }
 
 function renderSimplePage(title, content){
@@ -1057,7 +1059,6 @@ async function load(){
   if (core[5].status === 'fulfilled') lastRetention = core[5].value;
   if (core[6].status === 'fulfilled') {
     lastVersion = core[6].value;
-    if (lastVersion.commit && lastVersion.build_at) lastVersion.commit = `${lastVersion.commit} (${fmtTime(lastVersion.build_at)})`;
   }
 
   const pageFetches = [];
@@ -1575,21 +1576,34 @@ def start_web(cfg):
                 if isinstance(overview_recording_activity.get("oldest", {}), dict)
                 else {}
             )
-            if rec_storage.get("mounted"):
-                rec_storage_value = str(oldest_recording.get("display_local") or "No recording found")
-                rec_storage_free = f"{escape(str(rec_storage.get('free_gb', '-')))} GB free at {escape(str(rec_storage.get('mountpoint', '-')))}"
-                rec_storage_used = f"{escape(str(rec_storage.get('used_percent', '-')))}% used"
-                rec_storage_detail = f"{rec_storage_used} | {rec_storage_free}" if rec_storage_state == "healthy" else escape(str(rec_storage.get("message") or rec_storage_free))
+            if oldest_recording.get("display_local"):
+                oldest_recording_value = str(oldest_recording.get("display_local"))
+                oldest_recording_detail = "Oldest available Videosoft recording"
+            elif rec_storage.get("mounted"):
+                oldest_recording_value = "No recording found"
+                oldest_recording_detail = "No timestamped recording found"
             else:
-                rec_storage_value = escape(str(rec_storage.get("status", "missing")).upper())
-                rec_storage_detail = escape(str(rec_storage.get("message") or rec_storage.get("mountpoint") or "-"))
+                oldest_recording_value = "Storage unavailable"
+                oldest_recording_detail = str(rec_storage.get("message") or "Recording storage is not mounted")
+            oldest_recording_state = "healthy" if oldest_recording.get("display_local") else ("warning" if rec_storage.get("mounted") else "critical")
+            dedicated_storage = rec_storage.get("mode") != "system_directory"
+            root_used = disk_used("root_disk")
+            disk_value = f"Root {root_used}" if dedicated_storage else f"Root / Storage {root_used}"
+            disk_detail = (
+                (f"Storage {escape(str(rec_storage.get('used_percent', '-')))}%" if rec_storage.get("mounted") else "Storage unavailable")
+                if dedicated_storage
+                else disk_free("root_disk")
+            )
+            disk_state = check_state("root_disk", "healthy")
+            if disk_state == "healthy" and dedicated_storage:
+                disk_state = rec_storage_state
             return (
                 "<div class=\"grid metric-grid\">"
                 + tile("CPU Temp", check_value("temperature", "-"), check_message("temperature", ""), check_state("temperature", "healthy"))
                 + tile("CPU Load", f"{escape(str(check_value('cpu_load', '-')))}%", check_message("cpu_load", ""), check_state("cpu_load", "healthy"))
                 + tile("RAM", f"{escape(str(check_value('ram', '-')))}%", check_message("ram", ""), check_state("ram", "healthy"))
-                + tile("Root Disk", disk_used("root_disk"), disk_free("root_disk"), check_state("root_disk", "healthy"))
-                + tile("Oldest Recording", rec_storage_value, rec_storage_detail, rec_storage_state, "recording-tile")
+                + tile("Disk Usage", disk_value, disk_detail, disk_state)
+                + tile("Oldest Recording", oldest_recording_value, oldest_recording_detail, oldest_recording_state, "recording-tile")
                 + tile(
                     "Hardware Recovery",
                     watchdog_value,
@@ -1707,11 +1721,20 @@ def start_web(cfg):
             if not event_cards:
                 event_cards.append("<div class=\"event-card\">No events yet.</div>")
             return (
-                "<div class=\"card\"><h2>Events</h2>"
+                "<div class=\"card\"><h2>Event Overview</h2>"
+                "<p class=\"section-lead\">Review the current event totals, then open only the section needed for the investigation.</p>"
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/api/events/export\">Export JSON</a><a class=\"ghost\" href=\"/api/events/export.csv\">Export CSV</a></div>"
                 f"<div class=\"count-grid\">{''.join(count_cards)}</div>"
-                f"<div class=\"events\">{''.join(event_cards)}</div>"
                 "</div>"
+                "<div class=\"card\"><h2>Investigation Sections</h2><div class=\"button-row\">"
+                "<a class=\"ghost\" href=\"#event-log\">Event log</a>"
+                "<a class=\"ghost\" href=\"#history\">History</a>"
+                "<a class=\"ghost\" href=\"#evidence\">Evidence and diagnostics</a>"
+                "</div></div>"
+                "<details id=\"event-log\" class=\"advanced-disclosure moved-section\"><summary>Latest event log (up to 50 events)</summary>"
+                "<p class=\"muted\">Select an event to expand its source and recorded evidence.</p>"
+                f"<div class=\"events\">{''.join(event_cards)}</div>"
+                "</details>"
             )
 
         def services_card():
@@ -1786,16 +1809,6 @@ def start_web(cfg):
                 "<div class=\"card\"><h2>Active Alerts</h2>"
                 f"<div class=\"issue-list\">{''.join(rows)}</div>"
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/events\">Open event history</a></div></div>"
-            )
-
-        def quick_actions_card():
-            return (
-                "<div class=\"card\"><h2>Quick Actions</h2><div class=\"quick-actions\">"
-                "<a class=\"action\" href=\"/service-restart-confirm/bridge.service\">Restart Bridge<span>Requires confirmation</span></a>"
-                "<a class=\"ghost\" href=\"/events\">Review Alerts<span>Recent state changes</span></a>"
-                "<a class=\"ghost\" href=\"/api/diagnostics/support-bundle.zip\">Support Bundle<span>Download investigation logs</span></a>"
-                "<a class=\"ghost\" href=\"/settings#recovery\">Recovery Tools<span>Repair and update controls</span></a>"
-                "</div></div>"
             )
 
         def updates_card():
@@ -2787,7 +2800,9 @@ def start_web(cfg):
             "</div>"
             "<div class=\"label\">Build</div>"
             f"<div class=\"build-badge\">{escape(str(version.get('commit', '-')))}</div>"
-            f"<div class=\"value\">{escape(str(version.get('branch', '-')))}</div>"
+            "<div class=\"label\">Build time and date</div>"
+            f"<div class=\"value\">{escape(local_time(version.get('build_at')))}</div>"
+            f"<div class=\"muted\">{escape(str(version.get('branch', '-')))}</div>"
             "</div>"
             "<div class=\"summary-panel\">"
             "<div class=\"summary-panel-title\">Operational readiness</div>"
@@ -2815,10 +2830,7 @@ def start_web(cfg):
             + f"<tr><th>Previous reboot</th><td>{escape(str(reboot_evidence.get('reset_mechanism') or 'No previous reboot evidence'))}; confidence {escape(str(reboot_evidence.get('confidence') or '-'))}</td></tr>"
             + f"<tr><th>Persistent journal</th><td class=\"{'healthy' if journal.get('enabled') else 'warning'}\">{'Yes' if journal.get('enabled') else 'No'}</td></tr>"
             + "</tbody></table></div></div>"
-            + "<div class=\"grid operations-grid\">"
             + operational_alerts_card()
-            + quick_actions_card()
-            + "</div>"
             + disclosure("Services", services_card())
         )
 
