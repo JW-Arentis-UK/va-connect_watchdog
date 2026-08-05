@@ -152,7 +152,6 @@ label { display:block; margin:calc(6px * var(--scale)) 0; }
 .help-popover p { position:absolute; z-index:5; right:0; width:calc(300px * var(--scale)); margin:calc(8px * var(--scale)) 0 0; padding:calc(12px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text); box-shadow:0 10px 30px rgba(0,0,0,.2); }
 .grid { display:grid; gap:calc(12px * var(--scale)); }
 .top-grid { grid-template-columns: minmax(0, 1.6fr) minmax(300px, 0.9fr); }
-.overview-top { grid-template-columns:minmax(0, 1.6fr) minmax(calc(240px * var(--scale)), .75fr); }
 .metric-grid { grid-template-columns: repeat(6, minmax(calc(130px * var(--scale)), 1fr)); }
 .lower-grid { grid-template-columns: minmax(0, 1.1fr) minmax(330px, 0.9fr); }
 .operations-grid { grid-template-columns:repeat(2, minmax(0,1fr)); }
@@ -166,12 +165,13 @@ label { display:block; margin:calc(6px * var(--scale)) 0; }
 .summary-primary { font-size:calc(19px * var(--scale)); font-weight:800; line-height:1.2; overflow-wrap:anywhere; }
 .summary-pairs { display:grid; grid-template-columns:1fr 1fr; gap:calc(8px * var(--scale)) calc(14px * var(--scale)); }
 .summary-pairs .label { margin-top:0; }
-.breakdown-card { display:flex; flex-direction:column; }
-.breakdown-layout { display:grid; grid-template-columns:auto minmax(0,1fr); gap:calc(14px * var(--scale)); align-items:center; flex:1; }
-.breakdown-layout .donut { width:calc(128px * var(--scale)); height:calc(128px * var(--scale)); margin:0; }
-.breakdown-layout .donut span { width:calc(78px * var(--scale)); height:calc(78px * var(--scale)); }
-.breakdown-list .breakdown-row { margin:calc(6px * var(--scale)) 0; }
-.score { font-size:calc(38px * var(--scale)); font-weight:800; margin:calc(6px * var(--scale)) 0; }
+.operational-list { display:grid; gap:0; }
+.operational-row { display:grid; grid-template-columns:minmax(calc(135px * var(--scale)), .75fr) minmax(calc(240px * var(--scale)), 2fr) auto auto; gap:calc(12px * var(--scale)); align-items:center; padding:calc(11px * var(--scale)) calc(4px * var(--scale)); border-top:1px solid var(--line); }
+.operational-row:first-child { border-top:0; }
+.operational-area { font-weight:800; }
+.operational-detail { color:var(--muted); overflow-wrap:anywhere; }
+.operational-state { min-width:calc(105px * var(--scale)); font-weight:800; text-align:right; }
+.operational-link { white-space:nowrap; }
 .build-badge { display:inline-block; font-size:calc(18px * var(--scale)); font-weight:800; border:1px solid var(--line); border-radius:8px; padding:calc(8px * var(--scale)) calc(10px * var(--scale)); margin:calc(6px * var(--scale)) 0; background:rgba(59,130,246,.16); color:var(--text); }
 .status-word { font-size:calc(22px * var(--scale)); font-weight:800; }
 .healthy { color:var(--green); }
@@ -215,9 +215,6 @@ input[type="radio"] { width:18px; height:18px; }
 .event-message { font-weight:700; }
 .event-data { margin-top:calc(6px * var(--scale)); max-height:calc(130px * var(--scale)); }
 .count-grid { display:grid; grid-template-columns: repeat(5, minmax(calc(90px * var(--scale)), 1fr)); gap:calc(8px * var(--scale)); margin-bottom:calc(10px * var(--scale)); }
-.donut { width:calc(140px * var(--scale)); height:calc(140px * var(--scale)); border-radius:50%; display:grid; place-items:center; margin:calc(4px * var(--scale)) auto; background:conic-gradient(var(--green) calc(var(--score) * 1%), #26313d 0); }
-.donut span { width:calc(86px * var(--scale)); height:calc(86px * var(--scale)); display:grid; place-items:center; border-radius:50%; background:var(--panel); font-size:calc(26px * var(--scale)); font-weight:800; }
-.breakdown-row { display:flex; justify-content:space-between; gap:calc(12px * var(--scale)); margin:calc(8px * var(--scale)) 0; color:var(--muted); }
 .history-box { height:calc(160px * var(--scale)); border:1px solid var(--line); border-radius:6px; background:linear-gradient(180deg, rgba(54,209,95,.18), rgba(54,209,95,.04)); display:flex; align-items:center; justify-content:center; color:var(--muted); }
 .trend-bars { display:flex; align-items:flex-end; gap:2px; height:34px; min-width:150px; padding:4px 0; }
 .trend-bar { flex:1; min-width:2px; background:var(--blue); border-radius:2px 2px 0 0; opacity:.8; }
@@ -309,13 +306,16 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   .status-strip { grid-template-columns: 1fr; }
   .summary-card { grid-template-columns: 1fr; }
   .summary-pairs { grid-template-columns:1fr 1fr; }
-  .breakdown-layout { grid-template-columns:auto 1fr; }
-  .overview-top, .operations-grid { grid-template-columns:1fr; }
+  .operations-grid { grid-template-columns:1fr; }
   .page-intro { align-items:flex-start; }
   .quick-actions { grid-template-columns:1fr; }
   .summary-strip, .tool-grid, .settings-grid { grid-template-columns:1fr; }
   .event-summary { grid-template-columns:auto 1fr; }
   .event-summary .event-time { grid-column:2; }
+  .operational-row { grid-template-columns:1fr auto; }
+  .operational-detail { grid-column:1 / -1; grid-row:2; }
+  .operational-state { min-width:0; }
+  .operational-link { grid-column:1 / -1; }
 }
 </style>
 </head>
@@ -745,23 +745,15 @@ function renderGatewaySummary(status){
     && !(c.name === 'hardware_watchdog_feed_status' && !wdt.value)
   ).length;
   const pill = status.critical_failed ? 'Critical issue blocking feed' : (hasNonFeedCritical ? 'Attention needed, feed safe' : (warningCount ? `${warningCount} active warning${warningCount === 1 ? '' : 's'}` : 'No active alerts'));
-  const feed = status.hardware_watchdog_feed || {};
-  const services = (status.checks || []).filter(c => String(c.name || '').endsWith('.service'));
-  const healthyServices = services.filter(c => c.state === 'healthy').length;
-  const startupGrace = feed.startup_grace || {};
-  const graceRemaining = Math.max(0, Number(startupGrace.remaining_seconds || 0));
-  const graceCountdown = `${Math.floor(graceRemaining / 60)}:${String(graceRemaining % 60).padStart(2, '0')}`;
-  const protection = startupGrace.active ? `Waiting ${graceCountdown}` : (feed.enabled && feed.opened ? 'Active' : (wdt.value ? 'Detected, not active' : 'Not available'));
-  const protectionState = startupGrace.active ? 'waiting' : (feed.enabled && feed.opened ? 'healthy' : 'warning');
   const identity = lastSystemInfo.identity || lastVersion.identity || {};
   const gatewayName = identity.display_name || identity.site_name || lastSystemInfo.hostname || 'Site not configured';
   const buildTime = lastVersion.build_at ? fmtTime(lastVersion.build_at) : '-';
-  return `<div class="card summary-card"><div class="summary-panel summary-status"><div class="summary-panel-title">Gateway status</div><div class="status-word ${state}">${displayWord(status)}</div><div class="score">${escapeHtml(status.score ?? '-')}%</div><span class="pill ${state}">${escapeHtml(pill)}</span></div><div class="summary-panel"><div class="summary-panel-title">Gateway identity</div><div class="summary-primary">${escapeHtml(gatewayName)}</div><div class="summary-pairs"><div><div class="label">Asset ID</div><div class="value">${escapeHtml(identity.asset_id || '-')}</div></div><div><div class="label">Last check</div><div class="value">${escapeHtml(fmtTime(status.time))}</div></div></div><div class="label">Build</div><div class="build-badge">${escapeHtml(lastVersion.commit || '-')}</div><div class="label">Build time and date</div><div class="value">${escapeHtml(buildTime)}</div><div class="muted">${escapeHtml(lastVersion.branch || lastUpdateStatus?.branch || '-')}</div></div><div class="summary-panel"><div class="summary-panel-title">Operational readiness</div><div class="summary-pairs"><div><div class="label">Gateway monitor</div><div class="value healthy">ONLINE</div></div><div><div class="label">Videosoft services</div><div class="value ${healthyServices === services.length && services.length ? 'healthy' : 'warning'}">${escapeHtml(healthyServices)}/${escapeHtml(services.length)} running</div></div></div><div class="label">Hardware recovery</div><div class="summary-primary ${protectionState}">${escapeHtml(protection)}</div></div></div>`;
+  return `<div class="card summary-card"><div class="summary-panel summary-status"><div class="summary-panel-title">Overall state</div><div class="status-word ${state}">${displayWord(status)}</div><span class="pill ${state}">${escapeHtml(pill)}</span></div><div class="summary-panel"><div class="summary-panel-title">Gateway identity</div><div class="summary-primary">${escapeHtml(gatewayName)}</div><div class="summary-pairs"><div><div class="label">Asset ID</div><div class="value">${escapeHtml(identity.asset_id || '-')}</div></div><div><div class="label">Hostname</div><div class="value">${escapeHtml(identity.hostname || lastSystemInfo.hostname || '-')}</div></div></div></div><div class="summary-panel"><div class="summary-panel-title">Running software</div><div class="label">Build</div><div class="build-badge">${escapeHtml(lastVersion.commit || '-')}</div><div class="label">Build time and date</div><div class="value">${escapeHtml(buildTime)}</div><div class="muted">${escapeHtml(lastVersion.branch || lastUpdateStatus?.branch || '-')}</div><div class="label">Last update</div><div class="value">${escapeHtml(fmtTime(status.time))}</div></div></div>`;
 }
 
 function pageHelp(page){
   const help = {
-    Overview: ['Is this gateway ready to operate?', 'Shows live health, current alerts, the four Videosoft services, and the actions used most often.'],
+    Overview: ['Is this gateway ready to operate?', 'Shows gateway identity, operational readiness, live metrics, recording availability, and current alerts.'],
     Hardware: ['Is the hardware healthy?', 'Read-only sensor, CPU, memory, disk, and device discovery details.'],
     Watchdog: ['Will the gateway recover itself?', 'Configure, verify, and test the hardware and process watchdog protection layers.'],
     Services: ['Are the Videosoft services running?', 'Shows each monitored service and provides confirmed manual restart controls.'],
@@ -839,18 +831,39 @@ function renderWatchdogPage(status){
   return `${pageHelp('Watchdog')}<div class="card action-panel ${pageState}"><h2>${escapeHtml(pageTitle)}</h2><p class="${pageState}">${escapeHtml(pageMessage)}</p><div class="button-row">${primaryAction}<a class="ghost" href="/hardware-watchdog-prepare-confirm">Run full setup/cleanup</a><a class="ghost" href="/watchdog-hardware-probe-confirm">Run probe</a></div></div><div class="status-strip"><div class="status-box"><div class="label">Driver</div><div class="big ${modules.iTCO_wdt ? 'healthy' : 'warning'}">${modules.iTCO_wdt ? 'Loaded' : 'Needs setup'}</div><div class="step-detail">Intel TCO hardware watchdog driver</div></div><div class="status-box"><div class="label">Device</div><div class="big ${wdctl.device ? 'healthy' : 'warning'}">${escapeHtml(hwCfg.device || '/dev/watchdog0')}</div><div class="step-detail">${escapeHtml(wdctl.identity || 'No identity yet')}</div></div><div class="status-box"><div class="label">Hardware feed</div><div class="big ${feedState}">${feed.enabled && feed.opened ? 'Feeding' : 'Not feeding'}</div><div class="step-detail">${escapeHtml(lastFeed)}</div></div><div class="status-box"><div class="label">Legacy watchdogs</div><div class="big ${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Conflict' : 'Clear'}</div><div class="step-detail">${escapeHtml(legacyProblem ? 'Cleanup needed' : 'Removed/disabled')}</div></div></div><div class="grid lower-grid"><div class="card"><h2>Setup Checklist</h2><p class="muted">Work from top to bottom. Green means that layer is ready; amber/red shows the part to fix next.</p><div class="setup-steps">${checkCards}</div></div><div class="card"><h2>Existing Watchdogs and Cleanup</h2><p class="${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Another watchdog may still be installed or enabled.' : 'No conflicting legacy watchdog services detected.'}</p><table class="compact-table"><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead><tbody>${legacyRows}</tbody></table><p class="muted">This service should be the only process feeding the hardware watchdog.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs only</a><a class="ghost" href="/hardware">Hardware details</a></div></div></div><div class="grid lower-grid"><div class="card"><h2>Current Watchdog Configuration</h2><table class="compact-table"><tbody>${configRows}</tbody></table></div><div class="card"><h2>What the Layers Mean</h2><ul><li><strong>Hardware watchdog</strong> reboots the whole gateway if Linux stops feeding /dev/watchdog0.</li><li><strong>Hardware feed</strong> is this service opening and feeding the hardware device.</li><li><strong>Process watchdog</strong> is systemd restarting va-watchdog if the Python process hangs.</li><li><strong>Legacy watchdogs</strong> are old daemons/packages that should not also control the device.</li></ul></div></div><div class="grid lower-grid"><div class="card"><h2>Safe Watchdog Test</h2><p class="muted">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-test-arm"><button class="action" type="submit">Arm safe test</button></form></div><div class="label">Feed enabled</div><div class="value">${feed.enabled ? 'Enabled' : 'Disabled'}</div><div class="label">Last feed</div><div class="value">${escapeHtml(lastFeed)}</div></div><div class="card"><h2>Deliberate Watchdog Trip Test</h2><p class="warning">This stops hardware feeding and may reboot the gateway.</p><p class="muted">Open the test, tick the acknowledgement box, then run it.</p><div class="button-row">${tripAction}</div>${ready ? '' : '<p class="warning">Trip test is blocked until setup is complete and the service has a recent hardware feed.</p>'}<div class="label">State</div><div class="value">${escapeHtml(tripTest.triggered ? 'Triggered this boot' : (tripTest.completed_previous_boot ? 'Completed on previous boot' : 'Ready'))}</div><div class="label">Countdown verification</div><div class="value">${escapeHtml(tripCountdown.status || 'inactive')}${tripCountdown.current_timeleft == null ? '' : `; ${escapeHtml(tripCountdown.current_timeleft)}s remaining`}</div><div class="label">Last result</div><div class="value">${escapeHtml(tripTest.last_result_message || 'No trip test recorded yet')}</div></div><div class="card"><h2>Extend Timeout</h2><p class="muted">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p><form method="post" action="/watchdog-timeout-set"><label class="label">Timeout seconds</label><select name="timeout_seconds"><option value="30" ${timeout === 30 ? 'selected' : ''}>30</option><option value="60" ${timeout === 60 ? 'selected' : ''}>60</option><option value="120" ${timeout === 120 ? 'selected' : ''}>120</option><option value="180" ${timeout === 180 ? 'selected' : ''}>180</option><option value="300" ${timeout === 300 ? 'selected' : ''}>300</option></select><div class="button-row"><button class="action" type="submit">Apply timeout</button></div></form><p class="muted">Use a longer timeout while diagnosing reboot loops. Put it back to 30s once stable.</p></div></div><div class="card"><h2>Advanced Tools</h2><p class="muted">Use these only when the guided setup cannot complete.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy only</a><a class="ghost" href="/hardware-watchdog-enable-confirm">Enable feed only</a><a class="ghost" href="/hardware">Hardware details</a><a class="ghost" href="/events#evidence">Diagnostics</a></div></div>`;
 }
 
-function renderBreakdown(status){
-  const grouped = groupChecks(status.checks || []);
-  const score = Number(status.score || 0);
-  const sectionScore = checks => checks.length ? Math.max(0, 100 - checks.filter(c => c.state !== 'healthy').length * 5) : null;
-  const rows = [
-    ['Hardware', sectionScore(grouped.hardware)],
-    ['Services', sectionScore(grouped.services)],
-    ['Storage', sectionScore(grouped.storage)],
-    ['Network', sectionScore(grouped.system)],
-    ['Recovery', status.recovery ? (status.recovery.state === 'disabled' ? null : 100) : null],
-  ];
-  return `<div class="card breakdown-card"><h2>Health Breakdown</h2><div class="breakdown-layout"><div class="donut" style="--score:${score}"><span>${escapeHtml(score)}%</span></div><div class="breakdown-list">${rows.map(([name, value]) => `<div class="breakdown-row"><span>${escapeHtml(name)}</span><strong>${value === null ? 'N/A' : `${value}%`}</strong></div>`).join('')}</div></div></div>`;
+function renderOperationalStatus(status){
+  const checks = status.checks || [];
+  const worstState = items => {
+    const rank = {healthy: 0, degraded: 1, warning: 2, unknown: 2, critical: 3};
+    return (items || []).reduce((worst, item) => (rank[item.state] ?? 2) > (rank[worst] ?? 2) ? item.state : worst, 'healthy');
+  };
+  const operatorState = (state, configured=true) => {
+    if (!configured) return ['Not configured', 'unknown'];
+    if (state === 'critical') return ['Failed', 'critical'];
+    if (state === 'healthy') return ['Correct', 'healthy'];
+    return ['Warning', 'warning'];
+  };
+  const row = (area, detail, state, href, configured=true) => {
+    const [label, cssState] = operatorState(state, configured);
+    return `<div class="operational-row"><div class="operational-area">${escapeHtml(area)}</div><div class="operational-detail">${escapeHtml(detail)}</div><div class="operational-state ${cssState}">${escapeHtml(label)}</div><a class="ghost operational-link" href="${escapeHtml(href)}">Details</a></div>`;
+  };
+  const systemChecks = ['temperature', 'cpu_load', 'ram', 'root_disk', 'write_test'].map(name => findCheck(status, name)).filter(check => check.name);
+  const systemState = worstState(systemChecks);
+  const systemIssue = systemChecks.find(check => check.state !== 'healthy');
+  const services = checks.filter(check => String(check.name || '').endsWith('.service'));
+  const healthyServices = services.filter(check => check.state === 'healthy').length;
+  const serviceIssue = services.find(check => check.state !== 'healthy');
+  const recording = status.recording_storage || {};
+  const recordingCheck = findCheck(status, 'recording_storage');
+  const recordingConfigured = Boolean(recording.mode || recording.mountpoint || recordingCheck.name);
+  const network = findCheck(status, 'network_module');
+  const networkConfigured = Boolean(network.name) && !String(network.message || '').toLowerCase().includes('not configured');
+  const feed = status.hardware_watchdog_feed || {};
+  const watchdogPresent = Boolean(findCheck(status, 'hardware_watchdog_present').value);
+  const watchdogConfigured = Boolean(feed.enabled);
+  const watchdogState = watchdogPresent && feed.enabled && feed.opened ? 'healthy' : 'warning';
+  const watchdogDetail = watchdogPresent ? (feed.enabled && feed.opened ? `Feeding ${feed.device || '/dev/watchdog0'}` : 'Device detected but hardware recovery is not active') : 'No verified hardware watchdog device';
+  return `<div class="card"><h2>Operational Status</h2><p class="muted">This list shows what is ready and where attention is needed. Open Details for the relevant setup or evidence.</p><div class="operational-list">${row('System', systemIssue?.message || 'Operating system, CPU, memory and root storage checks are normal.', systemState, '/hardware', systemChecks.length > 0)}${row('Services', serviceIssue?.message || `${healthyServices}/${services.length} monitored services running`, worstState(services), '/services', services.length > 0)}${row('Recording storage', recording.message || recordingCheck.message || 'Recording storage has not been configured.', recording.status || recordingCheck.state || 'unknown', '/hardware#storage', recordingConfigured)}${row('Network', network.message || 'Network checks have not been configured.', network.state || 'unknown', '/network', networkConfigured)}${row('Hardware watchdog', watchdogDetail, watchdogState, '/services#watchdog', watchdogConfigured)}</div></div>`;
 }
 
 function renderMetricTiles(status){
@@ -917,7 +930,7 @@ function renderSystemInfo(status){
 }
 
 function renderOverview(status, events){
-  return `${pageHelp('Overview')}<div class="overview-page"><div class="grid overview-top">${renderGatewaySummary(status)}${renderBreakdown(status)}</div>${renderMetricTiles(status)}${renderOperationalAlerts(status)}</div>`;
+  return `${pageHelp('Overview')}<div class="overview-page">${renderGatewaySummary(status)}${renderOperationalStatus(status)}${renderMetricTiles(status)}${renderOperationalAlerts(status)}</div>`;
 }
 
 function renderSimplePage(title, content){
@@ -2766,60 +2779,121 @@ def start_web(cfg):
         heartbeat = status.get("heartbeat", {}) if isinstance(status.get("heartbeat", {}), dict) else {}
         reboot_evidence = status.get("reboot_evidence", {}) if isinstance(status.get("reboot_evidence", {}), dict) else {}
         journal = persistent_status()
-        startup_grace = feed.get("startup_grace", {}) if isinstance(feed.get("startup_grace", {}), dict) else {}
-        if startup_grace.get("active"):
-            grace_seconds = int(startup_grace.get("remaining_seconds", 0) or 0)
-            grace_minutes, grace_remainder = divmod(grace_seconds, 60)
-            protection_text = f"WAITING {grace_minutes}:{grace_remainder:02d}"
-            protection_state = "waiting"
-        elif feed.get("enabled") and feed.get("opened"):
-            protection_text = "ACTIVE"
-            protection_state = "healthy"
-        elif check_value("hardware_watchdog_present", False):
-            protection_text = "DETECTED, NOT ACTIVE"
-            protection_state = "warning"
+        identity = version.get("identity", {}) if isinstance(version.get("identity", {}), dict) else {}
+        recording = status.get("recording_storage", {}) if isinstance(status.get("recording_storage", {}), dict) else {}
+
+        def worst_check_state(items):
+            ranks = {"healthy": 0, "degraded": 1, "warning": 2, "unknown": 2, "critical": 3}
+            worst = "healthy"
+            for item in items:
+                item_state = str(item.get("state", "unknown"))
+                if ranks.get(item_state, 2) > ranks.get(worst, 2):
+                    worst = item_state
+            return worst
+
+        def operational_row(area, detail, row_state, href, configured=True):
+            if not configured:
+                label, css_state = "Not configured", "unknown"
+            elif row_state == "critical":
+                label, css_state = "Failed", "critical"
+            elif row_state == "healthy":
+                label, css_state = "Correct", "healthy"
+            else:
+                label, css_state = "Warning", "warning"
+            return (
+                "<div class=\"operational-row\">"
+                f"<div class=\"operational-area\">{escape(area)}</div>"
+                f"<div class=\"operational-detail\">{escape(str(detail))}</div>"
+                f"<div class=\"operational-state {css_state}\">{label}</div>"
+                f"<a class=\"ghost operational-link\" href=\"{escape(href)}\">Details</a>"
+                "</div>"
+            )
+
+        system_checks = [check_map[name] for name in ("temperature", "cpu_load", "ram", "root_disk", "write_test") if name in check_map]
+        system_issue = next((check for check in system_checks if check.get("state") != "healthy"), None)
+        service_issue = next((check for check in service_checks if check.get("state") != "healthy"), None)
+        recording_check = check_map.get("recording_storage", {})
+        network_check = check_map.get("network_module", {})
+        network_message = str(network_check.get("message") or "Network checks have not been configured.")
+        network_configured = bool(network_check) and "not configured" not in network_message.lower()
+        watchdog_present = bool(check_value("hardware_watchdog_present", False))
+        watchdog_configured = bool(feed.get("enabled"))
+        watchdog_state = "healthy" if watchdog_present and feed.get("enabled") and feed.get("opened") else "warning"
+        if watchdog_present and feed.get("enabled") and feed.get("opened"):
+            watchdog_detail = f"Feeding {feed.get('device') or '/dev/watchdog0'}"
+        elif watchdog_present:
+            watchdog_detail = "Device detected but hardware recovery is not active"
         else:
-            protection_text = "NOT AVAILABLE"
-            protection_state = "warning"
+            watchdog_detail = "No verified hardware watchdog device"
+        operational_rows = "".join(
+            (
+                operational_row(
+                    "System",
+                    (system_issue or {}).get("message") or "Operating system, CPU, memory and root storage checks are normal.",
+                    worst_check_state(system_checks),
+                    "/hardware",
+                    bool(system_checks),
+                ),
+                operational_row(
+                    "Services",
+                    (service_issue or {}).get("message") or f"{healthy_service_count}/{len(service_checks)} monitored services running",
+                    worst_check_state(service_checks),
+                    "/services",
+                    bool(service_checks),
+                ),
+                operational_row(
+                    "Recording storage",
+                    recording.get("message") or recording_check.get("message") or "Recording storage has not been configured.",
+                    str(recording.get("status") or recording_check.get("state") or "unknown"),
+                    "/hardware#storage",
+                    bool(recording.get("mode") or recording.get("mountpoint") or recording_check),
+                ),
+                operational_row(
+                    "Network",
+                    network_message,
+                    str(network_check.get("state") or "unknown"),
+                    "/network",
+                    network_configured,
+                ),
+                operational_row(
+                    "Hardware watchdog",
+                    watchdog_detail,
+                    watchdog_state,
+                    "/services#watchdog",
+                    watchdog_configured,
+                ),
+            )
+        )
         overview_html = (
-            "<div class=\"grid overview-top\">"
             "<div class=\"card summary-card\">"
             "<div class=\"summary-panel summary-status\">"
-            "<div class=\"summary-panel-title\">Gateway status</div>"
+            "<div class=\"summary-panel-title\">Overall state</div>"
             f"<div class=\"status-word {state}\">{word}</div>"
-            f"<div class=\"score\">{escape(str(status.get('score', '-')))}%</div>"
             f"{issue_pill}"
             f"{error_html}"
             "</div>"
             "<div class=\"summary-panel\">"
             "<div class=\"summary-panel-title\">Gateway identity</div>"
-            f"<div class=\"summary-primary\">{escape(str(version.get('identity', {}).get('display_name') or 'Site not configured'))}</div>"
+            f"<div class=\"summary-primary\">{escape(str(identity.get('display_name') or identity.get('site_name') or platform.node() or 'Site not configured'))}</div>"
             "<div class=\"summary-pairs\">"
-            f"<div><div class=\"label\">Asset ID</div><div class=\"value\">{escape(str(version.get('identity', {}).get('asset_id') or '-'))}</div></div>"
-            f"<div><div class=\"label\">Last check</div><div class=\"value\">{escape(local_time(status.get('time')))}</div></div>"
+            f"<div><div class=\"label\">Asset ID</div><div class=\"value\">{escape(str(identity.get('asset_id') or '-'))}</div></div>"
+            f"<div><div class=\"label\">Hostname</div><div class=\"value\">{escape(str(identity.get('hostname') or platform.node() or '-'))}</div></div>"
             "</div>"
+            "</div>"
+            "<div class=\"summary-panel\">"
+            "<div class=\"summary-panel-title\">Running software</div>"
             "<div class=\"label\">Build</div>"
             f"<div class=\"build-badge\">{escape(str(version.get('commit', '-')))}</div>"
             "<div class=\"label\">Build time and date</div>"
             f"<div class=\"value\">{escape(local_time(version.get('build_at')))}</div>"
             f"<div class=\"muted\">{escape(str(version.get('branch', '-')))}</div>"
-            "</div>"
-            "<div class=\"summary-panel\">"
-            "<div class=\"summary-panel-title\">Operational readiness</div>"
-            "<div class=\"summary-pairs\">"
-            "<div><div class=\"label\">Gateway monitor</div><div class=\"value healthy\">ONLINE</div></div>"
-            f"<div><div class=\"label\">Videosoft services</div><div class=\"value {'healthy' if service_checks and healthy_service_count == len(service_checks) else 'warning'}\">{healthy_service_count}/{len(service_checks)} running</div></div>"
-            "</div>"
-            f"<div class=\"label\">Hardware recovery</div><div class=\"summary-primary {protection_state}\">{protection_text}</div>"
+            "<div class=\"label\">Last update</div>"
+            f"<div class=\"value\">{escape(local_time(status.get('time')))}</div>"
             "</div>"
             "</div>"
-            "<div class=\"card breakdown-card\"><h2>Health Breakdown</h2><div class=\"breakdown-layout\">"
-            f"<div class=\"donut\" style=\"--score:{escape(str(status.get('score', 0)))}\"><span>{escape(str(status.get('score', '-')))}%</span></div>"
-            "<div class=\"breakdown-list\">"
-            "<div class=\"breakdown-row\"><span>Critical failed</span><strong>" + escape(str(critical).lower()) + "</strong></div>"
-            "<div class=\"breakdown-row\"><span>Total checks</span><strong>" + escape(str(len(checks))) + "</strong></div>"
-            "<div class=\"breakdown-row\"><span>View</span><strong>Operations</strong></div>"
-            "</div></div></div></div>"
+            "<div class=\"card\"><h2>Operational Status</h2>"
+            "<p class=\"muted\">This list shows what is ready and where attention is needed. Open Details for the relevant setup or evidence.</p>"
+            f"<div class=\"operational-list\">{operational_rows}</div></div>"
             + metric_tiles()
             + "<div class=\"card\"><h2>Stability Evidence</h2><div class=\"table-scroll\"><table><tbody>"
             + f"<tr><th>Last health sample</th><td>{escape(local_time(status.get('time')))}</td></tr>"

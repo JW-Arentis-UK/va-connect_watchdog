@@ -11,10 +11,10 @@ This checklist is the working record for the six-page VA-Connect Watchdog interf
 - [x] Separate oldest-recording availability from storage-capacity information.
 - [x] Show Root and Storage as separate lines when a dedicated recording disk is configured.
 - [x] Replace the initial Events wall with a compact summary and collapsed event log.
+- [x] Replace the Overview percentage and donut with a linked operational status list.
 
 ## Remaining Page Review
 
-- [ ] Overview: replace the percentage/donut presentation with a configuration and operational status list.
 - [ ] Events: add the final table, filters, action-result column, and cleaner expandable evidence layout.
 - [ ] Hardware: add System, Disks and Storage, and BIOS/Firmware tabs plus storage validation summary.
 - [ ] Network: add staged connectivity results and move raw routes, sockets, and counters into Advanced.
