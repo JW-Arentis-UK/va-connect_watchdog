@@ -15,7 +15,7 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread, local
-from urllib.parse import parse_qs, quote, unquote
+from urllib.parse import parse_qs, quote, unquote, urlencode
 
 from .blackbox import blackbox_summary, read_blackbox
 from .config import active_config_path, deep_merge, load_raw_config, save_raw_config
@@ -46,8 +46,8 @@ VISIBLE_PAGE_GROUPS = (
 LEGACY_PAGE_REDIRECTS = {
     "/storage": "/hardware#storage",
     "/watchdog": "/services#watchdog",
-    "/history": "/events#history",
-    "/diagnostics": "/events#evidence",
+    "/history": "/events?view=history",
+    "/diagnostics": "/events?view=evidence",
     "/recovery": "/settings#recovery",
     "/updates": "/settings#software-update",
 }
@@ -239,6 +239,22 @@ pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale))
 .compact-table td, .compact-table th { white-space:normal; }
 .muted { color:var(--muted); }
 .toolbar { display:flex; flex-wrap:wrap; gap:calc(8px * var(--scale)); align-items:center; margin-bottom:calc(10px * var(--scale)); }
+.page-tabs { display:flex; gap:calc(6px * var(--scale)); margin-bottom:calc(12px * var(--scale)); padding:calc(5px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.page-tabs a { flex:1; padding:calc(10px * var(--scale)); border-radius:6px; color:var(--muted); text-align:center; text-decoration:none; font-weight:800; }
+.page-tabs a.active { background:var(--blue); color:#fff; }
+.event-table { table-layout:fixed; }
+.event-table th:nth-child(1), .event-table td:nth-child(1) { width:calc(132px * var(--scale)); }
+.event-table th:nth-child(2), .event-table td:nth-child(2) { width:calc(82px * var(--scale)); }
+.event-table th:nth-child(3), .event-table td:nth-child(3) { width:calc(125px * var(--scale)); }
+.event-table th:nth-child(5), .event-table td:nth-child(5) { width:calc(92px * var(--scale)); }
+.event-table th:nth-child(6), .event-table td:nth-child(6) { width:calc(78px * var(--scale)); }
+.event-table td { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.event-table .event-message-cell { font-weight:700; }
+.event-evidence { position:relative; overflow:visible; }
+.event-evidence summary { color:var(--blue); cursor:pointer; font-weight:700; list-style:none; }
+.event-evidence summary::-webkit-details-marker { display:none; }
+.event-evidence[open] .event-evidence-body { position:absolute; z-index:4; right:0; width:min(calc(600px * var(--scale)), 75vw); padding:calc(12px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel); box-shadow:0 12px 30px rgba(0,0,0,.28); }
+.event-evidence-body pre { max-height:calc(260px * var(--scale)); }
 .chart { width:100%; height:calc(180px * var(--scale)); border:1px solid var(--line); border-radius:6px; background:rgba(54,209,95,.08); }
 .chart text { fill:var(--muted); font-size:10px; }
 .chart polyline { fill:none; stroke:var(--green); stroke-width:2; }
@@ -312,6 +328,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   .summary-strip, .tool-grid, .settings-grid { grid-template-columns:1fr; }
   .event-summary { grid-template-columns:auto 1fr; }
   .event-summary .event-time { grid-column:2; }
+  .page-tabs { display:grid; grid-template-columns:1fr; }
   .operational-row { grid-template-columns:1fr auto; }
   .operational-detail { grid-column:1 / -1; grid-row:2; }
   .operational-state { min-width:0; }
@@ -479,11 +496,6 @@ let lastDiagnostics = {};
 let lastVersion = {};
 let lastRecordingActivity = {};
 let refreshTimer = null;
-let eventLevelFilter = 'all';
-let eventSearch = '';
-let eventFrom = '';
-let eventTo = '';
-let eventDisplayLimit = 50;
 
 function escapeHtml(value){
   return String(value)
@@ -667,55 +679,6 @@ function renderEvents(events, limit=8){
   const rows = (events || []).slice(0, limit);
   if (!rows.length) return '<div class="event"><div class="event-time">-</div><div>No events yet</div></div>';
   return rows.map(event => `<details class="event-card"><summary class="event-summary"><span class="${statusClass(event.level)}">${escapeHtml((event.level || 'info').toUpperCase())}</span><span class="event-message">${escapeHtml(event.message || '')}</span><span class="event-time">${escapeHtml(fmtTime(event.time))}</span></summary><div class="event-detail"><div class="event-source">Source: ${escapeHtml(event.source || '-')}</div>${event.data ? `<pre class="event-data">${escapeHtml(JSON.stringify(event.data, null, 2))}</pre>` : '<p class="muted">No additional event data.</p>'}</div></details>`).join('');
-}
-
-function filteredEvents(){
-  return (lastEvents || []).filter(event => {
-    const levelOk = eventLevelFilter === 'all' || String(event.level || '').toLowerCase() === eventLevelFilter;
-    const text = `${event.source || ''} ${event.message || ''}`.toLowerCase();
-    const timestamp = new Date(event.time || '').getTime();
-    const fromOk = !eventFrom || (!Number.isNaN(timestamp) && timestamp >= new Date(eventFrom).getTime());
-    const toOk = !eventTo || (!Number.isNaN(timestamp) && timestamp <= new Date(eventTo).getTime());
-    return levelOk && fromOk && toOk && (!eventSearch || text.includes(eventSearch));
-  });
-}
-
-function setEventLevel(value){
-  eventLevelFilter = value;
-  eventDisplayLimit = 50;
-  render();
-}
-
-function setEventSearch(value){
-  eventSearch = String(value || '').toLowerCase();
-  eventDisplayLimit = 50;
-  render();
-  const input = document.getElementById('event-search');
-  if (input) {
-    input.focus();
-    input.setSelectionRange(input.value.length, input.value.length);
-  }
-}
-
-function setEventDate(which, value){
-  if (which === 'from') eventFrom = value || '';
-  if (which === 'to') eventTo = value || '';
-  eventDisplayLimit = 50;
-  render();
-}
-
-function clearEventFilters(){
-  eventLevelFilter = 'all';
-  eventSearch = '';
-  eventFrom = '';
-  eventTo = '';
-  eventDisplayLimit = 50;
-  render();
-}
-
-function showMoreEvents(){
-  eventDisplayLimit += 50;
-  render();
 }
 
 function renderHistoryChart(rows, key='score'){
@@ -1013,13 +976,6 @@ function renderStoragePage(grouped){
   return `<div class="grid metric-grid">${grouped.storage.map(c => tile(c.name, c, c.value?.used_percent !== undefined ? fmtPercent(c.value.used_percent) : fmtValue(c.value), c.message)).join('')}</div>${recordingPanel}<div class="card"><h2>Configured Storage Limits</h2><table><thead><tr><th>Name</th><th>Path</th><th>Used</th><th>Free</th><th>Warn</th><th>Critical</th><th>Full expected</th></tr></thead><tbody>${rows || '<tr><td colspan="7">No monitored paths configured</td></tr>'}</tbody></table></div>${renderRetentionPage()}`;
 }
 
-function renderEventsPage(){
-  const matching = filteredEvents();
-  const visible = matching.slice(0, eventDisplayLimit);
-  const more = visible.length < matching.length ? `<div class="button-row"><button class="ghost" onclick="showMoreEvents()">Load 50 more</button></div>` : '';
-  return renderSimplePage('Events', `<p class="pill warning">Automatic refresh paused while you review events</p><p class="muted">Use Refresh now when you want the latest events. The normal dashboard refresh returns when you leave this page.</p><div class="toolbar"><label>Level <select id="event-level-filter" onchange="setEventLevel(this.value)"><option value="all" ${eventLevelFilter === 'all' ? 'selected' : ''}>All</option><option value="critical" ${eventLevelFilter === 'critical' ? 'selected' : ''}>Critical</option><option value="degraded" ${eventLevelFilter === 'degraded' ? 'selected' : ''}>Degraded</option><option value="warning" ${eventLevelFilter === 'warning' ? 'selected' : ''}>Warning</option><option value="info" ${eventLevelFilter === 'info' ? 'selected' : ''}>Info</option><option value="healthy" ${eventLevelFilter === 'healthy' ? 'selected' : ''}>Healthy</option></select></label><label>Search <input id="event-search" value="${escapeHtml(eventSearch)}" oninput="setEventSearch(this.value)" placeholder="service, storage, watchdog"></label><label>From <input type="datetime-local" value="${escapeHtml(eventFrom)}" onchange="setEventDate('from', this.value)"></label><label>To <input type="datetime-local" value="${escapeHtml(eventTo)}" onchange="setEventDate('to', this.value)"></label><button class="ghost" onclick="clearEventFilters()">Clear filters</button><button class="action" onclick="exportEvents()">Export JSON</button><button class="ghost" onclick="exportEventsCsv()">Export CSV</button></div><p class="muted">Showing ${visible.length} of ${matching.length} matching events (${lastEvents.length} loaded). Times are shown in this browser's local time.</p><div class="events">${renderEvents(visible, visible.length)}</div>${more}<details class="advanced-disclosure"><summary>Event retention and cleanup</summary><p class="muted">These controls remove event records only. Status, history, configuration, diagnostics and CCTV recordings are not changed.</p><div class="button-row"><button class="ghost" onclick="purgeFilteredEvents()" ${eventTo ? '' : 'disabled'}>Delete events before To date</button><button class="danger" onclick="purgeAllEvents()">Clear all events</button></div></details>`);
-}
-
 function renderHistoryPage(){
   const latest = (lastHistory || []).slice(-1)[0] || {};
   const serviceNames = [...new Set((lastHistory || []).flatMap(row => (row.service_metrics || []).map(item => item.name)))];
@@ -1043,7 +999,6 @@ function renderPage(status, updateStatus, events){
   if (currentPage === 'Storage') return `${pageHelp('Storage')}${renderStoragePage(grouped)}`;
   if (currentPage === 'Network') return `${pageHelp('Network')}${renderNetworkPage()}`;
   if (currentPage === 'Recovery') return `${pageHelp('Recovery')}${renderSimplePage('Recovery', `<p class="${escapeHtml(status.recovery?.state || 'unknown')}">${escapeHtml((status.recovery?.state || 'unknown').toUpperCase())}</p><p>${escapeHtml(status.recovery?.message || 'No recovery state available.')}</p>${placeholderList(['Enable/disable recovery','Restart service policy','Reboot grace period','Install/configure hardware watchdog','Last reboot reason'])}`)}`;
-  if (currentPage === 'Events') return `${pageHelp('Events')}${renderEventsPage()}`;
   if (currentPage === 'History') return `${pageHelp('History')}${renderHistoryPage()}`;
   if (currentPage === 'Settings') return `${pageHelp('Settings')}${renderIdentitySettingsCard()}${renderSettingsPage()}`;
   if (currentPage === 'Updates') return `${pageHelp('Updates')}${renderUpdatesPage(updateStatus)}`;
@@ -1153,66 +1108,6 @@ async function triggerUpdate(){
   }
 }
 
-async function exportEvents(){
-  const response = await fetch('/api/events/export');
-  const payload = await response.json();
-  const blob = new Blob([JSON.stringify(payload, null, 2)], {type: 'application/json'});
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'va-watchdog-events.json';
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
-async function exportEventsCsv(){
-  const response = await fetch('/api/events/export.csv');
-  const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'va-watchdog-events.csv';
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
-async function requestEventPurge(payload){
-  const response = await fetch('/api/events/purge', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(payload),
-  });
-  const result = await response.json();
-  if (!response.ok || !result.ok) throw new Error(result.error || 'Event purge failed');
-  lastEvents = await fetchJson('/api/events?limit=500', []);
-  render();
-  return result;
-}
-
-async function purgeFilteredEvents(){
-  if (!eventTo) return;
-  const before = new Date(eventTo);
-  if (Number.isNaN(before.getTime())) return;
-  if (!confirm(`Delete event records before ${before.toLocaleString()}? This cannot be undone.`)) return;
-  try {
-    const result = await requestEventPurge({before: before.toISOString()});
-    alert(`${result.removed} event record(s) removed.`);
-  } catch (error) {
-    alert(`Event purge failed: ${error.message || error}`);
-  }
-}
-
-async function purgeAllEvents(){
-  if (!confirm('Clear ALL watchdog event records? This cannot be undone.')) return;
-  if (!confirm('Final confirmation: clear the complete Events list?')) return;
-  try {
-    const result = await requestEventPurge({purge_all: true});
-    alert(`${result.removed} event record(s) removed.`);
-  } catch (error) {
-    alert(`Event purge failed: ${error.message || error}`);
-  }
-}
-
 function linesFromTextarea(id){
   return String(document.getElementById(id)?.value || '')
     .split(/\\r?\\n/)
@@ -1312,15 +1207,6 @@ window.reloadPage = reloadPage;
 window.showPage = showPage;
 window.load = load;
 window.triggerUpdate = triggerUpdate;
-window.exportEvents = exportEvents;
-window.exportEventsCsv = exportEventsCsv;
-window.setEventLevel = setEventLevel;
-window.setEventSearch = setEventSearch;
-window.setEventDate = setEventDate;
-window.clearEventFilters = clearEventFilters;
-window.showMoreEvents = showMoreEvents;
-window.purgeFilteredEvents = purgeFilteredEvents;
-window.purgeAllEvents = purgeAllEvents;
 window.saveSettings = saveSettings;
 window.purgeOldData = purgeOldData;
 window.purgeAllData = purgeAllData;
@@ -1698,56 +1584,97 @@ def start_web(cfg):
                 rows.append("<div class=\"event\"><div class=\"event-time\">-</div><div>No events yet</div></div>")
             return "".join(rows)
 
-        def events_page(limit=50):
-            events = recent_events(limit=limit)
-            counts = {}
-            for event in events:
+        def events_page():
+            query = getattr(request_context, "query", {}) or {}
+            filtered, filters = filtered_events(query, limit=5000)
+            try:
+                display_limit = max(50, min(int(query.get("show", ["50"])[0]), 500))
+            except (TypeError, ValueError):
+                display_limit = 50
+            visible = filtered[:display_limit]
+
+            def event_result(event):
                 level = str(event.get("level", "info")).lower()
-                counts[level] = counts.get(level, 0) + 1
-            count_cards = []
-            for level in ["critical", "warning", "degraded", "info", "healthy"]:
-                count_cards.append(
-                    "<div class=\"mini-card\">"
-                    f"<div class=\"label\">{escape(level.upper())}</div>"
-                    f"<div class=\"tile-value {escape(level)}\">{escape(str(counts.get(level, 0)))}</div>"
-                    "</div>"
+                data = event.get("data") if isinstance(event.get("data"), dict) else {}
+                message = str(event.get("message", "")).lower()
+                if data.get("ok") is False or level == "critical":
+                    return "Failed", "critical"
+                if data.get("ok") is True:
+                    return "Success", "healthy"
+                if level in {"warning", "degraded"}:
+                    return "Attention", "warning"
+                if level == "healthy" or "changed to healthy" in message or "restored" in message:
+                    return "Recovered", "healthy"
+                return "Recorded", "muted"
+
+            rows = []
+            for event in visible:
+                level = str(event.get("level", "info")).lower()
+                result, result_state = event_result(event)
+                data = event.get("data") if isinstance(event.get("data"), dict) else {}
+                evidence = escape(json.dumps(data, indent=2)) if data else "No additional technical evidence was recorded for this event."
+                rows.append(
+                    "<tr>"
+                    f"<td title=\"{escape(str(event.get('time', '-')))}\">{escape(local_time(event.get('time')))}</td>"
+                    f"<td><span class=\"pill {escape(level)}\">{escape(level.upper())}</span></td>"
+                    f"<td title=\"{escape(str(event.get('source', '-')))}\">{escape(str(event.get('source', '-')))}</td>"
+                    f"<td class=\"event-message-cell\" title=\"{escape(str(event.get('message', '')))}\">{escape(str(event.get('message', '')))}</td>"
+                    f"<td class=\"{result_state}\">{result}</td>"
+                    "<td><details class=\"event-evidence\"><summary>View</summary>"
+                    f"<div class=\"event-evidence-body\"><div class=\"label\">Recorded time</div><div class=\"value\">{escape(str(event.get('time', '-')))}</div><div class=\"label\">Technical evidence</div><pre>{evidence}</pre></div>"
+                    "</details></td></tr>"
                 )
-            event_cards = []
-            for event in events:
-                data_html = ""
-                data = event.get("data")
-                if data:
-                    data_html = f"<pre class=\"event-data\">{escape(json.dumps(data, indent=2))}</pre>"
-                event_cards.append(
-                    "<details class=\"event-card\">"
-                    "<summary>"
-                    "<div class=\"event-head\">"
-                    f"<span class=\"{escape(str(event.get('level', 'info')))}\">{escape(str(event.get('level', 'info')).upper())}</span>"
-                    f"<span class=\"event-time\">{escape(local_time(event.get('time')))}</span>"
-                    "</div>"
-                    f"<div class=\"event-message\">{escape(str(event.get('message', '')))}</div>"
-                    "</summary>"
-                    f"<div class=\"event-source\">Source: {escape(str(event.get('source', '-')))}</div>"
-                    f"{data_html}"
-                    "</details>"
-                )
-            if not event_cards:
-                event_cards.append("<div class=\"event-card\">No events yet.</div>")
+            if not rows:
+                rows.append("<tr><td colspan=\"6\">No events match the selected filters.</td></tr>")
+
+            critical_count = sum(1 for event in filtered if str(event.get("level", "")).lower() == "critical")
+            warning_count = sum(1 for event in filtered if str(event.get("level", "")).lower() in {"warning", "degraded"})
+            info_count = sum(1 for event in filtered if str(event.get("level", "")).lower() in {"info", "healthy"})
+            query_values = {key: value for key, value in filters.items() if value}
+            export_query = urlencode(query_values)
+            export_suffix = f"?{export_query}" if export_query else ""
+            more_values = dict(query_values)
+            more_values["view"] = "events"
+            more_values["show"] = str(min(display_limit + 50, 500))
+            more_link = ""
+            if len(visible) < len(filtered) and display_limit < 500:
+                more_link = f"<a class=\"ghost\" href=\"/events?{escape(urlencode(more_values))}\">Load 50 more</a>"
+            selected_level = filters.get("level", "all")
+            options = [
+                ("all", "All events"),
+                ("attention", "Critical and warnings"),
+                ("critical", "Critical"),
+                ("warning", "Warning"),
+                ("degraded", "Degraded"),
+                ("info", "Information"),
+                ("healthy", "Recovery/healthy"),
+            ]
+            level_options = "".join(
+                f"<option value=\"{value}\" {'selected' if selected_level == value else ''}>{label}</option>"
+                for value, label in options
+            )
             return (
-                "<div class=\"card\"><h2>Event Overview</h2>"
-                "<p class=\"section-lead\">Review the current event totals, then open only the section needed for the investigation.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/api/events/export\">Export JSON</a><a class=\"ghost\" href=\"/api/events/export.csv\">Export CSV</a></div>"
-                f"<div class=\"count-grid\">{''.join(count_cards)}</div>"
+                summary_strip([
+                    ("Critical", critical_count, "Matching events", "critical" if critical_count else "healthy"),
+                    ("Warnings", warning_count, "Warning and degraded", "warning" if warning_count else "healthy"),
+                    ("Information", info_count, "Information and recovery", "healthy"),
+                ])
+                + "<div class=\"card\"><div class=\"section-lead\"><div><h2>Event Log</h2><p class=\"muted\">Manual refresh prevents an event closing while you review its evidence.</p></div>"
+                f"<div class=\"muted\">Loaded {escape(datetime.now().astimezone().strftime('%H:%M:%S %Y-%m-%d'))}</div></div>"
+                "<form method=\"get\" action=\"/events\"><input type=\"hidden\" name=\"view\" value=\"events\">"
+                "<div class=\"toolbar\">"
+                f"<label>Level <select name=\"level\">{level_options}</select></label>"
+                f"<label>Search <input name=\"search\" value=\"{escape(filters.get('search', ''))}\" placeholder=\"message or evidence\"></label>"
+                f"<label>Source <input name=\"source\" value=\"{escape(filters.get('source', ''))}\" placeholder=\"service, storage, watchdog\"></label>"
+                f"<label>From <input type=\"datetime-local\" name=\"from\" value=\"{escape(filters.get('from', ''))}\"></label>"
+                f"<label>To <input type=\"datetime-local\" name=\"to\" value=\"{escape(filters.get('to', ''))}\"></label>"
+                "<button class=\"action\" type=\"submit\">Apply / refresh</button><a class=\"ghost\" href=\"/events?view=events\">Clear filters</a>"
+                "</div></form>"
+                f"<p class=\"muted\">Showing {len(visible)} of {len(filtered)} matching events. Newest events appear first; times use the gateway's local timezone.</p>"
+                "<div class=\"table-scroll\"><table class=\"event-table compact-table\"><thead><tr><th>Time / date</th><th>Level</th><th>Source</th><th>Event</th><th>Result</th><th>Evidence</th></tr></thead>"
+                f"<tbody>{''.join(rows)}</tbody></table></div>"
+                f"<div class=\"button-row\">{more_link}<a class=\"action\" href=\"/api/events/export.csv{escape(export_suffix)}\" download=\"va-watchdog-events.csv\">Export CSV</a><a class=\"ghost\" href=\"/api/events/export{escape(export_suffix)}\" download=\"va-watchdog-events.json\">Export JSON</a></div>"
                 "</div>"
-                "<div class=\"card\"><h2>Investigation Sections</h2><div class=\"button-row\">"
-                "<a class=\"ghost\" href=\"#event-log\">Event log</a>"
-                "<a class=\"ghost\" href=\"#history\">History</a>"
-                "<a class=\"ghost\" href=\"#evidence\">Evidence and diagnostics</a>"
-                "</div></div>"
-                "<details id=\"event-log\" class=\"advanced-disclosure moved-section\"><summary>Latest event log (up to 50 events)</summary>"
-                "<p class=\"muted\">Select an event to expand its source and recorded evidence.</p>"
-                f"<div class=\"events\">{''.join(event_cards)}</div>"
-                "</details>"
             )
 
         def services_card():
@@ -1945,6 +1872,12 @@ def start_web(cfg):
                 f"<div><label class=\"label\">After deliberate trip reboot</label><select name=\"watchdog_post_trip_grace_seconds\">{post_trip_grace_options}</select><p class=\"muted\">Extended window after a deliberate watchdog test to prevent a reboot loop.</p></div>"
                 "</div><p>The hardware timeout remains separate and starts only after the safety window ends.</p>"
             )
+            journal_state = persistent_status()
+            journal_settings = (
+                f"<p class=\"{'healthy' if journal_state.get('enabled') else 'warning'}\"><strong>{'Enabled' if journal_state.get('enabled') else 'Disabled or unavailable'}</strong></p>"
+                "<p>Persistent journald storage preserves kernel and service evidence across a reboot. Enabling it is an explicit confirmed action and does not overwrite unrelated journald settings.</p>"
+                "<div class=\"button-row\"><a class=\"action\" href=\"/journal-enable-confirm\">Enable or apply safe logging limits</a></div>"
+            )
             advanced_settings = (
                 "<div class=\"label\">Active config file</div>"
                 f"<div class=\"value\">{escape(str(active_config_path()))}</div>"
@@ -1958,6 +1891,7 @@ def start_web(cfg):
                 + disclosure("Gateway identity", identity_settings, opened=True)
                 + disclosure("General and monitoring", general_settings, opened=True)
                 + disclosure("Watchdog startup safety", watchdog_settings, opened=True)
+                + "<div id=\"persistent-journal\">" + disclosure("Persistent evidence logging", journal_settings) + "</div>"
                 + disclosure("Storage alerts", storage_settings, opened=True)
                 + disclosure("Network and remote access", network_settings)
                 + disclosure("Recovery and updates", recovery_settings)
@@ -2265,7 +2199,7 @@ def start_web(cfg):
                 "</div>"
                 "<div class=\"card\"><h2>Advanced Tools</h2>"
                 "<p class=\"muted\">Use these only when the guided setup cannot complete. Diagnostics are intentionally separated from the normal operator path.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">Clean legacy only</a><a class=\"ghost\" href=\"/hardware-watchdog-enable-confirm\">Enable feed only</a><a class=\"ghost\" href=\"/hardware\">Hardware details</a><a class=\"ghost\" href=\"/events#evidence\">Diagnostics</a></div>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">Clean legacy only</a><a class=\"ghost\" href=\"/hardware-watchdog-enable-confirm\">Enable feed only</a><a class=\"ghost\" href=\"/hardware\">Hardware details</a><a class=\"ghost\" href=\"/events?view=evidence\">Diagnostics</a></div>"
                 "</div>"
             )
 
@@ -2579,24 +2513,21 @@ def start_web(cfg):
             samples = read_history(cfg, limit=288)
             summary = history_summary(samples)
             retention = cfg.get("retention", {})
-            latest = samples[-1] if samples else {}
-            state_rows = []
-            for state, count in summary.get("state_counts", {}).items():
-                state_rows.append(
-                    "<tr>"
-                    f"<td class=\"{escape(str(state))}\">{escape(str(state).upper())}</td>"
-                    f"<td>{escape(str(count))}</td>"
-                    "</tr>"
-                )
-            if not state_rows:
-                state_rows.append("<tr><td colspan=\"2\">No states recorded.</td></tr>")
-            rows = []
+            warning_count = sum(1 for item in samples if str(item.get("state", "")).lower() in {"warning", "degraded"})
+            critical_count = sum(1 for item in samples if str(item.get("state", "")).lower() == "critical" or item.get("critical_failed"))
+            last_abnormal = next((item for item in reversed(samples) if str(item.get("state", "healthy")).lower() != "healthy"), None)
+
+            state_rows = [
+                f"<tr><td class=\"{escape(str(item_state))}\">{escape(str(item_state).upper())}</td><td>{escape(str(count))}</td></tr>"
+                for item_state, count in summary.get("state_counts", {}).items()
+            ] or ["<tr><td colspan=\"2\">No states recorded.</td></tr>"]
+
+            sample_rows = []
             for item in samples[-48:]:
-                rows.append(
+                sample_rows.append(
                     "<tr>"
-                    f"<td>{escape(str(item.get('time', '-')))}</td>"
+                    f"<td>{escape(local_time(item.get('time')))}</td>"
                     f"<td class=\"{escape(str(item.get('state', 'unknown')))}\">{escape(str(item.get('state', 'unknown')).upper())}</td>"
-                    f"<td>{escape(str(item.get('score', '-')))}%</td>"
                     f"<td>{escape(str(item.get('temperature', '-')))}</td>"
                     f"<td>{escape(str(item.get('cpu_load', '-')))}%</td>"
                     f"<td>{escape(str(item.get('ram', '-')))}%</td>"
@@ -2604,11 +2535,24 @@ def start_web(cfg):
                     f"<td>{escape(str(item.get('recordings_disk', '-')))}%</td>"
                     "</tr>"
                 )
-            if not rows:
-                rows.append("<tr><td colspan=\"8\">No history samples have been captured yet.</td></tr>")
+            if not sample_rows:
+                sample_rows.append("<tr><td colspan=\"7\">No history samples have been captured yet.</td></tr>")
+
+            abnormal_rows = []
+            abnormal_samples = [item for item in samples if str(item.get("state", "healthy")).lower() != "healthy"][-20:]
+            for item in reversed(abnormal_samples):
+                conditions = item.get("critical_checks") or item.get("warning_checks") or item.get("degraded_checks") or []
+                detail = ", ".join(str(value) for value in conditions) or "State outside healthy"
+                abnormal_rows.append(
+                    f"<tr><td>{escape(local_time(item.get('time')))}</td>"
+                    f"<td class=\"{escape(str(item.get('state', 'unknown')))}\">{escape(str(item.get('state', 'unknown')).upper())}</td>"
+                    f"<td>{escape(detail)}</td></tr>"
+                )
+            if not abnormal_rows:
+                abnormal_rows.append("<tr><td colspan=\"3\">No abnormal samples in the retained window.</td></tr>")
+
             extra_charts = (
-                "<div class=\"grid lower-grid\">"
-                "<div><h3>Temperature Trend</h3>"
+                "<div class=\"grid lower-grid\"><div><h3>Temperature Trend</h3>"
                 f"{history_chart(samples, 'temperature', 0, 100, 'C')}"
                 "</div><div><h3>Disk Usage Trend</h3>"
                 f"{multi_history_chart(samples, [('root_disk', 'Root'), ('recordings_disk', 'Recordings')], 0, 100, '%')}"
@@ -2620,55 +2564,44 @@ def start_web(cfg):
                 for metric in (sample.get("service_metrics") or [])
                 if isinstance(metric, dict) and metric.get("name")
             })
-            service_trend_rows = []
-            for name in service_names:
-                service_trend_rows.append(
-                    "<tr>"
-                    f"<td>{escape(name)}</td>"
-                    f"<td>{service_combined_history_chart(samples, name)}</td>"
-                    "</tr>"
-                )
-            if not service_trend_rows:
-                service_trend_rows.append('<tr><td colspan="2">No service history samples have been captured yet. New samples appear after the configured history interval.</td></tr>')
+            service_trend_rows = [
+                f"<tr><td>{escape(name)}</td><td>{service_combined_history_chart(samples, name)}</td></tr>"
+                for name in service_names
+            ] or ['<tr><td colspan="2">No service history samples have been captured yet.</td></tr>']
             service_history_detail = (
                 '<div class="table-scroll"><table><thead><tr><th>Service</th><th>CPU and RAM trend</th></tr></thead>'
                 f"<tbody>{''.join(service_trend_rows)}</tbody></table></div>"
             )
-            storage_detail = (
-                "<div class=\"grid lower-grid\"><div>"
-                "<h3>State Counts</h3><table><thead><tr><th>State</th><th>Samples</th></tr></thead>"
-                f"<tbody>{''.join(state_rows)}</tbody></table></div><div>"
-                "<h3>History Storage</h3>"
-                f"<div class=\"label\">History file</div><div class=\"value\">{escape(str(history_path(cfg)))}</div>"
-                f"<div class=\"label\">Max rows</div><div class=\"value\">{escape(str(retention.get('history_max_rows', '-')))}</div>"
-                f"<div class=\"label\">Time range</div><div class=\"value\">{escape(str(summary.get('first_time', '-')))} to {escape(str(summary.get('last_time', '-')))}</div>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/api/history\">Export JSON</a><a class=\"ghost\" href=\"/api/history/export.csv\">Export CSV</a></div>"
-                "</div></div>"
+            abnormal_detail = (
+                "<div class=\"table-scroll\"><table><thead><tr><th>Time</th><th>State</th><th>Recorded condition</th></tr></thead>"
+                f"<tbody>{''.join(abnormal_rows)}</tbody></table></div>"
+            )
+            export_detail = (
+                "<div class=\"grid lower-grid\"><div><h3>State Counts</h3><table><thead><tr><th>State</th><th>Samples</th></tr></thead>"
+                f"<tbody>{''.join(state_rows)}</tbody></table></div><div><h3>History Export</h3>"
+                f"<div class=\"label\">Time range</div><div class=\"value\">{escape(local_time(summary.get('first_time')))} to {escape(local_time(summary.get('last_time')))}</div>"
+                "<div class=\"button-row\"><a class=\"action\" href=\"/api/history/export.csv\" download=\"va-watchdog-history.csv\">Export CSV</a><a class=\"ghost\" href=\"/api/history\" download=\"va-watchdog-history.json\">Export JSON</a></div></div></div>"
             )
             samples_detail = (
-                "<div class=\"table-scroll\"><table><thead><tr><th>Time</th><th>State</th><th>Score</th><th>Temp</th><th>CPU</th><th>RAM</th><th>Root Disk</th><th>Recordings Disk</th></tr></thead>"
-                f"<tbody>{''.join(rows)}</tbody></table></div>"
+                "<div class=\"table-scroll\"><table><thead><tr><th>Time</th><th>State</th><th>Temp</th><th>CPU</th><th>RAM</th><th>Root Disk</th><th>Recordings Disk</th></tr></thead>"
+                f"<tbody>{''.join(sample_rows)}</tbody></table></div>"
             )
             return (
                 summary_strip([
-                    ("Samples", summary.get("samples", 0), "Stored history rows", "healthy"),
-                    ("Latest score", f"{latest.get('score', '-')}%", local_time(latest.get("time")), "critical" if latest.get("critical_failed") else "healthy"),
-                    ("Average score", f"{summary.get('avg_score', '-')}%", "Retained window", "healthy"),
-                    ("Lowest score", f"{summary.get('min_score', '-')}%", "Worst recorded sample", "warning" if summary.get("min_score") not in ("-", None) and float(summary.get("min_score")) < 95 else "healthy"),
-                    ("Critical samples", summary.get("critical_count", 0), f"{retention.get('history_retention_days', '-')} day retention", "critical" if summary.get("critical_count", 0) else "healthy"),
+                    ("Samples", summary.get("samples", 0), "Retained window", "healthy"),
+                    ("History period", f"{retention.get('history_retention_days', '-')} days", "Configured retention", "healthy"),
+                    ("Warnings", warning_count, "Warning/degraded samples", "warning" if warning_count else "healthy"),
+                    ("Critical", critical_count, "Critical samples", "critical" if critical_count else "healthy"),
+                    ("Last abnormal", local_time(last_abnormal.get("time")) if last_abnormal else "None", str(last_abnormal.get("state", "")).upper() if last_abnormal else "Retained window clear", "warning" if last_abnormal else "healthy"),
                 ])
-                +
-                "<div class=\"grid lower-grid\">"
-                "<div class=\"card\"><h2>Health Score Trend</h2>"
-                f"{history_chart(samples, 'score', 0, 100, '%')}"
-                "</div>"
-                "<div class=\"card\"><h2>CPU/RAM Trend</h2>"
-                f"{multi_history_chart(samples, [('cpu_load', 'CPU load'), ('ram', 'RAM')], 0, 100, '%')}"
-                "</div></div>"
+                + "<div class=\"card\"><h2>Gateway CPU and RAM</h2><p class=\"muted\">Lightweight retained samples leading up to an incident.</p>"
+                + multi_history_chart(samples, [("cpu_load", "CPU load"), ("ram", "RAM")], 0, 100, "%")
+                + "</div>"
+                + disclosure("Abnormal periods", abnormal_detail, opened=bool(last_abnormal))
                 + disclosure("Temperature and disk trends", extra_charts)
                 + disclosure("Service history", service_history_detail)
-                + disclosure("History storage and state counts", storage_detail)
-                + disclosure("Recent sample data", samples_detail)
+                + disclosure("History export and state counts", export_detail)
+                + disclosure("Recent raw samples", samples_detail)
             )
 
         def diagnostics_page():
@@ -2702,7 +2635,7 @@ def start_web(cfg):
                 if baseline.get("download_ready") else ""
             )
             form_disabled = " disabled" if baseline.get("running") or not readiness.get("ready") else ""
-            baseline_refresh = "<script>setTimeout(function(){window.location.reload();},10000);</script>" if baseline.get("running") else ""
+            baseline_refresh = "<p class=\"warning\">Capture is running. Reload Evidence manually to check progress.</p>" if baseline.get("running") else ""
             baseline_card = (
                 "<div class=\"card\"><h2>Stage 0 System Baseline</h2>"
                 "<p class=\"section-lead\">Runs a low-impact performance and evidence capture in a separate systemd unit. It does not restart the watchdog or change monitoring configuration.</p>"
@@ -2726,40 +2659,32 @@ def start_web(cfg):
                 "<p class=\"muted\">Up to three completed baseline bundles are retained for seven days. CCTV recordings are never included.</p>"
                 f"{baseline_refresh}</div>"
             )
-            commands = (
-                "<pre>systemctl status va-watchdog\n"
-                "journalctl -u va-watchdog -n 80 --no-pager\n"
-                "wget -qO- http://127.0.0.1:9110/api/healthz\n"
-                "wget -qO- http://127.0.0.1:9110/api/version</pre>"
+            journal_state = persistent_status()
+            advanced_detail = (
+                tool_grid([
+                    ("Live diagnostics JSON", "Current operating-system and watchdog diagnostic data.", "/api/diagnostics", ""),
+                    ("Raw health status", "Unchanged /api/status payload used by integrations.", "/api/status", ""),
+                ])
+                + all_checks_table("All health-engine checks")
             )
             return (
                 summary_strip([
                     ("Watchdog service", active_value.upper(), f"Enabled: {enabled_value}", "healthy" if active_value == "active" else "critical"),
-                    ("Current health", str(status.get("state", "unknown")).upper(), f"Score {status.get('score', '-')}%", str(status.get("state", "unknown"))),
                     ("Black-box recorder", "Enabled" if bb.get("enabled") else "Disabled", f"{bb.get('rows', 0)} snapshots", "healthy" if bb.get("enabled") else "warning"),
                     ("Latest snapshot", local_time(bb.get("last_time")), "Hang investigation evidence", "healthy" if bb.get("last_time") else "warning"),
                     ("Preserved incidents", str(len(incident_archives)), "Previous-boot evidence protected from rolling retention", "healthy" if incident_archives else "muted"),
                 ])
-                + "<div class=\"card\"><h2>Diagnostic Toolbox</h2>"
-                "<p class=\"section-lead\">Start with the support bundle after a lockup. The other tools expose focused live evidence without changing gateway configuration.</p>"
+                + "<div class=\"card action-panel\"><h2>Incident Evidence</h2>"
+                f"<p class=\"{'healthy' if incident_archives else 'muted'}\">{len(incident_archives)} preserved incident archive(s). {escape(str(pstore.get('message') or 'pstore status unavailable'))}.</p>"
+                "<p class=\"muted\">Start with the support bundle after a lockup or unexpected reboot. It combines the evidence needed for investigation.</p>"
                 + tool_grid([
                     ("Download support bundle", "Best first step: logs, status, history, reboot, storage, network, and watchdog evidence.", "/api/diagnostics/support-bundle.zip", "primary"),
-                    ("Live diagnostics JSON", "Collected operating-system and watchdog diagnostic data.", "/api/diagnostics", ""),
-                    ("Black-box snapshots", "Short-interval evidence retained around a hang or reboot.", "/api/blackbox", ""),
-                    ("Raw health status", "Unchanged /api/status payload used by integrations.", "/api/status", ""),
-                    ("Network tests", "Connectivity, interfaces, routes, and remote access.", "/network", ""),
-                    ("Storage tests", "Mount, write, capacity, SMART, and retention checks.", "/hardware#storage", ""),
-                    ("Watchdog tests", "Safe and deliberate watchdog validation controls.", "/services#watchdog", ""),
-                    ("Relay test", "Planned: validate an attached relay output.", "", ""),
-                    ("Camera snapshot", "Planned: capture an image from a configured source.", "", ""),
-                    ("RTSP probe", "Planned: verify stream access and response timing.", "", ""),
+                    ("Black-box evidence", "Short-interval snapshots retained around a hang or reboot.", "/api/blackbox", ""),
                 ])
                 + "</div>"
-                + baseline_card
-                + f"<div class=\"card\"><h2>Persistent Journal</h2><p class=\"{'healthy' if persistent_status().get('enabled') else 'warning'}\">{'Enabled' if persistent_status().get('enabled') else 'Disabled or unavailable'}</p><p class=\"muted\">Persistent journals preserve kernel and service evidence across reboot. VA-Watchdog-managed logging is capped at 512 MB and reserves 1 GB free on the OS disk.</p><div class=\"button-row\"><a class=\"ghost\" href=\"/journal-enable-confirm\">Enable or apply safe limits</a></div></div>"
-                + f"<div class=\"card\"><h2>Crash Evidence</h2><p class=\"{'healthy' if incident_archives else 'muted'}\">{len(incident_archives)} preserved incident archive(s)</p><p class=\"muted\">A new archive is frozen at startup before heartbeat and Black Box retention can overwrite the previous boot. {escape(str(pstore.get('message') or 'pstore status unavailable'))}.</p></div>"
-                + disclosure("Useful terminal commands", commands)
-                + disclosure("All health-engine checks", all_checks_table("Diagnostics Checks"))
+                + f"<div class=\"card\"><h2>Persistent Journal</h2><p class=\"{'healthy' if journal_state.get('enabled') else 'warning'}\">{'Enabled' if journal_state.get('enabled') else 'Disabled or unavailable'}</p><p class=\"muted\">Persistent logging preserves kernel and service evidence across a reboot. Configuration is managed in Settings.</p><div class=\"button-row\"><a class=\"ghost\" href=\"/settings#persistent-journal\">Open logging settings</a></div></div>"
+                + disclosure("Stage 0 baseline capture", baseline_card)
+                + disclosure("Advanced technical data", advanced_detail)
             )
 
         error_html = ""
@@ -2929,17 +2854,24 @@ def start_web(cfg):
         if page == "Network":
             return page_help_html(page) + network_page()
         if page == "Events":
-            return (
-                page_help_html(page)
-                + events_page(limit=50)
-                + "<section id=\"history\" class=\"moved-section\"><div class=\"moved-section-heading\"><h2>History</h2><p>Retained health and service trends leading up to incidents.</p></div>"
-                + history_page()
-                + "</section>"
-                + "<section id=\"evidence\" class=\"moved-section\"><div class=\"moved-section-heading\"><h2>Evidence and Diagnostics</h2><p>Black-box evidence, support bundles, baseline captures, and raw engineering data.</p></div>"
-                + diagnostics_page()
-                + disclosure("Raw status JSON", "<pre>" + escape(json.dumps(status, indent=2)) + "</pre>")
-                + "</section>"
+            query = getattr(request_context, "query", {}) or {}
+            event_view = str(query.get("view", ["events"])[0]).lower()
+            if event_view not in {"events", "history", "evidence"}:
+                event_view = "events"
+            tabs = (
+                "<nav class=\"page-tabs\" aria-label=\"Events sections\">"
+                f"<a class=\"{'active' if event_view == 'events' else ''}\" href=\"/events?view=events\">Events</a>"
+                f"<a class=\"{'active' if event_view == 'history' else ''}\" href=\"/events?view=history\">History</a>"
+                f"<a class=\"{'active' if event_view == 'evidence' else ''}\" href=\"/events?view=evidence\">Evidence</a>"
+                "</nav>"
             )
+            if event_view == "history":
+                body = history_page()
+            elif event_view == "evidence":
+                body = diagnostics_page()
+            else:
+                body = events_page()
+            return page_help_html(page) + tabs + body
         if page == "Settings":
             return (
                 page_help_html(page)
@@ -2964,7 +2896,7 @@ def start_web(cfg):
                 "<p class=\"critical\">This page hit a runtime error while collecting live gateway details.</p>"
                 f"<pre>{escape(str(exc))}</pre>"
                 "<p class=\"muted\">The watchdog service can still be running even if this page failed. Use Evidence and Diagnostics or /api/status to check health while this is investigated.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/\">Overview</a><a class=\"ghost\" href=\"/events#evidence\">Evidence and Diagnostics</a><a class=\"ghost\" href=\"/api/status\">Raw status</a></div>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/\">Overview</a><a class=\"ghost\" href=\"/events?view=evidence\">Evidence</a><a class=\"ghost\" href=\"/api/status\">Raw status</a></div>"
                 "</div>"
             )
         return page_shell(body, page)
@@ -2977,8 +2909,8 @@ def start_web(cfg):
             f"<p class=\"{'healthy' if result.get('ok') else 'critical'}\">{escape(str(result.get('message', 'Baseline request processed.')))}</p>"
             f"<p>Current state: <strong>{escape(state.upper())}</strong></p>"
             "<p class=\"muted\">The capture runs independently. You can leave this page and return to Evidence and Diagnostics later.</p>"
-            "<div class=\"button-row\"><a class=\"action\" href=\"/events#evidence\">Back to Evidence and Diagnostics</a></div>"
-            "<script>setTimeout(function(){window.location.href='/events#evidence';},5000);</script>"
+            "<div class=\"button-row\"><a class=\"action\" href=\"/events?view=evidence\">Back to Evidence</a></div>"
+            "<script>setTimeout(function(){window.location.href='/events?view=evidence';},5000);</script>"
             "</div>"
         )
         return page_shell(body, "Diagnostics")
@@ -2990,7 +2922,7 @@ def start_web(cfg):
             "<p>Current journal persistence status: <strong>" + escape("Enabled" if current.get("enabled") else "Disabled or unavailable") + "</strong></p>"
             "<p class=\"muted\">This creates /var/log/journal if required and writes a separate VA-Watchdog drop-in without editing unrelated journald settings. It caps journals at 512 MB, reserves 1 GB free on the OS disk, retains up to 30 days, flushes journald, and restarts only systemd-journald.</p>"
             "<form method=\"post\" action=\"/journal-enable\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> I understand this changes system logging storage.</label>"
-            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Enable persistent logging</button><a class=\"ghost\" href=\"/events#evidence\">Cancel</a></div></form></div>"
+            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Enable persistent logging</button><a class=\"ghost\" href=\"/settings\">Cancel</a></div></form></div>"
         )
         return page_shell(body, "Diagnostics")
 
@@ -2999,7 +2931,7 @@ def start_web(cfg):
             "<div class=\"card\"><h2>Persistent Journald</h2>"
             f"<p class=\"{'healthy' if result.get('ok') else 'warning'}\">{escape(str(result.get('message', 'Action completed')))}</p>"
             f"<pre>{escape(json.dumps(result, indent=2))}</pre>"
-            "<div class=\"button-row\"><a class=\"ghost\" href=\"/events#evidence\">Back to Evidence and Diagnostics</a></div></div>"
+            "<div class=\"button-row\"><a class=\"ghost\" href=\"/settings\">Back to Settings</a></div></div>"
         )
         return page_shell(body, "Diagnostics")
 
@@ -5501,8 +5433,58 @@ def start_web(cfg):
     def recent_events(limit=500):
         return read_events(events_path, limit=limit)
 
-    def events_csv(limit=200):
-        rows = recent_events(limit=limit)
+    def filtered_events(query, limit=5000):
+        def first(name, default=""):
+            value = query.get(name, [default])
+            return str(value[0] if isinstance(value, list) and value else value or default).strip()
+
+        filters = {
+            "level": first("level", "all").lower(),
+            "search": first("search"),
+            "source": first("source"),
+            "from": first("from"),
+            "to": first("to"),
+        }
+
+        def filter_time(value):
+            if not value:
+                return None
+            try:
+                parsed = datetime.fromisoformat(value)
+                if parsed.tzinfo is None:
+                    parsed = parsed.astimezone()
+                return parsed.timestamp()
+            except (TypeError, ValueError):
+                return None
+
+        from_time = filter_time(filters["from"])
+        to_time = filter_time(filters["to"])
+        matches = []
+        for event in recent_events(limit=limit):
+            level = str(event.get("level", "info")).lower()
+            if filters["level"] == "attention" and level not in {"critical", "warning", "degraded"}:
+                continue
+            if filters["level"] not in {"", "all", "attention"} and level != filters["level"]:
+                continue
+            source = str(event.get("source", ""))
+            if filters["source"] and filters["source"].lower() not in source.lower():
+                continue
+            searchable = f"{source} {event.get('message', '')} {json.dumps(event.get('data') or {}, default=str)}".lower()
+            if filters["search"] and filters["search"].lower() not in searchable:
+                continue
+            try:
+                event_time = datetime.fromisoformat(str(event.get("time", "")).replace("Z", "+00:00")).timestamp()
+            except (TypeError, ValueError):
+                event_time = None
+            if from_time is not None and (event_time is None or event_time < from_time):
+                continue
+            if to_time is not None and (event_time is None or event_time > to_time):
+                continue
+            matches.append(event)
+        return matches, filters
+
+    def events_csv(limit=200, rows=None):
+        rows = recent_events(limit=limit) if rows is None else rows[:limit]
         identity = configured_identity(cfg)
         lines = ["site_name,asset_id,time,level,source,message"]
         for event in rows:
@@ -5801,6 +5783,7 @@ def start_web(cfg):
         def do_GET(self):
             request_context.theme = self._request_theme()
             route_path = self.path.split("?", 1)[0]
+            request_context.query = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "", keep_blank_values=True)
             if route_path in LEGACY_PAGE_REDIRECTS:
                 self.send_response(302)
                 self.send_header("Location", LEGACY_PAGE_REDIRECTS[route_path])
@@ -6012,13 +5995,15 @@ def start_web(cfg):
                 self._send_json(retention_status())
                 return
             if route_path == "/api/events/export":
+                rows, _ = filtered_events(request_context.query, limit=5000)
                 self._send_json({
                     "identity": configured_identity(cfg),
-                    "events": recent_events(limit=5000),
+                    "events": rows,
                 })
                 return
             if route_path == "/api/events/export.csv":
-                self._send_text(events_csv(limit=5000), content_type="text/csv")
+                rows, _ = filtered_events(request_context.query, limit=5000)
+                self._send_text(events_csv(limit=5000, rows=rows), content_type="text/csv")
                 return
             if route_path == "/api/history":
                 self._send_json(read_history(cfg, limit=288))

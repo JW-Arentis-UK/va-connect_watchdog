@@ -20,8 +20,8 @@ class WebNavigationTests(unittest.TestCase):
         self.assertEqual(LEGACY_PAGE_REDIRECTS, {
             "/storage": "/hardware#storage",
             "/watchdog": "/services#watchdog",
-            "/history": "/events#history",
-            "/diagnostics": "/events#evidence",
+            "/history": "/events?view=history",
+            "/diagnostics": "/events?view=evidence",
             "/recovery": "/settings#recovery",
             "/updates": "/settings#software-update",
         })
