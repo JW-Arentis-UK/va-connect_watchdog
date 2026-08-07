@@ -49,7 +49,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "hardware_watchdog": {
         "enabled": False,
+        "backend": "linux",
         "device": "/dev/watchdog0",
+        "library_path": "/usr/local/lib/va-watchdog/vendor/libwdt_dio.so",
         "feed_interval_seconds": 10,
         "timeout_seconds": 30,
         "stale_heartbeat_seconds": 15,

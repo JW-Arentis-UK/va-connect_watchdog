@@ -738,6 +738,8 @@ function renderWatchdogPage(status){
   const process = status.watchdog_process || {};
   const hwCfg = lastSettings.hardware_watchdog || {};
   const feed = status.hardware_watchdog_feed || {};
+  const backend = feed.backend || hwCfg.backend || 'linux';
+  const vendorBackend = backend === 'neousys_wdt_dio';
   const timeout = Number(hwCfg.timeout_seconds || 30);
   const systemd = watchdog.systemd_watchdog || {};
   const safeTest = watchdog.safe_test || {};
@@ -750,12 +752,16 @@ function renderWatchdogPage(status){
   const legacyClean = units.length ? units.every(unit => unit.active !== 'active' && !['enabled', 'static'].includes(unit.enabled)) : legacy.active !== 'active' && !['enabled', 'static'].includes(legacy.enabled);
   const lastFeed = feed.last_feed_unix ? `${Math.round((Date.now() / 1000) - Number(feed.last_feed_unix))}s ago` : 'No feed timestamp';
   const feedRecent = !!feed.last_feed_unix && ((Date.now() / 1000) - Number(feed.last_feed_unix)) <= Math.max(Number(hwCfg.feed_interval_seconds || 10) * 3, 30);
+  const driverLoaded = vendorBackend ? !!modules.wdt_dio : !!modules.iTCO_wdt;
+  const expectedIdentity = vendorBackend ? 'Neousys WDT_DIO' : 'iTCO_wdt';
+  const identityReady = String(wdctl.identity || '').includes(expectedIdentity) || (vendorBackend && feed.opened);
+  const selectedDevice = feed.device || hwCfg.device || (vendorBackend ? '/dev/wdt_dio' : '/dev/watchdog0');
   const setupChecks = [
-    ['Intel TCO driver', modules.iTCO_wdt ? 'healthy' : 'warning', modules.iTCO_wdt ? 'Loaded' : 'Not loaded yet'],
-    ['Watchdog device', wdctl.device ? (wdctl.identity && wdctl.identity !== '-' ? 'healthy' : 'warning') : 'warning', `${wdctl.device || '/dev/watchdog0'} / ${wdctl.identity || 'not ready'}`],
-    ['Driver identity', String(wdctl.identity || '').includes('iTCO_wdt') ? 'healthy' : 'warning', wdctl.identity || 'No iTCO identity reported yet'],
+    [vendorBackend ? 'Neousys WDT_DIO driver' : 'Intel TCO driver', driverLoaded ? 'healthy' : 'warning', driverLoaded ? 'Loaded' : 'Not loaded yet'],
+    ['Watchdog device', feed.opened || wdctl.state === 'healthy' ? 'healthy' : 'warning', `${selectedDevice} / ${wdctl.identity || 'not ready'}`],
+    ['Driver identity', identityReady ? 'healthy' : 'warning', wdctl.identity || `No ${expectedIdentity} identity reported yet`],
     ['Legacy daemon', legacyClean ? 'healthy' : 'critical', legacyClean ? 'Removed/disabled' : 'Another watchdog daemon may still own the device'],
-    ['Watchdog config', hwCfg.enabled ? 'healthy' : 'warning', `enabled=${!!hwCfg.enabled}, device=${hwCfg.device || '/dev/watchdog0'}`],
+    ['Watchdog config', hwCfg.enabled ? 'healthy' : 'warning', `backend=${backend}, enabled=${!!hwCfg.enabled}, device=${selectedDevice}`],
     ['Device owner', feed.opened ? 'healthy' : 'warning', feed.opened ? 'The watchdog service has opened the device' : (watchdog.owners?.summary || 'The watchdog service has not opened the device')],
     ['Live feed', feedRecent ? 'healthy' : 'warning', lastFeed],
     ['Process watchdog', systemd.state || 'warning', `${systemd.message || '-'}; ${systemd.watchdog_sec || '-'}`],
@@ -764,8 +770,9 @@ function renderWatchdogPage(status){
   const checkRows = setupChecks.map(row => `<tr><td>${escapeHtml(row[0])}</td><td class="${escapeHtml(row[1])}">${escapeHtml(row[1].toUpperCase())}</td><td>${escapeHtml(row[2])}</td></tr>`).join('');
   const checkCards = setupChecks.map(row => `<div class="setup-step ${escapeHtml(row[1])}"><div><div class="step-title">${escapeHtml(row[0])}</div><div class="step-detail">${escapeHtml(row[2])}</div></div><strong class="${escapeHtml(row[1])}">${escapeHtml(row[1].toUpperCase())}</strong></div>`).join('');
   const configRows = [
+    ['Backend', vendorBackend ? 'Neousys WDT_DIO' : 'Linux watchdog API'],
     ['Hardware feed', hwCfg.enabled ? 'Enabled' : 'Disabled'],
-    ['Device', hwCfg.device || '/dev/watchdog0'],
+    ['Device', selectedDevice],
     ['Opened device', feed.opened ? 'Yes' : 'No'],
     ['Feed interval', `${hwCfg.feed_interval_seconds || 10} seconds`],
     ['Configured timeout', `${timeout} seconds`],
@@ -788,10 +795,11 @@ function renderWatchdogPage(status){
   const legacyProblem = !legacyClean;
   const pageState = ready ? 'healthy' : (legacyProblem ? 'critical' : 'warning');
   const pageTitle = ready ? 'Hardware watchdog ready' : (legacyProblem ? 'Existing watchdog conflict found' : 'Watchdog needs setup');
-  const pageMessage = ready ? 'The watchdog service owns /dev/watchdog0 and is feeding it. The deliberate trip test is available.' : (legacyProblem ? 'A legacy watchdog service may own the device. Clean legacy watchdogs, then run one-click setup.' : 'Run the one-click setup to load the driver, clean old watchdog daemons, enable hardware feed, and restart the service.');
-  const primaryAction = ready ? `<a class="action" href="/watchdog-trip-confirm">${tripTest.armed ? 'Continue armed trip confirmation' : 'Start deliberate trip test'}</a>` : (legacyProblem ? '<a class="danger" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs</a>' : '<a class="action" href="/hardware-watchdog-prepare-confirm">Run one-click setup</a>');
+  const pageMessage = ready ? `The independent feeder owns ${selectedDevice} using ${vendorBackend ? 'the Neousys WDT_DIO API' : 'the Linux watchdog API'}. The deliberate trip test is available.` : (legacyProblem ? 'A legacy watchdog service may own the device. Clean legacy watchdogs, then complete setup.' : (vendorBackend ? 'The Neousys backend is selected but its driver, device, or feed is not ready. Run the reviewed vendor installer from SSH.' : 'Run the one-click setup to load the Intel driver, clean old watchdog daemons, enable hardware feed, and restart the service.'));
+  const primaryAction = ready ? `<a class="action" href="/watchdog-trip-confirm">${tripTest.armed ? 'Continue armed trip confirmation' : 'Start deliberate trip test'}</a>` : (legacyProblem ? '<a class="danger" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs</a>' : (vendorBackend ? '<button class="action" disabled>Neousys setup required</button>' : '<a class="action" href="/hardware-watchdog-prepare-confirm">Run one-click setup</a>'));
   const feedState = feed.enabled && feed.opened ? 'healthy' : 'warning';
-  return `${pageHelp('Watchdog')}<div class="card action-panel ${pageState}"><h2>${escapeHtml(pageTitle)}</h2><p class="${pageState}">${escapeHtml(pageMessage)}</p><div class="button-row">${primaryAction}<a class="ghost" href="/hardware-watchdog-prepare-confirm">Run full setup/cleanup</a><a class="ghost" href="/watchdog-hardware-probe-confirm">Run probe</a></div></div><div class="status-strip"><div class="status-box"><div class="label">Driver</div><div class="big ${modules.iTCO_wdt ? 'healthy' : 'warning'}">${modules.iTCO_wdt ? 'Loaded' : 'Needs setup'}</div><div class="step-detail">Intel TCO hardware watchdog driver</div></div><div class="status-box"><div class="label">Device</div><div class="big ${wdctl.device ? 'healthy' : 'warning'}">${escapeHtml(hwCfg.device || '/dev/watchdog0')}</div><div class="step-detail">${escapeHtml(wdctl.identity || 'No identity yet')}</div></div><div class="status-box"><div class="label">Hardware feed</div><div class="big ${feedState}">${feed.enabled && feed.opened ? 'Feeding' : 'Not feeding'}</div><div class="step-detail">${escapeHtml(lastFeed)}</div></div><div class="status-box"><div class="label">Legacy watchdogs</div><div class="big ${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Conflict' : 'Clear'}</div><div class="step-detail">${escapeHtml(legacyProblem ? 'Cleanup needed' : 'Removed/disabled')}</div></div></div><div class="grid lower-grid"><div class="card"><h2>Setup Checklist</h2><p class="muted">Work from top to bottom. Green means that layer is ready; amber/red shows the part to fix next.</p><div class="setup-steps">${checkCards}</div></div><div class="card"><h2>Existing Watchdogs and Cleanup</h2><p class="${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Another watchdog may still be installed or enabled.' : 'No conflicting legacy watchdog services detected.'}</p><table class="compact-table"><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead><tbody>${legacyRows}</tbody></table><p class="muted">This service should be the only process feeding the hardware watchdog.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs only</a><a class="ghost" href="/hardware">Hardware details</a></div></div></div><div class="grid lower-grid"><div class="card"><h2>Current Watchdog Configuration</h2><table class="compact-table"><tbody>${configRows}</tbody></table></div><div class="card"><h2>What the Layers Mean</h2><ul><li><strong>Hardware watchdog</strong> reboots the whole gateway if Linux stops feeding /dev/watchdog0.</li><li><strong>Hardware feed</strong> is this service opening and feeding the hardware device.</li><li><strong>Process watchdog</strong> is systemd restarting va-watchdog if the Python process hangs.</li><li><strong>Legacy watchdogs</strong> are old daemons/packages that should not also control the device.</li></ul></div></div><div class="grid lower-grid"><div class="card"><h2>Safe Watchdog Test</h2><p class="muted">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-test-arm"><button class="action" type="submit">Arm safe test</button></form></div><div class="label">Feed enabled</div><div class="value">${feed.enabled ? 'Enabled' : 'Disabled'}</div><div class="label">Last feed</div><div class="value">${escapeHtml(lastFeed)}</div></div><div class="card"><h2>Deliberate Watchdog Trip Test</h2><p class="warning">This stops hardware feeding and may reboot the gateway.</p><p class="muted">Open the test, tick the acknowledgement box, then run it.</p><div class="button-row">${tripAction}</div>${ready ? '' : '<p class="warning">Trip test is blocked until setup is complete and the service has a recent hardware feed.</p>'}<div class="label">State</div><div class="value">${escapeHtml(tripTest.triggered ? 'Triggered this boot' : (tripTest.completed_previous_boot ? 'Completed on previous boot' : 'Ready'))}</div><div class="label">Countdown verification</div><div class="value">${escapeHtml(tripCountdown.status || 'inactive')}${tripCountdown.current_timeleft == null ? '' : `; ${escapeHtml(tripCountdown.current_timeleft)}s remaining`}</div><div class="label">Last result</div><div class="value">${escapeHtml(tripTest.last_result_message || 'No trip test recorded yet')}</div></div><div class="card"><h2>Extend Timeout</h2><p class="muted">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p><form method="post" action="/watchdog-timeout-set"><label class="label">Timeout seconds</label><select name="timeout_seconds"><option value="30" ${timeout === 30 ? 'selected' : ''}>30</option><option value="60" ${timeout === 60 ? 'selected' : ''}>60</option><option value="120" ${timeout === 120 ? 'selected' : ''}>120</option><option value="180" ${timeout === 180 ? 'selected' : ''}>180</option><option value="300" ${timeout === 300 ? 'selected' : ''}>300</option></select><div class="button-row"><button class="action" type="submit">Apply timeout</button></div></form><p class="muted">Use a longer timeout while diagnosing reboot loops. Put it back to 30s once stable.</p></div></div><div class="card"><h2>Advanced Tools</h2><p class="muted">Use these only when the guided setup cannot complete.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy only</a><a class="ghost" href="/hardware-watchdog-enable-confirm">Enable feed only</a><a class="ghost" href="/hardware">Hardware details</a><a class="ghost" href="/events#evidence">Diagnostics</a></div></div>`;
+  const setupLink = vendorBackend ? '' : '<a class="ghost" href="/hardware-watchdog-prepare-confirm">Run full setup/cleanup</a>';
+  return `${pageHelp('Watchdog')}<div class="card action-panel ${pageState}"><h2>${escapeHtml(pageTitle)}</h2><p class="${pageState}">${escapeHtml(pageMessage)}</p><div class="button-row">${primaryAction}${setupLink}<a class="ghost" href="/watchdog-hardware-probe-confirm">Run probe</a></div></div><div class="status-strip"><div class="status-box"><div class="label">Driver</div><div class="big ${driverLoaded ? 'healthy' : 'warning'}">${driverLoaded ? 'Loaded' : 'Needs setup'}</div><div class="step-detail">${escapeHtml(vendorBackend ? 'Neousys WDT_DIO' : 'Intel TCO')}</div></div><div class="status-box"><div class="label">Device</div><div class="big ${feed.opened || wdctl.state === 'healthy' ? 'healthy' : 'warning'}">${escapeHtml(selectedDevice)}</div><div class="step-detail">${escapeHtml(wdctl.identity || 'No identity yet')}</div></div><div class="status-box"><div class="label">Hardware feed</div><div class="big ${feedState}">${feed.enabled && feed.opened ? 'Feeding' : 'Not feeding'}</div><div class="step-detail">${escapeHtml(lastFeed)}</div></div><div class="status-box"><div class="label">Legacy watchdogs</div><div class="big ${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Conflict' : 'Clear'}</div><div class="step-detail">${escapeHtml(legacyProblem ? 'Cleanup needed' : 'Removed/disabled')}</div></div></div><div class="grid lower-grid"><div class="card"><h2>Setup Checklist</h2><p class="muted">Work from top to bottom. Green means that layer is ready; amber/red shows the part to fix next.</p><div class="setup-steps">${checkCards}</div></div><div class="card"><h2>Existing Watchdogs and Cleanup</h2><p class="${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Another watchdog may still be installed or enabled.' : 'No conflicting legacy watchdog services detected.'}</p><table class="compact-table"><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead><tbody>${legacyRows}</tbody></table><p class="muted">This service should be the only process feeding the hardware watchdog.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs only</a><a class="ghost" href="/hardware">Hardware details</a></div></div></div><div class="grid lower-grid"><div class="card"><h2>Current Watchdog Configuration</h2><table class="compact-table"><tbody>${configRows}</tbody></table></div><div class="card"><h2>What the Layers Mean</h2><ul><li><strong>Hardware watchdog</strong> reboots the whole gateway if its selected backend stops receiving feeds.</li><li><strong>Hardware feed</strong> is the independent feeder controlling the selected device.</li><li><strong>Process watchdog</strong> is systemd restarting va-watchdog if the Python process hangs.</li><li><strong>Legacy watchdogs</strong> are old daemons/packages that should not also control the hardware.</li></ul></div></div><div class="grid lower-grid"><div class="card"><h2>Safe Watchdog Test</h2><p class="muted">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-test-arm"><button class="action" type="submit">Arm safe test</button></form></div><div class="label">Feed enabled</div><div class="value">${feed.enabled ? 'Enabled' : 'Disabled'}</div><div class="label">Last feed</div><div class="value">${escapeHtml(lastFeed)}</div></div><div class="card"><h2>Deliberate Watchdog Trip Test</h2><p class="warning">This stops hardware feeding and may reboot the gateway.</p><p class="muted">Open the test, tick the acknowledgement box, then run it.</p><div class="button-row">${tripAction}</div>${ready ? '' : '<p class="warning">Trip test is blocked until setup is complete and the service has a recent hardware feed.</p>'}<div class="label">State</div><div class="value">${escapeHtml(tripTest.triggered ? 'Triggered this boot' : (tripTest.completed_previous_boot ? 'Completed on previous boot' : 'Ready'))}</div><div class="label">Countdown verification</div><div class="value">${escapeHtml(tripCountdown.status || 'inactive')}${tripCountdown.current_timeleft == null ? '' : `; ${escapeHtml(tripCountdown.current_timeleft)}s remaining`}</div><div class="label">Last result</div><div class="value">${escapeHtml(tripTest.last_result_message || 'No trip test recorded yet')}</div></div><div class="card"><h2>Extend Timeout</h2><p class="muted">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p><form method="post" action="/watchdog-timeout-set"><label class="label">Timeout seconds</label><select name="timeout_seconds"><option value="30" ${timeout === 30 ? 'selected' : ''}>30</option><option value="60" ${timeout === 60 ? 'selected' : ''}>60</option><option value="120" ${timeout === 120 ? 'selected' : ''}>120</option><option value="180" ${timeout === 180 ? 'selected' : ''}>180</option><option value="300" ${timeout === 300 ? 'selected' : ''}>300</option></select><div class="button-row"><button class="action" type="submit">Apply timeout</button></div></form><p class="muted">Use a longer timeout while diagnosing reboot loops. Put it back to 30s once stable.</p></div></div><div class="card"><h2>Advanced Tools</h2><p class="muted">Use these only when the guided setup cannot complete.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy only</a><a class="ghost" href="/hardware">Hardware details</a><a class="ghost" href="/events#evidence">Diagnostics</a></div></div>`;
 }
 
 function renderOperationalStatus(status){
@@ -4044,8 +4052,12 @@ def start_web(cfg):
         owner = watchdog.get("owners", {})
         wdt = watchdog_test_summary()
         hw_cfg = cfg.get("hardware_watchdog", {})
+        backend = str(hw_cfg.get("backend") or "linux")
+        vendor_backend = backend == "neousys_wdt_dio"
         device = str(hw_cfg.get("device") or watchdog.get("device") or "/dev/watchdog0")
         identity = str(wdctl.get("identity", ""))
+        driver_loaded = bool(modules.get("wdt_dio")) if vendor_backend else bool(modules.get("iTCO_wdt"))
+        identity_ready = "Neousys WDT_DIO" in identity if vendor_backend else "iTCO_wdt" in identity
         feed_enabled = bool(hw_cfg.get("enabled"))
         feed_opened = bool(wdt.get("opened"))
         feed_recent = wdt.get("feed_state") == "healthy"
@@ -4055,9 +4067,9 @@ def start_web(cfg):
         feed_interval = int(hw_cfg.get("feed_interval_seconds", 10) or 10)
         rows = [
             {
-                "name": "Intel TCO driver",
-                "state": "healthy" if modules.get("iTCO_wdt") else "warning",
-                "message": "Loaded" if modules.get("iTCO_wdt") else "Not loaded yet",
+                "name": "Neousys WDT_DIO driver" if vendor_backend else "Intel TCO driver",
+                "state": "healthy" if driver_loaded else "warning",
+                "message": "Loaded" if driver_loaded else "Not loaded yet",
             },
             {
                 "name": "Watchdog device",
@@ -4066,8 +4078,8 @@ def start_web(cfg):
             },
             {
                 "name": "Driver identity",
-                "state": "healthy" if "iTCO_wdt" in identity else "warning",
-                "message": identity or "No iTCO identity reported yet",
+                "state": "healthy" if identity_ready else "warning",
+                "message": identity or ("No Neousys identity reported yet" if vendor_backend else "No iTCO identity reported yet"),
             },
             {
                 "name": "Legacy daemon",
@@ -4077,7 +4089,7 @@ def start_web(cfg):
             {
                 "name": "Watchdog config",
                 "state": "healthy" if feed_enabled else "warning",
-                "message": f"enabled={feed_enabled}, device={device}, feed={feed_interval}s, timeout={timeout}s",
+                "message": f"backend={backend}, enabled={feed_enabled}, device={device}, feed={feed_interval}s, timeout={timeout}s",
             },
             {
                 "name": "Device owner",
@@ -4109,6 +4121,7 @@ def start_web(cfg):
             "config": {
                 "path": str(active_config_path()),
                 "enabled": feed_enabled,
+                "backend": backend,
                 "device": device,
                 "feed_interval_seconds": feed_interval,
                 "timeout_seconds": timeout,
@@ -4983,6 +4996,8 @@ def start_web(cfg):
                     }
         block_devices = _run(["lsblk", "-o", "NAME,MODEL,SIZE,TYPE,MOUNTPOINT", "-n"])["stdout"].splitlines()
         watchdog_devices = sorted(str(path) for path in Path("/dev").glob("watchdog*"))
+        if Path("/dev/wdt_dio").exists():
+            watchdog_devices.append("/dev/wdt_dio")
         watchdog_summary = watchdog_driver_info(watchdog_devices)
         status = status_snapshot()
         live_feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
@@ -5008,13 +5023,17 @@ def start_web(cfg):
             "iTCO_wdt": False,
             "iTCO_vendor_support": False,
             "intel_pmc_bxt": False,
+            "wdt_dio": False,
         }
         proc_modules = Path("/proc/modules")
         if proc_modules.exists():
             text = proc_modules.read_text(encoding="utf-8", errors="ignore")
             for name in modules:
                 modules[name] = any(line.startswith(name + " ") for line in text.splitlines())
-        device = "/dev/watchdog0" if "/dev/watchdog0" in watchdog_devices else (watchdog_devices[0] if watchdog_devices else "/dev/watchdog0")
+        hw_cfg = cfg.get("hardware_watchdog", {}) if isinstance(cfg.get("hardware_watchdog", {}), dict) else {}
+        backend = str(hw_cfg.get("backend") or "linux")
+        configured_device = str(hw_cfg.get("device") or ("/dev/wdt_dio" if backend == "neousys_wdt_dio" else "/dev/watchdog0"))
+        device = configured_device if configured_device in watchdog_devices else (watchdog_devices[0] if watchdog_devices else configured_device)
         wdctl = {
             "device": device,
             "state": "warning",
@@ -5022,7 +5041,14 @@ def start_web(cfg):
             "timeout": "-",
             "raw": "",
         }
-        if Path(device).exists():
+        if backend == "neousys_wdt_dio" and Path(device).exists():
+            wdctl.update({
+                "state": "healthy",
+                "identity": "Neousys WDT_DIO",
+                "timeout": str(hw_cfg.get("timeout_seconds") or 30),
+                "raw": "Vendor API backend; Linux wdctl does not apply.",
+            })
+        elif Path(device).exists():
             result = _run(["wdctl", device], timeout=4)
             raw = result["stdout"] or result["stderr"]
             wdctl["raw"] = raw
@@ -5034,8 +5060,9 @@ def start_web(cfg):
                 elif "Timeout:" in line:
                     wdctl["timeout"] = line.split("Timeout:", 1)[1].strip()
         return {
-            "expected_driver": "iTCO_wdt",
-            "expected_identity": "iTCO_wdt [version 6]",
+            "backend": backend,
+            "expected_driver": "wdt_dio" if backend == "neousys_wdt_dio" else "iTCO_wdt",
+            "expected_identity": "Neousys WDT_DIO" if backend == "neousys_wdt_dio" else "iTCO_wdt [version 6]",
             "device": device,
             "modules": modules,
             "wdctl": wdctl,
@@ -5611,6 +5638,9 @@ def start_web(cfg):
             "disk-lsblk.txt": _run(["lsblk", "-o", "NAME,PATH,TYPE,SIZE,FSTYPE,LABEL,MOUNTPOINT,MODEL,SERIAL"], timeout=5),
             "mounts-findmnt.txt": _run(["findmnt"], timeout=5),
             "watchdog-wdctl.txt": _run(["wdctl", str(cfg.get("hardware_watchdog", {}).get("device") or "/dev/watchdog0")], timeout=5),
+            "watchdog-modules.txt": _run(["bash", "-lc", "grep -E '^(wdt_dio|iTCO_wdt|iTCO_vendor_support) ' /proc/modules || true"], timeout=5),
+            "neousys-module.txt": _run(["modinfo", "wdt_dio"], timeout=5),
+            "neousys-files.txt": _run(["bash", "-lc", "ls -l /dev/wdt_dio /usr/local/lib/va-watchdog/vendor/libwdt_dio.so 2>&1; sha256sum /usr/local/lib/va-watchdog/vendor/libwdt_dio.so 2>&1"], timeout=5),
             "network-ip-addr.txt": _run(["ip", "-4", "addr", "show"], timeout=5),
             "network-routes.txt": _run(["ip", "route"], timeout=5),
             "kernel-previous-boot.txt": _run(["journalctl", "-b", "-1", "-k", "--no-pager"], timeout=15),

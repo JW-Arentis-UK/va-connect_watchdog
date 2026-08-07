@@ -23,7 +23,12 @@ class FeedWorker:
         self.cfg = cfg
         hw_cfg = cfg.get("hardware_watchdog", {})
         self.enabled = bool(hw_cfg.get("enabled", False))
+        self.backend = str(hw_cfg.get("backend") or "linux")
         self.device = str(hw_cfg.get("device") or "/dev/watchdog0")
+        self.library_path = str(
+            hw_cfg.get("library_path")
+            or "/usr/local/lib/va-watchdog/vendor/libwdt_dio.so"
+        )
         self.interval = max(1, int(hw_cfg.get("feed_interval_seconds", 10) or 10))
         self.timeout = max(5, int(hw_cfg.get("timeout_seconds", 30) or 30))
         configured_stale = float(hw_cfg.get("stale_heartbeat_seconds", 15) or 15)
@@ -32,7 +37,15 @@ class FeedWorker:
         self.lock_path = Path(cfg.get("hardware_watchdog_lock_path") or Path(cfg["events_path"]).parent / "hardware-watchdog.lock")
         self.stop_requested = False
         self.lock_handle = None
-        self.hw = HardwareWatchdog(True, self.device, self.interval, None, timeout_seconds=self.timeout)
+        self.hw = HardwareWatchdog(
+            True,
+            self.device,
+            self.interval,
+            None,
+            timeout_seconds=self.timeout,
+            backend=self.backend,
+            library_path=self.library_path,
+        )
         self.last_error = ""
         self.error_count = 0
         self.magic_close = bool(hw_cfg.get("magic_close", False))
@@ -69,12 +82,13 @@ class FeedWorker:
         payload = {
             "pid": os.getpid(),
             "process_status": status,
+            "backend": self.backend,
             "device": self.device,
             "interval_seconds": self.interval,
             "timeout_seconds": self.hw.get_timeout(),
             "stale_heartbeat_seconds": self.stale_seconds,
             "magic_close_requested": self.magic_close,
-            "shutdown_behavior": "write V before close" if self.magic_close else "driver close semantics; nowayout may keep timer armed",
+            "shutdown_behavior": self._shutdown_behavior(),
             "nowayout": self.nowayout,
             "last_feed_utc": last_feed_utc,
             "last_feed_unix": last_feed_unix,
@@ -96,6 +110,8 @@ class FeedWorker:
         os.replace(temporary, self.state_path)
 
     def _read_timeleft(self):
+        if self.backend == "neousys_wdt_dio":
+            return None
         path = Path(f"/sys/class/watchdog/{Path(self.device).name}/timeleft")
         try:
             return int(path.read_text(encoding="utf-8").strip())
@@ -131,9 +147,25 @@ class FeedWorker:
 
         elapsed = max(0.0, now - self.trip_started_monotonic)
         if current is None or self.trip_initial_timeleft is None:
-            # Some watchdog drivers do not expose timeleft. Preserve the existing
-            # deliberate trip behavior rather than masking a potentially valid test.
             self.trip_countdown_status = "unavailable"
+            if elapsed >= float(self.timeout) + 5.0:
+                message = (
+                    "Trip test failed safely: this watchdog does not expose a countdown and "
+                    "the gateway did not reboot within the configured timeout; feeding resumed."
+                )
+                fail_trip_test(
+                    self.cfg,
+                    message,
+                    {
+                        "backend": self.backend,
+                        "device": self.device,
+                        "elapsed_seconds": round(elapsed, 1),
+                    },
+                )
+                self.last_error = message
+                self.error_count += 1
+                self.trip_countdown_status = "failed_no_reset"
+                return False
             return True
 
         if not self.trip_countdown_confirmed and elapsed >= self.trip_verify_seconds:
@@ -190,6 +222,8 @@ class FeedWorker:
             raise RuntimeError(f"another watchdog feeder owns {self.device}: {exc}") from exc
 
     def _read_nowayout(self):
+        if self.backend == "neousys_wdt_dio":
+            return None
         for path in ("/sys/module/iTCO_wdt/parameters/nowayout", "/sys/module/watchdog_core/parameters/nowayout"):
             try:
                 value = Path(path).read_text(encoding="utf-8").strip().lower()
@@ -198,6 +232,13 @@ class FeedWorker:
             except OSError:
                 continue
         return None
+
+    def _shutdown_behavior(self):
+        if self.backend == "neousys_wdt_dio":
+            return "StopWDT on orderly service stop; feeder crash leaves hardware timer active"
+        if self.magic_close:
+            return "write V before close"
+        return "driver close semantics; nowayout may keep timer armed"
 
     def _legacy_conflict(self):
         for unit in ("watchdog.service", "wd_keepalive.service"):
@@ -251,9 +292,7 @@ class FeedWorker:
                 allowed = self.heartbeat_allows_feed(heartbeat, grace, trip_active=effective_trip_active)
                 if allowed and (self.hw.last_feed is None or time.time() - self.hw.last_feed >= self.interval):
                     try:
-                        self.hw.handle.write(b"\0")
-                        self.hw.last_feed = time.time()
-                        self.hw.feed_count += 1
+                        self.hw.feed()
                         self.last_error = ""
                         self.write_state("feeding")
                     except Exception as exc:
@@ -265,11 +304,17 @@ class FeedWorker:
                 time.sleep(min(1, self.interval))
         finally:
             self.write_state("stopping")
-            self.hw.close(magic_close=bool(self.cfg.get("hardware_watchdog", {}).get("magic_close", False)))
-            if self.lock_handle:
-                if fcntl is not None:
-                    fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_UN)
-                self.lock_handle.close()
+            try:
+                self.hw.close(magic_close=bool(self.cfg.get("hardware_watchdog", {}).get("magic_close", False)))
+            except Exception as exc:
+                self.last_error = f"orderly watchdog stop failed: {exc}"
+                self.error_count += 1
+                self.write_state("stop_error")
+            finally:
+                if self.lock_handle:
+                    if fcntl is not None:
+                        fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_UN)
+                    self.lock_handle.close()
         return 0
 
 

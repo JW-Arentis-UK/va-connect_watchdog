@@ -142,6 +142,7 @@ def hardware_feed_status(cfg, startup_grace, trip_active=False, trip_summary=Non
         feed_age = None
     return {
         "enabled": bool(hw_cfg.get("enabled")),
+        "backend": feed.get("backend") or hw_cfg.get("backend", "linux"),
         "device": feed.get("device") or hw_cfg.get("device", "/dev/watchdog0"),
         "opened": feed.get("process_status") in {"running", "feeding", "paused_stale_heartbeat", "paused_trip_test"},
         "last_feed_unix": last_feed_unix,
