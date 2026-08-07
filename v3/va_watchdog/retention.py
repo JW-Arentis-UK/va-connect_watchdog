@@ -14,6 +14,11 @@ def data_dir(cfg: dict[str, Any]) -> Path:
     return Path(cfg["events_path"]).parent
 
 
+def blackbox_segment_dir(cfg: dict[str, Any]) -> Path:
+    configured = cfg.get("blackbox", {}) if isinstance(cfg.get("blackbox", {}), dict) else {}
+    return Path(configured.get("segment_dir") or data_dir(cfg) / "blackbox-buffer")
+
+
 def data_files(cfg: dict[str, Any]) -> list[Path]:
     base = data_dir(cfg)
     files = [
@@ -87,6 +92,7 @@ def retention_status(cfg: dict[str, Any]) -> dict[str, Any]:
         "history_sample_seconds": retention.get("history_sample_seconds"),
         "history_max_rows": retention.get("history_max_rows"),
         "exports_retention_days": retention.get("exports_retention_days"),
+        "blackbox_buffer_bytes": dir_size(blackbox_segment_dir(cfg)),
         "files": files,
     }
 
@@ -112,6 +118,16 @@ def purge_data(cfg: dict[str, Any], mode: str = "old", older_than_days: int | No
                 removed.append({"path": str(path), "size_bytes": size})
             except OSError:
                 pass
+    segment_dir = blackbox_segment_dir(cfg)
+    if segment_dir.is_dir():
+        for path in segment_dir.glob("*.jsonl.gz"):
+            try:
+                if mode == "all" or (cutoff is not None and path.stat().st_mtime < cutoff):
+                    size = file_size(path)
+                    path.unlink()
+                    removed.append({"path": str(path), "size_bytes": size})
+            except OSError:
+                continue
     return {"removed": removed, "trimmed": trimmed, "retention": retention_status(cfg)}
 
 
@@ -139,6 +155,13 @@ def enforce_retention(cfg: dict[str, Any]) -> dict[str, Any]:
         candidates = []
         for path in data_files(cfg):
             if path.exists() and path.name != "status.json":
+                try:
+                    candidates.append((path.stat().st_mtime, path))
+                except OSError:
+                    continue
+        segment_dir = blackbox_segment_dir(cfg)
+        if segment_dir.is_dir():
+            for path in segment_dir.glob("*.jsonl.gz"):
                 try:
                     candidates.append((path.stat().st_mtime, path))
                 except OSError:

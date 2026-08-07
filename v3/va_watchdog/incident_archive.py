@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .blackbox import write_boot_archive
+
 
 def archive_config(cfg: dict[str, Any]) -> dict[str, Any]:
     data_dir = Path(cfg.get("events_path", "/var/lib/va-watchdog/events.jsonl")).parent
@@ -60,9 +62,7 @@ def archive_previous_boot(
 
     heartbeat_path = Path(cfg.get("heartbeat_path") or data_dir / "heartbeat.jsonl")
     files.append(_filter_jsonl(heartbeat_path, temporary / "heartbeat.jsonl.gz", previous_boot))
-    blackbox_cfg = cfg.get("blackbox", {}) if isinstance(cfg.get("blackbox"), dict) else {}
-    blackbox_path = Path(blackbox_cfg.get("path") or data_dir / "blackbox.jsonl")
-    files.append(_filter_jsonl(blackbox_path, temporary / "blackbox.jsonl.gz", previous_boot))
+    files.append(write_boot_archive(cfg, temporary / "blackbox.jsonl.gz", previous_boot))
     history_path = Path(cfg.get("history_path") or data_dir / "history.jsonl")
     files.append(_filter_jsonl(history_path, temporary / "history.jsonl.gz", previous_boot))
     events_path = Path(cfg.get("events_path") or data_dir / "events.jsonl")

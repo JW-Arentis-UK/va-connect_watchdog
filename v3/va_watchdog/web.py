@@ -5621,7 +5621,6 @@ def start_web(cfg):
             "status.json": status_path,
             "events.jsonl": events_path,
             "history.jsonl": history_path(cfg),
-            "blackbox.jsonl": Path(blackbox_summary(cfg)["path"]),
             "update-state.json": data_dir / "update-state.json",
             "update.log": Path(cfg.get("update", {}).get("log_path") or data_dir / "update.log"),
             "last-reboot-reason.json": Path(cfg.get("last_reboot_reason_path") or data_dir / "last-reboot-reason.json"),
@@ -5656,8 +5655,13 @@ def start_web(cfg):
             archive.writestr("hardware-info.json", json.dumps(hardware_info(), indent=2))
             archive.writestr("network-info.json", json.dumps(network_info(), indent=2))
             archive.writestr("services-info.json", json.dumps(service_info(), indent=2))
-            archive.writestr("blackbox-summary.json", json.dumps(blackbox_summary(cfg), indent=2))
-            archive.writestr("blackbox-last-100.json", json.dumps(read_blackbox(cfg, limit=100), indent=2))
+            blackbox_state = blackbox_summary(cfg)
+            blackbox_rows = read_blackbox(cfg, limit=blackbox_state.get("max_rows", 450))
+            archive.writestr("blackbox-summary.json", json.dumps(blackbox_state, indent=2))
+            archive.writestr(
+                "blackbox-buffer.jsonl",
+                "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in blackbox_rows),
+            )
             archive.writestr("history-export.csv", history_csv(limit=5000))
             archive.writestr("events-export.csv", events_csv(limit=1000))
             for name, result in command_outputs.items():
@@ -6031,7 +6035,8 @@ def start_web(cfg):
                     self._send_json({"error": str(exc)}, status=500)
                 return
             if route_path == "/api/blackbox":
-                self._send_json({"summary": blackbox_summary(cfg), "snapshots": read_blackbox(cfg, limit=100)})
+                summary = blackbox_summary(cfg)
+                self._send_json({"summary": summary, "snapshots": read_blackbox(cfg, limit=summary.get("max_rows", 450))})
                 return
             if route_path == "/api/diagnostics/support-bundle.zip":
                 try:

@@ -17,11 +17,13 @@
   "blackbox": {
     "enabled": true,
     "path": "/var/lib/va-watchdog/blackbox.jsonl",
+    "segment_dir": "/var/lib/va-watchdog/blackbox-buffer",
     "state_path": "/var/lib/va-watchdog/blackbox-state.json",
-    "sample_seconds": 60,
-    "max_rows": 300,
-    "top_process_count": 8,
-    "journal_lines": 30
+    "interval_seconds": 2,
+    "retention_seconds": 900,
+    "checkpoint_seconds": 10,
+    "main_service": "esg.service",
+    "max_kernel_records_per_sample": 256
   },
   "incident_archive": {
     "enabled": true,

@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 import traceback
 
-from .blackbox import check_unexpected_boot, maybe_capture_blackbox
+from .blackbox import blackbox_summary, check_unexpected_boot, start_recorder
 from .config import load_config
 from .common import CheckResult, score_from_checks, worst_state
 from .events import EventLog
@@ -175,6 +175,8 @@ def main():
             reboot_evidence,
         )
 
+    _blackbox_recorder = start_recorder(cfg)
+
     event_log.add("info", "watchdog", "VA-Connect Watchdog starting")
     trip_active, trip_summary = trip_test_active(cfg)
     startup_grace = startup_grace_status(cfg, trip_summary)
@@ -208,7 +210,7 @@ def main():
     status["heartbeat"] = heartbeat.publish_once()
     atomic_write_json(cfg["status_path"], status)
     append_history(cfg, status)
-    maybe_capture_blackbox(cfg, status, force=True)
+    status["blackbox"] = blackbox_summary(cfg)
     heartbeat.start()
     start_web(cfg)
     systemd_notify("READY=1\nSTATUS=VA-Connect Watchdog running")
@@ -244,7 +246,7 @@ def main():
             if time.time() - last_kernel_scan >= 30:
                 status["kernel_faults"] = scan_kernel_faults(cfg, event_log)
                 last_kernel_scan = time.time()
-            status["blackbox"] = maybe_capture_blackbox(cfg, status)
+            status["blackbox"] = blackbox_summary(cfg)
             heartbeat.mark_health_sample(
                 health_sequence,
                 status["hardware_watchdog_feed"].get("last_feed_utc", ""),
