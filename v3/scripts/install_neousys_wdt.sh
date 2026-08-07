@@ -56,15 +56,16 @@ fi
 [[ "$(uname -m)" == "x86_64" ]] || fail "the supplied vendor library supports x86_64 only"
 kernel="$(uname -r)"
 kernel_build="/lib/modules/$kernel/build"
+kernel_cc="x86_64-linux-gnu-gcc-12"
 
-if ! command -v make >/dev/null 2>&1 || ! command -v gcc >/dev/null 2>&1 || [[ ! -d "$kernel_build" ]] || { [[ "$BUNDLE" == *.zip ]] && ! command -v unzip >/dev/null 2>&1; }; then
+if ! command -v make >/dev/null 2>&1 || ! command -v "$kernel_cc" >/dev/null 2>&1 || [[ ! -d "$kernel_build" ]] || { [[ "$BUNDLE" == *.zip ]] && ! command -v unzip >/dev/null 2>&1; }; then
   command -v apt-get >/dev/null 2>&1 || fail "build tools or kernel headers are missing and apt-get is unavailable"
   log "Installing build tools and headers for $kernel"
   apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential "linux-headers-$kernel" unzip
+  DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential gcc-12 "linux-headers-$kernel" unzip
 fi
 
-for command in sha256sum tar make gcc install depmod modprobe python3; do
+for command in sha256sum tar make "$kernel_cc" install depmod modprobe python3; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is required"
 done
 
@@ -111,9 +112,9 @@ if [[ "$product" != *"POC-451VTC"* ]]; then
   fail "this reviewed installation path is restricted to POC-451VTC; detected: ${product:-unknown}"
 fi
 
-log "Building wdt_dio.ko for $kernel"
-make -C "$kernel_build" M="$driver_dir" clean >/dev/null
-make -C "$kernel_build" M="$driver_dir" modules
+log "Building wdt_dio.ko for $kernel with $kernel_cc"
+make -C "$kernel_build" M="$driver_dir" CC="$kernel_cc" clean >/dev/null
+make -C "$kernel_build" M="$driver_dir" CC="$kernel_cc" modules
 
 module_target="/lib/modules/$kernel/extra/va-watchdog/wdt_dio.ko"
 install -D -m 0644 "$driver_dir/wdt_dio.ko" "$module_target"

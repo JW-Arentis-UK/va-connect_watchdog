@@ -172,7 +172,8 @@ class NeousysWatchdogTests(unittest.TestCase):
         self.assertIn('if [[ "$ACTIVATE" != 1 ]]', text)
         self.assertIn("configuration was not changed", text)
         self.assertIn('product" != *"POC-451VTC"*', text)
-        self.assertIn('apt-get install -y build-essential "linux-headers-$kernel" unzip', text)
+        self.assertIn('apt-get install -y build-essential gcc-12 "linux-headers-$kernel" unzip', text)
+        self.assertIn('CC="$kernel_cc" modules', text)
         self.assertIn("blacklist iTCO_wdt", text)
         self.assertIn("apt-get remove -y watchdog", text)
 
