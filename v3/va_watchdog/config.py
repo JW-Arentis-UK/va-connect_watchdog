@@ -49,8 +49,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "hardware_watchdog": {
         "enabled": False,
-        "backend": "linux",
-        "device": "/dev/watchdog0",
+        "backend": "neousys_wdt_dio",
+        "device": "/dev/wdt_dio",
         "library_path": "/usr/local/lib/va-watchdog/vendor/libwdt_dio.so",
         "feed_interval_seconds": 10,
         "timeout_seconds": 30,
@@ -203,6 +203,23 @@ def _migrate_default_videosoft_services(cfg: Dict[str, Any]) -> Dict[str, Any]:
         cfg["services"] = [*services, {"name": "sysops.service", "critical": True, "restart": True}]
     return cfg
 
+
+def _enforce_neousys_watchdog(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """This test build has one hardware backend and cannot fall back to alternatives."""
+    cfg = dict(cfg)
+    hardware = dict(cfg.get("hardware_watchdog", {}))
+    migrating_backend = hardware.get("backend") != "neousys_wdt_dio"
+    hardware.update({
+        "backend": "neousys_wdt_dio",
+        "device": "/dev/wdt_dio",
+        "library_path": "/usr/local/lib/va-watchdog/vendor/libwdt_dio.so",
+        "magic_close": False,
+    })
+    if migrating_backend:
+        hardware["enabled"] = False
+    cfg["hardware_watchdog"] = hardware
+    return cfg
+
 def load_config() -> Dict[str, Any]:
     cfg = DEFAULT_CONFIG
     for path in CONFIG_PATHS:
@@ -210,7 +227,7 @@ def load_config() -> Dict[str, Any]:
             with path.open("r", encoding="utf-8") as f:
                 cfg = deep_merge(cfg, json.load(f))
             break
-    return _migrate_default_videosoft_services(cfg)
+    return _enforce_neousys_watchdog(_migrate_default_videosoft_services(cfg))
 
 def active_config_path() -> Path:
     for path in CONFIG_PATHS:

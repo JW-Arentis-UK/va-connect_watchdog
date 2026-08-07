@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from va_watchdog.config import _enforce_neousys_watchdog
 from va_watchdog.neousys_watchdog import NeousysWatchdog
 from va_watchdog.watchdog_device import HardwareWatchdog
 from va_watchdog.watchdog_feed import FeedWorker
@@ -33,6 +34,36 @@ class FakeLibrary:
 
 
 class NeousysWatchdogTests(unittest.TestCase):
+    def test_migrating_an_enabled_linux_backend_is_safely_disabled(self):
+        config = _enforce_neousys_watchdog({
+            "hardware_watchdog": {
+                "enabled": True,
+                "backend": "linux_watchdog",
+                "device": "/dev/watchdog0",
+            }
+        })
+
+        self.assertEqual(config["hardware_watchdog"]["backend"], "neousys_wdt_dio")
+        self.assertEqual(config["hardware_watchdog"]["device"], "/dev/wdt_dio")
+        self.assertFalse(config["hardware_watchdog"]["enabled"])
+
+    def test_existing_neousys_activation_is_preserved(self):
+        config = _enforce_neousys_watchdog({
+            "hardware_watchdog": {"enabled": True, "backend": "neousys_wdt_dio"}
+        })
+
+        self.assertTrue(config["hardware_watchdog"]["enabled"])
+
+    def test_linux_watchdog_backend_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "unsupported hardware watchdog backend"):
+            HardwareWatchdog(
+                True,
+                "/dev/watchdog0",
+                10,
+                None,
+                backend="linux_watchdog",
+            )
+
     def test_vendor_start_feed_and_orderly_stop(self):
         with tempfile.TemporaryDirectory() as temporary:
             library_path = Path(temporary) / "libwdt_dio.so"
@@ -88,6 +119,17 @@ class NeousysWatchdogTests(unittest.TestCase):
         self.assertEqual(hardware.feed_count, 1)
         self.assertFalse(hardware.opened)
 
+    def test_ordinary_health_failure_does_not_stop_feeding(self):
+        vendor = Mock()
+        with patch("va_watchdog.watchdog_device.os.path.exists", return_value=True), patch(
+            "va_watchdog.watchdog_device.NeousysWatchdog", return_value=vendor
+        ):
+            hardware = HardwareWatchdog(True, "/dev/wdt_dio", 10, None)
+            hardware.open()
+            self.assertTrue(hardware.feed_if_due(healthy=False))
+
+        vendor.feed.assert_called_once_with()
+
     def test_vendor_trip_without_counter_resumes_after_timeout(self):
         worker = FeedWorker({
             "events_path": "/tmp/events.jsonl",
@@ -130,6 +172,8 @@ class NeousysWatchdogTests(unittest.TestCase):
         self.assertIn('if [[ "$ACTIVATE" != 1 ]]', text)
         self.assertIn("configuration was not changed", text)
         self.assertIn('product" != *"POC-451VTC"*', text)
+        self.assertIn("blacklist iTCO_wdt", text)
+        self.assertIn("apt-get remove -y watchdog", text)
 
 
 if __name__ == "__main__":

@@ -40,8 +40,8 @@
   },
   "hardware_watchdog": {
     "enabled": false,
-    "backend": "linux",
-    "device": "/dev/watchdog0",
+    "backend": "neousys_wdt_dio",
+    "device": "/dev/wdt_dio",
     "library_path": "/usr/local/lib/va-watchdog/vendor/libwdt_dio.so",
     "feed_interval_seconds": 10,
     "timeout_seconds": 30,

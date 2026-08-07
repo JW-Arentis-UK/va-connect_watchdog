@@ -9,10 +9,10 @@
 - POC-451VTC is explicitly present in the vendor release history.
 
 The package provides a GPL-labelled `wdt_dio` kernel module, a binary-only
-`libwdt_dio.so`, headers, examples, and prebuilt modules. It does not include a
-redistribution licence for the proprietary userspace library. For that reason,
-the original archive and library are not committed to this repository. The
-installer consumes the locally supplied, hash-verified vendor archive.
+`libwdt_dio.so`, headers, examples, and prebuilt modules. This test branch includes
+the original hash-verified archive at `v3/vendor/neousys/` solely for controlled
+POC-451VTC testing. Redistribution or production deployment requires a separate
+licence review.
 
 ## Why this backend exists
 
@@ -33,11 +33,11 @@ trip test before production use.
 
 ## Installation
 
-Install without activation first:
+Install without activation first (the bundled archive is selected automatically):
 
 ```bash
 cd /opt/va-connect-watchdog-v3
-sudo ./v3/scripts/install_neousys_wdt.sh /path/to/WDT_DIO_202505_v2-4-1-0_Linux.zip
+sudo ./v3/scripts/install_neousys_wdt.sh
 ```
 
 The script validates the exact archive hash, verifies POC-451VTC DMI identity,
@@ -47,11 +47,12 @@ checks the five required API symbols. It does not start the hardware watchdog.
 Activation is explicit and must be performed during an attended test window:
 
 ```bash
-sudo ./v3/scripts/install_neousys_wdt.sh /path/to/WDT_DIO_202505_v2-4-1-0_Linux.zip --activate
+sudo ./v3/scripts/install_neousys_wdt.sh --activate
 ```
 
 Activation backs up the existing configuration, selects the
-`neousys_wdt_dio` backend, and applies a 15-minute startup safety extension.
+`neousys_wdt_dio` backend, removes legacy watchdog daemons and Intel TCO hardware
+paths, and applies a 15-minute startup safety extension.
 
 ## Runtime behaviour
 

@@ -6,11 +6,13 @@ EXPECTED_TAR_SHA256="9c4b6033a501a605ee5ac92fe946812b7571f359a8bfbca1e442754be94
 VERSION="2.4.1.0"
 CONFIG_PATH="${VA_WATCHDOG_CONFIG_PATH:-/etc/va-watchdog/config.json}"
 LIBRARY_PATH="/usr/local/lib/va-watchdog/vendor/libwdt_dio.so"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEFAULT_BUNDLE="$SCRIPT_DIR/../vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip"
 ACTIVATE=0
 
 usage() {
   cat <<'EOF'
-Usage: install_neousys_wdt.sh <vendor-zip-or-tar> [--activate]
+Usage: install_neousys_wdt.sh [vendor-zip-or-tar] [--activate]
 
 Installs the Neousys WDT_DIO driver and private library for the running kernel.
 Without --activate, VA-Connect configuration is not changed and no watchdog is started.
@@ -28,9 +30,11 @@ log() {
   printf '[Neousys WDT install] %s\n' "$*"
 }
 
-[[ $# -ge 1 ]] || { usage; exit 2; }
-BUNDLE="$1"
-shift
+BUNDLE="$DEFAULT_BUNDLE"
+if [[ $# -gt 0 && "$1" != --* ]]; then
+  BUNDLE="$1"
+  shift
+fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --activate) ACTIVATE=1 ;;
@@ -147,6 +151,23 @@ fi
 backup="$CONFIG_PATH.$(date -u +%Y%m%dT%H%M%SZ).neousys.bak"
 cp -a "$CONFIG_PATH" "$backup"
 systemctl stop va-watchdog-feed.service || true
+
+log "Removing competing legacy and Intel watchdog paths"
+for unit in watchdog.service wd_keepalive.service; do
+  systemctl stop "$unit" 2>/dev/null || true
+  systemctl disable "$unit" 2>/dev/null || true
+  systemctl mask "$unit" 2>/dev/null || true
+done
+if command -v apt-get >/dev/null 2>&1 && dpkg-query -W -f='${Status}' watchdog 2>/dev/null | grep -q 'install ok installed'; then
+  DEBIAN_FRONTEND=noninteractive apt-get remove -y watchdog
+fi
+rm -f /etc/modules-load.d/iTCO_wdt.conf /etc/modprobe.d/va-watchdog-itco.conf
+cat > /etc/modprobe.d/va-watchdog-neousys-only.conf <<'EOF'
+# This attended test build uses the Neousys WDT_DIO backend exclusively.
+blacklist iTCO_wdt
+blacklist iTCO_vendor_support
+EOF
+modprobe -r iTCO_wdt iTCO_vendor_support 2>/dev/null || true
 
 PYTHONPATH="/opt/va-connect-watchdog-v3/v3" python3 - "$CONFIG_PATH" <<'PY'
 import json

@@ -23,8 +23,8 @@ class FeedWorker:
         self.cfg = cfg
         hw_cfg = cfg.get("hardware_watchdog", {})
         self.enabled = bool(hw_cfg.get("enabled", False))
-        self.backend = str(hw_cfg.get("backend") or "linux")
-        self.device = str(hw_cfg.get("device") or "/dev/watchdog0")
+        self.backend = "neousys_wdt_dio"
+        self.device = "/dev/wdt_dio"
         self.library_path = str(
             hw_cfg.get("library_path")
             or "/usr/local/lib/va-watchdog/vendor/libwdt_dio.so"
@@ -110,13 +110,7 @@ class FeedWorker:
         os.replace(temporary, self.state_path)
 
     def _read_timeleft(self):
-        if self.backend == "neousys_wdt_dio":
-            return None
-        path = Path(f"/sys/class/watchdog/{Path(self.device).name}/timeleft")
-        try:
-            return int(path.read_text(encoding="utf-8").strip())
-        except (OSError, TypeError, ValueError):
-            return None
+        return None
 
     def evaluate_trip_countdown(self, trip_active, current_monotonic=None, timeleft=None):
         if not trip_active:
@@ -222,23 +216,10 @@ class FeedWorker:
             raise RuntimeError(f"another watchdog feeder owns {self.device}: {exc}") from exc
 
     def _read_nowayout(self):
-        if self.backend == "neousys_wdt_dio":
-            return None
-        for path in ("/sys/module/iTCO_wdt/parameters/nowayout", "/sys/module/watchdog_core/parameters/nowayout"):
-            try:
-                value = Path(path).read_text(encoding="utf-8").strip().lower()
-                if value:
-                    return value in {"1", "y", "yes", "true"}
-            except OSError:
-                continue
         return None
 
     def _shutdown_behavior(self):
-        if self.backend == "neousys_wdt_dio":
-            return "StopWDT on orderly service stop; feeder crash leaves hardware timer active"
-        if self.magic_close:
-            return "write V before close"
-        return "driver close semantics; nowayout may keep timer armed"
+        return "StopWDT on orderly service stop; feeder crash leaves hardware timer active"
 
     def _legacy_conflict(self):
         for unit in ("watchdog.service", "wd_keepalive.service"):

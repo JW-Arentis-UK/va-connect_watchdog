@@ -738,8 +738,8 @@ function renderWatchdogPage(status){
   const process = status.watchdog_process || {};
   const hwCfg = lastSettings.hardware_watchdog || {};
   const feed = status.hardware_watchdog_feed || {};
-  const backend = feed.backend || hwCfg.backend || 'linux';
-  const vendorBackend = backend === 'neousys_wdt_dio';
+  const backend = 'neousys_wdt_dio';
+  const vendorBackend = true;
   const timeout = Number(hwCfg.timeout_seconds || 30);
   const systemd = watchdog.systemd_watchdog || {};
   const safeTest = watchdog.safe_test || {};
@@ -752,12 +752,12 @@ function renderWatchdogPage(status){
   const legacyClean = units.length ? units.every(unit => unit.active !== 'active' && !['enabled', 'static'].includes(unit.enabled)) : legacy.active !== 'active' && !['enabled', 'static'].includes(legacy.enabled);
   const lastFeed = feed.last_feed_unix ? `${Math.round((Date.now() / 1000) - Number(feed.last_feed_unix))}s ago` : 'No feed timestamp';
   const feedRecent = !!feed.last_feed_unix && ((Date.now() / 1000) - Number(feed.last_feed_unix)) <= Math.max(Number(hwCfg.feed_interval_seconds || 10) * 3, 30);
-  const driverLoaded = vendorBackend ? !!modules.wdt_dio : !!modules.iTCO_wdt;
-  const expectedIdentity = vendorBackend ? 'Neousys WDT_DIO' : 'iTCO_wdt';
+  const driverLoaded = !!modules.wdt_dio;
+  const expectedIdentity = 'Neousys WDT_DIO';
   const identityReady = String(wdctl.identity || '').includes(expectedIdentity) || (vendorBackend && feed.opened);
-  const selectedDevice = feed.device || hwCfg.device || (vendorBackend ? '/dev/wdt_dio' : '/dev/watchdog0');
+  const selectedDevice = feed.device || hwCfg.device || '/dev/wdt_dio';
   const setupChecks = [
-    [vendorBackend ? 'Neousys WDT_DIO driver' : 'Intel TCO driver', driverLoaded ? 'healthy' : 'warning', driverLoaded ? 'Loaded' : 'Not loaded yet'],
+    ['Neousys WDT_DIO driver', driverLoaded ? 'healthy' : 'warning', driverLoaded ? 'Loaded' : 'Not loaded yet'],
     ['Watchdog device', feed.opened || wdctl.state === 'healthy' ? 'healthy' : 'warning', `${selectedDevice} / ${wdctl.identity || 'not ready'}`],
     ['Driver identity', identityReady ? 'healthy' : 'warning', wdctl.identity || `No ${expectedIdentity} identity reported yet`],
     ['Legacy daemon', legacyClean ? 'healthy' : 'critical', legacyClean ? 'Removed/disabled' : 'Another watchdog daemon may still own the device'],
@@ -770,7 +770,7 @@ function renderWatchdogPage(status){
   const checkRows = setupChecks.map(row => `<tr><td>${escapeHtml(row[0])}</td><td class="${escapeHtml(row[1])}">${escapeHtml(row[1].toUpperCase())}</td><td>${escapeHtml(row[2])}</td></tr>`).join('');
   const checkCards = setupChecks.map(row => `<div class="setup-step ${escapeHtml(row[1])}"><div><div class="step-title">${escapeHtml(row[0])}</div><div class="step-detail">${escapeHtml(row[2])}</div></div><strong class="${escapeHtml(row[1])}">${escapeHtml(row[1].toUpperCase())}</strong></div>`).join('');
   const configRows = [
-    ['Backend', vendorBackend ? 'Neousys WDT_DIO' : 'Linux watchdog API'],
+    ['Backend', 'Neousys WDT_DIO'],
     ['Hardware feed', hwCfg.enabled ? 'Enabled' : 'Disabled'],
     ['Device', selectedDevice],
     ['Opened device', feed.opened ? 'Yes' : 'No'],
@@ -795,11 +795,11 @@ function renderWatchdogPage(status){
   const legacyProblem = !legacyClean;
   const pageState = ready ? 'healthy' : (legacyProblem ? 'critical' : 'warning');
   const pageTitle = ready ? 'Hardware watchdog ready' : (legacyProblem ? 'Existing watchdog conflict found' : 'Watchdog needs setup');
-  const pageMessage = ready ? `The independent feeder owns ${selectedDevice} using ${vendorBackend ? 'the Neousys WDT_DIO API' : 'the Linux watchdog API'}. The deliberate trip test is available.` : (legacyProblem ? 'A legacy watchdog service may own the device. Clean legacy watchdogs, then complete setup.' : (vendorBackend ? 'The Neousys backend is selected but its driver, device, or feed is not ready. Run the reviewed vendor installer from SSH.' : 'Run the one-click setup to load the Intel driver, clean old watchdog daemons, enable hardware feed, and restart the service.'));
-  const primaryAction = ready ? `<a class="action" href="/watchdog-trip-confirm">${tripTest.armed ? 'Continue armed trip confirmation' : 'Start deliberate trip test'}</a>` : (legacyProblem ? '<a class="danger" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs</a>' : (vendorBackend ? '<button class="action" disabled>Neousys setup required</button>' : '<a class="action" href="/hardware-watchdog-prepare-confirm">Run one-click setup</a>'));
+  const pageMessage = ready ? `The independent feeder owns ${selectedDevice} using the Neousys WDT_DIO API. The deliberate trip test is available.` : (legacyProblem ? 'A legacy watchdog service may own the device. Clean legacy watchdogs, then complete setup.' : 'The Neousys driver, device, or feed is not ready. Run Neousys setup.');
+  const primaryAction = ready ? `<a class="action" href="/watchdog-trip-confirm">${tripTest.armed ? 'Continue armed trip confirmation' : 'Start deliberate trip test'}</a>` : (legacyProblem ? '<a class="danger" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs</a>' : '<a class="action" href="/hardware-watchdog-prepare-confirm">Run Neousys setup</a>');
   const feedState = feed.enabled && feed.opened ? 'healthy' : 'warning';
-  const setupLink = vendorBackend ? '' : '<a class="ghost" href="/hardware-watchdog-prepare-confirm">Run full setup/cleanup</a>';
-  return `${pageHelp('Watchdog')}<div class="card action-panel ${pageState}"><h2>${escapeHtml(pageTitle)}</h2><p class="${pageState}">${escapeHtml(pageMessage)}</p><div class="button-row">${primaryAction}${setupLink}<a class="ghost" href="/watchdog-hardware-probe-confirm">Run probe</a></div></div><div class="status-strip"><div class="status-box"><div class="label">Driver</div><div class="big ${driverLoaded ? 'healthy' : 'warning'}">${driverLoaded ? 'Loaded' : 'Needs setup'}</div><div class="step-detail">${escapeHtml(vendorBackend ? 'Neousys WDT_DIO' : 'Intel TCO')}</div></div><div class="status-box"><div class="label">Device</div><div class="big ${feed.opened || wdctl.state === 'healthy' ? 'healthy' : 'warning'}">${escapeHtml(selectedDevice)}</div><div class="step-detail">${escapeHtml(wdctl.identity || 'No identity yet')}</div></div><div class="status-box"><div class="label">Hardware feed</div><div class="big ${feedState}">${feed.enabled && feed.opened ? 'Feeding' : 'Not feeding'}</div><div class="step-detail">${escapeHtml(lastFeed)}</div></div><div class="status-box"><div class="label">Legacy watchdogs</div><div class="big ${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Conflict' : 'Clear'}</div><div class="step-detail">${escapeHtml(legacyProblem ? 'Cleanup needed' : 'Removed/disabled')}</div></div></div><div class="grid lower-grid"><div class="card"><h2>Setup Checklist</h2><p class="muted">Work from top to bottom. Green means that layer is ready; amber/red shows the part to fix next.</p><div class="setup-steps">${checkCards}</div></div><div class="card"><h2>Existing Watchdogs and Cleanup</h2><p class="${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Another watchdog may still be installed or enabled.' : 'No conflicting legacy watchdog services detected.'}</p><table class="compact-table"><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead><tbody>${legacyRows}</tbody></table><p class="muted">This service should be the only process feeding the hardware watchdog.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs only</a><a class="ghost" href="/hardware">Hardware details</a></div></div></div><div class="grid lower-grid"><div class="card"><h2>Current Watchdog Configuration</h2><table class="compact-table"><tbody>${configRows}</tbody></table></div><div class="card"><h2>What the Layers Mean</h2><ul><li><strong>Hardware watchdog</strong> reboots the whole gateway if its selected backend stops receiving feeds.</li><li><strong>Hardware feed</strong> is the independent feeder controlling the selected device.</li><li><strong>Process watchdog</strong> is systemd restarting va-watchdog if the Python process hangs.</li><li><strong>Legacy watchdogs</strong> are old daemons/packages that should not also control the hardware.</li></ul></div></div><div class="grid lower-grid"><div class="card"><h2>Safe Watchdog Test</h2><p class="muted">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-test-arm"><button class="action" type="submit">Arm safe test</button></form></div><div class="label">Feed enabled</div><div class="value">${feed.enabled ? 'Enabled' : 'Disabled'}</div><div class="label">Last feed</div><div class="value">${escapeHtml(lastFeed)}</div></div><div class="card"><h2>Deliberate Watchdog Trip Test</h2><p class="warning">This stops hardware feeding and may reboot the gateway.</p><p class="muted">Open the test, tick the acknowledgement box, then run it.</p><div class="button-row">${tripAction}</div>${ready ? '' : '<p class="warning">Trip test is blocked until setup is complete and the service has a recent hardware feed.</p>'}<div class="label">State</div><div class="value">${escapeHtml(tripTest.triggered ? 'Triggered this boot' : (tripTest.completed_previous_boot ? 'Completed on previous boot' : 'Ready'))}</div><div class="label">Countdown verification</div><div class="value">${escapeHtml(tripCountdown.status || 'inactive')}${tripCountdown.current_timeleft == null ? '' : `; ${escapeHtml(tripCountdown.current_timeleft)}s remaining`}</div><div class="label">Last result</div><div class="value">${escapeHtml(tripTest.last_result_message || 'No trip test recorded yet')}</div></div><div class="card"><h2>Extend Timeout</h2><p class="muted">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p><form method="post" action="/watchdog-timeout-set"><label class="label">Timeout seconds</label><select name="timeout_seconds"><option value="30" ${timeout === 30 ? 'selected' : ''}>30</option><option value="60" ${timeout === 60 ? 'selected' : ''}>60</option><option value="120" ${timeout === 120 ? 'selected' : ''}>120</option><option value="180" ${timeout === 180 ? 'selected' : ''}>180</option><option value="300" ${timeout === 300 ? 'selected' : ''}>300</option></select><div class="button-row"><button class="action" type="submit">Apply timeout</button></div></form><p class="muted">Use a longer timeout while diagnosing reboot loops. Put it back to 30s once stable.</p></div></div><div class="card"><h2>Advanced Tools</h2><p class="muted">Use these only when the guided setup cannot complete.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy only</a><a class="ghost" href="/hardware">Hardware details</a><a class="ghost" href="/events#evidence">Diagnostics</a></div></div>`;
+  const setupLink = '<a class="ghost" href="/hardware-watchdog-prepare-confirm">Run Neousys setup/cleanup</a>';
+  return `${pageHelp('Watchdog')}<div class="card action-panel ${pageState}"><h2>${escapeHtml(pageTitle)}</h2><p class="${pageState}">${escapeHtml(pageMessage)}</p><div class="button-row">${primaryAction}${setupLink}<a class="ghost" href="/watchdog-hardware-probe-confirm">Run probe</a></div></div><div class="status-strip"><div class="status-box"><div class="label">Driver</div><div class="big ${driverLoaded ? 'healthy' : 'warning'}">${driverLoaded ? 'Loaded' : 'Needs setup'}</div><div class="step-detail">Neousys WDT_DIO</div></div><div class="status-box"><div class="label">Device</div><div class="big ${feed.opened || wdctl.state === 'healthy' ? 'healthy' : 'warning'}">${escapeHtml(selectedDevice)}</div><div class="step-detail">${escapeHtml(wdctl.identity || 'No identity yet')}</div></div><div class="status-box"><div class="label">Hardware feed</div><div class="big ${feedState}">${feed.enabled && feed.opened ? 'Feeding' : 'Not feeding'}</div><div class="step-detail">${escapeHtml(lastFeed)}</div></div><div class="status-box"><div class="label">Legacy watchdogs</div><div class="big ${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Conflict' : 'Clear'}</div><div class="step-detail">${escapeHtml(legacyProblem ? 'Cleanup needed' : 'Removed/disabled')}</div></div></div><div class="grid lower-grid"><div class="card"><h2>Setup Checklist</h2><p class="muted">Work from top to bottom. Green means that layer is ready; amber/red shows the part to fix next.</p><div class="setup-steps">${checkCards}</div></div><div class="card"><h2>Existing Watchdogs and Cleanup</h2><p class="${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Another watchdog may still be installed or enabled.' : 'No conflicting legacy watchdog services detected.'}</p><table class="compact-table"><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead><tbody>${legacyRows}</tbody></table><p class="muted">This service should be the only process feeding the hardware watchdog.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs only</a><a class="ghost" href="/hardware">Hardware details</a></div></div></div><div class="grid lower-grid"><div class="card"><h2>Current Watchdog Configuration</h2><table class="compact-table"><tbody>${configRows}</tbody></table></div><div class="card"><h2>What the Layers Mean</h2><ul><li><strong>Hardware watchdog</strong> reboots the whole gateway if its selected backend stops receiving feeds.</li><li><strong>Hardware feed</strong> is the independent feeder controlling the selected device.</li><li><strong>Process watchdog</strong> is systemd restarting va-watchdog if the Python process hangs.</li><li><strong>Legacy watchdogs</strong> are old daemons/packages that should not also control the hardware.</li></ul></div></div><div class="grid lower-grid"><div class="card"><h2>Safe Watchdog Test</h2><p class="muted">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-test-arm"><button class="action" type="submit">Arm safe test</button></form></div><div class="label">Feed enabled</div><div class="value">${feed.enabled ? 'Enabled' : 'Disabled'}</div><div class="label">Last feed</div><div class="value">${escapeHtml(lastFeed)}</div></div><div class="card"><h2>Deliberate Watchdog Trip Test</h2><p class="warning">This stops hardware feeding and may reboot the gateway.</p><p class="muted">Open the test, tick the acknowledgement box, then run it.</p><div class="button-row">${tripAction}</div>${ready ? '' : '<p class="warning">Trip test is blocked until setup is complete and the service has a recent hardware feed.</p>'}<div class="label">State</div><div class="value">${escapeHtml(tripTest.triggered ? 'Triggered this boot' : (tripTest.completed_previous_boot ? 'Completed on previous boot' : 'Ready'))}</div><div class="label">Countdown verification</div><div class="value">${escapeHtml(tripCountdown.status || 'inactive')}${tripCountdown.current_timeleft == null ? '' : `; ${escapeHtml(tripCountdown.current_timeleft)}s remaining`}</div><div class="label">Last result</div><div class="value">${escapeHtml(tripTest.last_result_message || 'No trip test recorded yet')}</div></div><div class="card"><h2>Extend Timeout</h2><p class="muted">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p><form method="post" action="/watchdog-timeout-set"><label class="label">Timeout seconds</label><select name="timeout_seconds"><option value="30" ${timeout === 30 ? 'selected' : ''}>30</option><option value="60" ${timeout === 60 ? 'selected' : ''}>60</option><option value="120" ${timeout === 120 ? 'selected' : ''}>120</option><option value="180" ${timeout === 180 ? 'selected' : ''}>180</option><option value="300" ${timeout === 300 ? 'selected' : ''}>300</option></select><div class="button-row"><button class="action" type="submit">Apply timeout</button></div></form><p class="muted">Use a longer timeout while diagnosing reboot loops. Put it back to 30s once stable.</p></div></div><div class="card"><h2>Advanced Tools</h2><p class="muted">Use these only when the guided setup cannot complete.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy only</a><a class="ghost" href="/hardware">Hardware details</a><a class="ghost" href="/events#evidence">Diagnostics</a></div></div>`;
 }
 
 function renderOperationalStatus(status){
@@ -833,7 +833,7 @@ function renderOperationalStatus(status){
   const watchdogPresent = Boolean(findCheck(status, 'hardware_watchdog_present').value);
   const watchdogConfigured = Boolean(feed.enabled);
   const watchdogState = watchdogPresent && feed.enabled && feed.opened ? 'healthy' : 'warning';
-  const watchdogDetail = watchdogPresent ? (feed.enabled && feed.opened ? `Feeding ${feed.device || '/dev/watchdog0'}` : 'Device detected but hardware recovery is not active') : 'No verified hardware watchdog device';
+  const watchdogDetail = watchdogPresent ? (feed.enabled && feed.opened ? `Feeding ${feed.device || '/dev/wdt_dio'}` : 'Device detected but hardware recovery is not active') : 'No verified Neousys hardware watchdog device';
   return `<div class="card"><h2>Operational Status</h2><p class="muted">This list shows what is ready and where attention is needed. Open Details for the relevant setup or evidence.</p><div class="operational-list">${row('System', systemIssue?.message || 'Operating system, CPU, memory and root storage checks are normal.', systemState, '/hardware', systemChecks.length > 0)}${row('Services', serviceIssue?.message || `${healthyServices}/${services.length} monitored services running`, worstState(services), '/services', services.length > 0)}${row('Recording storage', recording.message || recordingCheck.message || 'Recording storage has not been configured.', recording.status || recordingCheck.state || 'unknown', '/hardware#storage', recordingConfigured)}${row('Network', network.message || 'Network checks have not been configured.', network.state || 'unknown', '/network', networkConfigured)}${row('Hardware watchdog', watchdogDetail, watchdogState, '/services#watchdog', watchdogConfigured)}</div></div>`;
 }
 
@@ -1939,19 +1939,19 @@ def start_web(cfg):
                 "</div>"
             )
             watchdog_detail = (
-                "<div class=\"card\"><h2>Intel TCO Discovery</h2>"
-                "<p class=\"muted\">These values identify whether Linux can see the POC hardware watchdog. Setup and testing are managed on the dedicated Watchdog page.</p>"
+                "<div class=\"card\"><h2>Neousys Watchdog Discovery</h2>"
+                "<p class=\"muted\">These values identify whether the test driver and vendor API are ready. Setup and testing are managed on the dedicated Watchdog page.</p>"
                 "<div class=\"settings-grid\">"
-                f"<div><div class=\"label\">Expected driver</div><div class=\"value\">iTCO_wdt with iTCO_vendor_support</div></div>"
-                f"<div><div class=\"label\">iTCO_wdt loaded</div><div class=\"value {'healthy' if modules.get('iTCO_wdt') else 'warning'}\">{escape('Yes' if modules.get('iTCO_wdt') else 'No')}</div></div>"
-                f"<div><div class=\"label\">Vendor support loaded</div><div class=\"value {'healthy' if modules.get('iTCO_vendor_support') else 'warning'}\">{escape('Yes' if modules.get('iTCO_vendor_support') else 'No')}</div></div>"
-                f"<div><div class=\"label\">Platform module loaded</div><div class=\"value {'healthy' if modules.get('intel_pmc_bxt') else 'warning'}\">{escape('Yes' if modules.get('intel_pmc_bxt') else 'No')}</div></div>"
+                f"<div><div class=\"label\">Expected driver</div><div class=\"value\">Neousys wdt_dio</div></div>"
+                f"<div><div class=\"label\">wdt_dio loaded</div><div class=\"value {'healthy' if modules.get('wdt_dio') else 'warning'}\">{escape('Yes' if modules.get('wdt_dio') else 'No')}</div></div>"
+                f"<div><div class=\"label\">Device</div><div class=\"value {'healthy' if '/dev/wdt_dio' in watchdog_devices else 'warning'}\">/dev/wdt_dio</div></div>"
+                f"<div><div class=\"label\">Backend</div><div class=\"value\">Neousys WDT_DIO API</div></div>"
                 f"<div><div class=\"label\">Driver identity</div><div class=\"value {escape(str(wdctl.get('state', 'unknown')))}\">{escape(str(wdctl.get('identity', '-')))}</div></div>"
                 f"<div><div class=\"label\">Driver timeout</div><div class=\"value\">{escape(str(wdctl.get('timeout', '-')))}</div></div>"
                 f"<div><div class=\"label\">Legacy watchdog service</div><div class=\"value {'warning' if legacy.get('active') == 'active' else 'healthy'}\">{escape(str(legacy.get('active', '-')).upper())} / {escape(str(legacy.get('enabled', '-')).upper())}</div></div>"
                 "</div>"
                 "<div class=\"button-row\"><a class=\"action\" href=\"/services#watchdog\">Open Watchdog setup</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run full probe</a></div>"
-                f"{disclosure('Raw wdctl output', '<pre>' + escape(str(wdctl.get('raw', 'wdctl not available or watchdog not present'))) + '</pre>')}"
+                f"{disclosure('Raw watchdog status', '<pre>' + escape(str(wdctl.get('raw', 'Neousys device not present'))) + '</pre>')}"
                 f"{disclosure('Setup and probe logs', '<h3>One-click prepare</h3><pre>' + escape(str(watchdog.get('prepare_log', 'No prepare log yet'))) + '</pre><h3>Setup</h3><pre>' + escape(str(watchdog.get('setup_log', 'No setup log yet'))) + '</pre><h3>Full probe</h3><pre>' + escape(str(watchdog.get('probe_log', 'No hardware probe log yet'))) + '</pre>')}"
                 "</div>"
             )
@@ -1989,7 +1989,7 @@ def start_web(cfg):
             timeout = int(hw_cfg.get("timeout_seconds", 30) or 30)
             checks = setup.get("checks", [])
             by_name = {str(row.get("name", "")): row for row in checks}
-            driver = by_name.get("Intel TCO driver", {})
+            driver = by_name.get("Neousys WDT_DIO driver", {})
             device = by_name.get("Watchdog device", {})
             legacy_check = by_name.get("Legacy daemon", {})
             config_check = by_name.get("Watchdog config", {})
@@ -2010,7 +2010,7 @@ def start_web(cfg):
             if grace_active:
                 page_state = "waiting"
                 page_title = "Startup safety window active"
-                page_message = f"Hardware protection will arm in {grace_countdown}. Remote access remains available while /dev/watchdog0 stays closed."
+                page_message = f"Hardware protection will arm in {grace_countdown}. Remote access remains available while /dev/wdt_dio stays closed."
                 primary_action = (
                     "<form class=\"inline\" method=\"post\" action=\"/watchdog-grace-delay\"><input type=\"hidden\" name=\"delay_seconds\" value=\"900\"><button class=\"action\" type=\"submit\">Delay another 15 minutes</button></form> "
                     "<a class=\"ghost\" href=\"/watchdog-arm-now-confirm\">Arm now</a> "
@@ -2024,7 +2024,7 @@ def start_web(cfg):
                     primary_action = "<a class=\"action\" href=\"/watchdog-trip-confirm\">Continue armed trip confirmation</a>"
                 else:
                     page_title = "Hardware watchdog ready"
-                    page_message = "The watchdog service owns /dev/watchdog0 and is feeding it. The deliberate trip test is available."
+                    page_message = "The feeder owns /dev/wdt_dio and is feeding it. The deliberate trip test is available."
                     primary_action = "<a class=\"action\" href=\"/watchdog-trip-confirm\">Start deliberate trip test</a>"
             elif legacy_problem:
                 page_state = "critical"
@@ -2034,7 +2034,7 @@ def start_web(cfg):
             elif str(driver.get("state", "")) != "healthy" or str(device.get("state", "")) != "healthy":
                 page_state = "warning"
                 page_title = "Hardware watchdog not fully prepared"
-                page_message = "Load the Intel TCO driver and let the watchdog service configure ownership/feed in one step."
+                page_message = "Install the Neousys driver and let the independent feeder configure hardware protection in one step."
                 primary_action = "<a class=\"action\" href=\"/hardware-watchdog-prepare-confirm\">Run one-click setup</a>"
             elif not feed_enabled or not feed_opened:
                 page_state = "warning"
@@ -2105,7 +2105,7 @@ def start_web(cfg):
                 f"<p class=\"{escape(str(legacy_check.get('state', 'unknown')))}\">{escape(str(legacy_check.get('message', '-')))}</p>"
                 "<div class=\"table-scroll\"><table class=\"compact-table\"><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead>"
                 f"<tbody>{legacy_rows}</tbody></table></div>"
-                "<p class=\"muted\">A legacy watchdog service can take ownership of /dev/watchdog0. VA-Connect should be the only process feeding this device.</p>"
+                "<p class=\"muted\">A legacy watchdog service must not compete with the Neousys backend. VA-Connect should be the only hardware feeder.</p>"
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">Clean legacy watchdogs</a><a class=\"ghost\" href=\"/hardware\">Hardware details</a></div>"
             )
             config_detail = (
@@ -2115,7 +2115,7 @@ def start_web(cfg):
             )
             layers_detail = (
                 "<ul>"
-                "<li><strong>Hardware watchdog:</strong> reboots the gateway if Linux stops feeding /dev/watchdog0.</li>"
+                "<li><strong>Hardware watchdog:</strong> reboots the gateway if VA-Connect stops resetting the Neousys timer.</li>"
                 "<li><strong>Hardware feed:</strong> VA-Connect opening and regularly feeding the hardware device.</li>"
                 "<li><strong>Process watchdog:</strong> systemd restarting VA-Connect if its Python process hangs.</li>"
                 "<li><strong>Legacy watchdog:</strong> an older daemon that must not compete for the same device.</li>"
@@ -2159,8 +2159,8 @@ def start_web(cfg):
             return (
                 summary_strip([
                     ("Overall readiness", "WAITING" if grace_active else ("READY" if setup.get("ready") else "SETUP NEEDED"), page_message, page_state),
-                    ("Intel TCO driver", "Loaded" if driver.get("state") == "healthy" else "Needs setup", driver.get("message", "-"), driver.get("state", "unknown")),
-                    ("Watchdog device", setup_config.get("device", "/dev/watchdog0"), wdctl.get("identity") or device.get("message") or "-", device.get("state", "unknown")),
+                    ("Neousys WDT_DIO", "Loaded" if driver.get("state") == "healthy" else "Needs setup", driver.get("message", "-"), driver.get("state", "unknown")),
+                    ("Watchdog device", setup_config.get("device", "/dev/wdt_dio"), wdctl.get("identity") or device.get("message") or "-", device.get("state", "unknown")),
                     ("Live feed", f"Starts in {grace_countdown}" if grace_active else ("Feeding" if feed_enabled and feed_opened else "Not feeding"), f"Feed count {feed_count}", "waiting" if grace_active else ("healthy" if feed_enabled and feed_opened else "warning")),
                     ("Legacy watchdogs", "Clear" if not legacy_problem else "Conflict", legacy_check.get("message", "-"), legacy_check.get("state", "unknown")),
                 ])
@@ -2753,7 +2753,7 @@ def start_web(cfg):
         watchdog_configured = bool(feed.get("enabled"))
         watchdog_state = "healthy" if watchdog_present and feed.get("enabled") and feed.get("opened") else "warning"
         if watchdog_present and feed.get("enabled") and feed.get("opened"):
-            watchdog_detail = f"Feeding {feed.get('device') or '/dev/watchdog0'}"
+            watchdog_detail = f"Feeding {feed.get('device') or '/dev/wdt_dio'}"
         elif watchdog_present:
             watchdog_detail = "Device detected but hardware recovery is not active"
         else:
@@ -3400,16 +3400,16 @@ def start_web(cfg):
         )
         return page_shell(body, "Recovery")
 
-    def itco_install_confirm_html():
+    def neousys_install_confirm_html():
         body = (
             "<div class=\"card\">"
-            "<h2>Confirm Intel TCO Watchdog Setup</h2>"
-            "<p class=\"warning\">This will load the Intel TCO watchdog kernel driver and persist it across reboot.</p>"
-            "<p class=\"muted\">It runs v3/scripts/setup_itco_watchdog.sh. It does not enable VA-Connect hardware feeding and does not intentionally reboot the gateway.</p>"
-            "<div class=\"label\">Expected driver</div><div class=\"value\">iTCO_wdt</div>"
-            "<div class=\"label\">Expected device after success</div><div class=\"value\">/dev/watchdog0</div>"
-            "<div class=\"label\">Expected identity</div><div class=\"value\">iTCO_wdt [version 6]</div>"
-            "<form class=\"inline\" method=\"post\" action=\"/itco-watchdog-install-now\"><button class=\"action\" type=\"submit\">Confirm install/load Intel TCO</button></form> "
+            "<h2>Confirm Neousys Watchdog Driver Install</h2>"
+            "<p class=\"warning\">This installs the bundled test driver for the running kernel. It does not start the hardware timer.</p>"
+            "<p class=\"muted\">Activation is a separate attended action because it removes competing watchdog paths and enables hardware feeding.</p>"
+            "<div class=\"label\">Expected driver</div><div class=\"value\">wdt_dio</div>"
+            "<div class=\"label\">Expected device after success</div><div class=\"value\">/dev/wdt_dio</div>"
+            "<div class=\"label\">Expected API</div><div class=\"value\">Neousys WDT_DIO 2.4.1.0</div>"
+            "<form class=\"inline\" method=\"post\" action=\"/neousys-watchdog-install-now\"><button class=\"action\" type=\"submit\">Install Neousys driver</button></form> "
             "<a class=\"ghost\" href=\"/services#watchdog\">Cancel</a>"
             "</div>"
         )
@@ -3433,9 +3433,9 @@ def start_web(cfg):
             "<div class=\"card\">"
             "<h2>One-Click Hardware Watchdog Setup</h2>"
             "<p class=\"warning\">This is the recommended setup and cleanup path for POC-451VTC.</p>"
-            "<p class=\"muted\">It will load and persist Intel TCO, stop/disable/mask/remove Ubuntu's legacy watchdog daemon if present, write VA-Connect hardware watchdog settings, reinstall the va-watchdog systemd unit, and restart va-watchdog in the background.</p>"
-            "<div class=\"label\">Expected device</div><div class=\"value\">/dev/watchdog0</div>"
-            "<div class=\"label\">Expected driver</div><div class=\"value\">iTCO_wdt [version 6]</div>"
+            "<p class=\"muted\">It installs the bundled Neousys driver, removes legacy and Intel hardware watchdog paths, writes the Neousys settings, and restarts both VA-Connect services with a safety window.</p>"
+            "<div class=\"label\">Expected device</div><div class=\"value\">/dev/wdt_dio</div>"
+            "<div class=\"label\">Expected driver</div><div class=\"value\">Neousys wdt_dio</div>"
             f"<div class=\"label\">Current legacy watchdog.service</div><div class=\"value\">{escape(str(legacy.get('active', '-')))} / {escape(str(legacy.get('enabled', '-')))}</div>"
             f"<div class=\"label\">Legacy package</div><div class=\"value\">{escape(str(legacy.get('package_status', '-')))}</div>"
             "<table><thead><tr><th>Check</th><th>Now</th><th>Meaning</th></tr></thead>"
@@ -3447,12 +3447,12 @@ def start_web(cfg):
         )
         return page_shell(body, "Hardware")
 
-    def itco_install_started_html(result):
+    def neousys_install_started_html(result):
         status_class = "healthy" if result.get("ok") else "critical"
         body = (
             "<meta http-equiv=\"refresh\" content=\"20;url=/hardware\">"
             "<div class=\"card\">"
-            "<h2>Intel TCO Watchdog Setup</h2>"
+            "<h2>Neousys Watchdog Driver Install</h2>"
             f"<p class=\"{status_class}\">{escape(str(result.get('message', 'Setup request sent.')))}</p>"
             "<p class=\"muted\">This page will return to Watchdog automatically in 20 seconds. Reload Watchdog after that to see module/device status.</p>"
             f"<div class=\"label\">Command</div><div class=\"value\">{escape(str(result.get('command', '-')))}</div>"
@@ -3466,8 +3466,8 @@ def start_web(cfg):
         body = (
             "<div class=\"card\">"
             "<h2>Confirm Full Watchdog Hardware Probe</h2>"
-            "<p class=\"warning\">This will run the full Intel TCO/watchdog diagnostic command set on the gateway.</p>"
-            "<p class=\"muted\">It includes sudo modprobe iTCO_wdt, wdctl /dev/watchdog0, dmesg checks, systemd checks, and module/autoload checks. It does not enable VA-Connect hardware feeding.</p>"
+            "<p class=\"warning\">This will inspect the Neousys driver, device, library, configuration, feeder ownership, and conflicts.</p>"
+            "<p class=\"muted\">The probe is read-only and does not start or stop the hardware timer.</p>"
             "<form class=\"inline\" method=\"post\" action=\"/watchdog-hardware-probe-now\"><button class=\"action\" type=\"submit\">Run full watchdog probe</button></form> "
             "<a class=\"ghost\" href=\"/services#watchdog\">Cancel</a>"
             "</div>"
@@ -3503,7 +3503,7 @@ def start_web(cfg):
             "<div class=\"card\">"
             "<h2>Confirm Legacy Watchdog Cleanup</h2>"
             "<p class=\"warning\">This will stop, disable, mask, and remove Ubuntu's legacy watchdog daemon if it exists.</p>"
-            "<p class=\"muted\">This is separate from the systemd process watchdog. It only removes other daemons that may compete for /dev/watchdog0.</p>"
+            "<p class=\"muted\">This is separate from the systemd process watchdog. It removes daemons that may compete with the Neousys hardware feeder.</p>"
             f"<div class=\"label\">Package</div><div class=\"value\">{escape(str(legacy.get('package_status', '-')))}</div>"
             "<table><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead>"
             f"<tbody>{unit_rows}</tbody></table>"
@@ -3522,7 +3522,7 @@ def start_web(cfg):
             "<div class=\"card\">"
             "<h2>Confirm VA-Connect Hardware Watchdog Feeding</h2>"
             f"<p class=\"{escape(str(wizard.get('state', 'warning')))}\">{escape(str(wizard.get('message', '-')))}</p>"
-            "<p class=\"muted\">This writes hardware_watchdog.enabled=true, device=/dev/watchdog0, feed_interval_seconds=10, starts the configured safety window, then restarts va-watchdog in the background.</p>"
+            "<p class=\"muted\">This writes the Neousys backend settings, starts the configured safety window, then restarts both VA-Connect services.</p>"
             f"<div class=\"label\">Driver identity</div><div class=\"value\">{escape(str(watchdog.get('wdctl', {}).get('identity', '-')))}</div>"
             f"<div class=\"label\">Timeout</div><div class=\"value\">{escape(str(watchdog.get('wdctl', {}).get('timeout', '-')))}</div>"
             f"<div class=\"label\">Legacy watchdog.service</div><div class=\"value\">{escape(str(watchdog.get('legacy_daemon', {}).get('active', '-')))} / {escape(str(watchdog.get('legacy_daemon', {}).get('enabled', '-')))}</div>"
@@ -3721,7 +3721,7 @@ def start_web(cfg):
             "</form>",
         ]
         if not trip_ready:
-            body_parts.append("<p class=\"warning\">Trip test is blocked until this service owns /dev/watchdog0 and has a recent hardware feed. Run one-click setup and reload Watchdog first.</p>")
+            body_parts.append("<p class=\"warning\">Trip test is blocked until the feeder owns /dev/wdt_dio and has a recent hardware feed. Run one-click setup and reload Watchdog first.</p>")
         if trip.get("triggered"):
             body_parts.append("<p class=\"warning\">A trip test is already active for this boot.</p>")
         body_parts.append("</div>")
@@ -3735,7 +3735,7 @@ def start_web(cfg):
         body = (
             "<div class=\"card\"><h2>Confirm Arm Hardware Watchdog Now</h2>"
             "<p class=\"warning\">This ends the startup safety window for this boot.</p>"
-            "<p>VA-Connect will open /dev/watchdog0 on its next health loop. Once opened, the configured 30-second hardware timeout applies and this page cannot safely disable the device.</p>"
+            "<p>The independent feeder will start the Neousys timer when the safety window ends. Once started, use only the attended controls on this page.</p>"
             f"<div class=\"label\">Safety time remaining</div><div class=\"value\">{remaining} seconds</div>"
             f"<div class=\"label\">Device currently opened</div><div class=\"value\">{'Yes' if feed.get('opened') else 'No'}</div>"
         )
@@ -3755,7 +3755,7 @@ def start_web(cfg):
         body = (
             "<div class=\"card\"><h2>Confirm Disable Hardware Watchdog Feed</h2>"
             "<p class=\"warning\">This disables hardware reboot protection in the saved configuration. The systemd process watchdog remains available.</p>"
-            "<p>This action is deliberately blocked after /dev/watchdog0 has been opened. Closing a live watchdog device is not a safe recovery method.</p>"
+            "<p>This action is deliberately blocked after /dev/wdt_dio has been opened. Stopping a live hardware timer is not a safe recovery method.</p>"
             f"<div class=\"label\">Safety time remaining</div><div class=\"value\">{remaining} seconds</div>"
             f"<div class=\"label\">Device currently opened</div><div class=\"value\">{'Yes' if feed.get('opened') else 'No'}</div>"
         )
@@ -3945,7 +3945,7 @@ def start_web(cfg):
         status = status_snapshot()
         hw_cfg = cfg.get("hardware_watchdog", {})
         feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
-        device = str(hw_cfg.get("device", "/dev/watchdog0"))
+        device = str(hw_cfg.get("device", "/dev/wdt_dio"))
         device_exists = Path(device).exists()
         driver = watchdog_driver_info(sorted(str(path) for path in Path("/dev").glob("watchdog*")))
         wdctl = driver.get("wdctl", {})
@@ -3998,7 +3998,7 @@ def start_web(cfg):
         }
 
     def watchdog_owner_info(device):
-        device_path = Path(str(device or "/dev/watchdog0"))
+        device_path = Path(str(device or "/dev/wdt_dio"))
         owners = []
         if not device_path.exists():
             return {"device": str(device_path), "owners": [], "summary": "Device not present"}
@@ -4052,12 +4052,11 @@ def start_web(cfg):
         owner = watchdog.get("owners", {})
         wdt = watchdog_test_summary()
         hw_cfg = cfg.get("hardware_watchdog", {})
-        backend = str(hw_cfg.get("backend") or "linux")
-        vendor_backend = backend == "neousys_wdt_dio"
-        device = str(hw_cfg.get("device") or watchdog.get("device") or "/dev/watchdog0")
+        backend = "neousys_wdt_dio"
+        device = "/dev/wdt_dio"
         identity = str(wdctl.get("identity", ""))
-        driver_loaded = bool(modules.get("wdt_dio")) if vendor_backend else bool(modules.get("iTCO_wdt"))
-        identity_ready = "Neousys WDT_DIO" in identity if vendor_backend else "iTCO_wdt" in identity
+        driver_loaded = bool(modules.get("wdt_dio"))
+        identity_ready = "Neousys WDT_DIO" in identity
         feed_enabled = bool(hw_cfg.get("enabled"))
         feed_opened = bool(wdt.get("opened"))
         feed_recent = wdt.get("feed_state") == "healthy"
@@ -4067,7 +4066,7 @@ def start_web(cfg):
         feed_interval = int(hw_cfg.get("feed_interval_seconds", 10) or 10)
         rows = [
             {
-                "name": "Neousys WDT_DIO driver" if vendor_backend else "Intel TCO driver",
+                "name": "Neousys WDT_DIO driver",
                 "state": "healthy" if driver_loaded else "warning",
                 "message": "Loaded" if driver_loaded else "Not loaded yet",
             },
@@ -4079,7 +4078,7 @@ def start_web(cfg):
             {
                 "name": "Driver identity",
                 "state": "healthy" if identity_ready else "warning",
-                "message": identity or ("No Neousys identity reported yet" if vendor_backend else "No iTCO identity reported yet"),
+                "message": identity or "No Neousys identity reported yet",
             },
             {
                 "name": "Legacy daemon",
@@ -4236,7 +4235,7 @@ def start_web(cfg):
         status = status_snapshot()
         hw_cfg = cfg.get("hardware_watchdog", {})
         feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
-        device = str(hw_cfg.get("device", "/dev/watchdog0"))
+        device = str(hw_cfg.get("device", "/dev/wdt_dio"))
         feed_interval = int(hw_cfg.get("feed_interval_seconds", 10) or 10)
         stale_after = max(feed_interval * 3, int(cfg.get("poll_interval_seconds", 5) or 5) * 3, 30)
         checks = []
@@ -4514,79 +4513,74 @@ def start_web(cfg):
             "log_path": str(log_path),
         }
 
-    def itco_setup_status():
-        log_path = data_dir / "itco-watchdog-setup.log"
+    def neousys_install_status():
+        log_path = data_dir / "neousys-watchdog-install.log"
         return {
-            "script": str(repo_root() / "scripts" / "setup_itco_watchdog.sh"),
+            "script": str(repo_root() / "scripts" / "install_neousys_wdt.sh"),
             "log_path": str(log_path),
             "last_log": tail_file(log_path, lines=80).get("tail", ""),
         }
 
-    def watchdog_probe_status():
-        log_path = data_dir / "watchdog-hardware-probe.log"
+    def neousys_probe_status():
+        log_path = data_dir / "neousys-watchdog-probe.log"
         return {
-            "script": str(repo_root() / "scripts" / "probe_watchdog_hardware.sh"),
+            "script": str(repo_root() / "scripts" / "probe_neousys_watchdog.sh"),
             "log_path": str(log_path),
             "last_log": tail_file(log_path, lines=200).get("tail", ""),
         }
 
-    def itco_prepare_status():
-        log_path = data_dir / "itco-watchdog-prepare.log"
-        return {
-            "script": str(repo_root() / "scripts" / "prepare_itco_watchdog.sh"),
-            "log_path": str(log_path),
-            "last_log": tail_file(log_path, lines=120).get("tail", ""),
-        }
-
-    def launch_itco_setup():
-        status = itco_setup_status()
+    def launch_neousys_install():
+        status = neousys_install_status()
         script = Path(status["script"])
         log_path = Path(status["log_path"])
         log_path.parent.mkdir(parents=True, exist_ok=True)
         if not script.exists():
-            return {"ok": False, "message": f"Intel TCO setup script not found: {script}", "log_path": str(log_path)}
-        command = f"cd {repo_root()!s}; /bin/bash scripts/setup_itco_watchdog.sh >> {log_path!s} 2>&1"
+            return {"ok": False, "message": f"Neousys setup script not found: {script}", "log_path": str(log_path)}
+        command = f"cd {repo_root()!s}; /bin/bash scripts/install_neousys_wdt.sh >> {log_path!s} 2>&1"
         try:
             subprocess.Popen(["/bin/bash", "-lc", command], start_new_session=True)
         except Exception as exc:
-            return {"ok": False, "message": f"Could not start Intel TCO setup: {exc}", "command": command, "log_path": str(log_path)}
-        append_web_event("info", "hardware_watchdog", "Intel TCO watchdog setup started", {"log_path": str(log_path)})
+            return {"ok": False, "message": f"Could not start Neousys setup: {exc}", "command": command, "log_path": str(log_path)}
+        append_web_event("info", "hardware_watchdog", "Neousys watchdog driver installation started", {"log_path": str(log_path)})
         return {
             "ok": True,
-            "message": "Intel TCO watchdog setup started in the background.",
+            "message": "Neousys watchdog driver installation started in the background without activating the timer.",
             "command": command,
             "log_path": str(log_path),
         }
 
     def launch_watchdog_probe():
-        status = watchdog_probe_status()
+        status = neousys_probe_status()
         script = Path(status["script"])
         log_path = Path(status["log_path"])
         log_path.parent.mkdir(parents=True, exist_ok=True)
         if not script.exists():
             return {"ok": False, "message": f"Watchdog probe script not found: {script}", "log_path": str(log_path)}
-        command = f"cd {repo_root()!s}; /bin/bash scripts/probe_watchdog_hardware.sh > {log_path!s} 2>&1"
+        command = f"cd {repo_root()!s}; /bin/bash scripts/probe_neousys_watchdog.sh > {log_path!s} 2>&1"
         try:
             subprocess.Popen(["/bin/bash", "-lc", command], start_new_session=True)
         except Exception as exc:
             return {"ok": False, "message": f"Could not start watchdog probe: {exc}", "command": command, "log_path": str(log_path)}
-        append_web_event("info", "hardware_watchdog", "Full watchdog hardware probe started", {"log_path": str(log_path)})
+        append_web_event("info", "hardware_watchdog", "Neousys watchdog probe started", {"log_path": str(log_path)})
         return {
             "ok": True,
-            "message": "Full watchdog hardware probe started in the background.",
+            "message": "Neousys watchdog probe started in the background.",
             "command": command,
             "log_path": str(log_path),
         }
 
     def launch_hardware_watchdog_prepare():
-        status = itco_prepare_status()
+        status = neousys_install_status()
         script = Path(status["script"])
         log_path = Path(status["log_path"])
         log_path.parent.mkdir(parents=True, exist_ok=True)
         if not script.exists():
             return {"ok": False, "message": f"Hardware watchdog prepare script not found: {script}", "log_path": str(log_path)}
 
-        command = f"cd {repo_root()!s}; /bin/bash scripts/prepare_itco_watchdog.sh > {log_path!s} 2>&1"
+        cleanup = disable_legacy_watchdog_daemon()
+        if not cleanup.get("ok"):
+            return cleanup
+        command = f"cd {repo_root()!s}; /bin/bash scripts/install_neousys_wdt.sh --activate > {log_path!s} 2>&1"
         try:
             subprocess.Popen(["/bin/bash", "-lc", command], start_new_session=True)
         except Exception as exc:
@@ -4600,14 +4594,14 @@ def start_web(cfg):
         append_web_event(
             "info",
             "hardware_watchdog",
-            "Hardware watchdog automatic prepare started",
+            "Neousys watchdog installation and activation started",
             {"log_path": str(log_path)},
         )
         return {
             "ok": True,
-            "message": "Hardware watchdog setup and legacy cleanup started. The script will restart va-watchdog in the background.",
+            "message": "Neousys watchdog setup started after legacy watchdog cleanup. The feeder will restart in the background.",
             "command": command,
-            "output": "Setup flow: load Intel TCO, remove legacy watchdog daemon, write watchdog config, install/restart va-watchdog, verify /dev/watchdog0.",
+            "output": "Setup flow: remove legacy daemons, install the bundled Neousys driver, select /dev/wdt_dio, and restart the independent feeder.",
             "log_path": str(log_path),
         }
 
@@ -4649,8 +4643,11 @@ def start_web(cfg):
         updates = {
             "hardware_watchdog": {
                 "enabled": True,
-                "device": "/dev/watchdog0",
+                "backend": "neousys_wdt_dio",
+                "device": "/dev/wdt_dio",
+                "library_path": "/usr/local/lib/va-watchdog/vendor/libwdt_dio.so",
                 "feed_interval_seconds": 10,
+                "magic_close": False,
             }
         }
         raw = load_raw_config()
@@ -4676,7 +4673,7 @@ def start_web(cfg):
             "ok": True,
             "message": f"Hardware watchdog configured. A {startup_delay // 60}-minute safety window starts before the device is opened; va-watchdog restart requested.",
             "command": command,
-            "output": f"hardware_watchdog.enabled=true, device=/dev/watchdog0, feed_interval_seconds=10, startup_grace_seconds={startup_delay}",
+            "output": f"hardware_watchdog.enabled=true, backend=neousys_wdt_dio, device=/dev/wdt_dio, feed_interval_seconds=10, startup_grace_seconds={startup_delay}",
         }
 
     def set_watchdog_timeout(timeout_seconds):
@@ -4769,7 +4766,7 @@ def start_web(cfg):
         remaining = int(grace.get("remaining_seconds", 0) or 0)
         safety_margin = max(15, int(cfg.get("poll_interval_seconds", 5) or 5) * 2)
         if feed.get("opened"):
-            return {"ok": False, "message": "Safe disable blocked: /dev/watchdog0 is already opened.", "command": "", "output": "A live hardware watchdog is never closed from the webpage."}
+            return {"ok": False, "message": "Safe disable blocked: /dev/wdt_dio is already opened.", "command": "", "output": "A live hardware watchdog is never closed from the webpage."}
         if not grace.get("active") or remaining <= safety_margin:
             return {"ok": False, "message": "Safe disable blocked: use this control earlier in the startup safety window.", "command": "", "output": json.dumps(grace, indent=2)}
         updates = {"hardware_watchdog": {"enabled": False}}
@@ -4995,9 +4992,7 @@ def start_web(cfg):
                         "available_mb": int(parts[6]),
                     }
         block_devices = _run(["lsblk", "-o", "NAME,MODEL,SIZE,TYPE,MOUNTPOINT", "-n"])["stdout"].splitlines()
-        watchdog_devices = sorted(str(path) for path in Path("/dev").glob("watchdog*"))
-        if Path("/dev/wdt_dio").exists():
-            watchdog_devices.append("/dev/wdt_dio")
+        watchdog_devices = ["/dev/wdt_dio"] if Path("/dev/wdt_dio").exists() else []
         watchdog_summary = watchdog_driver_info(watchdog_devices)
         status = status_snapshot()
         live_feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
@@ -5020,9 +5015,6 @@ def start_web(cfg):
 
     def watchdog_driver_info(watchdog_devices):
         modules = {
-            "iTCO_wdt": False,
-            "iTCO_vendor_support": False,
-            "intel_pmc_bxt": False,
             "wdt_dio": False,
         }
         proc_modules = Path("/proc/modules")
@@ -5031,8 +5023,8 @@ def start_web(cfg):
             for name in modules:
                 modules[name] = any(line.startswith(name + " ") for line in text.splitlines())
         hw_cfg = cfg.get("hardware_watchdog", {}) if isinstance(cfg.get("hardware_watchdog", {}), dict) else {}
-        backend = str(hw_cfg.get("backend") or "linux")
-        configured_device = str(hw_cfg.get("device") or ("/dev/wdt_dio" if backend == "neousys_wdt_dio" else "/dev/watchdog0"))
+        backend = "neousys_wdt_dio"
+        configured_device = "/dev/wdt_dio"
         device = configured_device if configured_device in watchdog_devices else (watchdog_devices[0] if watchdog_devices else configured_device)
         wdctl = {
             "device": device,
@@ -5041,37 +5033,26 @@ def start_web(cfg):
             "timeout": "-",
             "raw": "",
         }
-        if backend == "neousys_wdt_dio" and Path(device).exists():
+        if Path(device).exists():
             wdctl.update({
                 "state": "healthy",
                 "identity": "Neousys WDT_DIO",
                 "timeout": str(hw_cfg.get("timeout_seconds") or 30),
                 "raw": "Vendor API backend; Linux wdctl does not apply.",
             })
-        elif Path(device).exists():
-            result = _run(["wdctl", device], timeout=4)
-            raw = result["stdout"] or result["stderr"]
-            wdctl["raw"] = raw
-            if result["ok"]:
-                wdctl["state"] = "healthy"
-            for line in raw.splitlines():
-                if "Identity:" in line:
-                    wdctl["identity"] = line.split("Identity:", 1)[1].strip()
-                elif "Timeout:" in line:
-                    wdctl["timeout"] = line.split("Timeout:", 1)[1].strip()
         return {
             "backend": backend,
-            "expected_driver": "wdt_dio" if backend == "neousys_wdt_dio" else "iTCO_wdt",
-            "expected_identity": "Neousys WDT_DIO" if backend == "neousys_wdt_dio" else "iTCO_wdt [version 6]",
+            "expected_driver": "wdt_dio",
+            "expected_identity": "Neousys WDT_DIO",
             "device": device,
             "modules": modules,
             "wdctl": wdctl,
             "owners": watchdog_owner_info(device),
             "legacy_daemon": legacy_watchdog_daemon_info(),
             "systemd_watchdog": systemd_watchdog_info(),
-            "prepare_log": itco_prepare_status().get("last_log", ""),
-            "setup_log": itco_setup_status().get("last_log", ""),
-            "probe_log": watchdog_probe_status().get("last_log", ""),
+            "prepare_log": neousys_install_status().get("last_log", ""),
+            "setup_log": neousys_install_status().get("last_log", ""),
+            "probe_log": neousys_probe_status().get("last_log", ""),
         }
 
     def legacy_watchdog_daemon_info():
@@ -5637,8 +5618,8 @@ def start_web(cfg):
             "reboots-last-x.txt": _run(["last", "-x"], timeout=10),
             "disk-lsblk.txt": _run(["lsblk", "-o", "NAME,PATH,TYPE,SIZE,FSTYPE,LABEL,MOUNTPOINT,MODEL,SERIAL"], timeout=5),
             "mounts-findmnt.txt": _run(["findmnt"], timeout=5),
-            "watchdog-wdctl.txt": _run(["wdctl", str(cfg.get("hardware_watchdog", {}).get("device") or "/dev/watchdog0")], timeout=5),
-            "watchdog-modules.txt": _run(["bash", "-lc", "grep -E '^(wdt_dio|iTCO_wdt|iTCO_vendor_support) ' /proc/modules || true"], timeout=5),
+            "watchdog-device.txt": _run(["bash", "-lc", "ls -l /dev/wdt_dio 2>&1; fuser -v /dev/wdt_dio 2>&1 || true"], timeout=5),
+            "watchdog-modules.txt": _run(["bash", "-lc", "grep -E '^wdt_dio ' /proc/modules || true"], timeout=5),
             "neousys-module.txt": _run(["modinfo", "wdt_dio"], timeout=5),
             "neousys-files.txt": _run(["bash", "-lc", "ls -l /dev/wdt_dio /usr/local/lib/va-watchdog/vendor/libwdt_dio.so 2>&1; sha256sum /usr/local/lib/va-watchdog/vendor/libwdt_dio.so 2>&1"], timeout=5),
             "network-ip-addr.txt": _run(["ip", "-4", "addr", "show"], timeout=5),
@@ -5889,8 +5870,8 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            if route_path == "/itco-watchdog-install-confirm":
-                body = itco_install_confirm_html().encode("utf-8")
+            if route_path == "/neousys-watchdog-install-confirm":
+                body = neousys_install_confirm_html().encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
@@ -6366,9 +6347,9 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            if route_path == "/itco-watchdog-install-now":
-                result = launch_itco_setup()
-                body = itco_install_started_html(result).encode("utf-8")
+            if route_path == "/neousys-watchdog-install-now":
+                result = launch_neousys_install()
+                body = neousys_install_started_html(result).encode("utf-8")
                 self.send_response(200 if result.get("ok") else 500)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))

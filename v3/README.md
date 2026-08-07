@@ -47,8 +47,9 @@ The installer:
 - installs and enables both watchdog systemd services
 - verifies the local health and identity APIs
 
-Hardware watchdog feeding is deliberately not enabled on a clean install. Configure
-and test it from the Watchdog page after confirming `/dev/watchdog0` is correct.
+Hardware watchdog feeding is deliberately not enabled on a clean install. This
+test branch installs the bundled Neousys driver, but activation and the first trip
+test must be performed from the Watchdog page during an attended maintenance window.
 
 For an unattended install:
 
@@ -114,20 +115,31 @@ Folder**. Enter the existing path selected in Videosoft, such as
 `/home/vsuser/recordings`. This mode keeps the system disk protected and makes no
 partition, label, mount, ownership, or `/etc/fstab` changes.
 
-Hardware watchdog is disabled by default. Enable only after testing:
-For POC-451VTC / Intel Atom x6425E gateways, first expose the Intel TCO watchdog:
+Hardware watchdog feeding is disabled by default. This test build supports only the
+Neousys WDT_DIO backend on POC-451VTC. Install the bundled reviewed driver without
+starting the hardware timer:
 
 ```bash
 cd /opt/va-connect-watchdog-v3
-sudo ./v3/scripts/setup_itco_watchdog.sh
+sudo ./v3/scripts/install_neousys_wdt.sh
 ```
 
-Only enable feeding after `/dev/watchdog0` exists and `wdctl /dev/watchdog0` reports `iTCO_wdt`:
+Activation is explicit. It removes the Ubuntu legacy watchdog package/service,
+removes and blacklists Intel TCO hardware paths, selects `/dev/wdt_dio`, and starts
+a 15-minute remote-access safety window:
+
+```bash
+sudo ./v3/scripts/install_neousys_wdt.sh --activate
+```
+
+The effective hardware settings are:
 
 ```json
 "hardware_watchdog": {
   "enabled": true,
-  "device": "/dev/watchdog0",
+  "backend": "neousys_wdt_dio",
+  "device": "/dev/wdt_dio",
+  "library_path": "/usr/local/lib/va-watchdog/vendor/libwdt_dio.so",
   "feed_interval_seconds": 10,
   "timeout_seconds": 30,
   "startup_grace_seconds": 300,
@@ -135,13 +147,12 @@ Only enable feeding after `/dev/watchdog0` exists and `wdctl /dev/watchdog0` rep
 }
 ```
 
-When hardware feeding is enabled, the independent feeder opens and feeds
-`/dev/watchdog0` during the startup safety window. Stale-heartbeat enforcement is
-deferred for five minutes after a normal boot and 15 minutes after a deliberate trip
-test, allowing the main application and remote access to initialise without causing a
-reboot loop. The Watchdog page shows the countdown and provides guarded controls to
-extend the window, end it immediately, or disable feeding. Once grace ends, a stale
-main heartbeat stops feeding and the configured hardware timeout applies.
+When hardware feeding is enabled, the independent feeder controls the vendor API.
+It continues feeding during startup grace while stale-heartbeat enforcement is
+deferred, allowing the main application and remote access to initialise without a
+reboot loop. Ordinary service, storage, network, CPU, and RAM warnings never stop
+feeding. Only a stale main heartbeat, a deliberate trip test, shutdown, or an
+explicitly configured fatal condition can pause the hardware feed.
 
 ## Preserved crash evidence
 

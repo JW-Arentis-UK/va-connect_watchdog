@@ -47,7 +47,7 @@ def add_hardware_feed_check(status, cfg):
     hw_cfg = cfg.get("hardware_watchdog", {}) if isinstance(cfg.get("hardware_watchdog", {}), dict) else {}
     enabled = bool(feed.get("enabled") or hw_cfg.get("enabled"))
     opened = bool(feed.get("opened"))
-    device = str(feed.get("device") or hw_cfg.get("device") or "/dev/watchdog0")
+    device = str(feed.get("device") or hw_cfg.get("device") or "/dev/wdt_dio")
     feed_interval = int(hw_cfg.get("feed_interval_seconds", 10) or 10)
     poll_interval = int(cfg.get("poll_interval_seconds", 5) or 5)
     stale_after = max(feed_interval * 3, poll_interval * 3, 30)
@@ -142,8 +142,8 @@ def hardware_feed_status(cfg, startup_grace, trip_active=False, trip_summary=Non
         feed_age = None
     return {
         "enabled": bool(hw_cfg.get("enabled")),
-        "backend": feed.get("backend") or hw_cfg.get("backend", "linux"),
-        "device": feed.get("device") or hw_cfg.get("device", "/dev/watchdog0"),
+        "backend": "neousys_wdt_dio",
+        "device": feed.get("device") or hw_cfg.get("device", "/dev/wdt_dio"),
         "opened": feed.get("process_status") in {"running", "feeding", "paused_stale_heartbeat", "paused_trip_test"},
         "last_feed_unix": last_feed_unix,
         "feed_age_seconds": feed_age,

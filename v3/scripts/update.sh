@@ -62,6 +62,16 @@ log "update started branch=$BRANCH remote=$REMOTE commit=$commit_before"
 commit_after="$("${GIT[@]}" rev-parse --short HEAD)"
 log "update pulled commit=$commit_after"
 
+if [ -f "$ROOT_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" ]; then
+  log "installing bundled Neousys WDT_DIO driver without activating hardware feeding"
+  if ! command -v gcc >/dev/null 2>&1 || [ ! -d "/lib/modules/$(uname -r)/build" ]; then
+    apt-get update
+    apt-get install -y build-essential "linux-headers-$(uname -r)" unzip
+  fi
+  /bin/bash "$ROOT_DIR/scripts/install_neousys_wdt.sh"
+  log "Neousys WDT_DIO driver installed"
+fi
+
 if [ -f "$ROOT_DIR/systemd/va-watchdog.service" ]; then
   install -m 0644 "$ROOT_DIR/systemd/va-watchdog.service" /etc/systemd/system/va-watchdog.service
   log "installed current va-watchdog systemd unit"
