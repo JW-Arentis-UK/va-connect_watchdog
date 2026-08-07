@@ -54,6 +54,16 @@ fi
 
 [[ -f "$BUNDLE" ]] || fail "vendor bundle not found: $BUNDLE"
 [[ "$(uname -m)" == "x86_64" ]] || fail "the supplied vendor library supports x86_64 only"
+kernel="$(uname -r)"
+kernel_build="/lib/modules/$kernel/build"
+
+if ! command -v make >/dev/null 2>&1 || ! command -v gcc >/dev/null 2>&1 || [[ ! -d "$kernel_build" ]] || { [[ "$BUNDLE" == *.zip ]] && ! command -v unzip >/dev/null 2>&1; }; then
+  command -v apt-get >/dev/null 2>&1 || fail "build tools or kernel headers are missing and apt-get is unavailable"
+  log "Installing build tools and headers for $kernel"
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential "linux-headers-$kernel" unzip
+fi
+
 for command in sha256sum tar make gcc install depmod modprobe python3; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is required"
 done
@@ -63,8 +73,6 @@ if [[ "$actual_sha256" != "$EXPECTED_SHA256" && "$actual_sha256" != "$EXPECTED_T
   fail "bundle SHA256 did not match the reviewed Neousys v$VERSION package"
 fi
 
-kernel="$(uname -r)"
-kernel_build="/lib/modules/$kernel/build"
 [[ -d "$kernel_build" ]] || fail "kernel headers are missing: install linux-headers-$kernel"
 
 workdir="$(mktemp -d /tmp/va-neousys-wdt.XXXXXX)"

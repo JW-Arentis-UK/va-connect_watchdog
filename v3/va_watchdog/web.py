@@ -2137,7 +2137,11 @@ def start_web(cfg):
             grace_explanation = (
                 "During this window the hardware device is not opened, so you can reconnect remotely and disable protection without causing another watchdog reboot."
                 if grace_active
-                else "The startup delay has finished. The independent feeder now owns the hardware watchdog device."
+                else (
+                    "The startup delay has finished and the independent feeder owns the Neousys watchdog device."
+                    if feed_opened
+                    else "Hardware protection is inactive. Complete setup to install the driver and enable the independent feeder."
+                )
             )
             grace_controls = (
                 "<div class=\"card\"><h2>Startup Safety Window</h2>"
