@@ -4,6 +4,7 @@ import json
 import os
 import platform
 import secrets
+import shutil
 import socket
 import subprocess
 import re
@@ -1876,9 +1877,9 @@ def start_web(cfg):
             )
             watchdog_settings = (
                 "<div class=\"settings-grid\">"
-                f"<div><label class=\"label\">Normal reboot safety window</label><select name=\"watchdog_startup_grace_seconds\">{normal_grace_options}</select><p class=\"muted\">How long after boot before VA-Connect opens the hardware watchdog.</p></div>"
+                f"<div><label class=\"label\">Normal reboot safety window</label><select name=\"watchdog_startup_grace_seconds\">{normal_grace_options}</select><p class=\"muted\">How long after boot before stale-heartbeat enforcement begins. Hardware feeding continues during this window.</p></div>"
                 f"<div><label class=\"label\">After deliberate trip reboot</label><select name=\"watchdog_post_trip_grace_seconds\">{post_trip_grace_options}</select><p class=\"muted\">Extended window after a deliberate watchdog test to prevent a reboot loop.</p></div>"
-                "</div><p>The hardware timeout remains separate and starts only after the safety window ends.</p>"
+                "</div><p>The hardware timer is fed throughout the safety window. Only stale-heartbeat enforcement is delayed.</p>"
             )
             journal_state = persistent_status()
             journal_settings = (
@@ -2008,14 +2009,20 @@ def start_web(cfg):
             remaining_minutes, remaining_remainder = divmod(remaining_seconds, 60)
             grace_countdown = f"{remaining_minutes:02d}:{remaining_remainder:02d}"
             if grace_active:
-                page_state = "waiting"
-                page_title = "Startup safety window active"
-                page_message = f"Hardware protection will arm in {grace_countdown}. Remote access remains available while /dev/wdt_dio stays closed."
-                primary_action = (
-                    "<form class=\"inline\" method=\"post\" action=\"/watchdog-grace-delay\"><input type=\"hidden\" name=\"delay_seconds\" value=\"900\"><button class=\"action\" type=\"submit\">Delay another 15 minutes</button></form> "
-                    "<a class=\"ghost\" href=\"/watchdog-arm-now-confirm\">Arm now</a> "
-                    "<a class=\"danger\" href=\"/hardware-watchdog-disable-confirm\">Disable hardware feed</a>"
-                )
+                if feed_opened and str(feed_check.get("state", "")) == "healthy":
+                    page_state = "waiting"
+                    page_title = "Startup safety window active"
+                    page_message = f"Hardware feeding is active. Stale-heartbeat enforcement begins in {grace_countdown}, leaving time for remote recovery."
+                    primary_action = (
+                        "<form class=\"inline\" method=\"post\" action=\"/watchdog-grace-delay\"><input type=\"hidden\" name=\"delay_seconds\" value=\"900\"><button class=\"action\" type=\"submit\">Delay another 15 minutes</button></form> "
+                        "<a class=\"ghost\" href=\"/watchdog-arm-now-confirm\">End delay now</a> "
+                        "<a class=\"danger\" href=\"/hardware-watchdog-disable-confirm\">Disable hardware feed</a>"
+                    )
+                else:
+                    page_state = "critical"
+                    page_title = "Hardware feeder did not start"
+                    page_message = "The Neousys driver is installed, but no process owns or feeds it. Retry setup; the hardware timer is not protecting the gateway."
+                    primary_action = "<a class=\"action\" href=\"/hardware-watchdog-prepare-confirm\">Retry Neousys setup</a>"
             elif setup.get("ready"):
                 page_state = "healthy"
                 if trip_test.get("armed"):
@@ -2131,11 +2138,14 @@ def start_web(cfg):
                 f"<option value=\"{value}\" {'selected' if post_trip_grace == value else ''}>{label}</option>"
                 for value, label in [(300, "5 minutes"), (900, "15 minutes"), (1800, "30 minutes"), (3600, "60 minutes")]
             )
-            grace_state = "WAITING" if grace_active else ("PROTECTION ACTIVE" if feed_opened else "INACTIVE")
-            grace_state_class = "waiting" if grace_active else ("healthy" if feed_opened else "warning")
+            grace_feed_active = grace_active and feed_opened and str(feed_check.get("state", "")) == "healthy"
+            grace_state = "WAITING" if grace_feed_active else ("FEEDER NOT RUNNING" if grace_active else ("PROTECTION ACTIVE" if feed_opened else "INACTIVE"))
+            grace_state_class = "waiting" if grace_feed_active else ("critical" if grace_active else ("healthy" if feed_opened else "warning"))
             grace_display = grace_countdown if grace_active else "No delay active"
             grace_explanation = (
-                "During this window the hardware device is not opened, so you can reconnect remotely and disable protection without causing another watchdog reboot."
+                "The feeder continues resetting the hardware timer during this window, while stale-heartbeat enforcement is deferred so you can reconnect remotely."
+                if grace_feed_active
+                else "The safety delay is active, but the feeder is not running. The hardware timer is not protecting the gateway."
                 if grace_active
                 else (
                     "The startup delay has finished and the independent feeder owns the Neousys watchdog device."
@@ -2162,10 +2172,10 @@ def start_web(cfg):
             )
             return (
                 summary_strip([
-                    ("Overall readiness", "WAITING" if grace_active else ("READY" if setup.get("ready") else "SETUP NEEDED"), page_message, page_state),
+                    ("Overall readiness", "WAITING" if grace_feed_active else ("READY" if setup.get("ready") else "SETUP NEEDED"), page_message, page_state),
                     ("Neousys WDT_DIO", "Loaded" if driver.get("state") == "healthy" else "Needs setup", driver.get("message", "-"), driver.get("state", "unknown")),
                     ("Watchdog device", setup_config.get("device", "/dev/wdt_dio"), wdctl.get("identity") or device.get("message") or "-", device.get("state", "unknown")),
-                    ("Live feed", f"Starts in {grace_countdown}" if grace_active else ("Feeding" if feed_enabled and feed_opened else "Not feeding"), f"Feed count {feed_count}", "waiting" if grace_active else ("healthy" if feed_enabled and feed_opened else "warning")),
+                    ("Live feed", "Feeding" if feed_enabled and feed_opened else "Not feeding", f"Feed count {feed_count}; stale enforcement in {grace_countdown}" if grace_active else f"Feed count {feed_count}", "healthy" if feed_enabled and feed_opened else "critical"),
                     ("Legacy watchdogs", "Clear" if not legacy_problem else "Conflict", legacy_check.get("message", "-"), legacy_check.get("state", "unknown")),
                 ])
                 + f"<div class=\"card action-panel {escape(page_state)}\"><h2>{escape(page_title)}</h2>"
@@ -4096,12 +4106,12 @@ def start_web(cfg):
             },
             {
                 "name": "Device owner",
-                "state": "healthy" if feed_opened else ("waiting" if grace_active else "warning"),
-                "message": "The watchdog service has opened the device" if feed_opened else ("Device intentionally remains closed during startup safety window" if grace_active else owner.get("summary", "The watchdog service has not opened the device")),
+                "state": "healthy" if feed_opened else "warning",
+                "message": "The independent feeder has opened the device" if feed_opened else owner.get("summary", "The independent feeder has not opened the device"),
             },
             {
                 "name": "Live feed",
-                "state": "healthy" if feed_recent else ("waiting" if grace_active else "warning"),
+                "state": "healthy" if feed_recent else "warning",
                 "message": str(wdt.get("last_feed_message", "No feed status yet")),
             },
             {
@@ -4112,12 +4122,12 @@ def start_web(cfg):
         ]
         prerequisites_ready = all(row["state"] == "healthy" for row in rows[:5])
         feed_ready = feed_opened and feed_recent
-        ready = prerequisites_ready and (feed_ready or grace_active)
+        ready = prerequisites_ready and feed_ready
         return {
             "ready": ready,
             "trip_ready": prerequisites_ready and feed_ready and not grace_active,
             "state": "waiting" if grace_active and ready else ("healthy" if ready else "warning"),
-            "message": (f"Startup safety window active; hardware protection arms in {startup_grace.get('remaining_seconds', 0)}s" if grace_active and ready else ("Hardware watchdog is ready and owned by VA-Connect" if ready else "Setup incomplete: run the one-click setup, then reload this page")),
+            "message": (f"Hardware feeding; stale-heartbeat enforcement begins in {startup_grace.get('remaining_seconds', 0)}s" if grace_active and ready else ("Hardware watchdog is ready and owned by VA-Connect" if ready else "Setup incomplete: the independent feeder must own and feed the device")),
             "checks": rows,
             "owner": owner,
             "startup_grace": startup_grace,
@@ -4585,14 +4595,42 @@ def start_web(cfg):
         if not cleanup.get("ok"):
             return cleanup
         command = f"cd {repo_root()!s}; /bin/bash scripts/install_neousys_wdt.sh --activate > {log_path!s} 2>&1"
+        systemd_run = shutil.which("systemd-run")
+        if not systemd_run:
+            return {
+                "ok": False,
+                "message": "Setup cannot safely restart services because systemd-run is unavailable.",
+                "command": command,
+                "output": "Activation was not started.",
+                "log_path": str(log_path),
+            }
+        unit_name = f"va-watchdog-neousys-setup-{int(time.time())}"
+        launch_command = [
+            systemd_run,
+            f"--unit={unit_name}",
+            "--collect",
+            "--no-block",
+            "/bin/bash",
+            "-lc",
+            command,
+        ]
         try:
-            subprocess.Popen(["/bin/bash", "-lc", command], start_new_session=True)
+            result = subprocess.run(launch_command, capture_output=True, text=True, timeout=10, check=False)
         except Exception as exc:
             return {
                 "ok": False,
                 "message": f"Prepare job could not start: {exc}",
                 "command": command,
                 "output": str(exc),
+                "log_path": str(log_path),
+            }
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "systemd-run failed").strip()
+            return {
+                "ok": False,
+                "message": f"Setup could not start independently: {detail}",
+                "command": launch_command,
+                "output": detail,
                 "log_path": str(log_path),
             }
         append_web_event(
@@ -4604,7 +4642,7 @@ def start_web(cfg):
         return {
             "ok": True,
             "message": "Neousys watchdog setup started after legacy watchdog cleanup. The feeder will restart in the background.",
-            "command": command,
+            "command": " ".join(launch_command[:-1]) + " <setup-command>",
             "output": "Setup flow: remove legacy daemons, install the bundled Neousys driver, select /dev/wdt_dio, and restart the independent feeder.",
             "log_path": str(log_path),
         }

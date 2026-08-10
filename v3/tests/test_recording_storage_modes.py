@@ -29,6 +29,10 @@ class RecordingStorageModeTests(unittest.TestCase):
         "va_watchdog.storage._smart_info",
         return_value={"status": "PASSED", "temperature_c": 35, "device": "/dev/sda"},
     )
+    @patch(
+        "va_watchdog.storage.shutil.disk_usage",
+        return_value=(100 * 1024**3, 20 * 1024**3, 80 * 1024**3),
+    )
     @patch("va_watchdog.storage.os.path.realpath", side_effect=lambda value: value)
     @patch("va_watchdog.storage._blkid_value", return_value="")
     @patch("va_watchdog.storage._row_for_device", return_value={})
@@ -42,6 +46,7 @@ class RecordingStorageModeTests(unittest.TestCase):
         _row,
         _blkid,
         _realpath,
+        _disk_usage,
         _smart,
     ):
         with tempfile.TemporaryDirectory() as temporary:

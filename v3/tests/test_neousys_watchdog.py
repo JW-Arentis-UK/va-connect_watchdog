@@ -177,6 +177,15 @@ class NeousysWatchdogTests(unittest.TestCase):
         self.assertIn("blacklist iTCO_wdt", text)
         self.assertIn("apt-get remove -y watchdog", text)
 
+    def test_web_activation_uses_independent_systemd_job(self):
+        web = Path(__file__).parents[1] / "va_watchdog" / "web.py"
+        text = web.read_text(encoding="utf-8")
+
+        self.assertIn('unit_name = f"va-watchdog-neousys-setup-', text)
+        self.assertIn('"--collect"', text)
+        self.assertIn("subprocess.run(launch_command", text)
+        self.assertNotIn("Device intentionally remains closed during startup safety window", text)
+
 
 if __name__ == "__main__":
     unittest.main()
