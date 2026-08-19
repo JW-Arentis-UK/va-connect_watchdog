@@ -1,5 +1,7 @@
 import json
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -8,6 +10,7 @@ from va_watchdog.config import _enforce_neousys_watchdog
 from va_watchdog.neousys_watchdog import NeousysWatchdog
 from va_watchdog.watchdog_device import HardwareWatchdog
 from va_watchdog.watchdog_feed import FeedWorker
+from va_watchdog.watchdog import hardware_feed_status
 
 
 class FakeFunction:
@@ -164,6 +167,59 @@ class NeousysWatchdogTests(unittest.TestCase):
 
         self.assertEqual(state["backend"], "neousys_wdt_dio")
         self.assertIn("StopWDT", state["shutdown_behavior"])
+
+    def test_stale_feeder_process_is_not_reported_as_feeding(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            now = time.time()
+            state_path = Path(temporary) / "feed.json"
+            state_path.write_text(json.dumps({
+                "pid": os.getpid(),
+                "process_status": "feeding",
+                "last_feed_unix": now - 600,
+                "updated_at": now - 600,
+                "feed_count": 42,
+            }), encoding="utf-8")
+            cfg = {
+                "events_path": str(Path(temporary) / "events.jsonl"),
+                "hardware_watchdog_feed_state_path": str(state_path),
+                "hardware_watchdog": {
+                    "enabled": True,
+                    "feed_interval_seconds": 10,
+                    "device": "/dev/wdt_dio",
+                },
+            }
+            with patch("va_watchdog.watchdog.Path.exists", return_value=True):
+                status = hardware_feed_status(cfg, {"active": False})
+
+        self.assertTrue(status["opened"])
+        self.assertTrue(status["process_alive"])
+        self.assertFalse(status["feeding"])
+        self.assertGreater(status["feed_age_seconds"], 590)
+
+    def test_recent_feeder_process_is_reported_as_feeding(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            now = time.time()
+            state_path = Path(temporary) / "feed.json"
+            state_path.write_text(json.dumps({
+                "pid": os.getpid(),
+                "process_status": "feeding",
+                "last_feed_unix": now,
+                "updated_at": now,
+                "feed_count": 43,
+            }), encoding="utf-8")
+            cfg = {
+                "events_path": str(Path(temporary) / "events.jsonl"),
+                "hardware_watchdog_feed_state_path": str(state_path),
+                "hardware_watchdog": {
+                    "enabled": True,
+                    "feed_interval_seconds": 10,
+                    "device": "/dev/wdt_dio",
+                },
+            }
+            with patch("va_watchdog.watchdog.Path.exists", return_value=True):
+                status = hardware_feed_status(cfg, {"active": False})
+
+        self.assertTrue(status["feeding"])
 
     def test_installer_does_not_activate_without_explicit_flag(self):
         script = Path(__file__).parents[1] / "scripts" / "install_neousys_wdt.sh"

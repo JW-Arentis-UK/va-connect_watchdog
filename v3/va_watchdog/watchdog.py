@@ -140,17 +140,45 @@ def hardware_feed_status(cfg, startup_grace, trip_active=False, trip_summary=Non
         feed_age = round(max(0.0, time.time() - float(last_feed_unix)), 1) if last_feed_unix else None
     except (TypeError, ValueError):
         feed_age = None
+    updated_at = feed.get("updated_at")
+    try:
+        state_age = round(max(0.0, time.time() - float(updated_at)), 1) if updated_at else None
+    except (TypeError, ValueError):
+        state_age = None
+    pid = feed.get("pid")
+    try:
+        process_alive = bool(pid and Path(f"/proc/{int(pid)}").exists())
+    except (TypeError, ValueError):
+        process_alive = False
+    process_status = str(feed.get("process_status", "unknown"))
+    reports_open = process_status in {"running", "feeding", "paused_stale_heartbeat", "paused_trip_test"}
+    feed_interval = max(1, int(hw_cfg.get("feed_interval_seconds", 10) or 10))
+    fresh_after = max(feed_interval * 3, 30)
+    feeding = bool(
+        reports_open
+        and process_alive
+        and process_status == "feeding"
+        and feed_age is not None
+        and feed_age <= fresh_after
+        and state_age is not None
+        and state_age <= fresh_after
+    )
     return {
         "enabled": bool(hw_cfg.get("enabled")),
         "backend": "neousys_wdt_dio",
         "device": feed.get("device") or hw_cfg.get("device", "/dev/wdt_dio"),
-        "opened": feed.get("process_status") in {"running", "feeding", "paused_stale_heartbeat", "paused_trip_test"},
+        "opened": reports_open and process_alive,
+        "reported_open": reports_open,
+        "process_alive": process_alive,
+        "feeding": feeding,
+        "pid": pid,
         "last_feed_unix": last_feed_unix,
         "feed_age_seconds": feed_age,
+        "state_age_seconds": state_age,
         "last_feed_utc": feed.get("last_feed_utc", ""),
         "feed_count": feed.get("feed_count", 0),
         "timeout_seconds": feed.get("timeout_seconds") or hw_cfg.get("timeout_seconds", 30),
-        "feed_process_status": feed.get("process_status", "unknown"),
+        "feed_process_status": process_status,
         "feed_last_error": feed.get("last_error", ""),
         "feed_error_count": feed.get("error_count", 0),
         "trip_countdown": feed.get("trip_countdown", {}),
