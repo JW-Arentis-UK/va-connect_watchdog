@@ -2168,7 +2168,7 @@ def start_web(cfg):
                 f"<div><label class=\"label\">Normal reboot delay</label><select name=\"startup_grace_seconds\">{normal_grace_options}</select></div>"
                 f"<div><label class=\"label\">After deliberate trip reboot</label><select name=\"post_trip_grace_seconds\">{post_trip_grace_options}</select></div>"
                 "</div><div class=\"button-row\"><button class=\"ghost\" type=\"submit\">Save safety windows</button></div></form>"
-                + ("<script>(function(){var e=document.getElementById('watchdog-grace-countdown');if(!e)return;var s=Number(e.getAttribute('data-seconds')||0);setInterval(function(){if(s<=0)return;s-=1;e.textContent=Math.floor(s/60)+':' + String(s%60).padStart(2,'0');},1000);}());</script>" if grace_active else "")
+                + ("<script>(function(){var e=document.getElementById('watchdog-grace-countdown');if(!e)return;var s=Number(e.getAttribute('data-seconds')||0);var k='va-watchdog-grace-reload';if(s>0){sessionStorage.removeItem(k);}var t=setInterval(function(){if(s>0){s-=1;e.textContent=Math.floor(s/60)+':' + String(s%60).padStart(2,'0');}if(s<=0){clearInterval(t);if(sessionStorage.getItem(k)!=='1'){sessionStorage.setItem(k,'1');setTimeout(function(){window.location.reload();},500);}}},1000);}());</script>" if grace_active else "")
                 + "</div>"
             )
             return (
