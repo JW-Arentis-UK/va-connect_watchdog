@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from va_watchdog.heartbeat import HeartbeatPublisher, heartbeat_age_seconds, read_state
 from va_watchdog.incident_archive import archive_previous_boot, list_archives
-from va_watchdog.reboot_evidence import classify
+from va_watchdog.reboot_evidence import classify, create
 from va_watchdog.watchdog_feed import FeedWorker
 from va_watchdog.watchdog_test import read_trip_test_state, trigger_trip_test
 
@@ -163,6 +163,48 @@ class ForensicPhase1Tests(unittest.TestCase):
         self.assertEqual(evidence["reset_mechanism"], "Watchdog reset")
         self.assertEqual(evidence["probable_preceding_fault"], "storage I/O")
         self.assertIn(evidence["confidence"], {"Medium", "High"})
+
+    def test_confirmed_trip_classifies_matching_previous_boot_as_watchdog_reset(self):
+        change = {"changed": True, "previous_boot_id": "old", "current_boot_id": "new"}
+        trip = {
+            "triggered": True,
+            "triggered_boot_id": "old",
+            "triggered_at": "2026-08-20 13:16:13",
+            "last_result": {"ok": True, "triggered_boot_id": "old", "message": "Trip test confirmed"},
+        }
+
+        evidence = classify(change, [], {}, "", "session - crash", "", trip)
+
+        self.assertEqual(evidence["reset_mechanism"], "Watchdog reset")
+        self.assertEqual(evidence["confidence"], "High")
+        self.assertTrue(evidence["deliberate_trip_test"]["confirmed"])
+
+    def test_existing_unknown_evidence_is_amended_from_matching_trip(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cfg = {
+                "events_path": str(root / "events.jsonl"),
+                "reboot_evidence_path": str(root / "reboot-evidence.jsonl"),
+                "trip_test_path": str(root / "watchdog-trip-test.json"),
+            }
+            (root / "last-reboot-evidence.json").write_text(json.dumps({
+                "reset_mechanism": "Unknown",
+                "classification": "Unknown",
+                "confidence": "Low",
+                "previous_boot_id": "old",
+                "evidence_used": ["No direct reset-cause evidence was found; classification remains Unknown."],
+            }), encoding="utf-8")
+            (root / "watchdog-trip-test.json").write_text(json.dumps({
+                "triggered": True,
+                "triggered_boot_id": "old",
+                "last_result": {"ok": True, "triggered_boot_id": "old"},
+            }), encoding="utf-8")
+
+            evidence = create(cfg, {"changed": False})
+
+            self.assertEqual(evidence["reset_mechanism"], "Watchdog reset")
+            self.assertEqual(evidence["confidence"], "High")
+            self.assertEqual(len((root / "reboot-evidence.jsonl").read_text(encoding="utf-8").splitlines()), 1)
 
     def test_nmi_watchdog_enabled_is_not_a_hard_lockup_or_watchdog_reset(self):
         change = {
