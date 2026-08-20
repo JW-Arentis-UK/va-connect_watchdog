@@ -82,6 +82,8 @@ if [ -f "$ROOT_DIR/systemd/va-watchdog-feed.service" ]; then
 fi
 systemctl daemon-reload
 
+systemctl unmask va-watchdog-feed va-watchdog 2>/dev/null || true
+systemctl enable va-watchdog-feed va-watchdog
 systemctl restart va-watchdog-feed
 log "hardware feeder restart requested"
 systemctl restart va-watchdog
@@ -89,6 +91,7 @@ log "main service restart requested"
 sleep 2
 systemctl is-active --quiet va-watchdog-feed
 systemctl is-active --quiet va-watchdog
+systemctl is-enabled --quiet va-watchdog-feed
 
 write_state "completed" "update completed" "$commit_after"
 log "update completed commit=$commit_after"

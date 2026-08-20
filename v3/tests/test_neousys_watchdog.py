@@ -232,6 +232,8 @@ class NeousysWatchdogTests(unittest.TestCase):
         self.assertIn('CC="$kernel_cc" modules', text)
         self.assertIn("blacklist iTCO_wdt", text)
         self.assertIn("apt-get remove -y watchdog", text)
+        self.assertIn("systemctl enable va-watchdog.service va-watchdog-feed.service", text)
+        self.assertIn('fail "va-watchdog-feed.service is not enabled for reboot"', text)
 
     def test_web_activation_uses_independent_systemd_job(self):
         web = Path(__file__).parents[1] / "va_watchdog" / "web.py"

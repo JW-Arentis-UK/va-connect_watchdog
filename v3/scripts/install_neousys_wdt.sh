@@ -206,10 +206,13 @@ os.replace(temporary, path)
 delay_current_boot(payload, delay_seconds=900, extend=False)
 PY
 
+systemctl unmask va-watchdog.service va-watchdog-feed.service 2>/dev/null || true
+systemctl enable va-watchdog.service va-watchdog-feed.service
 systemctl restart va-watchdog.service
 systemctl restart va-watchdog-feed.service
 sleep 2
 systemctl is-active --quiet va-watchdog.service || fail "va-watchdog.service did not restart"
 systemctl is-active --quiet va-watchdog-feed.service || fail "va-watchdog-feed.service did not restart"
+systemctl is-enabled --quiet va-watchdog-feed.service || fail "va-watchdog-feed.service is not enabled for reboot"
 log "Neousys feeding activated with a 15-minute attended safety window"
 log "Configuration backup: $backup"

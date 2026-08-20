@@ -125,6 +125,8 @@ class UpdateTests(unittest.TestCase):
     def test_update_restarts_independent_hardware_feeder(self):
         script = Path(__file__).parents[1] / "scripts" / "update.sh"
         source = script.read_text(encoding="utf-8")
+        self.assertIn("systemctl enable va-watchdog-feed va-watchdog", source)
+        self.assertIn("systemctl is-enabled --quiet va-watchdog-feed", source)
         self.assertIn("systemctl restart va-watchdog-feed", source)
         self.assertIn("systemctl is-active --quiet va-watchdog-feed", source)
 
