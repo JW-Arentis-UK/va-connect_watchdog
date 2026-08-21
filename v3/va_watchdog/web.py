@@ -40,15 +40,13 @@ from .recording_activity import recording_activity
 
 VISIBLE_PAGE_GROUPS = (
     ("Operations", (("Overview", "/"), ("Events", "/events"))),
-    ("System", (("Hardware", "/hardware"), ("Network", "/network"), ("Services", "/services"))),
+    ("System", (("Hardware", "/hardware"), ("Network", "/network"), ("Services", "/services"), ("Watchdog", "/watchdog"))),
+    ("Engineering", (("History", "/history"), ("Diagnostics", "/diagnostics"))),
     ("Administration", (("Settings", "/settings"),)),
 )
 
 LEGACY_PAGE_REDIRECTS = {
     "/storage": "/hardware#storage",
-    "/watchdog": "/services#watchdog",
-    "/history": "/events?view=history",
-    "/diagnostics": "/events?view=evidence",
     "/recovery": "/settings#recovery",
     "/updates": "/settings#software-update",
 }
@@ -471,12 +469,14 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
 <script type="module">
 const PAGE_MODES = {
   Operations: ['Overview', 'Events'],
-  System: ['Hardware', 'Network', 'Services'],
+  System: ['Hardware', 'Network', 'Services', 'Watchdog'],
+  Engineering: ['History', 'Diagnostics'],
   Administration: ['Settings'],
 };
 const PATH_PAGES = {
   '/': 'Overview', '/events': 'Events', '/hardware': 'Hardware', '/network': 'Network',
-  '/services': 'Services', '/settings': 'Settings',
+  '/services': 'Services', '/watchdog': 'Watchdog', '/history': 'History',
+  '/diagnostics': 'Diagnostics', '/settings': 'Settings',
 };
 const PAGES = Object.keys(PAGE_MODES).reduce((pages, mode) => pages.concat(PAGE_MODES[mode]), []);
 let currentPage = PATH_PAGES[window.location.pathname] || '__PAGE_TITLE__';
@@ -734,75 +734,6 @@ function pageHelp(page){
   return `<div class="page-intro"><div><div class="page-kicker">${escapeHtml(modeForPage(page))}</div><h1>${escapeHtml(page)}</h1><div class="page-question">${escapeHtml(content[0])}</div></div><details class="help-popover"><summary title="Page help">?</summary><p>${escapeHtml(content[1])}</p></details></div>`;
 }
 
-function renderWatchdogPage(status){
-  const watchdog = lastHardwareInfo.watchdog || {};
-  const process = status.watchdog_process || {};
-  const hwCfg = lastSettings.hardware_watchdog || {};
-  const feed = status.hardware_watchdog_feed || {};
-  const backend = 'neousys_wdt_dio';
-  const vendorBackend = true;
-  const timeout = Number(hwCfg.timeout_seconds || 30);
-  const systemd = watchdog.systemd_watchdog || {};
-  const safeTest = watchdog.safe_test || {};
-  const tripTest = watchdog.trip_test || {};
-  const tripCountdown = feed.trip_countdown || {};
-  const wdctl = watchdog.wdctl || {};
-  const modules = watchdog.modules || {};
-  const legacy = watchdog.legacy_daemon || {};
-  const units = legacy.units || [];
-  const legacyClean = units.length ? units.every(unit => unit.active !== 'active' && !['enabled', 'static'].includes(unit.enabled)) : legacy.active !== 'active' && !['enabled', 'static'].includes(legacy.enabled);
-  const lastFeed = feed.last_feed_unix ? `${Math.round((Date.now() / 1000) - Number(feed.last_feed_unix))}s ago` : 'No feed timestamp';
-  const feedRecent = !!feed.last_feed_unix && ((Date.now() / 1000) - Number(feed.last_feed_unix)) <= Math.max(Number(hwCfg.feed_interval_seconds || 10) * 3, 30);
-  const driverLoaded = !!modules.wdt_dio;
-  const expectedIdentity = 'Neousys WDT_DIO';
-  const identityReady = String(wdctl.identity || '').includes(expectedIdentity) || (vendorBackend && feed.opened);
-  const selectedDevice = feed.device || hwCfg.device || '/dev/wdt_dio';
-  const setupChecks = [
-    ['Neousys WDT_DIO driver', driverLoaded ? 'healthy' : 'warning', driverLoaded ? 'Loaded' : 'Not loaded yet'],
-    ['Watchdog device', feed.opened || wdctl.state === 'healthy' ? 'healthy' : 'warning', `${selectedDevice} / ${wdctl.identity || 'not ready'}`],
-    ['Driver identity', identityReady ? 'healthy' : 'warning', wdctl.identity || `No ${expectedIdentity} identity reported yet`],
-    ['Legacy daemon', legacyClean ? 'healthy' : 'critical', legacyClean ? 'Removed/disabled' : 'Another watchdog daemon may still own the device'],
-    ['Watchdog config', hwCfg.enabled ? 'healthy' : 'warning', `backend=${backend}, enabled=${!!hwCfg.enabled}, device=${selectedDevice}`],
-    ['Device owner', feed.opened ? 'healthy' : 'warning', feed.opened ? 'The watchdog service has opened the device' : (watchdog.owners?.summary || 'The watchdog service has not opened the device')],
-    ['Live feed', feedRecent ? 'healthy' : 'warning', lastFeed],
-    ['Process watchdog', systemd.state || 'warning', `${systemd.message || '-'}; ${systemd.watchdog_sec || '-'}`],
-  ];
-  const ready = setupChecks.slice(0, 7).every(row => row[1] === 'healthy');
-  const checkRows = setupChecks.map(row => `<tr><td>${escapeHtml(row[0])}</td><td class="${escapeHtml(row[1])}">${escapeHtml(row[1].toUpperCase())}</td><td>${escapeHtml(row[2])}</td></tr>`).join('');
-  const checkCards = setupChecks.map(row => `<div class="setup-step ${escapeHtml(row[1])}"><div><div class="step-title">${escapeHtml(row[0])}</div><div class="step-detail">${escapeHtml(row[2])}</div></div><strong class="${escapeHtml(row[1])}">${escapeHtml(row[1].toUpperCase())}</strong></div>`).join('');
-  const configRows = [
-    ['Backend', 'Neousys WDT_DIO'],
-    ['Hardware feed', hwCfg.enabled ? 'Enabled' : 'Disabled'],
-    ['Device', selectedDevice],
-    ['Opened device', feed.opened ? 'Yes' : 'No'],
-    ['Feed interval', `${hwCfg.feed_interval_seconds || 10} seconds`],
-    ['Configured timeout', `${timeout} seconds`],
-    ['Driver timeout', wdctl.timeout || '-'],
-    ['Trip countdown check', tripCountdown.status || 'inactive'],
-    ['Device owner', watchdog.owners?.summary || '-'],
-    ['Legacy package', legacy.package_status || '-'],
-    ['Watchdog CPU', process.cpu_percent == null ? '-' : `${Number(process.cpu_percent).toFixed(1)}%`],
-    ['Watchdog memory', process.memory_mb == null ? '-' : `${Number(process.memory_mb).toFixed(1)} MB`],
-    ['Watchdog PID', process.pid ?? '-'],
-    ['Resource monitor', process.message || 'Unavailable'],
-    ['CPU thresholds', `${process.cpu_warning_percent ?? '-'}% warning / ${process.cpu_critical_percent ?? '-'}% critical`],
-    ['Memory thresholds', `${process.memory_warning_mb ?? '-'} MB warning / ${process.memory_critical_mb ?? '-'} MB critical`],
-    ['Systemd memory limit', systemd.memory_max || 'Not reported'],
-    ['Systemd task limit', systemd.tasks_max || 'Not reported'],
-    ['Systemd restarts', systemd.restarts || '0'],
-  ].map(row => `<tr><td>${escapeHtml(row[0])}</td><td>${escapeHtml(row[1])}</td></tr>`).join('');
-  const legacyRows = units.length ? units.map(unit => `<tr><td>${escapeHtml(unit.unit || '-')}</td><td class="${unit.active === 'active' ? 'critical' : 'healthy'}">${escapeHtml(unit.active || '-')}</td><td class="${['enabled', 'static'].includes(unit.enabled) ? 'warning' : 'healthy'}">${escapeHtml(unit.enabled || '-')}</td></tr>`).join('') : '<tr><td colspan="3">No legacy watchdog units found.</td></tr>';
-  const tripAction = ready ? '<a class="action" href="/watchdog-trip-confirm">Open trip test</a>' : '<button class="action" disabled>Open trip test</button>';
-  const legacyProblem = !legacyClean;
-  const pageState = ready ? 'healthy' : (legacyProblem ? 'critical' : 'warning');
-  const pageTitle = ready ? 'Hardware watchdog ready' : (legacyProblem ? 'Existing watchdog conflict found' : 'Watchdog needs setup');
-  const pageMessage = ready ? `The independent feeder owns ${selectedDevice} using the Neousys WDT_DIO API. The deliberate trip test is available.` : (legacyProblem ? 'A legacy watchdog service may own the device. Clean legacy watchdogs, then complete setup.' : 'The Neousys driver, device, or feed is not ready. Run Neousys setup.');
-  const primaryAction = ready ? `<a class="action" href="/watchdog-trip-confirm">${tripTest.armed ? 'Continue armed trip confirmation' : 'Start deliberate trip test'}</a>` : (legacyProblem ? '<a class="danger" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs</a>' : '<a class="action" href="/hardware-watchdog-prepare-confirm">Run Neousys setup</a>');
-  const feedState = feedRecent ? 'healthy' : 'critical';
-  const setupLink = '<a class="ghost" href="/hardware-watchdog-prepare-confirm">Run Neousys setup/cleanup</a>';
-  return `${pageHelp('Watchdog')}<div class="card action-panel ${pageState}"><h2>${escapeHtml(pageTitle)}</h2><p class="${pageState}">${escapeHtml(pageMessage)}</p><div class="button-row">${primaryAction}${setupLink}<a class="ghost" href="/watchdog-hardware-probe-confirm">Run probe</a></div></div><div class="status-strip"><div class="status-box"><div class="label">Driver</div><div class="big ${driverLoaded ? 'healthy' : 'warning'}">${driverLoaded ? 'Loaded' : 'Needs setup'}</div><div class="step-detail">Neousys WDT_DIO</div></div><div class="status-box"><div class="label">Device</div><div class="big ${feed.opened || wdctl.state === 'healthy' ? 'healthy' : 'warning'}">${escapeHtml(selectedDevice)}</div><div class="step-detail">${escapeHtml(wdctl.identity || 'No identity yet')}</div></div><div class="status-box"><div class="label">Hardware feed</div><div class="big ${feedState}">${feedRecent ? 'Feeding' : 'Feed stale'}</div><div class="step-detail">${escapeHtml(lastFeed)}</div></div><div class="status-box"><div class="label">Legacy watchdogs</div><div class="big ${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Conflict' : 'Clear'}</div><div class="step-detail">${escapeHtml(legacyProblem ? 'Cleanup needed' : 'Removed/disabled')}</div></div></div><div class="grid lower-grid"><div class="card"><h2>Setup Checklist</h2><p class="muted">Work from top to bottom. Green means that layer is ready; amber/red shows the part to fix next.</p><div class="setup-steps">${checkCards}</div></div><div class="card"><h2>Existing Watchdogs and Cleanup</h2><p class="${legacyProblem ? 'critical' : 'healthy'}">${legacyProblem ? 'Another watchdog may still be installed or enabled.' : 'No conflicting legacy watchdog services detected.'}</p><table class="compact-table"><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead><tbody>${legacyRows}</tbody></table><p class="muted">This service should be the only process feeding the hardware watchdog.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy watchdogs only</a><a class="ghost" href="/hardware">Hardware details</a></div></div></div><div class="grid lower-grid"><div class="card"><h2>Current Watchdog Configuration</h2><table class="compact-table"><tbody>${configRows}</tbody></table></div><div class="card"><h2>What the Layers Mean</h2><ul><li><strong>Hardware watchdog</strong> reboots the whole gateway if its selected backend stops receiving feeds.</li><li><strong>Hardware feed</strong> is the independent feeder controlling the selected device.</li><li><strong>Process watchdog</strong> is systemd restarting va-watchdog if the Python process hangs.</li><li><strong>Legacy watchdogs</strong> are old daemons/packages that should not also control the hardware.</li></ul></div></div><div class="grid lower-grid"><div class="card"><h2>Safe Watchdog Test</h2><p class="muted">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p><div class="button-row"><form class="inline" method="post" action="/watchdog-test-arm"><button class="action" type="submit">Arm safe test</button></form></div><div class="label">Feed enabled</div><div class="value">${feed.enabled ? 'Enabled' : 'Disabled'}</div><div class="label">Last feed</div><div class="value">${escapeHtml(lastFeed)}</div></div><div class="card"><h2>Deliberate Watchdog Trip Test</h2><p class="warning">This stops hardware feeding and may reboot the gateway.</p><p class="muted">Open the test, tick the acknowledgement box, then run it.</p><div class="button-row">${tripAction}</div>${ready ? '' : '<p class="warning">Trip test is blocked until setup is complete and the service has a recent hardware feed.</p>'}<div class="label">State</div><div class="value">${escapeHtml(tripTest.triggered ? 'Triggered this boot' : (tripTest.completed_previous_boot ? 'Completed on previous boot' : 'Ready'))}</div><div class="label">Countdown verification</div><div class="value">${escapeHtml(tripCountdown.status || 'inactive')}${tripCountdown.current_timeleft == null ? '' : `; ${escapeHtml(tripCountdown.current_timeleft)}s remaining`}</div><div class="label">Last result</div><div class="value">${escapeHtml(tripTest.last_result_message || 'No trip test recorded yet')}</div></div><div class="card"><h2>Extend Timeout</h2><p class="muted">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p><form method="post" action="/watchdog-timeout-set"><label class="label">Timeout seconds</label><select name="timeout_seconds"><option value="30" ${timeout === 30 ? 'selected' : ''}>30</option><option value="60" ${timeout === 60 ? 'selected' : ''}>60</option><option value="120" ${timeout === 120 ? 'selected' : ''}>120</option><option value="180" ${timeout === 180 ? 'selected' : ''}>180</option><option value="300" ${timeout === 300 ? 'selected' : ''}>300</option></select><div class="button-row"><button class="action" type="submit">Apply timeout</button></div></form><p class="muted">Use a longer timeout while diagnosing reboot loops. Put it back to 30s once stable.</p></div></div><div class="card"><h2>Advanced Tools</h2><p class="muted">Use these only when the guided setup cannot complete.</p><div class="button-row"><a class="ghost" href="/watchdog-legacy-disable-confirm">Clean legacy only</a><a class="ghost" href="/hardware">Hardware details</a><a class="ghost" href="/events#evidence">Diagnostics</a></div></div>`;
-}
-
 function renderOperationalStatus(status){
   const checks = status.checks || [];
   const worstState = items => {
@@ -835,7 +766,7 @@ function renderOperationalStatus(status){
   const watchdogConfigured = Boolean(feed.enabled);
   const watchdogState = watchdogPresent && feed.feeding ? 'healthy' : 'warning';
   const watchdogDetail = watchdogPresent ? (feed.feeding ? `Feeding ${feed.device || '/dev/wdt_dio'}` : 'Device detected but the hardware feed is stale or inactive') : 'No verified Neousys hardware watchdog device';
-  return `<div class="card"><h2>Operational Status</h2><p class="muted">This list shows what is ready and where attention is needed. Open Details for the relevant setup or evidence.</p><div class="operational-list">${row('System', systemIssue?.message || 'Operating system, CPU, memory and root storage checks are normal.', systemState, '/hardware', systemChecks.length > 0)}${row('Services', serviceIssue?.message || `${healthyServices}/${services.length} monitored services running`, worstState(services), '/services', services.length > 0)}${row('Recording storage', recording.message || recordingCheck.message || 'Recording storage has not been configured.', recording.status || recordingCheck.state || 'unknown', '/hardware#storage', recordingConfigured)}${row('Network', network.message || 'Network checks have not been configured.', network.state || 'unknown', '/network', networkConfigured)}${row('Hardware watchdog', watchdogDetail, watchdogState, '/services#watchdog', watchdogConfigured)}</div></div>`;
+  return `<div class="card"><h2>Operational Status</h2><p class="muted">This list shows what is ready and where attention is needed. Open Details for the relevant setup or evidence.</p><div class="operational-list">${row('System', systemIssue?.message || 'Operating system, CPU, memory and root storage checks are normal.', systemState, '/hardware', systemChecks.length > 0)}${row('Services', serviceIssue?.message || `${healthyServices}/${services.length} monitored services running`, worstState(services), '/services', services.length > 0)}${row('Recording storage', recording.message || recordingCheck.message || 'Recording storage has not been configured.', recording.status || recordingCheck.state || 'unknown', '/hardware#storage', recordingConfigured)}${row('Network', network.message || 'Network checks have not been configured.', network.state || 'unknown', '/network', networkConfigured)}${row('Hardware watchdog', watchdogDetail, watchdogState, '/watchdog', watchdogConfigured)}</div></div>`;
 }
 
 function renderMetricTiles(status){
@@ -1003,7 +934,6 @@ function renderPage(status, updateStatus, events){
   const grouped = groupChecks(status.checks || []);
   if (currentPage === 'Overview') return renderOverview(status, events);
   if (currentPage === 'Hardware') return `${pageHelp('Hardware')}${renderHardwarePage(grouped)}`;
-  if (currentPage === 'Watchdog') return renderWatchdogPage(status);
   if (currentPage === 'Services') return `${pageHelp('Services')}${renderServices(status)}`;
   if (currentPage === 'Storage') return `${pageHelp('Storage')}${renderStoragePage(grouped)}`;
   if (currentPage === 'Network') return `${pageHelp('Network')}${renderNetworkPage()}`;
@@ -1281,9 +1211,6 @@ def start_web(cfg):
     server_pages = [item for _, pages in page_modes for item in pages]
     legacy_page_names = {
         "Storage": "Hardware",
-        "Watchdog": "Services",
-        "History": "Events",
-        "Diagnostics": "Events",
         "Recovery": "Settings",
         "Updates": "Settings",
     }
@@ -1320,9 +1247,12 @@ def start_web(cfg):
         help_map = {
             "Overview": ("Is this gateway ready to operate?", "Shows live health, current alerts, the four Videosoft services, and the actions used most often."),
             "Hardware": ("Is the hardware and recording storage healthy?", "Shows sensors, CPU, memory, devices, recording storage health, capacity, permissions, and setup tools."),
-            "Services": ("Are the gateway services and watchdog protection running?", "Shows monitored services, confirmed restart controls, and hardware watchdog setup and testing."),
+            "Services": ("Are the gateway services running?", "Shows the four Videosoft services and the VA-Connect process monitor, with resource use and confirmed restart controls."),
+            "Watchdog": ("Will the gateway recover itself?", "Shows Neousys hardware protection, the independent feeder, the latest feed, and the controls needed to set up or test it."),
             "Network": ("Can the gateway communicate?", "Shows interfaces, routes, targets, sockets, and remote-access service status."),
-            "Events": ("What changed and what evidence is available?", "Review events, retained history, black-box evidence, diagnostics, and exports."),
+            "Events": ("What changed recently?", "Review concise event records, filter the list, inspect evidence, or export it."),
+            "History": ("Has gateway health changed over time?", "Shows retained gateway and service trends without mixing them into the live event list."),
+            "Diagnostics": ("What evidence is available?", "Downloads support bundles and exposes black-box, baseline, and raw engineering evidence."),
             "Settings": ("How is this gateway configured and recovered?", "Configure monitoring, updates, recovery, identity, storage, network, and watchdog behaviour."),
         }
         question, detail = help_map.get(page, ("What does this page show?", "Page help unavailable."))
@@ -1688,43 +1618,46 @@ def start_web(cfg):
 
         def services_card():
             live = service_info().get("services", [])
-            rows = []
-            for svc in live:
-                name = str(svc.get("name", ""))
-                active = str(svc.get("active", "unknown"))
-                rows.append(
-                    "<tr>"
-                    f"<td>{escape(name)}</td>"
-                    f"<td class=\"{'healthy' if active == 'active' else 'critical' if svc.get('critical') else 'warning'}\">{escape(active.upper())}</td>"
-                    f"<td>{escape(str(svc.get('sub_state', '-')))}</td>"
-                    f"<td>{escape(str(svc.get('unit_file_state', '-')))}</td>"
-                    f"<td>{escape(str(svc.get('cpu_percent', '-')))}% / {escape(str(svc.get('cpu_system_percent', '-')))}% system</td>"
-                    f"<td>{escape(str(svc.get('memory_mb', '-')))} MB</td>"
-                    f"<td>{escape(str(svc.get('restarts', '-')))}</td>"
-                    f"<td>{escape(str(svc.get('uptime', '-')))}</td>"
-                    f"<td>{'Yes' if svc.get('critical') else 'No'}</td>"
-                    f"<td><a class=\"ghost\" href=\"/service/{quote(name)}\">Details</a> <a class=\"ghost\" href=\"/service-restart-confirm/{quote(name)}\">Restart</a></td>"
-                    "</tr>"
-                )
-            if not rows:
-                rows.append("<tr><td colspan=\"10\">No configured services found.</td></tr>")
-            videosoft = [svc for svc in live if svc.get("name") != "va-watchdog"]
+            videosoft = [svc for svc in live if str(svc.get("name", "")) not in {"va-watchdog", "va-watchdog.service"}]
+            watchdog_services = [svc for svc in live if str(svc.get("name", "")) in {"va-watchdog", "va-watchdog.service"}]
+
+            def service_rows(items, empty_message):
+                rows = []
+                for svc in items:
+                    name = str(svc.get("name", ""))
+                    active = str(svc.get("active", "unknown"))
+                    state_class = "healthy" if active == "active" else "critical" if svc.get("critical") else "warning"
+                    rows.append(
+                        "<tr>"
+                        f"<td>{escape(name)}</td>"
+                        f"<td class=\"{state_class}\">{escape(active.upper())}</td>"
+                        f"<td>{escape(str(svc.get('cpu_percent', '-')))}% / {escape(str(svc.get('cpu_system_percent', '-')))}% system</td>"
+                        f"<td>{escape(str(svc.get('memory_mb', '-')))} MB</td>"
+                        f"<td>{escape(str(svc.get('restarts', '-')))}</td>"
+                        f"<td>{escape(str(svc.get('uptime', '-')))}</td>"
+                        f"<td><a class=\"ghost\" href=\"/service/{quote(name)}\">Details</a> <a class=\"ghost\" href=\"/service-restart-confirm/{quote(name)}\">Restart</a></td>"
+                        "</tr>"
+                    )
+                return "".join(rows) if rows else f"<tr><td colspan=\"7\">{escape(empty_message)}</td></tr>"
+
             active_count = sum(1 for svc in videosoft if str(svc.get("active", "")) == "active")
-            watchdog_service = next((svc for svc in live if svc.get("name") == "va-watchdog"), {})
+            watchdog_service = watchdog_services[0] if watchdog_services else {}
             critical_failures = sum(1 for svc in live if svc.get("critical") and str(svc.get("active", "")) != "active")
             restart_count = sum(int(svc.get("restarts") or 0) for svc in live)
             return (
                 summary_strip([
                     ("Videosoft services", f"{active_count}/{len(videosoft)}", "Running now", "healthy" if videosoft and active_count == len(videosoft) else "warning"),
-                    ("Watchdog service", str(watchdog_service.get("active", "unknown")).upper(), "Process monitor", "healthy" if watchdog_service.get("active") == "active" else "critical"),
+                    ("VA-Connect monitor", str(watchdog_service.get("active", "unknown")).upper(), "Software supervision", "healthy" if watchdog_service.get("active") == "active" else "critical"),
                     ("Critical failures", critical_failures, "Require attention", "critical" if critical_failures else "healthy"),
                     ("Service restarts", restart_count, "Since service start", "warning" if restart_count else "healthy"),
-                    ("Monitoring", "ACTIVE", "Four configured units", "healthy"),
                 ])
                 + "<div class=\"card\"><h2>Videosoft Services</h2>"
-                "<p class=\"muted\">CPU shows per-core usage followed by its whole-system equivalent. For example, 93% per core on a 4-core gateway is about 23% of total CPU capacity.</p>"
-                "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Active</th><th>Substate</th><th>Enabled</th><th>CPU / system</th><th>Memory</th><th>Restarts</th><th>Uptime</th><th>Critical</th><th>Actions</th></tr></thead>"
-                f"<tbody>{''.join(rows)}</tbody></table></div></div>"
+                "<p class=\"muted\">These are the four gateway application services. CPU shows Linux per-core usage followed by the equivalent share of the whole gateway.</p>"
+                "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Status</th><th>CPU / system</th><th>Memory</th><th>Restarts</th><th>Uptime</th><th>Actions</th></tr></thead>"
+                f"<tbody>{service_rows(videosoft, 'No Videosoft services are configured.')}</tbody></table></div></div>"
+                + "<div class=\"card\"><div class=\"section-lead\"><div><h2>VA-Connect Monitor</h2><p class=\"muted\">The software service that collects health data and serves this dashboard. Hardware recovery is shown separately on Watchdog.</p></div><a class=\"ghost\" href=\"/history\">View service history</a></div>"
+                "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Status</th><th>CPU / system</th><th>Memory</th><th>Restarts</th><th>Uptime</th><th>Actions</th></tr></thead>"
+                f"<tbody>{service_rows(watchdog_services, 'VA-Connect service status is unavailable.')}</tbody></table></div></div>"
             )
 
         def operational_alerts_card():
@@ -1951,7 +1884,7 @@ def start_web(cfg):
                 f"<div><div class=\"label\">Driver timeout</div><div class=\"value\">{escape(str(wdctl.get('timeout', '-')))}</div></div>"
                 f"<div><div class=\"label\">Legacy watchdog service</div><div class=\"value {'warning' if legacy.get('active') == 'active' else 'healthy'}\">{escape(str(legacy.get('active', '-')).upper())} / {escape(str(legacy.get('enabled', '-')).upper())}</div></div>"
                 "</div>"
-                "<div class=\"button-row\"><a class=\"action\" href=\"/services#watchdog\">Open Watchdog setup</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run full probe</a></div>"
+                "<div class=\"button-row\"><a class=\"action\" href=\"/watchdog\">Open Watchdog</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run full probe</a></div>"
                 f"{disclosure('Raw watchdog status', '<pre>' + escape(str(wdctl.get('raw', 'Neousys device not present'))) + '</pre>')}"
                 f"{disclosure('Setup and probe logs', '<h3>One-click prepare</h3><pre>' + escape(str(watchdog.get('prepare_log', 'No prepare log yet'))) + '</pre><h3>Setup</h3><pre>' + escape(str(watchdog.get('setup_log', 'No setup log yet'))) + '</pre><h3>Full probe</h3><pre>' + escape(str(watchdog.get('probe_log', 'No hardware probe log yet'))) + '</pre>')}"
                 "</div>"
@@ -1981,249 +1914,203 @@ def start_web(cfg):
             info = hardware_info()
             watchdog = info.get("watchdog", {})
             hw_cfg = cfg.get("hardware_watchdog", {})
-            trip_test = watchdog.get("trip_test", trip_test_summary(cfg))
             systemd_wdt = watchdog.get("systemd_watchdog", systemd_watchdog_info())
             setup = watchdog_setup_rows(watchdog, systemd_wdt)
             setup_config = setup.get("config", {})
-            legacy = watchdog.get("legacy_daemon", {})
-            wdctl = watchdog.get("wdctl", {})
-            timeout = int(hw_cfg.get("timeout_seconds", 30) or 30)
             checks = setup.get("checks", [])
             by_name = {str(row.get("name", "")): row for row in checks}
             driver = by_name.get("Neousys WDT_DIO driver", {})
             device = by_name.get("Watchdog device", {})
             legacy_check = by_name.get("Legacy daemon", {})
-            config_check = by_name.get("Watchdog config", {})
             owner_check = by_name.get("Device owner", {})
             feed_check = by_name.get("Live feed", {})
             process_check = by_name.get("Process watchdog", {})
-            trip_ready = bool(setup.get("trip_ready"))
-            legacy_units = legacy.get("units", [])
-            legacy_problem = str(legacy_check.get("state", "")) == "critical"
-            feed_enabled = bool(setup_config.get("enabled"))
+            trip_test = watchdog.get("trip_test", trip_test_summary(cfg))
+            legacy = watchdog.get("legacy_daemon", {})
+            feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
+
+            timeout = int(hw_cfg.get("timeout_seconds", 30) or 30)
+            feed_interval = int(hw_cfg.get("feed_interval_seconds", 10) or 10)
             feed_opened = bool(setup_config.get("opened"))
             feed_recent = str(feed_check.get("state", "")) == "healthy"
-            feed_count = setup_config.get("feed_count", 0)
+            feed_count = int(setup_config.get("feed_count", 0) or 0)
+            legacy_problem = str(legacy_check.get("state", "")) == "critical"
+            ready = bool(setup.get("ready"))
+            trip_ready = bool(setup.get("trip_ready"))
             startup_grace = setup.get("startup_grace", {}) if isinstance(setup.get("startup_grace", {}), dict) else {}
             grace_active = bool(startup_grace.get("active"))
             remaining_seconds = int(startup_grace.get("remaining_seconds", 0) or 0)
-            remaining_minutes, remaining_remainder = divmod(remaining_seconds, 60)
-            grace_countdown = f"{remaining_minutes:02d}:{remaining_remainder:02d}"
-            if grace_active:
-                if feed_opened and str(feed_check.get("state", "")) == "healthy":
-                    page_state = "waiting"
-                    page_title = "Startup safety window active"
-                    page_message = f"Hardware feeding is active. Stale-heartbeat enforcement begins in {grace_countdown}, leaving time for remote recovery."
-                    primary_action = (
-                        "<form class=\"inline\" method=\"post\" action=\"/watchdog-grace-delay\"><input type=\"hidden\" name=\"delay_seconds\" value=\"900\"><button class=\"action\" type=\"submit\">Delay another 15 minutes</button></form> "
-                        "<a class=\"ghost\" href=\"/watchdog-arm-now-confirm\">End delay now</a> "
-                        "<a class=\"danger\" href=\"/hardware-watchdog-disable-confirm\">Disable hardware feed</a>"
-                    )
-                else:
-                    page_state = "critical"
-                    page_title = "Hardware feeder did not start"
-                    page_message = "The Neousys driver is installed, but no process owns or feeds it. Retry setup; the hardware timer is not protecting the gateway."
-                    primary_action = "<a class=\"action\" href=\"/hardware-watchdog-prepare-confirm\">Retry Neousys setup</a>"
-            elif setup.get("ready"):
-                page_state = "healthy"
-                if trip_test.get("armed"):
-                    page_title = "Trip test armed; final confirmation required"
-                    page_message = "Hardware feeding continues until you tick the risk box, type TRIP, and submit the final trigger."
-                    primary_action = "<a class=\"action\" href=\"/watchdog-trip-confirm\">Continue armed trip confirmation</a>"
-                else:
-                    page_title = "Hardware watchdog ready"
-                    page_message = "The feeder owns /dev/wdt_dio and is feeding it. The deliberate trip test is available."
-                    primary_action = "<a class=\"action\" href=\"/watchdog-trip-confirm\">Start deliberate trip test</a>"
+            minutes, seconds = divmod(remaining_seconds, 60)
+            grace_countdown = f"{minutes}:{seconds:02d}"
+
+            last_feed_unix = feed.get("last_feed_unix")
+            try:
+                feed_age = max(0, int(time.time() - float(last_feed_unix))) if last_feed_unix else None
+            except (TypeError, ValueError):
+                feed_age = None
+            feed_age_text = f"{feed_age} seconds ago" if feed_age is not None else "Not recorded"
+            last_feed_text = local_time(feed.get("last_feed_utc")) if feed.get("last_feed_utc") else feed_age_text
+            feed_process = str(feed.get("process_status") or feed.get("feed_process_status") or "unknown")
+
+            if grace_active and feed_opened and feed_recent:
+                protection_state = "waiting"
+                protection_word = "SAFETY WINDOW"
+                protection_message = f"Neousys protection is feeding. Full stale-heartbeat enforcement starts in {grace_countdown}."
+            elif ready:
+                protection_state = "healthy"
+                protection_word = "ACTIVE"
+                protection_message = "The independent feeder owns /dev/wdt_dio and is resetting the Neousys hardware timer."
             elif legacy_problem:
-                page_state = "critical"
-                page_title = "Existing watchdog conflict found"
-                page_message = "A legacy watchdog service may own the device. Clean legacy watchdogs, then run one-click setup."
-                primary_action = "<a class=\"danger\" href=\"/watchdog-legacy-disable-confirm\">Clean legacy watchdogs</a>"
-            elif str(driver.get("state", "")) != "healthy" or str(device.get("state", "")) != "healthy":
-                page_state = "warning"
-                page_title = "Hardware watchdog not fully prepared"
-                page_message = "Install the Neousys driver and let the independent feeder configure hardware protection in one step."
-                primary_action = "<a class=\"action\" href=\"/hardware-watchdog-prepare-confirm\">Run one-click setup</a>"
-            elif not feed_enabled or not feed_opened:
-                page_state = "warning"
-                page_title = "Hardware feed is not enabled yet"
-                page_message = "The hardware exists, but feed is not enabled or the service has not opened the device."
-                primary_action = "<a class=\"action\" href=\"/hardware-watchdog-prepare-confirm\">Enable hardware feed</a>"
+                protection_state = "critical"
+                protection_word = "CONFLICT"
+                protection_message = "Another watchdog service may compete with the Neousys feeder and must be removed."
             else:
-                page_state = "warning"
-                page_title = "Watchdog needs attention"
-                page_message = str(setup.get("message", "Check the setup steps below."))
-                primary_action = "<a class=\"action\" href=\"/hardware-watchdog-prepare-confirm\">Run one-click setup</a>"
-            timeout_options = "".join(
-                f"<option value=\"{value}\" {'selected' if timeout == value else ''}>{value}</option>"
-                for value in [30, 60, 120, 180, 300]
-            )
-            step_rows = []
-            for row in checks:
-                state = str(row.get("state", "unknown"))
-                step_rows.append(
-                    f"<div class=\"setup-step {escape(state)}\">"
-                    "<div>"
-                    f"<div class=\"step-title\">{escape(str(row.get('name', '-')))}</div>"
-                    f"<div class=\"step-detail\">{escape(str(row.get('message', '-')))}</div>"
-                    "</div>"
-                    f"<strong class=\"{escape(state)}\">{escape(state.upper())}</strong>"
-                    "</div>"
+                protection_state = "warning"
+                protection_word = "SETUP NEEDED"
+                protection_message = "Neousys hardware is not fully protecting this gateway. Run setup or repair."
+
+            if ready:
+                primary_action = (
+                    "<a class=\"action\" href=\"/watchdog-trip-confirm\">Run deliberate test</a>"
+                    if trip_ready
+                    else "<button class=\"action\" disabled>Test available after safety window</button>"
                 )
+                repair_action = ""
+            elif legacy_problem:
+                primary_action = "<a class=\"danger\" href=\"/watchdog-legacy-disable-confirm\">Remove conflicting watchdog</a>"
+                repair_action = "<a class=\"ghost\" href=\"/hardware-watchdog-prepare-confirm\">Run full setup</a>"
+            else:
+                primary_action = "<a class=\"action\" href=\"/hardware-watchdog-prepare-confirm\">Set up Neousys watchdog</a>"
+                repair_action = ""
+
+            trip_state = (
+                "Triggered on this boot"
+                if trip_test.get("triggered")
+                else "Completed on previous boot"
+                if trip_test.get("completed_previous_boot")
+                else "Ready"
+            )
+            trip_result = str(trip_test.get("last_result_message") or "No deliberate test recorded yet")
+            trip_button = (
+                "<a class=\"action\" href=\"/watchdog-trip-confirm\">Run deliberate test</a>"
+                if trip_ready
+                else "<button class=\"action\" disabled>Test unavailable</button>"
+            )
+
+            detail_rows = [
+                ("Protection", protection_word),
+                ("Hardware", "Neousys WDT_DIO"),
+                ("Device", setup_config.get("device", "/dev/wdt_dio")),
+                ("Feeder", feed_process),
+                ("Last successful feed", last_feed_text),
+                ("Feed age", feed_age_text),
+                ("Feed count", feed_count),
+                ("Feed interval", f"{feed_interval} seconds"),
+                ("Hardware timeout", f"{timeout} seconds"),
+                ("Software process watchdog", process_check.get("message", "Unknown")),
+            ]
+            detail_html = "".join(
+                f"<tr><th>{escape(str(label))}</th><td>{escape(str(value))}</td></tr>"
+                for label, value in detail_rows
+            )
+
+            visible_checks = [
+                row for row in checks
+                if str(row.get("name", "")) != "Legacy daemon" or legacy_problem
+            ]
+            check_html = "".join(
+                "<tr>"
+                f"<td>{escape(str(row.get('name', '-')))}</td>"
+                f"<td class=\"{escape(str(row.get('state', 'unknown')))}\">{escape(str(row.get('state', 'unknown')).upper())}</td>"
+                f"<td>{escape(str(row.get('message', '-')))}</td>"
+                "</tr>"
+                for row in visible_checks
+            )
             config_rows = [
-                ("Config file", setup_config.get("path", "-")),
-                ("Hardware feed", "Enabled" if setup_config.get("enabled") else "Disabled"),
-                ("Device", setup_config.get("device", "-")),
-                ("Opened device", "Yes" if setup_config.get("opened") else "No"),
-                ("Feed interval", f"{setup_config.get('feed_interval_seconds', '-')} seconds"),
-                ("Configured timeout", f"{setup_config.get('timeout_seconds', '-')} seconds"),
-                ("Driver identity", wdctl.get("identity", "-")),
-                ("Driver timeout", wdctl.get("timeout", "-")),
-                ("Device owner", watchdog.get("owners", {}).get("summary", "-")),
-                ("Legacy package", legacy.get("package_status", "-")),
-                ("Last feed", setup_config.get("last_feed", "-")),
-                ("Feed count", setup_config.get("feed_count", 0)),
-                ("Normal boot safety window", f"{setup_config.get('startup_grace_seconds', 300)} seconds"),
-                ("Post-trip safety window", f"{setup_config.get('post_trip_grace_seconds', 900)} seconds"),
+                ("Configuration", setup_config.get("path", active_config_path())),
+                ("Backend", setup_config.get("backend", "neousys_wdt_dio")),
+                ("Enabled", "Yes" if setup_config.get("enabled") else "No"),
+                ("Device owner", watchdog.get("owners", {}).get("summary", owner_check.get("message", "-"))),
+                ("Driver identity", watchdog.get("wdctl", {}).get("identity", "-")),
+                ("Normal startup safety", f"{setup_config.get('startup_grace_seconds', 300)} seconds"),
+                ("Post-test startup safety", f"{setup_config.get('post_trip_grace_seconds', 900)} seconds"),
             ]
             config_html = "".join(
-                "<tr>"
-                f"<td>{escape(str(label))}</td>"
-                f"<td>{escape(str(value))}</td>"
-                "</tr>"
+                f"<tr><th>{escape(str(label))}</th><td>{escape(str(value))}</td></tr>"
                 for label, value in config_rows
             )
-            legacy_rows = "".join(
-                "<tr>"
-                f"<td>{escape(str(unit.get('unit', '-')))}</td>"
-                f"<td class=\"{'critical' if unit.get('active') == 'active' else 'healthy'}\">{escape(str(unit.get('active', '-')))}</td>"
-                f"<td class=\"{'warning' if unit.get('enabled') in {'enabled', 'static'} else 'healthy'}\">{escape(str(unit.get('enabled', '-')))}</td>"
-                "</tr>"
-                for unit in legacy_units
-            )
-            if not legacy_rows:
-                legacy_rows = "<tr><td colspan=\"3\">No legacy watchdog units found.</td></tr>"
-            trip_action = (
-                "<a class=\"action\" href=\"/watchdog-trip-confirm\">Open trip test</a>"
-                if trip_ready
-                else "<button class=\"action\" disabled>Open trip test</button>"
-            )
-            trip_warning = "" if trip_ready else "<p class=\"warning\">Trip test is blocked until setup is complete and the service has a recent hardware feed.</p>"
-            legacy_detail = (
-                f"<p class=\"{escape(str(legacy_check.get('state', 'unknown')))}\">{escape(str(legacy_check.get('message', '-')))}</p>"
-                "<div class=\"table-scroll\"><table class=\"compact-table\"><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead>"
-                f"<tbody>{legacy_rows}</tbody></table></div>"
-                "<p class=\"muted\">A legacy watchdog service must not compete with the Neousys backend. VA-Connect should be the only hardware feeder.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">Clean legacy watchdogs</a><a class=\"ghost\" href=\"/hardware\">Hardware details</a></div>"
-            )
-            config_detail = (
-                "<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>"
-                f"{config_html}"
-                "</tbody></table></div>"
-            )
-            layers_detail = (
-                "<ul>"
-                "<li><strong>Hardware watchdog:</strong> reboots the gateway if VA-Connect stops resetting the Neousys timer.</li>"
-                "<li><strong>Hardware feed:</strong> VA-Connect opening and regularly feeding the hardware device.</li>"
-                "<li><strong>Process watchdog:</strong> systemd restarting VA-Connect if its Python process hangs.</li>"
-                "<li><strong>Legacy watchdog:</strong> an older daemon that must not compete for the same device.</li>"
-                "</ul>"
-            )
-            normal_grace = int(setup_config.get("startup_grace_seconds", 300) or 0)
-            post_trip_grace = int(setup_config.get("post_trip_grace_seconds", 900) or 0)
-            normal_grace_options = "".join(
-                f"<option value=\"{value}\" {'selected' if normal_grace == value else ''}>{label}</option>"
-                for value, label in [(60, "1 minute"), (300, "5 minutes"), (600, "10 minutes"), (900, "15 minutes")]
-            )
-            post_trip_grace_options = "".join(
-                f"<option value=\"{value}\" {'selected' if post_trip_grace == value else ''}>{label}</option>"
-                for value, label in [(300, "5 minutes"), (900, "15 minutes"), (1800, "30 minutes"), (3600, "60 minutes")]
-            )
-            grace_feed_active = grace_active and feed_opened and str(feed_check.get("state", "")) == "healthy"
-            grace_state = "WAITING" if grace_feed_active else ("FEEDER NOT RUNNING" if grace_active else ("PROTECTION ACTIVE" if feed_opened else "INACTIVE"))
-            grace_state_class = "waiting" if grace_feed_active else ("critical" if grace_active else ("healthy" if feed_opened else "warning"))
-            grace_display = grace_countdown if grace_active else "No delay active"
-            grace_explanation = (
-                "The feeder continues resetting the hardware timer during this window, while stale-heartbeat enforcement is deferred so you can reconnect remotely."
-                if grace_feed_active
-                else "The safety delay is active, but the feeder is not running. The hardware timer is not protecting the gateway."
-                if grace_active
-                else (
-                    "The startup delay has finished and the independent feeder owns the Neousys watchdog device."
-                    if feed_opened
-                    else "Hardware protection is inactive. Complete setup to install the driver and enable the independent feeder."
+
+            conflict_html = ""
+            if legacy_problem:
+                unit_rows = "".join(
+                    "<tr>"
+                    f"<td>{escape(str(unit.get('unit', '-')))}</td>"
+                    f"<td>{escape(str(unit.get('active', '-')))}</td>"
+                    f"<td>{escape(str(unit.get('enabled', '-')))}</td>"
+                    "</tr>"
+                    for unit in legacy.get("units", [])
+                ) or "<tr><td colspan=\"3\">Conflict reported; no unit detail was returned.</td></tr>"
+                conflict_html = (
+                    "<div class=\"card action-panel critical\"><h2>Conflicting watchdog detected</h2>"
+                    f"<p class=\"critical\">{escape(str(legacy_check.get('message', 'Another watchdog may own the device.')))}</p>"
+                    "<div class=\"table-scroll\"><table><thead><tr><th>Unit</th><th>Active</th><th>Enabled</th></tr></thead>"
+                    f"<tbody>{unit_rows}</tbody></table></div>"
+                    "<div class=\"button-row\"><a class=\"danger\" href=\"/watchdog-legacy-disable-confirm\">Remove conflict</a></div></div>"
                 )
+
+            grace_controls = ""
+            if grace_active:
+                grace_controls = (
+                    "<div class=\"card\"><h2>Startup Safety Window</h2>"
+                    f"<div class=\"status-word waiting\">FEEDING, ENFORCEMENT DELAYED</div>"
+                    f"<div class=\"score\" id=\"watchdog-grace-countdown\" data-seconds=\"{remaining_seconds}\">{grace_countdown}</div>"
+                    "<p class=\"muted\">The Neousys timer is still being fed. This delay only gives remote access time before stale-heartbeat enforcement starts.</p>"
+                    "<div class=\"button-row\"><form class=\"inline\" method=\"post\" action=\"/watchdog-grace-delay\"><input type=\"hidden\" name=\"delay_seconds\" value=\"900\"><button class=\"ghost\" type=\"submit\">Add 15 minutes</button></form>"
+                    "<a class=\"ghost\" href=\"/watchdog-arm-now-confirm\">End delay now</a>"
+                    "<a class=\"danger\" href=\"/hardware-watchdog-disable-confirm\">Disable feed safely</a></div>"
+                    "<script>(function(){var e=document.getElementById('watchdog-grace-countdown');if(!e)return;var s=Number(e.getAttribute('data-seconds')||0);var k='va-watchdog-grace-reload';if(s>0){sessionStorage.removeItem(k);}var t=setInterval(function(){if(s>0){s-=1;e.textContent=Math.floor(s/60)+':' + String(s%60).padStart(2,'0');}if(s<=0){clearInterval(t);if(sessionStorage.getItem(k)!=='1'){sessionStorage.setItem(k,'1');setTimeout(function(){window.location.reload();},500);}}},1000);}());</script>"
+                    "</div>"
+                )
+
+            timeout_options = "".join(
+                f"<option value=\"{value}\" {'selected' if timeout == value else ''}>{value} seconds</option>"
+                for value in (30, 60, 120, 180, 300)
             )
-            grace_controls = (
-                "<div class=\"card\"><h2>Startup Safety Window</h2>"
-                f"<div class=\"status-word {grace_state_class}\">{grace_state}</div>"
-                f"<div class=\"score\" id=\"watchdog-grace-countdown\" data-seconds=\"{remaining_seconds}\">{grace_display}</div>"
-                f"<p>{escape(str(startup_grace.get('reason', 'Startup safety state unavailable.')))}</p>"
-                f"<p class=\"muted\">{escape(grace_explanation)}</p>"
-                "<div class=\"button-row\">"
-                "<form class=\"inline\" method=\"post\" action=\"/watchdog-grace-delay\"><input type=\"hidden\" name=\"delay_seconds\" value=\"900\"><button class=\"action\" type=\"submit\" " + ("" if grace_active else "disabled") + ">Delay another 15 minutes</button></form>"
-                + ("<a class=\"ghost\" href=\"/watchdog-arm-now-confirm\">End delay and arm now</a>" if grace_active else "")
-                + "<a class=\"danger\" href=\"/hardware-watchdog-disable-confirm\">Disable hardware feed</a>"
-                "</div><form method=\"post\" action=\"/watchdog-grace-config-set\"><div class=\"settings-grid\">"
-                f"<div><label class=\"label\">Normal reboot delay</label><select name=\"startup_grace_seconds\">{normal_grace_options}</select></div>"
-                f"<div><label class=\"label\">After deliberate trip reboot</label><select name=\"post_trip_grace_seconds\">{post_trip_grace_options}</select></div>"
-                "</div><div class=\"button-row\"><button class=\"ghost\" type=\"submit\">Save safety windows</button></div></form>"
-                + ("<script>(function(){var e=document.getElementById('watchdog-grace-countdown');if(!e)return;var s=Number(e.getAttribute('data-seconds')||0);var k='va-watchdog-grace-reload';if(s>0){sessionStorage.removeItem(k);}var t=setInterval(function(){if(s>0){s-=1;e.textContent=Math.floor(s/60)+':' + String(s%60).padStart(2,'0');}if(s<=0){clearInterval(t);if(sessionStorage.getItem(k)!=='1'){sessionStorage.setItem(k,'1');setTimeout(function(){window.location.reload();},500);}}},1000);}());</script>" if grace_active else "")
-                + "</div>"
+            advanced_html = (
+                "<p class=\"muted\">Use this only for setup faults or engineering investigation.</p>"
+                "<h3>Readiness checks</h3><div class=\"table-scroll\"><table><thead><tr><th>Check</th><th>Status</th><th>Meaning</th></tr></thead>"
+                f"<tbody>{check_html}</tbody></table></div>"
+                "<h3>Configuration</h3><div class=\"table-scroll\"><table><tbody>"
+                f"{config_html}</tbody></table></div>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run read-only probe</a>"
+                "<a class=\"ghost\" href=\"/hardware-watchdog-prepare-confirm\">Repair Neousys setup</a>"
+                "<a class=\"ghost\" href=\"/diagnostics\">Open diagnostics</a></div>"
             )
+
             return (
                 summary_strip([
-                    ("Overall readiness", "WAITING" if grace_feed_active else ("READY" if setup.get("ready") else "SETUP NEEDED"), page_message, page_state),
-                    ("Neousys WDT_DIO", "Loaded" if driver.get("state") == "healthy" else "Needs setup", driver.get("message", "-"), driver.get("state", "unknown")),
-                    ("Watchdog device", setup_config.get("device", "/dev/wdt_dio"), wdctl.get("identity") or device.get("message") or "-", device.get("state", "unknown")),
-                    ("Live feed", "Feeding" if feed_recent else "Feed stale", f"Feed count {feed_count}; stale enforcement in {grace_countdown}" if grace_active else f"Feed count {feed_count}", "healthy" if feed_recent else "critical"),
-                    ("Legacy watchdogs", "Clear" if not legacy_problem else "Conflict", legacy_check.get("message", "-"), legacy_check.get("state", "unknown")),
+                    ("Protection", protection_word, protection_message, protection_state),
+                    ("Neousys driver", "LOADED" if driver.get("state") == "healthy" else "NOT READY", driver.get("message", "-"), driver.get("state", "warning")),
+                    ("Device", "/dev/wdt_dio", device.get("message", "-"), device.get("state", "warning")),
+                    ("Hardware feed", "FEEDING" if feed_recent else "NOT FEEDING", feed_age_text, "healthy" if feed_recent else "critical"),
+                    ("Timeout", f"{timeout}s", f"Feed every {feed_interval}s", "healthy"),
                 ])
-                + f"<div class=\"card action-panel {escape(page_state)}\"><h2>{escape(page_title)}</h2>"
-                f"<p class=\"{escape(page_state)}\">{escape(page_message)}</p>"
-                "<div class=\"button-row\">"
-                f"{primary_action}"
-                "<a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run probe</a>"
-                "</div>"
-                "</div>"
+                + f"<div class=\"card action-panel {escape(protection_state)}\"><h2>{escape(protection_word.replace('_', ' ').title())}</h2>"
+                f"<p class=\"{escape(protection_state)}\">{escape(protection_message)}</p>"
+                f"<div class=\"button-row\">{primary_action}{repair_action}</div></div>"
                 + grace_controls
-                + "<div class=\"card\"><h2>Setup Checklist</h2>"
-                "<p class=\"section-lead\">Work from top to bottom. The first amber or red item identifies what to fix next.</p>"
-                f"<div class=\"setup-steps\">{''.join(step_rows)}</div>"
-                "</div>"
-                + disclosure("Existing watchdogs and cleanup", legacy_detail, opened=legacy_problem)
-                + disclosure("Current configuration", config_detail)
-                + disclosure("What the protection layers mean", layers_detail)
-                +
-                "<div class=\"grid lower-grid\">"
-                "<div class=\"card\"><h2>Safe Watchdog Test</h2>"
-                "<p class=\"muted\">Double knock: arm the test, then confirm it before it expires. This does not intentionally reboot the gateway.</p>"
-                "<div class=\"button-row\"><form class=\"inline\" method=\"post\" action=\"/watchdog-test-arm\"><button class=\"action\" type=\"submit\">Arm safe test</button></form></div>"
-                f"<div class=\"label\">Feed enabled</div><div class=\"value\">{'Enabled' if watchdog.get('safe_test', {}).get('feed_enabled') else 'Disabled'}</div>"
-                f"<div class=\"label\">Last feed</div><div class=\"value\">{escape(str(watchdog.get('safe_test', {}).get('last_feed_message', 'Not recorded')))}</div>"
-                "</div>"
-                "<div class=\"card\"><h2>Deliberate Watchdog Trip Test</h2>"
-                "<p class=\"warning\">This test intentionally stops hardware feeding for the current boot and may reboot the gateway if the watchdog is healthy.</p>"
-                "<p class=\"muted\">Open the test, tick the acknowledgement box, then run it.</p>"
-                f"<div class=\"button-row\">{trip_action}</div>"
-                f"{trip_warning}"
-                f"<div class=\"label\">State</div><div class=\"value\">{escape('Triggered: feeding paused' if trip_test.get('triggered') else ('Completed on previous boot' if trip_test.get('completed_previous_boot') else ('Armed: feeding continues until final confirmation' if trip_test.get('armed') else 'Not armed')))}</div>"
-                f"<div class=\"label\">Last result</div><div class=\"value\">{escape(str(trip_test.get('last_result_message', 'No trip test recorded yet')))}</div>"
-                f"<div class=\"label\">Armed at</div><div class=\"value\">{escape(str(trip_test.get('armed_at', '-')))}</div>"
-                "</div>"
-                "<div class=\"card\"><h2>Extend Timeout</h2>"
-                "<p class=\"muted\">Change the watchdog timeout and restart the service to give the gateway more time before reboot.</p>"
-                "<form method=\"post\" action=\"/watchdog-timeout-set\">"
-                f"<label class=\"label\">Timeout seconds</label><select name=\"timeout_seconds\">{timeout_options}</select>"
-                "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Apply timeout</button></div>"
-                "</form>"
-                "<p class=\"muted\">Use a longer timeout while diagnosing reboot loops or slow startup. Put it back to 30s once stable.</p>"
-                "</div>"
-                "</div>"
-                "<div class=\"card\"><h2>Advanced Tools</h2>"
-                "<p class=\"muted\">Use these only when the guided setup cannot complete. Diagnostics are intentionally separated from the normal operator path.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-legacy-disable-confirm\">Clean legacy only</a><a class=\"ghost\" href=\"/hardware-watchdog-enable-confirm\">Enable feed only</a><a class=\"ghost\" href=\"/hardware\">Hardware details</a><a class=\"ghost\" href=\"/events?view=evidence\">Diagnostics</a></div>"
-                "</div>"
+                + conflict_html
+                + "<div class=\"grid lower-grid\"><div class=\"card\"><h2>Protection Details</h2>"
+                f"<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>{detail_html}</tbody></table></div></div>"
+                + "<div class=\"card\"><h2>Last Deliberate Test</h2>"
+                f"<div class=\"status-word {'healthy' if trip_test.get('completed_previous_boot') else 'muted'}\">{escape(trip_state.upper())}</div>"
+                f"<p>{escape(trip_result)}</p>"
+                f"<div class=\"button-row\">{trip_button}</div>"
+                "<p class=\"muted\">This intentionally stops feeding and should reboot the gateway if hardware protection is working.</p></div></div>"
+                + "<div class=\"card\"><h2>Timeout</h2><p class=\"muted\">Keep 30 seconds for normal operation. Extend it temporarily only when investigating a reboot loop.</p>"
+                "<form method=\"post\" action=\"/watchdog-timeout-set\"><div class=\"toolbar\"><label>Hardware timeout "
+                f"<select name=\"timeout_seconds\">{timeout_options}</select></label><button class=\"ghost\" type=\"submit\">Save timeout</button></div></form></div>"
+                + disclosure("Advanced diagnostics", advanced_html, opened=legacy_problem)
             )
 
         def storage_page():
@@ -2807,7 +2694,7 @@ def start_web(cfg):
                     "Hardware watchdog",
                     watchdog_detail,
                     watchdog_state,
-                    "/services#watchdog",
+                    "/watchdog",
                     watchdog_configured,
                 ),
             )
@@ -2867,34 +2754,17 @@ def start_web(cfg):
                 + "</section>"
             )
         if page == "Services":
-            return (
-                page_help_html(page)
-                + services_card()
-                + "<section id=\"watchdog\" class=\"moved-section\"><div class=\"moved-section-heading\"><h2>Watchdog Protection</h2><p>Hardware watchdog readiness, setup, ownership, and deliberate test controls.</p></div>"
-                + watchdog_page()
-                + "</section>"
-            )
+            return page_help_html(page) + services_card()
+        if page == "Watchdog":
+            return page_help_html(page) + watchdog_page()
         if page == "Network":
             return page_help_html(page) + network_page()
         if page == "Events":
-            query = getattr(request_context, "query", {}) or {}
-            event_view = str(query.get("view", ["events"])[0]).lower()
-            if event_view not in {"events", "history", "evidence"}:
-                event_view = "events"
-            tabs = (
-                "<nav class=\"page-tabs\" aria-label=\"Events sections\">"
-                f"<a class=\"{'active' if event_view == 'events' else ''}\" href=\"/events?view=events\">Events</a>"
-                f"<a class=\"{'active' if event_view == 'history' else ''}\" href=\"/events?view=history\">History</a>"
-                f"<a class=\"{'active' if event_view == 'evidence' else ''}\" href=\"/events?view=evidence\">Evidence</a>"
-                "</nav>"
-            )
-            if event_view == "history":
-                body = history_page()
-            elif event_view == "evidence":
-                body = diagnostics_page()
-            else:
-                body = events_page()
-            return page_help_html(page) + tabs + body
+            return page_help_html(page) + events_page()
+        if page == "History":
+            return page_help_html(page) + history_page()
+        if page == "Diagnostics":
+            return page_help_html(page) + diagnostics_page()
         if page == "Settings":
             return (
                 page_help_html(page)
@@ -2919,7 +2789,7 @@ def start_web(cfg):
                 "<p class=\"critical\">This page hit a runtime error while collecting live gateway details.</p>"
                 f"<pre>{escape(str(exc))}</pre>"
                 "<p class=\"muted\">The watchdog service can still be running even if this page failed. Use Evidence and Diagnostics or /api/status to check health while this is investigated.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/\">Overview</a><a class=\"ghost\" href=\"/events?view=evidence\">Evidence</a><a class=\"ghost\" href=\"/api/status\">Raw status</a></div>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/\">Overview</a><a class=\"ghost\" href=\"/diagnostics\">Diagnostics</a><a class=\"ghost\" href=\"/api/status\">Raw status</a></div>"
                 "</div>"
             )
         return page_shell(body, page)
@@ -2932,8 +2802,8 @@ def start_web(cfg):
             f"<p class=\"{'healthy' if result.get('ok') else 'critical'}\">{escape(str(result.get('message', 'Baseline request processed.')))}</p>"
             f"<p>Current state: <strong>{escape(state.upper())}</strong></p>"
             "<p class=\"muted\">The capture runs independently. You can leave this page and return to Evidence and Diagnostics later.</p>"
-            "<div class=\"button-row\"><a class=\"action\" href=\"/events?view=evidence\">Back to Evidence</a></div>"
-            "<script>setTimeout(function(){window.location.href='/events?view=evidence';},5000);</script>"
+            "<div class=\"button-row\"><a class=\"action\" href=\"/diagnostics\">Back to Diagnostics</a></div>"
+            "<script>setTimeout(function(){window.location.href='/diagnostics';},5000);</script>"
             "</div>"
         )
         return page_shell(body, "Diagnostics")
@@ -3425,7 +3295,7 @@ def start_web(cfg):
             "<div class=\"label\">Expected device after success</div><div class=\"value\">/dev/wdt_dio</div>"
             "<div class=\"label\">Expected API</div><div class=\"value\">Neousys WDT_DIO 2.4.1.0</div>"
             "<form class=\"inline\" method=\"post\" action=\"/neousys-watchdog-install-now\"><button class=\"action\" type=\"submit\">Install Neousys driver</button></form> "
-            "<a class=\"ghost\" href=\"/services#watchdog\">Cancel</a>"
+            "<a class=\"ghost\" href=\"/watchdog\">Cancel</a>"
             "</div>"
         )
         return page_shell(body, "Watchdog")
@@ -3433,46 +3303,36 @@ def start_web(cfg):
     def hardware_watchdog_prepare_confirm_html():
         info = hardware_info()
         watchdog = info.get("watchdog", {})
-        legacy = watchdog.get("legacy_daemon", {})
         systemd_wdt = watchdog.get("systemd_watchdog", systemd_watchdog_info())
         setup = watchdog_setup_rows(watchdog, systemd_wdt)
-        check_rows = "".join(
-            "<tr>"
-            f"<td>{escape(str(item.get('name', '-')))}</td>"
-            f"<td class=\"{escape(str(item.get('state', 'unknown')))}\">{escape(str(item.get('state', 'unknown')).upper())}</td>"
-            f"<td>{escape(str(item.get('message', '-')))}</td>"
-            "</tr>"
-            for item in setup.get("checks", [])
-        )
         body = (
             "<div class=\"card\">"
-            "<h2>One-Click Hardware Watchdog Setup</h2>"
-            "<p class=\"warning\">This is the recommended setup and cleanup path for POC-451VTC.</p>"
-            "<p class=\"muted\">It installs the bundled Neousys driver, removes legacy and Intel hardware watchdog paths, writes the Neousys settings, and restarts both VA-Connect services with a safety window.</p>"
-            "<div class=\"label\">Expected device</div><div class=\"value\">/dev/wdt_dio</div>"
-            "<div class=\"label\">Expected driver</div><div class=\"value\">Neousys wdt_dio</div>"
-            f"<div class=\"label\">Current legacy watchdog.service</div><div class=\"value\">{escape(str(legacy.get('active', '-')))} / {escape(str(legacy.get('enabled', '-')))}</div>"
-            f"<div class=\"label\">Legacy package</div><div class=\"value\">{escape(str(legacy.get('package_status', '-')))}</div>"
-            "<table><thead><tr><th>Check</th><th>Now</th><th>Meaning</th></tr></thead>"
-            f"<tbody>{check_rows}</tbody></table>"
-            "<p class=\"muted\">After confirming, wait about 30 seconds, then return to Hardware. The page may briefly disconnect while the service restarts.</p>"
-            "<form class=\"inline\" method=\"post\" action=\"/hardware-watchdog-prepare-now\"><button class=\"action\" type=\"submit\">Run setup and cleanup</button></form> "
-            "<a class=\"ghost\" href=\"/hardware\">Cancel</a>"
+            "<h2>Set Up Neousys Hardware Watchdog</h2>"
+            f"<p class=\"{escape(str(setup.get('state', 'warning')))}\">{escape(str(setup.get('message', 'Setup status unavailable.')))}</p>"
+            "<p>This guided action will:</p><ul>"
+            "<li>Install or repair the bundled Neousys WDT_DIO driver.</li>"
+            "<li>Configure VA-Connect to use <strong>/dev/wdt_dio</strong>.</li>"
+            "<li>Remove any detected watchdog service that could compete for the device.</li>"
+            "<li>Restart the monitor and feeder with a remote-access safety window.</li>"
+            "</ul>"
+            "<p class=\"warning\">The dashboard may disconnect briefly while the VA-Connect services restart.</p>"
+            "<form class=\"inline\" method=\"post\" action=\"/hardware-watchdog-prepare-now\"><button class=\"action\" type=\"submit\">Confirm Neousys setup</button></form> "
+            "<a class=\"ghost\" href=\"/watchdog\">Cancel</a>"
             "</div>"
         )
-        return page_shell(body, "Hardware")
+        return page_shell(body, "Watchdog")
 
     def neousys_install_started_html(result):
         status_class = "healthy" if result.get("ok") else "critical"
         body = (
-            "<meta http-equiv=\"refresh\" content=\"20;url=/hardware\">"
+            "<meta http-equiv=\"refresh\" content=\"20;url=/watchdog\">"
             "<div class=\"card\">"
             "<h2>Neousys Watchdog Driver Install</h2>"
             f"<p class=\"{status_class}\">{escape(str(result.get('message', 'Setup request sent.')))}</p>"
             "<p class=\"muted\">This page will return to Watchdog automatically in 20 seconds. Reload Watchdog after that to see module/device status.</p>"
             f"<div class=\"label\">Command</div><div class=\"value\">{escape(str(result.get('command', '-')))}</div>"
             f"<div class=\"label\">Log</div><div class=\"value\">{escape(str(result.get('log_path', '-')))}</div>"
-            "<a class=\"ghost\" href=\"/services#watchdog\">Back to Watchdog</a>"
+            "<a class=\"ghost\" href=\"/watchdog\">Back to Watchdog</a>"
             "</div>"
         )
         return page_shell(body, "Watchdog")
@@ -3484,7 +3344,7 @@ def start_web(cfg):
             "<p class=\"warning\">This will inspect the Neousys driver, device, library, configuration, feeder ownership, and conflicts.</p>"
             "<p class=\"muted\">The probe is read-only and does not start or stop the hardware timer.</p>"
             "<form class=\"inline\" method=\"post\" action=\"/watchdog-hardware-probe-now\"><button class=\"action\" type=\"submit\">Run full watchdog probe</button></form> "
-            "<a class=\"ghost\" href=\"/services#watchdog\">Cancel</a>"
+            "<a class=\"ghost\" href=\"/watchdog\">Cancel</a>"
             "</div>"
         )
         return page_shell(body, "Watchdog")
@@ -3492,14 +3352,14 @@ def start_web(cfg):
     def watchdog_probe_started_html(result):
         status_class = "healthy" if result.get("ok") else "critical"
         body = (
-            "<meta http-equiv=\"refresh\" content=\"20;url=/services#watchdog\">"
+            "<meta http-equiv=\"refresh\" content=\"20;url=/watchdog\">"
             "<div class=\"card\">"
             "<h2>Watchdog Hardware Probe</h2>"
             f"<p class=\"{status_class}\">{escape(str(result.get('message', 'Probe request sent.')))}</p>"
             "<p class=\"muted\">This page will return to Watchdog automatically in 20 seconds. Reload Watchdog to see the full probe log.</p>"
             f"<div class=\"label\">Command</div><div class=\"value\">{escape(str(result.get('command', '-')))}</div>"
             f"<div class=\"label\">Log</div><div class=\"value\">{escape(str(result.get('log_path', '-')))}</div>"
-            "<a class=\"ghost\" href=\"/services#watchdog\">Back to Watchdog</a>"
+            "<a class=\"ghost\" href=\"/watchdog\">Back to Watchdog</a>"
             "</div>"
         )
         return page_shell(body, "Watchdog")
@@ -3571,7 +3431,7 @@ def start_web(cfg):
     def watchdog_action_result_html(result):
         ok = bool(result.get("ok"))
         body = (
-            "<meta http-equiv=\"refresh\" content=\"20;url=/services#watchdog\">"
+            "<meta http-equiv=\"refresh\" content=\"20;url=/watchdog\">"
             "<div class=\"card\">"
             "<h2>Watchdog Action</h2>"
             f"<p class=\"{'healthy' if ok else 'critical'}\">{escape(str(result.get('message', '-')))}</p>"
@@ -3671,7 +3531,7 @@ def start_web(cfg):
 
     def watchdog_test_armed_html(result):
         body = (
-            "<meta http-equiv=\"refresh\" content=\"45;url=/services#watchdog\">"
+            "<meta http-equiv=\"refresh\" content=\"45;url=/watchdog\">"
             "<div class=\"card\">"
             "<h2>Safe Watchdog Test Armed</h2>"
             "<p class=\"warning\">Second knock required.</p>"
@@ -3702,7 +3562,7 @@ def start_web(cfg):
         if not rows:
             rows.append("<tr><td colspan=\"3\">No checks were run.</td></tr>")
         body = (
-            "<meta http-equiv=\"refresh\" content=\"12;url=/services#watchdog\">"
+            "<meta http-equiv=\"refresh\" content=\"12;url=/watchdog\">"
             "<div class=\"card\">"
             "<h2>Safe Watchdog Test Result</h2>"
             f"<p class=\"{'healthy' if ok else 'warning'}\">{escape(str(result.get('message', 'Test complete')))}</p>"
@@ -3783,13 +3643,13 @@ def start_web(cfg):
 
     def watchdog_trip_armed_html(result):
         body = (
-            "<meta http-equiv=\"refresh\" content=\"300;url=/services#watchdog\">"
+            "<meta http-equiv=\"refresh\" content=\"300;url=/watchdog\">"
             "<div class=\"card\">"
             "<h2>Trip Test Armed</h2>"
             "<p class=\"warning\">The next page requires a checkbox and a typed TRIP confirmation before the test can be triggered.</p>"
             f"<div class=\"label\">Armed at</div><div class=\"value\">{escape(str(result.get('armed_at', '-')))}</div>"
             f"<div class=\"label\">Expires</div><div class=\"value\">{escape(str(result.get('expires_at_unix', '-')))}</div>"
-            "<div class=\"button-row\"><a class=\"action\" href=\"/watchdog-trip-confirm\">Continue to confirm page</a><a class=\"ghost\" href=\"/services#watchdog\">Back to Watchdog</a></div>"
+            "<div class=\"button-row\"><a class=\"action\" href=\"/watchdog-trip-confirm\">Continue to confirm page</a><a class=\"ghost\" href=\"/watchdog\">Back to Watchdog</a></div>"
             "</div>"
         )
         return page_shell(body, "Watchdog")
@@ -3797,7 +3657,7 @@ def start_web(cfg):
     def watchdog_trip_result_html(result):
         ok = bool(result.get("ok"))
         body = (
-            "<meta http-equiv=\"refresh\" content=\"12;url=/services#watchdog\">"
+            "<meta http-equiv=\"refresh\" content=\"12;url=/watchdog\">"
             "<div class=\"card\">"
             "<h2>Deliberate Watchdog Trip Test</h2>"
             f"<p class=\"{'critical' if ok else 'warning'}\">{escape(str(result.get('message', 'Trip test processed.')))}</p>"
