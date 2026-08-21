@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .blackbox import write_boot_archive
+from .watchdog_feed_evidence import evidence_paths, feeder_state_for_boot
 
 
 def archive_config(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -57,8 +58,17 @@ def archive_previous_boot(
 
     status_path = Path(cfg.get("status_path") or data_dir / "status.json")
     files.append(_copy_file(status_path, temporary / "last-status.json"))
-    feed_path = Path(cfg.get("hardware_watchdog_feed_state_path") or data_dir / "hardware-watchdog-feed.json")
-    files.append(_copy_file(feed_path, temporary / "last-watchdog-feed.json"))
+    feed_state, feed_path = feeder_state_for_boot(cfg, previous_boot)
+    if feed_path:
+        files.append(_copy_file(feed_path, temporary / "last-watchdog-feed.json"))
+    else:
+        files.append(_write_json(temporary / "last-watchdog-feed.json", {
+            "boot_id": previous_boot,
+            "evidence_available": False,
+            "message": "No feeder state matching the previous boot ID was preserved.",
+        }))
+    _, _, lifecycle_path = evidence_paths(cfg)
+    files.append(_filter_jsonl(lifecycle_path, temporary / "watchdog-feed-lifecycle.jsonl.gz", previous_boot))
 
     heartbeat_path = Path(cfg.get("heartbeat_path") or data_dir / "heartbeat.jsonl")
     files.append(_filter_jsonl(heartbeat_path, temporary / "heartbeat.jsonl.gz", previous_boot))

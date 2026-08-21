@@ -4,7 +4,6 @@ try:
     import fcntl
 except ImportError:  # Windows development/test hosts do not expose Linux file locks.
     fcntl = None
-import json
 import os
 import signal
 import subprocess
@@ -16,6 +15,12 @@ from .heartbeat import heartbeat_age_seconds, read_state
 from .watchdog_device import HardwareWatchdog
 from .watchdog_grace import startup_grace_status
 from .watchdog_test import fail_trip_test, trip_test_active
+from .watchdog_feed_evidence import (
+    append_lifecycle,
+    atomic_write_json,
+    current_boot_id,
+    preserve_previous_boot_state,
+)
 
 
 class FeedWorker:
@@ -57,6 +62,17 @@ class FeedWorker:
         self.trip_current_timeleft = None
         self.trip_countdown_status = "inactive"
         self.trip_countdown_confirmed = False
+        self.boot_id = current_boot_id()
+        self.last_lifecycle_status = ""
+        self.last_lifecycle_checkpoint = 0.0
+        self.lifecycle_checkpoint_seconds = max(10, int(hw_cfg.get("lifecycle_checkpoint_seconds", 60) or 60))
+        self.received_signal = ""
+        heartbeat_boot = str(read_state(cfg).get("boot_id") or "")
+        self.preservation_result = preserve_previous_boot_state(
+            cfg,
+            self.boot_id,
+            fallback_boot_id=heartbeat_boot,
+        )
 
     def heartbeat_allows_feed(self, heartbeat, grace, trip_active=False, current_uptime=None):
         if trip_active:
@@ -72,6 +88,11 @@ class FeedWorker:
         )
 
     def stop(self, *_args):
+        if _args:
+            try:
+                self.received_signal = signal.Signals(int(_args[0])).name
+            except (TypeError, ValueError):
+                self.received_signal = str(_args[0])
         self.stop_requested = True
 
     def write_state(self, status):
@@ -80,6 +101,7 @@ class FeedWorker:
         if last_feed_unix is not None:
             last_feed_utc = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.gmtime(last_feed_unix))
         payload = {
+            "boot_id": self.boot_id,
             "pid": os.getpid(),
             "process_status": status,
             "backend": self.backend,
@@ -104,10 +126,38 @@ class FeedWorker:
             },
             "updated_at": time.time(),
         }
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
-        temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        os.replace(temporary, self.state_path)
+        try:
+            atomic_write_json(self.state_path, payload)
+        except OSError:
+            # State reporting must never interrupt hardware feeding.
+            pass
+        self._record_lifecycle(status, payload)
+
+    def _record_lifecycle(self, status, payload, force=False):
+        now = time.monotonic()
+        checkpoint_due = now - self.last_lifecycle_checkpoint >= self.lifecycle_checkpoint_seconds
+        if not force and status == self.last_lifecycle_status and not checkpoint_due:
+            return
+        event = "feed_checkpoint" if status == "feeding" and status == self.last_lifecycle_status else f"state_{status}"
+        append_lifecycle(
+            self.cfg,
+            self.boot_id,
+            event,
+            {
+                "status": status,
+                "backend": self.backend,
+                "device": self.device,
+                "feed_count": payload.get("feed_count", 0),
+                "last_feed_utc": payload.get("last_feed_utc", ""),
+                "last_error": payload.get("last_error", ""),
+                "error_count": payload.get("error_count", 0),
+            },
+        )
+        self.last_lifecycle_status = status
+        self.last_lifecycle_checkpoint = now
+
+    def log_lifecycle(self, event, details=None):
+        append_lifecycle(self.cfg, self.boot_id, event, details or {})
 
     def _read_timeleft(self):
         return None
@@ -235,6 +285,12 @@ class FeedWorker:
         signal.signal(signal.SIGTERM, self.stop)
         signal.signal(signal.SIGINT, self.stop)
         self.acquire_lock()
+        self.log_lifecycle("feeder_started", {
+            "backend": self.backend,
+            "device": self.device,
+            "enabled": self.enabled,
+            "previous_state": self.preservation_result,
+        })
         if not self.enabled:
             self.write_state("disabled")
             if self.lock_handle:
@@ -259,8 +315,10 @@ class FeedWorker:
                 self.write_state("device_unavailable")
                 return 1
             self.write_state("running")
+            self.log_lifecycle("hardware_opened", {"timeout_seconds": self.hw.get_timeout()})
             while not self.stop_requested:
                 if not bool(load_config().get("hardware_watchdog", {}).get("enabled", False)):
+                    self.log_lifecycle("feed_disabled_by_config")
                     self.stop_requested = True
                     break
                 trip_active, trip_summary = trip_test_active(self.cfg)
@@ -283,14 +341,24 @@ class FeedWorker:
                 elif not allowed:
                     self.write_state("paused_stale_heartbeat" if not effective_trip_active else "paused_trip_test")
                 time.sleep(min(1, self.interval))
+        except Exception as exc:
+            self.last_error = str(exc)
+            self.error_count += 1
+            self.log_lifecycle("feeder_exception", {"error": str(exc), "feed_count": self.hw.feed_count})
+            raise
         finally:
+            if self.received_signal:
+                self.log_lifecycle("signal_received", {"signal": self.received_signal})
             self.write_state("stopping")
             try:
+                self.log_lifecycle("stop_wdt_requested", {"opened": self.hw.opened, "feed_count": self.hw.feed_count})
                 self.hw.close(magic_close=bool(self.cfg.get("hardware_watchdog", {}).get("magic_close", False)))
+                self.log_lifecycle("stop_wdt_completed", {"opened": self.hw.opened})
             except Exception as exc:
                 self.last_error = f"orderly watchdog stop failed: {exc}"
                 self.error_count += 1
                 self.write_state("stop_error")
+                self.log_lifecycle("stop_wdt_error", {"error": str(exc)})
             finally:
                 if self.lock_handle:
                     if fcntl is not None:

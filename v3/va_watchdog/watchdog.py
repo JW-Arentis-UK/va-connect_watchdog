@@ -165,6 +165,7 @@ def hardware_feed_status(cfg, startup_grace, trip_active=False, trip_summary=Non
     )
     return {
         "enabled": bool(hw_cfg.get("enabled")),
+        "boot_id": feed.get("boot_id", ""),
         "backend": "neousys_wdt_dio",
         "device": feed.get("device") or hw_cfg.get("device", "/dev/wdt_dio"),
         "opened": reports_open and process_alive,

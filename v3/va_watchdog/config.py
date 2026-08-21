@@ -22,6 +22,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "reboot_evidence_path": "/var/lib/va-watchdog/reboot-evidence.jsonl",
     "kernel_fault_state_path": "/var/lib/va-watchdog/kernel-fault-state.json",
     "hardware_watchdog_feed_state_path": "/var/lib/va-watchdog/hardware-watchdog-feed.json",
+    "hardware_watchdog_previous_state_path": "/var/lib/va-watchdog/hardware-watchdog-feed-previous.json",
+    "hardware_watchdog_lifecycle_path": "/var/lib/va-watchdog/hardware-watchdog-lifecycle.jsonl",
     "hardware_watchdog_lock_path": "/var/lib/va-watchdog/hardware-watchdog.lock",
     "blackbox": {
         "enabled": True,
@@ -57,7 +59,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "stale_heartbeat_seconds": 15,
         "magic_close": False,
         "startup_grace_seconds": 300,
-        "post_trip_grace_seconds": 900
+        "post_trip_grace_seconds": 900,
+        "lifecycle_checkpoint_seconds": 60,
+        "lifecycle_max_bytes": 1048576
     },
     "hardware_watchdog_control_path": "/var/lib/va-watchdog/hardware-watchdog-control.json",
     "trip_test_path": "/var/lib/va-watchdog/watchdog-trip-test.json",

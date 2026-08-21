@@ -38,6 +38,8 @@ def data_files(cfg: dict[str, Any]) -> list[Path]:
         base / "reboot-evidence.jsonl",
         base / "kernel-fault-state.json",
         base / "hardware-watchdog-feed.json",
+        base / "hardware-watchdog-feed-previous.json",
+        base / "hardware-watchdog-lifecycle.jsonl",
     ]
     custom_history = history_path(cfg)
     if custom_history not in files:

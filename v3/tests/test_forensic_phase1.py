@@ -9,6 +9,11 @@ from va_watchdog.heartbeat import HeartbeatPublisher, heartbeat_age_seconds, rea
 from va_watchdog.incident_archive import archive_previous_boot, list_archives
 from va_watchdog.reboot_evidence import classify, create
 from va_watchdog.watchdog_feed import FeedWorker
+from va_watchdog.watchdog_feed_evidence import (
+    append_lifecycle,
+    feeder_state_for_boot,
+    preserve_previous_boot_state,
+)
 from va_watchdog.watchdog_test import read_trip_test_state, trigger_trip_test
 
 
@@ -108,6 +113,75 @@ class ForensicPhase1Tests(unittest.TestCase):
 
         self.assertEqual(first["last_feed_unix"], 1234.5)
         self.assertEqual(second["last_feed_unix"], 1234.5)
+        self.assertIn("boot_id", first)
+
+    def test_feeder_preserves_previous_boot_state_before_first_new_boot_write(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cfg = {
+                "events_path": str(root / "events.jsonl"),
+                "hardware_watchdog_feed_state_path": str(root / "hardware-watchdog-feed.json"),
+                "hardware_watchdog_previous_state_path": str(root / "hardware-watchdog-feed-previous.json"),
+            }
+            Path(cfg["hardware_watchdog_feed_state_path"]).write_text(
+                json.dumps({"boot_id": "failed-boot", "feed_count": 4242, "last_feed_utc": "old"}),
+                encoding="utf-8",
+            )
+
+            result = preserve_previous_boot_state(cfg, "new-boot")
+            state, source = feeder_state_for_boot(cfg, "failed-boot")
+
+        self.assertTrue(result["preserved"])
+        self.assertEqual(state["feed_count"], 4242)
+        self.assertEqual(source.name, "hardware-watchdog-feed-previous.json")
+
+    def test_legacy_feeder_state_uses_previous_heartbeat_boot_id(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cfg = {
+                "events_path": str(root / "events.jsonl"),
+                "hardware_watchdog_feed_state_path": str(root / "hardware-watchdog-feed.json"),
+                "hardware_watchdog_previous_state_path": str(root / "hardware-watchdog-feed-previous.json"),
+            }
+            Path(cfg["hardware_watchdog_feed_state_path"]).write_text(
+                json.dumps({"feed_count": 17, "last_feed_utc": "old"}),
+                encoding="utf-8",
+            )
+
+            result = preserve_previous_boot_state(cfg, "new-boot", fallback_boot_id="failed-boot")
+            state, _ = feeder_state_for_boot(cfg, "failed-boot")
+
+        self.assertTrue(result["preserved"])
+        self.assertEqual(state["boot_id"], "failed-boot")
+
+    def test_lifecycle_log_is_boot_identified_and_bounded(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lifecycle = root / "hardware-watchdog-lifecycle.jsonl"
+            cfg = {
+                "events_path": str(root / "events.jsonl"),
+                "hardware_watchdog_lifecycle_path": str(lifecycle),
+                "hardware_watchdog": {"lifecycle_max_bytes": 65536},
+            }
+            for index in range(500):
+                append_lifecycle(cfg, "boot-a", "feed_checkpoint", {"index": index, "padding": "x" * 100})
+            rows = [json.loads(line) for line in lifecycle.read_text(encoding="utf-8").splitlines()]
+            lifecycle_size = lifecycle.stat().st_size
+
+        self.assertLess(lifecycle_size, 65536)
+        self.assertEqual(rows[-1]["boot_id"], "boot-a")
+        self.assertEqual(rows[-1]["details"]["index"], 499)
+
+    def test_lifecycle_write_failure_does_not_raise(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cfg = {
+                "events_path": str(Path(temporary) / "events.jsonl"),
+                "hardware_watchdog_lifecycle_path": str(Path(temporary) / "lifecycle.jsonl"),
+            }
+            with patch("pathlib.Path.open", side_effect=OSError("disk unavailable")):
+                result = append_lifecycle(cfg, "boot-a", "feed_checkpoint")
+
+        self.assertIn("write_error", result)
 
     def test_trip_countdown_decrease_keeps_trip_active(self):
         worker = FeedWorker({
@@ -275,6 +349,19 @@ class ForensicPhase1Tests(unittest.TestCase):
                 encoding="utf-8",
             )
             (data_dir / "events.jsonl").write_text(json.dumps({"time": "old-event"}) + "\n", encoding="utf-8")
+            (data_dir / "hardware-watchdog-feed-previous.json").write_text(
+                json.dumps({"boot_id": "old", "feed_count": 91, "last_feed_utc": "old-feed"}),
+                encoding="utf-8",
+            )
+            (data_dir / "hardware-watchdog-lifecycle.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps({"boot_id": "old", "event": "feed_checkpoint"}),
+                        json.dumps({"boot_id": "new", "event": "feeder_started"}),
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
             change = {
                 "changed": True,
                 "previous_boot_id": "old",
@@ -286,12 +373,18 @@ class ForensicPhase1Tests(unittest.TestCase):
             archive_dir = Path(result["path"])
             with gzip.open(archive_dir / "heartbeat.jsonl.gz", "rt", encoding="utf-8") as handle:
                 heartbeat_rows = [json.loads(line) for line in handle]
+            with gzip.open(archive_dir / "watchdog-feed-lifecycle.jsonl.gz", "rt", encoding="utf-8") as handle:
+                lifecycle_rows = [json.loads(line) for line in handle]
+            archived_feed = json.loads((archive_dir / "last-watchdog-feed.json").read_text(encoding="utf-8"))
 
             self.assertTrue(result["created"])
             self.assertEqual(len(list_archives(cfg)), 1)
             self.assertEqual(heartbeat_rows, [{"boot_id": "old", "time": "old-heartbeat"}])
             self.assertTrue((archive_dir / "blackbox.jsonl.gz").is_file())
             self.assertTrue((archive_dir / "last-status.json").is_file())
+            self.assertEqual(archived_feed["boot_id"], "old")
+            self.assertEqual(archived_feed["feed_count"], 91)
+            self.assertEqual(lifecycle_rows, [{"boot_id": "old", "event": "feed_checkpoint"}])
 
     def test_main_service_restart_does_not_change_feeder_unit(self):
         feeder_unit = Path(__file__).parents[1] / "systemd" / "va-watchdog-feed.service"

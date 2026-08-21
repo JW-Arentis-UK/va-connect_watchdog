@@ -5685,6 +5685,8 @@ def start_web(cfg):
             "reboot-evidence.jsonl": Path(cfg.get("reboot_evidence_path") or data_dir / "reboot-evidence.jsonl"),
             "last-reboot-evidence.json": Path(cfg.get("reboot_evidence_path") or data_dir / "reboot-evidence.jsonl").with_name("last-reboot-evidence.json"),
             "hardware-watchdog-feed.json": Path(cfg.get("hardware_watchdog_feed_state_path") or data_dir / "hardware-watchdog-feed.json"),
+            "hardware-watchdog-feed-previous.json": Path(cfg.get("hardware_watchdog_previous_state_path") or data_dir / "hardware-watchdog-feed-previous.json"),
+            "hardware-watchdog-lifecycle.jsonl": Path(cfg.get("hardware_watchdog_lifecycle_path") or data_dir / "hardware-watchdog-lifecycle.jsonl"),
             "kernel-fault-state.json": Path(cfg.get("kernel_fault_state_path") or data_dir / "kernel-fault-state.json"),
             "stage0-baseline-state.json": baseline_paths(cfg)[1],
         }
