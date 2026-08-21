@@ -1717,10 +1717,6 @@ def start_web(cfg):
                 "<p class=\"muted\">After starting, the result page returns to Operations automatically. Reopen Updates to confirm the new build and log result.</p>"
                 "</div>"
                 + disclosure("Update log", log_detail)
-                + tool_grid([
-                    ("Check-only comparison", "Planned: compare local and remote builds without applying an update.", "", ""),
-                    ("Rollback", "Planned: return to a previously validated build after explicit confirmation.", "", ""),
-                ])
             )
 
         def settings_card():
@@ -1732,21 +1728,12 @@ def start_web(cfg):
             recovery = cfg.get("recovery", {})
             rec_storage = cfg.get("recording_storage", {}) if isinstance(cfg.get("recording_storage", {}), dict) else {}
             hw_cfg = cfg.get("hardware_watchdog", {}) if isinstance(cfg.get("hardware_watchdog", {}), dict) else {}
-            current = version_info()
-            update_state = str(update_status.get("state", "idle"))
-            update_target = update.get("branch") or current.get("branch", "-")
-            software_update = (
-                summary_strip([
-                    ("Running build", current.get("commit", "-"), current.get("branch", "-"), "healthy"),
-                    ("Update target", update_target, f"Remote {update.get('remote', 'origin')}", "healthy"),
-                    ("Last update", update_state.upper(), local_time(update_status.get("updated_at")), "healthy" if update_state in {"idle", "complete", "completed", "success"} else "warning"),
-                ])
-                + "<div class=\"card\"><h2>Software Update</h2>"
-                "<p>Update VA-Connect Watchdog from the configured Git branch and restart only the watchdog service.</p>"
-                "<p class=\"warning\">Check the target branch above before continuing. Save any branch change below before starting the update.</p>"
-                "<div class=\"button-row\"><a class=\"action\" href=\"/update-confirm\">Update watchdog</a>"
-                "<a class=\"ghost\" href=\"/settings#software-update\">View update details and log</a></div></div>"
-            )
+            settings_summary = summary_strip([
+                ("Gateway", gateway_identity.get("display_name") or gateway_identity.get("hostname") or "Not named", gateway_identity.get("asset_id") or "No asset ID", "healthy"),
+                ("Health checks", f"Every {cfg.get('poll_interval_seconds', 5)}s", "Lightweight live monitoring", "healthy"),
+                ("History", f"{retention.get('history_retention_days', 30)} days", f"Sample every {retention.get('history_sample_seconds', 60)}s", "healthy"),
+                ("Watchdog data", f"{retention.get('max_total_mb', 100)} MB max", "Self-purging evidence storage", "healthy"),
+            ])
             general_settings = (
                 "<div class=\"settings-grid\">"
                 f"<div><label class=\"label\">Health check interval</label><input name=\"poll_interval_seconds\" type=\"number\" min=\"2\" max=\"300\" value=\"{escape(str(cfg.get('poll_interval_seconds', 5)))}\"><p class=\"muted\">Seconds between live gateway checks.</p></div>"
@@ -1826,15 +1813,15 @@ def start_web(cfg):
                 "<p class=\"muted\">The theme is saved by this browser and is changed from the page header.</p>"
             )
             return (
-                software_update
-                + "<div class=\"card\"><h2>Gateway Settings</h2>"
-                "<p class=\"section-lead\">Settings are grouped by purpose. Saving creates a backup before the new configuration is applied.</p>"
+                settings_summary
+                + "<div class=\"card\"><h2>Configuration</h2>"
+                "<p class=\"section-lead\">Routine identity and monitoring settings are open below. Less common engineering controls remain collapsed. Saving creates a backup first.</p>"
                 "<form method=\"post\" action=\"/settings-save\">"
                 + disclosure("Gateway identity", identity_settings, opened=True)
-                + disclosure("General and monitoring", general_settings, opened=True)
-                + disclosure("Watchdog startup safety", watchdog_settings, opened=True)
+                + disclosure("Monitoring and data retention", general_settings, opened=True)
+                + disclosure("Watchdog startup safety", watchdog_settings)
                 + "<div id=\"persistent-journal\">" + disclosure("Persistent evidence logging", journal_settings) + "</div>"
-                + disclosure("Storage alerts", storage_settings, opened=True)
+                + disclosure("Storage alerts", storage_settings)
                 + disclosure("Network and remote access", network_settings)
                 + disclosure("Recovery and updates", recovery_settings)
                 + disclosure("Advanced configuration", advanced_settings)
@@ -1851,63 +1838,37 @@ def start_web(cfg):
             watchdog_devices = info.get("watchdog_devices", [])
             watchdog = info.get("watchdog", {})
             modules = watchdog.get("modules", {})
-            wdctl = watchdog.get("wdctl", {})
-            legacy = watchdog.get("legacy_daemon", {})
-            wdt = watchdog_test_summary()
-            systemd_wdt = systemd_watchdog_info()
-            wizard = hardware_watchdog_wizard_state(watchdog, systemd_wdt)
-            prereq_rows = []
-            for item in wizard.get("checks", []):
-                prereq_rows.append(
-                    "<tr>"
-                    f"<td>{escape(str(item.get('name', '-')))}</td>"
-                    f"<td class=\"{escape(str(item.get('state', 'unknown')))}\">{escape(str(item.get('state', 'unknown')).upper())}</td>"
-                    f"<td>{escape(str(item.get('message', '-')))}</td>"
-                    "</tr>"
-                )
-            hardware_state = "healthy" if watchdog_devices else "warning"
-            device_detail = (
-                "<div class=\"card\"><h2>Detected Devices</h2>"
-                f"<div class=\"label\">Watchdog devices</div><div class=\"value\">{escape(', '.join(watchdog_devices) if watchdog_devices else 'None detected')}</div>"
-                f"<div class=\"label\">Block devices</div><pre>{escape(chr(10).join(block_devices) if block_devices else 'No block device details available')}</pre>"
-                "</div>"
-            )
-            watchdog_detail = (
-                "<div class=\"card\"><h2>Neousys Watchdog Discovery</h2>"
-                "<p class=\"muted\">These values identify whether the test driver and vendor API are ready. Setup and testing are managed on the dedicated Watchdog page.</p>"
-                "<div class=\"settings-grid\">"
-                f"<div><div class=\"label\">Expected driver</div><div class=\"value\">Neousys wdt_dio</div></div>"
-                f"<div><div class=\"label\">wdt_dio loaded</div><div class=\"value {'healthy' if modules.get('wdt_dio') else 'warning'}\">{escape('Yes' if modules.get('wdt_dio') else 'No')}</div></div>"
-                f"<div><div class=\"label\">Device</div><div class=\"value {'healthy' if '/dev/wdt_dio' in watchdog_devices else 'warning'}\">/dev/wdt_dio</div></div>"
-                f"<div><div class=\"label\">Backend</div><div class=\"value\">Neousys WDT_DIO API</div></div>"
-                f"<div><div class=\"label\">Driver identity</div><div class=\"value {escape(str(wdctl.get('state', 'unknown')))}\">{escape(str(wdctl.get('identity', '-')))}</div></div>"
-                f"<div><div class=\"label\">Driver timeout</div><div class=\"value\">{escape(str(wdctl.get('timeout', '-')))}</div></div>"
-                f"<div><div class=\"label\">Legacy watchdog service</div><div class=\"value {'warning' if legacy.get('active') == 'active' else 'healthy'}\">{escape(str(legacy.get('active', '-')).upper())} / {escape(str(legacy.get('enabled', '-')).upper())}</div></div>"
-                "</div>"
-                "<div class=\"button-row\"><a class=\"action\" href=\"/watchdog\">Open Watchdog</a><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run full probe</a></div>"
-                f"{disclosure('Raw watchdog status', '<pre>' + escape(str(wdctl.get('raw', 'Neousys device not present'))) + '</pre>')}"
-                f"{disclosure('Setup and probe logs', '<h3>One-click prepare</h3><pre>' + escape(str(watchdog.get('prepare_log', 'No prepare log yet'))) + '</pre><h3>Setup</h3><pre>' + escape(str(watchdog.get('setup_log', 'No setup log yet'))) + '</pre><h3>Full probe</h3><pre>' + escape(str(watchdog.get('probe_log', 'No hardware probe log yet'))) + '</pre>')}"
-                "</div>"
+            driver_loaded = bool(modules.get("wdt_dio"))
+            watchdog_present = "/dev/wdt_dio" in watchdog_devices
+            watchdog_state = "healthy" if driver_loaded and watchdog_present else "warning"
+            hardware_rows = "".join([
+                f"<tr><th>CPU</th><td>{escape(str(cpu.get('model', '-')))}</td></tr>",
+                f"<tr><th>Logical CPUs</th><td>{escape(str(cpu.get('cores', '-')))}</td></tr>",
+                f"<tr><th>Architecture</th><td>{escape(str(cpu.get('architecture', '-')))}</td></tr>",
+                f"<tr><th>Memory</th><td>{escape(str(memory.get('total_mb', '-')))} MB total / {escape(str(memory.get('available_mb', '-')))} MB available</td></tr>",
+                f"<tr><th>Neousys watchdog</th><td class=\"{watchdog_state}\">{'Driver and device detected' if watchdog_state == 'healthy' else 'Setup required or unavailable'}</td></tr>",
+            ])
+            engineering_detail = (
+                "<h3>Block devices</h3>"
+                f"<pre>{escape(chr(10).join(block_devices) if block_devices else 'No block device details available')}</pre>"
+                "<h3>Neousys discovery</h3>"
+                "<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>"
+                f"<tr><th>wdt_dio module</th><td>{'Loaded' if driver_loaded else 'Not loaded'}</td></tr>"
+                f"<tr><th>Device</th><td>{'/dev/wdt_dio present' if watchdog_present else '/dev/wdt_dio missing'}</td></tr>"
+                f"<tr><th>Detected watchdog devices</th><td>{escape(', '.join(watchdog_devices) if watchdog_devices else 'None')}</td></tr>"
+                "</tbody></table></div>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run read-only hardware probe</a><a class=\"ghost\" href=\"/diagnostics\">Open diagnostics</a></div>"
             )
             return (
                 summary_strip([
-                    ("Hardware", "DETECTED", "Gateway sensors available", "healthy"),
                     ("CPU temperature", f"{check_value('temperature', '-')} C", "Current reading", check_state("temperature")),
                     ("CPU load", f"{check_value('cpu_load', '-')}%", f"{cpu.get('cores', '-')} logical cores", check_state("cpu_load")),
                     ("Memory", f"{check_value('ram', '-')}%", f"{memory.get('available_mb', '-')} MB available", check_state("ram")),
-                    ("Watchdog device", "Present" if watchdog_devices else "Not present", ", ".join(watchdog_devices) if watchdog_devices else "Run discovery", hardware_state),
+                    ("Neousys recovery", "Available" if watchdog_state == "healthy" else "Needs setup", "/dev/wdt_dio", watchdog_state),
                 ])
-                + "<div class=\"card\"><h2>CPU and Memory</h2>"
-                "<p class=\"section-lead\">The live hardware readings used by the health engine.</p>"
-                "<div class=\"settings-grid\">"
-                f"<div class=\"label\">CPU model</div><div class=\"value\">{escape(str(cpu.get('model', '-')))}</div>"
-                f"<div class=\"label\">CPU cores</div><div class=\"value\">{escape(str(cpu.get('cores', '-')))}</div>"
-                f"<div class=\"label\">Architecture</div><div class=\"value\">{escape(str(cpu.get('architecture', '-')))}</div>"
-                f"<div class=\"label\">RAM total</div><div class=\"value\">{escape(str(memory.get('total_mb', '-')))} MB</div>"
-                f"<div class=\"label\">RAM available</div><div class=\"value\">{escape(str(memory.get('available_mb', '-')))} MB</div>"
-                "</div></div>"
-                + disclosure("Detected devices", device_detail)
-                + disclosure("Hardware watchdog discovery", watchdog_detail)
+                + "<div class=\"card\"><div class=\"section-lead\"><div><h2>Gateway Hardware</h2><p class=\"muted\">Identity and live capacity information used during support.</p></div><a class=\"ghost\" href=\"/watchdog\">Open hardware recovery</a></div>"
+                f"<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>{hardware_rows}</tbody></table></div></div>"
+                + disclosure("Engineering hardware details", engineering_detail)
             )
 
         def watchdog_page():
@@ -2149,23 +2110,12 @@ def start_web(cfg):
             rec_rows = [
                 ("Status", str(recording.get("status", "unknown")).upper()),
                 ("Mode", "One drive / OS filesystem" if recording.get("mode") == "system_directory" else "Dedicated recording storage"),
-                ("Device", recording.get("device", "-")),
-                ("Mountpoint", recording.get("mountpoint", "-")),
+                ("Location", recording.get("mountpoint", "-")),
                 ("Recordings folder", recording.get("recordings_path", "-")),
-                ("Owner", f"{recording.get('owner', '-') or '-'}:{recording.get('group', '-') or '-'}"),
-                ("Label", f"{recording.get('label', '-')} / expected {recording.get('expected_label', '-')}"),
-                ("Filesystem", f"{recording.get('filesystem', '-')} / expected {recording.get('expected_filesystem', '-')}"),
                 ("Capacity", f"{recording.get('total_gb', '-')} GB"),
-                ("Free space", f"{recording.get('free_gb', '-')} GB"),
-                ("Used %", f"{recording.get('used_percent', '-')}%"),
-                ("Used warn / critical", f"{recording.get('used_warning_percent', '-')}% / {recording.get('used_critical_percent', '-')}%"),
-                ("Expected full mode", "Enabled" if recording.get("expected_full") else "Disabled"),
-                ("Minimum free MB warn / critical", f"{recording.get('minimum_free_mb_warning', '-')} / {recording.get('minimum_free_mb_critical', '-')}"),
-                ("Legacy free warning", f"{recording.get('free_warning_percent', '-')}% free" if recording.get("free_warning_enabled") else "Disabled"),
+                ("Space", f"{recording.get('free_gb', '-')} GB free / {recording.get('used_percent', '-')}% used"),
                 ("Writable", "Yes" if recording.get("writable") else "No"),
-                ("SMART", recording.get("smart_status", "-")),
-                ("Temperature", f"{recording.get('temperature_c', '-')} C"),
-                ("Last successful check", recording.get("last_successful_check") or recording.get("checked_at", "-")),
+                ("Oldest recording", oldest_activity.get("display_local", "Not found")),
             ]
             rec_html = "".join(
                 "<tr>"
@@ -2208,29 +2158,42 @@ def start_web(cfg):
                 "<div class=\"table-scroll\"><table><thead><tr><th>File</th><th>Size</th><th>Modified</th></tr></thead>"
                 f"<tbody>{''.join(file_rows)}</tbody></table></div>"
             )
+            setup_detail = (
+                "<h3>Storage identity</h3><div class=\"table-scroll\"><table class=\"compact-table\"><tbody>"
+                f"<tr><th>Device</th><td>{escape(str(recording.get('device', '-')))}</td></tr>"
+                f"<tr><th>Owner</th><td>{escape(str(recording.get('owner', '-') or '-'))}:{escape(str(recording.get('group', '-') or '-'))}</td></tr>"
+                f"<tr><th>Label</th><td>{escape(str(recording.get('label', '-')))} / expected {escape(str(recording.get('expected_label', '-')))}</td></tr>"
+                f"<tr><th>Filesystem</th><td>{escape(str(recording.get('filesystem', '-')))} / expected {escape(str(recording.get('expected_filesystem', '-')))}</td></tr>"
+                f"<tr><th>SMART / temperature</th><td>{escape(str(recording.get('smart_status', '-')))} / {escape(str(recording.get('temperature_c', '-')))} C</td></tr>"
+                f"<tr><th>Last successful check</th><td>{escape(str(recording.get('last_successful_check') or recording.get('checked_at', '-')))}</td></tr>"
+                "</tbody></table></div>"
+                "<h3>Recording service mount guard</h3>"
+                "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Requires mount</th><th>Status</th></tr></thead>"
+                f"<tbody>{guard_rows}</tbody></table></div>"
+                "<form class=\"inline\" method=\"post\" action=\"/recording-storage-guard-apply\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> Apply RequiresMountsFor to configured recording services</label> <button class=\"ghost\" type=\"submit\">Apply service guard</button></form>"
+                "<h3>Configured limits</h3>"
+                f"{limits_detail}"
+            )
+            storage_action = (
+                f"<div class=\"card action-panel {escape(rec_state)}\"><h2>Storage needs attention</h2><p class=\"{escape(rec_state)}\">{escape(str(recording.get('message', 'Recording storage status unavailable')))}</p>"
+                "<div class=\"button-row\"><a class=\"action\" href=\"/recording-storage-configure\">Review storage setup</a></div></div>"
+                if rec_state != "healthy" else ""
+            )
             return (
                 summary_strip([
                     ("Recording storage", rec_state.upper(), recording.get("message", "Status unavailable"), rec_state),
-                    ("Mounted", "Yes" if recording.get("mounted") else "No", recording.get("mountpoint", "-"), "healthy" if recording.get("mounted") else "critical"),
-                    ("Writable", "Yes" if recording.get("writable") else "No", recording.get("recordings_path", "-"), "healthy" if recording.get("writable") else "critical"),
                     ("Free space", f"{recording.get('free_gb', '-')} GB", f"{recording.get('used_percent', '-')}% used", rec_state),
                     ("Oldest recording", oldest_activity.get("display_local", "Not found"), "Oldest footage currently available", "healthy" if activity.get("available") else "warning"),
-                    ("SMART", recording.get("smart_status", "-"), f"{recording.get('temperature_c', '-')} C", "warning" if str(recording.get("smart_status", "")).lower() == "unavailable" else rec_state),
+                    ("Writable", "Yes" if recording.get("writable") else "No", recording.get("recordings_path", "-"), "healthy" if recording.get("writable") else "critical"),
                 ])
-                + "<div class=\"card\"><h2>Recording Storage</h2>"
-                f"<p class=\"{escape(rec_state)}\">{escape(str(recording.get('message', 'Recording storage status unavailable')))}</p>"
+                + storage_action
+                + "<div class=\"card\"><div class=\"section-lead\"><div><h2>Recording Location</h2><p class=\"muted\">The information needed to confirm footage is available.</p></div><a class=\"ghost\" href=\"/recording-storage-configure\">Configure storage</a></div>"
                 "<div class=\"table-scroll\"><table><tbody>"
                 f"{rec_html}"
                 "</tbody></table></div>"
-                "<h3>Recording Service Mount Guard</h3>"
-                "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Requires mount</th><th>Status</th></tr></thead>"
-                f"<tbody>{guard_rows}</tbody></table></div>"
-                "<div class=\"button-row\"><a class=\"action\" href=\"/recording-storage-configure\">Configure recording storage</a><a class=\"ghost\" href=\"/api/status\">Raw status</a></div>"
-                "<form class=\"inline\" method=\"post\" action=\"/recording-storage-guard-apply\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> Apply RequiresMountsFor to configured recording services</label> <button class=\"ghost\" type=\"submit\">Apply service guard</button></form>"
                 "</div>"
-                + disclosure("Configured storage limits", limits_detail)
-                + disclosure("Watchdog data retention and purge", retention_detail)
-                + disclosure("Watchdog data files", files_detail)
+                + disclosure("Storage setup and safeguards", setup_detail)
+                + disclosure("Watchdog data management", retention_detail + files_detail)
             )
 
         def network_page():
@@ -2249,22 +2212,17 @@ def start_web(cfg):
                 interfaces.append("<tr><td colspan=\"3\">No interface details available.</td></tr>")
             ping_rows = []
             for item in info.get("pings", []):
-                ping_state = "OK" if item.get("ping_ok") else "FAILED"
-                tcp_state = "N/A" if item.get("tcp_ok") is None else ("OK" if item.get("tcp_ok") else "FAILED")
                 row_ok = item.get("ok")
                 ping_rows.append(
                     "<tr>"
                     f"<td>{escape(str(item.get('target', '-')))}</td>"
-                    f"<td>{escape(str(item.get('host', '-')))}</td>"
-                    f"<td>{escape(str(item.get('port') or '-'))}</td>"
-                    f"<td class=\"{'healthy' if item.get('ping_ok') else 'warning'}\">{ping_state}</td>"
-                    f"<td class=\"{'healthy' if item.get('tcp_ok') else ('muted' if item.get('tcp_ok') is None else 'warning')}\">{tcp_state}</td>"
-                    f"<td class=\"{'healthy' if row_ok else 'warning'}\">{'OK' if row_ok else 'CHECK'}</td>"
+                    f"<td>{'Ping' if item.get('port') is None else 'TCP ' + str(item.get('port'))}</td>"
+                    f"<td class=\"{'healthy' if row_ok else 'warning'}\">{'REACHABLE' if row_ok else 'FAILED'}</td>"
                     f"<td>{escape(str(item.get('tcp_detail') or item.get('detail') or '-'))}</td>"
                     "</tr>"
                 )
             if not ping_rows:
-                ping_rows.append("<tr><td colspan=\"7\">No network targets configured yet. Add internet hosts/local targets in Settings.</td></tr>")
+                ping_rows.append("<tr><td colspan=\"4\">No network targets configured yet. Add targets in Settings.</td></tr>")
             remote_rows = []
             for item in info.get("remote_access", []):
                 remote_rows.append(
@@ -2272,11 +2230,10 @@ def start_web(cfg):
                     f"<td>{escape(str(item.get('service', '-')))}</td>"
                     f"<td class=\"{'healthy' if item.get('active') else 'warning'}\">{escape(str(item.get('state', '-')).upper())}</td>"
                     f"<td>{escape(str(item.get('enabled', '-')).upper())}</td>"
-                    f"<td>{escape(str(item.get('detail') or item.get('note') or ''))}</td>"
                     "</tr>"
                 )
             if not remote_rows:
-                remote_rows.append("<tr><td colspan=\"4\">No remote access services configured. TeamViewer placeholder remains in Settings as teamviewerd.</td></tr>")
+                remote_rows.append("<tr><td colspan=\"3\">No remote access service is configured.</td></tr>")
             urls = "".join(f"<li>{escape(str(url))}</li>" for url in info.get("support_urls", []))
             ping_items = info.get("pings", [])
             ping_ok = sum(1 for item in ping_items if item.get("ok"))
@@ -2297,12 +2254,15 @@ def start_web(cfg):
                 f"<div class=\"label\">LAN neighbours</div><pre>{escape(str(info.get('neighbours', '-')))}</pre>"
                 f"<div class=\"label\">Listening TCP sockets</div><pre>{escape(str(info.get('listening_sockets', 'ss output not available')))}</pre>"
             )
-            speed_test_card = (
-                "<div class=\"card\"><h2>Internet Speed Test</h2>"
-                "<p class=\"section-lead\">Runs a short manual test for latency, download and upload speed. "
-                "It does not run during normal health checks and does not change the gateway health score.</p>"
+            network_tools = (
+                "<h3>Manual speed test</h3>"
+                "<p class=\"muted\">Runs a short bounded latency, download and upload test. It is never part of normal monitoring.</p>"
                 "<form class=\"inline\" method=\"post\" action=\"/network-speed-test\">"
-                "<button class=\"action\" type=\"submit\">Run speed test</button></form></div>"
+                "<button class=\"ghost\" type=\"submit\">Run speed test</button></form>"
+                "<h3>Interfaces and addressing</h3>" + interface_detail
+                + "<h3>Support URLs and DNS</h3>" + support_detail
+                + "<h3>Routes and sockets</h3>" + route_detail
+                + all_checks_table("Health-engine network check", {"network_module"})
             )
             return (
                 summary_strip([
@@ -2313,19 +2273,14 @@ def start_web(cfg):
                 ])
                 +
                 "<div class=\"card\"><h2>Connectivity Checks</h2>"
-                "<p class=\"section-lead\">Configured internet, local device, and TCP checks. Add or change targets in Settings.</p>"
-                "<div class=\"table-scroll\"><table><thead><tr><th>Target</th><th>Host</th><th>Port</th><th>Ping</th><th>TCP</th><th>Overall</th><th>Detail</th></tr></thead>"
+                "<p class=\"section-lead\">Configured internet and local reachability checks. Add or change targets in Settings.</p>"
+                "<div class=\"table-scroll\"><table><thead><tr><th>Target</th><th>Check</th><th>Status</th><th>Detail</th></tr></thead>"
                 f"<tbody>{''.join(ping_rows)}</tbody></table></div></div>"
-                "<div class=\"card\"><h2>Remote Access Services</h2>"
-                "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Status</th><th>Enabled</th><th>Detail</th></tr></thead>"
+                "<div class=\"card\"><div class=\"section-lead\"><div><h2>Remote Access</h2><p class=\"muted\">Configured support service state.</p></div><a class=\"ghost\" href=\"/settings\">Edit network settings</a></div>"
+                "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Status</th><th>Enabled</th></tr></thead>"
                 f"<tbody>{''.join(remote_rows)}</tbody></table></div>"
-                "<p class=\"muted\">TeamViewer or other support tooling can be tracked here by adding the systemd service name in Settings.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/settings\">Edit network targets</a></div></div>"
-                + speed_test_card
-                + disclosure("Interfaces and default route", interface_detail)
-                + disclosure("Support URLs and DNS", support_detail)
-                + disclosure("Routes, neighbours, and listening sockets", route_detail)
-                + disclosure("Health-engine network check", all_checks_table("Network Check", {"network_module"}))
+                "</div>"
+                + disclosure("Network tools and engineering details", network_tools)
             )
 
         def speed_test_result_html(result):
@@ -2377,10 +2332,8 @@ def start_web(cfg):
             ]
             recovery_tools.extend([
                 ("Reinstall watchdog service", "Repair the VA-Connect systemd installation without deleting configuration or data.", "/recovery-install-confirm", "primary"),
-                ("Update VA-Connect", "Open controlled build update and result details.", "/updates", ""),
                 ("Download support bundle", "Collect status, journals, history, storage, network, and reboot evidence.", "/api/diagnostics/support-bundle.zip", ""),
                 ("Hardware watchdog controls", "Open setup, timeout, and deliberate test controls.", "/watchdog", ""),
-                ("Restart gateway", "Planned emergency action. Not enabled until field policy is agreed.", "", "danger"),
             ])
             recovery_detail = (
                 f"<div class=\"label\">Current state</div><div class=\"value {escape(str(recovery.get('state', 'unknown')))}\">{escape(str(recovery.get('state', 'unknown')).upper())}</div>"
@@ -2410,8 +2363,8 @@ def start_web(cfg):
                     ("Watchdog service", str(install.get("active", "unknown")).upper(), str(install.get("enabled", "-")).upper(), "healthy" if install.get("active") == "active" else "critical"),
                     ("Automatic reboot", "Allowed" if cfg_recovery.get("allow_reboot") else "Blocked", f"Grace {cfg_recovery.get('critical_grace_seconds', '-')}s", "warning" if cfg_recovery.get("allow_reboot") else "healthy"),
                 ])
-                + "<div class=\"card\"><h2>Recovery Toolbox</h2>"
-                "<p class=\"section-lead\">Every live action opens a confirmation or download. Disabled cards identify planned controls that are not safe to expose yet.</p>"
+                + "<div class=\"card\"><h2>Recovery Tools</h2>"
+                "<p class=\"section-lead\">Manual repair actions only. Every action opens a confirmation or downloads evidence.</p>"
                 + tool_grid(recovery_tools)
                 + "</div>"
                 + disclosure("Current recovery status and reboot evidence", recovery_detail, opened=bool(reboot))
@@ -2507,7 +2460,7 @@ def start_web(cfg):
                 + "<div class=\"card\"><h2>Gateway CPU and RAM</h2><p class=\"muted\">Lightweight retained samples leading up to an incident.</p>"
                 + multi_history_chart(samples, [("cpu_load", "CPU load"), ("ram", "RAM")], 0, 100, "%")
                 + "</div>"
-                + disclosure("Abnormal periods", abnormal_detail, opened=bool(last_abnormal))
+                + disclosure("Abnormal periods", abnormal_detail)
                 + disclosure("Temperature and disk trends", extra_charts)
                 + disclosure("Service history", service_history_detail)
                 + disclosure("History export and state counts", export_detail)
@@ -2699,6 +2652,18 @@ def start_web(cfg):
                 ),
             )
         )
+        stability_detail = (
+            "<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>"
+            f"<tr><th>Last health sample</th><td>{escape(local_time(status.get('time')))}</td></tr>"
+            f"<tr><th>Last watchdog feed</th><td>{escape(str(feed.get('last_feed_utc') or '-'))}</td></tr>"
+            f"<tr><th>Feed status</th><td>{escape(str(feed.get('feed_process_status') or 'unknown'))}; age {escape(str(feed.get('feed_age_seconds') if feed.get('feed_age_seconds') is not None else '-'))}s</td></tr>"
+            f"<tr><th>Last heartbeat</th><td>{escape(local_time(heartbeat.get('time')))}</td></tr>"
+            f"<tr><th>Heartbeat age</th><td>{escape(str(heartbeat_age_seconds(heartbeat) if heartbeat else '-'))}s</td></tr>"
+            f"<tr><th>Previous reboot</th><td>{escape(str(reboot_evidence.get('reset_mechanism') or 'No previous reboot evidence'))}; confidence {escape(str(reboot_evidence.get('confidence') or '-'))}</td></tr>"
+            f"<tr><th>Persistent journal</th><td class=\"{'healthy' if journal.get('enabled') else 'warning'}\">{'Yes' if journal.get('enabled') else 'No'}</td></tr>"
+            "</tbody></table></div>"
+            "<div class=\"button-row\"><a class=\"ghost\" href=\"/diagnostics\">Open incident evidence</a></div>"
+        )
         overview_html = (
             "<div class=\"card summary-card\">"
             "<div class=\"summary-panel summary-status\">"
@@ -2730,17 +2695,9 @@ def start_web(cfg):
             "<p class=\"muted\">This list shows what is ready and where attention is needed. Open Details for the relevant setup or evidence.</p>"
             f"<div class=\"operational-list\">{operational_rows}</div></div>"
             + metric_tiles()
-            + "<div class=\"card\"><h2>Stability Evidence</h2><div class=\"table-scroll\"><table><tbody>"
-            + f"<tr><th>Last health sample</th><td>{escape(local_time(status.get('time')))}</td></tr>"
-            + f"<tr><th>Last watchdog feed</th><td>{escape(str(feed.get('last_feed_utc') or '-'))}</td></tr>"
-            + f"<tr><th>Feed status</th><td>{escape(str(feed.get('feed_process_status') or 'unknown'))}; age {escape(str(feed.get('feed_age_seconds') if feed.get('feed_age_seconds') is not None else '-'))}s; threshold {escape(str(feed.get('stale_heartbeat_seconds') or '-'))}s</td></tr>"
-            + f"<tr><th>Last heartbeat</th><td>{escape(local_time(heartbeat.get('time')))}</td></tr>"
-            + f"<tr><th>Heartbeat age</th><td>{escape(str(heartbeat_age_seconds(heartbeat) if heartbeat else '-'))}s</td></tr>"
-            + f"<tr><th>Previous reboot</th><td>{escape(str(reboot_evidence.get('reset_mechanism') or 'No previous reboot evidence'))}; confidence {escape(str(reboot_evidence.get('confidence') or '-'))}</td></tr>"
-            + f"<tr><th>Persistent journal</th><td class=\"{'healthy' if journal.get('enabled') else 'warning'}\">{'Yes' if journal.get('enabled') else 'No'}</td></tr>"
-            + "</tbody></table></div></div>"
             + operational_alerts_card()
-            + disclosure("Services", services_card())
+            + disclosure("Stability evidence", stability_detail)
+            + disclosure("Service details", services_card())
         )
 
         if page == "Overview":
@@ -2769,11 +2726,11 @@ def start_web(cfg):
             return (
                 page_help_html(page)
                 + settings_card()
-                + "<section id=\"software-update\" class=\"moved-section\"><div class=\"moved-section-heading\"><h2>Software Update</h2><p>Running build, configured update target, last result, and update log.</p></div>"
-                + updates_card()
+                + "<section id=\"software-update\" class=\"moved-section\">"
+                + disclosure("Software update", updates_card(), opened=True)
                 + "</section>"
-                + "<section id=\"recovery\" class=\"moved-section\"><div class=\"moved-section-heading\"><h2>Recovery</h2><p>Repair, reinstall, reboot policy, and emergency support actions.</p></div>"
-                + recovery_page()
+                + "<section id=\"recovery\" class=\"moved-section\">"
+                + disclosure("Recovery and repair tools", recovery_page())
                 + "</section>"
             )
         return page_help_html("Overview") + overview_html

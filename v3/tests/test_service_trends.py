@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,7 +24,7 @@ class ServiceTrendTests(unittest.TestCase):
             path = Path(temporary) / "history.jsonl"
             cfg = {"history_path": str(path), "events_path": str(Path(temporary) / "events.jsonl"), "retention": {"history_sample_seconds": 60, "history_max_rows": 100}}
             status = {
-                "time": "2026-07-21T12:00:00+00:00",
+                "time": datetime.now(timezone.utc).isoformat(),
                 "state": "healthy",
                 "score": 100,
                 "checks": [{"name": "esg.service", "state": "healthy", "value": {"active": "active", "cpu_percent": 12.5, "memory_mb": 42.0, "restarts": 2}}],

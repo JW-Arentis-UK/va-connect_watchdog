@@ -54,6 +54,42 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn("if(s<=0){clearInterval(t)", source)
         self.assertIn("setTimeout(function(){window.location.reload();},500)", source)
 
+    def test_hardware_and_storage_keep_engineering_detail_collapsed(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+        start = source.index("        def hardware_page():")
+        end = source.index("        def network_page():", start)
+        renderer = source[start:end]
+
+        self.assertIn("Gateway Hardware", renderer)
+        self.assertIn('disclosure("Engineering hardware details"', renderer)
+        self.assertIn("Recording Location", renderer)
+        self.assertIn('disclosure("Storage setup and safeguards"', renderer)
+        self.assertNotIn("Neousys Watchdog Discovery", renderer)
+
+    def test_network_page_uses_compact_operator_view(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+        start = source.index("        def network_page():")
+        end = source.index("        def speed_test_result_html", start)
+        renderer = source[start:end]
+
+        self.assertIn("<th>Target</th><th>Check</th><th>Status</th><th>Detail</th>", renderer)
+        self.assertIn('disclosure("Network tools and engineering details"', renderer)
+        self.assertNotIn("TeamViewer placeholder", renderer)
+
+    def test_settings_do_not_advertise_unimplemented_update_actions(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("Check-only comparison", source)
+        self.assertNotIn("Planned: return to a previously validated build", source)
+        self.assertIn('disclosure("Software update", updates_card(), opened=True)', source)
+        self.assertIn('disclosure("Recovery and repair tools", recovery_page())', source)
+
+    def test_overview_hides_detailed_evidence_and_services_by_default(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+
+        self.assertIn('disclosure("Stability evidence", stability_detail)', source)
+        self.assertIn('disclosure("Service details", services_card())', source)
+
 
 if __name__ == "__main__":
     unittest.main()
