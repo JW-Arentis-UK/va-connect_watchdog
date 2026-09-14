@@ -38,6 +38,7 @@ class FeedWorker:
         self.timeout = max(5, int(hw_cfg.get("timeout_seconds", 30) or 30))
         configured_stale = float(hw_cfg.get("stale_heartbeat_seconds", 15) or 15)
         self.stale_seconds = max(5.0, min(configured_stale, float(self.timeout) - 2.0))
+        self.device_retry_seconds = max(10, int(hw_cfg.get("device_retry_seconds", 60) or 60))
         self.state_path = Path(cfg.get("hardware_watchdog_feed_state_path") or Path(cfg["events_path"]).parent / "hardware-watchdog-feed.json")
         self.lock_path = Path(cfg.get("hardware_watchdog_lock_path") or Path(cfg["events_path"]).parent / "hardware-watchdog.lock")
         self.stop_requested = False
@@ -109,6 +110,7 @@ class FeedWorker:
             "interval_seconds": self.interval,
             "timeout_seconds": self.hw.get_timeout(),
             "stale_heartbeat_seconds": self.stale_seconds,
+            "device_retry_seconds": self.device_retry_seconds,
             "magic_close_requested": self.magic_close,
             "shutdown_behavior": self._shutdown_behavior(),
             "nowayout": self.nowayout,
@@ -281,6 +283,41 @@ class FeedWorker:
                 continue
         return ""
 
+    def _wait_interruptibly(self, seconds):
+        deadline = time.monotonic() + max(0.0, float(seconds))
+        while not self.stop_requested and time.monotonic() < deadline:
+            time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+
+    def _open_when_available(self):
+        """Wait in one supervised process so a missing driver cannot create a restart storm."""
+        while not self.stop_requested:
+            live_cfg = load_config()
+            if not bool(live_cfg.get("hardware_watchdog", {}).get("enabled", False)):
+                self.log_lifecycle("feed_disabled_by_config")
+                self.stop_requested = True
+                return False
+
+            conflict = self._legacy_conflict()
+            if conflict:
+                self.last_error = f"legacy watchdog service is active: {conflict}"
+                self.error_count += 1
+                self.write_state("legacy_conflict")
+                self._wait_interruptibly(self.device_retry_seconds)
+                continue
+
+            self.hw.open()
+            if self.hw.opened:
+                self.last_error = ""
+                self.write_state("running")
+                self.log_lifecycle("hardware_opened", {"timeout_seconds": self.hw.get_timeout()})
+                return True
+
+            self.last_error = self.hw.last_error or f"{self.device} is unavailable"
+            self.error_count += 1
+            self.write_state("device_unavailable")
+            self._wait_interruptibly(self.device_retry_seconds)
+        return False
+
     def run(self):
         signal.signal(signal.SIGTERM, self.stop)
         signal.signal(signal.SIGINT, self.stop)
@@ -298,24 +335,10 @@ class FeedWorker:
                     fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_UN)
                 self.lock_handle.close()
             return 0
-        conflict = self._legacy_conflict()
-        if conflict:
-            self.last_error = f"legacy watchdog service is active: {conflict}"
-            self.error_count += 1
-            self.write_state("legacy_conflict")
-            if self.lock_handle:
-                if fcntl is not None:
-                    fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_UN)
-                self.lock_handle.close()
-            return 1
         self.write_state("starting")
         try:
-            self.hw.open()
-            if not self.hw.opened:
-                self.write_state("device_unavailable")
-                return 1
-            self.write_state("running")
-            self.log_lifecycle("hardware_opened", {"timeout_seconds": self.hw.get_timeout()})
+            if not self._open_when_available():
+                return 0
             while not self.stop_requested:
                 if not bool(load_config().get("hardware_watchdog", {}).get("enabled", False)):
                     self.log_lifecycle("feed_disabled_by_config")
@@ -340,7 +363,7 @@ class FeedWorker:
                         self.write_state("feed_error")
                 elif not allowed:
                     self.write_state("paused_stale_heartbeat" if not effective_trip_active else "paused_trip_test")
-                time.sleep(min(1, self.interval))
+                self._wait_interruptibly(min(1, self.interval))
         except Exception as exc:
             self.last_error = str(exc)
             self.error_count += 1
@@ -368,13 +391,17 @@ class FeedWorker:
 
 
 def main():
-    while True:
-        cfg = load_config()
-        if not bool(cfg.get("hardware_watchdog", {}).get("enabled", False)):
-            FeedWorker(cfg).write_state("disabled")
-            time.sleep(5)
-            continue
+    cfg = load_config()
+    if bool(cfg.get("hardware_watchdog", {}).get("enabled", False)):
         return FeedWorker(cfg).run()
+
+    worker = FeedWorker(cfg)
+    worker.write_state("disabled")
+    while True:
+        time.sleep(5)
+        cfg = load_config()
+        if bool(cfg.get("hardware_watchdog", {}).get("enabled", False)):
+            return FeedWorker(cfg).run()
 
 
 if __name__ == "__main__":

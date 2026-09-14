@@ -46,6 +46,7 @@
     "feed_interval_seconds": 10,
     "timeout_seconds": 30,
     "stale_heartbeat_seconds": 15,
+    "device_retry_seconds": 60,
     "magic_close": false,
     "startup_grace_seconds": 300,
     "post_trip_grace_seconds": 900
@@ -125,8 +126,8 @@
     "used_warning_percent": null,
     "used_critical_percent": null,
     "expected_full": false,
-    "minimum_free_mb_warning": null,
-    "minimum_free_mb_critical": null,
+    "minimum_free_mb_warning": 5000,
+    "minimum_free_mb_critical": 2048,
     "free_warning_percent": null,
     "free_warning_enabled": false,
     "temperature_warning_c": 55,

@@ -93,9 +93,10 @@ def check_hardware(cfg):
     wdt_device = cfg["hardware_watchdog"]["device"]
     checks.append(CheckResult(
         "hardware_watchdog_present",
-        "healthy" if os.path.exists(wdt_device) else "warning",
+        "healthy" if os.path.exists(wdt_device) else "critical",
         f"{wdt_device} present" if os.path.exists(wdt_device) else f"{wdt_device} not present",
-        os.path.exists(wdt_device)
+        os.path.exists(wdt_device),
+        False,
     ))
 
     return checks

@@ -79,7 +79,7 @@ def add_hardware_feed_check(status, cfg):
     elif not enabled:
         check = CheckResult(
             "hardware_watchdog_feed_status",
-            "warning",
+            "critical",
             f"Hardware watchdog present but watchdog feed is disabled for {device}",
             feed,
             False,
@@ -87,7 +87,7 @@ def add_hardware_feed_check(status, cfg):
     elif not opened:
         check = CheckResult(
             "hardware_watchdog_feed_status",
-            "warning",
+            "critical",
             f"Watchdog feed enabled but {device} is not opened",
             feed,
             False,
@@ -103,7 +103,7 @@ def add_hardware_feed_check(status, cfg):
     elif age > stale_after:
         check = CheckResult(
             "hardware_watchdog_feed_status",
-            "warning",
+            "critical",
             f"Last hardware watchdog feed is stale ({int(age)}s ago)",
             feed,
             False,

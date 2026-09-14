@@ -62,6 +62,42 @@ class RecordingStorageModeTests(unittest.TestCase):
         self.assertIn("Not used", status["fstab_entry"])
 
     @patch(
+        "va_watchdog.storage._smart_info",
+        return_value={"status": "PASSED", "temperature_c": 35, "device": "/dev/sda"},
+    )
+    @patch(
+        "va_watchdog.storage.shutil.disk_usage",
+        return_value=(100 * 1024**3, 96 * 1024**3, 4 * 1024**3),
+    )
+    @patch("va_watchdog.storage.os.path.realpath", side_effect=lambda value: value)
+    @patch("va_watchdog.storage._blkid_value", return_value="")
+    @patch("va_watchdog.storage._row_for_device", return_value={})
+    @patch(
+        "va_watchdog.storage._findmnt_for_path",
+        return_value={"source": "/dev/sda2", "target": "/", "fstype": "ext4", "options": "rw,relatime"},
+    )
+    def test_expected_full_storage_still_warns_below_five_gb_reserve(
+        self,
+        _findmnt,
+        _row,
+        _blkid,
+        _realpath,
+        _disk_usage,
+        _smart,
+    ):
+        with tempfile.TemporaryDirectory() as temporary:
+            cfg = self._cfg(temporary)
+            cfg["recording_storage"].update({
+                "expected_full": True,
+                "minimum_free_mb_warning": 5000,
+                "minimum_free_mb_critical": 2048,
+            })
+            status = recording_storage_status(cfg)
+
+        self.assertEqual(status["status"], "warning")
+        self.assertEqual(status["message"], "Recording storage low free MB")
+
+    @patch(
         "va_watchdog.storage._findmnt_for_path",
         return_value={"source": "/dev/sda2", "target": "/", "fstype": "ext4", "options": "rw"},
     )

@@ -33,7 +33,7 @@ command -v systemctl >/dev/null 2>&1 || fail "systemd is required"
 if [[ -f "$APP_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" ]]; then
   log "Installing bundled Neousys WDT_DIO driver without activating hardware feeding"
   apt-get update
-  apt-get install -y build-essential "linux-headers-$(uname -r)" unzip
+  apt-get install -y build-essential dkms gcc-12 "linux-headers-$(uname -r)" unzip
   /bin/bash "$APP_DIR/scripts/install_neousys_wdt.sh"
 fi
 

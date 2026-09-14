@@ -7,6 +7,7 @@ from typing import Any
 
 
 MANAGED_CONFIG = Path("/etc/systemd/journald.conf.d/va-watchdog-persistent.conf")
+SAFE_SYSTEM_MAX_USE_BYTES = 512 * 1024 * 1024
 
 
 def _run(command, timeout=10):
@@ -15,6 +16,20 @@ def _run(command, timeout=10):
         return {"ok": result.returncode == 0, "stdout": result.stdout.strip(), "stderr": result.stderr.strip(), "returncode": result.returncode}
     except Exception as exc:
         return {"ok": False, "stdout": "", "stderr": str(exc), "returncode": None}
+
+
+def _size_bytes(value: Any) -> int | None:
+    text = str(value or "").strip().upper()
+    if not text or text == "SYSTEM DEFAULT":
+        return None
+    multipliers = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
+    suffix = text[-1]
+    multiplier = multipliers.get(suffix, 1)
+    number = text[:-1] if suffix in multipliers else text
+    try:
+        return int(float(number) * multiplier)
+    except (TypeError, ValueError):
+        return None
 
 
 def persistent_status() -> dict[str, Any]:
@@ -36,18 +51,37 @@ def persistent_status() -> dict[str, Any]:
                     config[key.strip()] = value.strip()
     storage_value = config.get("Storage", "auto").lower()
     enabled = journal_dir.exists() and storage_value in {"auto", "persistent"}
+    system_max_use = config.get("SystemMaxUse", "system default")
+    max_use_bytes = _size_bytes(system_max_use)
+    bounded = bool(max_use_bytes and max_use_bytes > 0)
+    within_safe_limit = bool(bounded and max_use_bytes <= SAFE_SYSTEM_MAX_USE_BYTES)
+    service_active = "ActiveState=active" in str(storage.get("stdout") or "")
+    healthy = bool(enabled and service_active and within_safe_limit)
+    if healthy:
+        summary = f"Enabled, limited to {system_max_use}"
+    elif enabled and bounded:
+        summary = f"Persistent, limit {system_max_use} exceeds 512M"
+    elif enabled:
+        summary = "Persistent, but no safe size limit is configured"
+    else:
+        summary = "Disabled or unavailable"
     return {
         "enabled": enabled,
+        "bounded": bounded,
+        "within_safe_limit": within_safe_limit,
+        "healthy": healthy,
+        "summary": summary,
         "journal_directory": str(journal_dir),
         "directory_exists": journal_dir.exists(),
         "storage_setting": storage_value,
         "config_path": str(journald_conf),
         "managed_config_path": str(MANAGED_CONFIG),
         "managed_config_exists": MANAGED_CONFIG.exists(),
-        "system_max_use": config.get("SystemMaxUse", "system default"),
+        "system_max_use": system_max_use,
         "system_keep_free": config.get("SystemKeepFree", "system default"),
         "max_retention": config.get("MaxRetentionSec", "system default"),
         "journald_service": storage.get("stdout") or storage.get("stderr"),
+        "service_active": service_active,
         "disk_usage": show.get("stdout") or show.get("stderr"),
     }
 
@@ -73,8 +107,8 @@ def enable_persistent() -> dict[str, Any]:
         vacuumed = _run(["journalctl", "--vacuum-size=512M", "--vacuum-time=30d"], timeout=30)
         status = persistent_status()
         return {
-            "ok": bool(status.get("enabled")),
-            "message": "Persistent journald storage enabled." if status.get("enabled") else "Persistent journald storage could not be confirmed.",
+            "ok": bool(status.get("healthy")),
+            "message": "Persistent journald storage enabled and limited to 512 MB." if status.get("healthy") else "Persistent journald storage and its safe size limit could not be confirmed.",
             "status": status,
             "flush": flushed,
             "restart": restarted,

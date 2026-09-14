@@ -57,6 +57,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "feed_interval_seconds": 10,
         "timeout_seconds": 30,
         "stale_heartbeat_seconds": 15,
+        "device_retry_seconds": 60,
         "magic_close": False,
         "startup_grace_seconds": 300,
         "post_trip_grace_seconds": 900,
@@ -138,8 +139,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "used_warning_percent": None,
         "used_critical_percent": None,
         "expected_full": False,
-        "minimum_free_mb_warning": None,
-        "minimum_free_mb_critical": None,
+        "minimum_free_mb_warning": 5000,
+        "minimum_free_mb_critical": 2048,
         "free_warning_percent": None,
         "free_warning_enabled": False,
         "temperature_warning_c": 55,
@@ -224,6 +225,18 @@ def _enforce_neousys_watchdog(cfg: Dict[str, Any]) -> Dict[str, Any]:
     cfg["hardware_watchdog"] = hardware
     return cfg
 
+
+def _enforce_recording_free_space_reserve(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply the field-safe reserve to older configs that stored null thresholds."""
+    cfg = dict(cfg)
+    recording = dict(cfg.get("recording_storage", {}))
+    if recording.get("minimum_free_mb_warning") in (None, ""):
+        recording["minimum_free_mb_warning"] = 5000
+    if recording.get("minimum_free_mb_critical") in (None, ""):
+        recording["minimum_free_mb_critical"] = 2048
+    cfg["recording_storage"] = recording
+    return cfg
+
 def load_config() -> Dict[str, Any]:
     cfg = DEFAULT_CONFIG
     for path in CONFIG_PATHS:
@@ -231,7 +244,9 @@ def load_config() -> Dict[str, Any]:
             with path.open("r", encoding="utf-8") as f:
                 cfg = deep_merge(cfg, json.load(f))
             break
-    return _enforce_neousys_watchdog(_migrate_default_videosoft_services(cfg))
+    cfg = _migrate_default_videosoft_services(cfg)
+    cfg = _enforce_neousys_watchdog(cfg)
+    return _enforce_recording_free_space_reserve(cfg)
 
 def active_config_path() -> Path:
     for path in CONFIG_PATHS:

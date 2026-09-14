@@ -4,6 +4,7 @@ set -Eeuo pipefail
 EXPECTED_SHA256="e78018ea9c45c4bcc6ad5a3a1c42dfe092e126093d267eecacfbe7f1e8d2f658"
 EXPECTED_TAR_SHA256="9c4b6033a501a605ee5ac92fe946812b7571f359a8bfbca1e442754be9476788"
 VERSION="2.4.1.0"
+DKMS_NAME="neousys-wdt-dio"
 CONFIG_PATH="${VA_WATCHDOG_CONFIG_PATH:-/etc/va-watchdog/config.json}"
 LIBRARY_PATH="/usr/local/lib/va-watchdog/vendor/libwdt_dio.so"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -14,7 +15,8 @@ usage() {
   cat <<'EOF'
 Usage: install_neousys_wdt.sh [vendor-zip-or-tar] [--activate]
 
-Installs the Neousys WDT_DIO driver and private library for the running kernel.
+Installs the Neousys WDT_DIO driver through DKMS and the private library.
+DKMS rebuilds the driver automatically when Ubuntu installs a new kernel.
 Without --activate, VA-Connect configuration is not changed and no watchdog is started.
 
 --activate  Select the Neousys backend, enable feeding, and restart VA-Connect.
@@ -58,14 +60,14 @@ kernel="$(uname -r)"
 kernel_build="/lib/modules/$kernel/build"
 kernel_cc="x86_64-linux-gnu-gcc-12"
 
-if ! command -v make >/dev/null 2>&1 || ! command -v "$kernel_cc" >/dev/null 2>&1 || [[ ! -d "$kernel_build" ]] || { [[ "$BUNDLE" == *.zip ]] && ! command -v unzip >/dev/null 2>&1; }; then
+if ! command -v make >/dev/null 2>&1 || ! command -v "$kernel_cc" >/dev/null 2>&1 || ! command -v dkms >/dev/null 2>&1 || [[ ! -d "$kernel_build" ]] || { [[ "$BUNDLE" == *.zip ]] && ! command -v unzip >/dev/null 2>&1; }; then
   command -v apt-get >/dev/null 2>&1 || fail "build tools or kernel headers are missing and apt-get is unavailable"
   log "Installing build tools and headers for $kernel"
   apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential gcc-12 "linux-headers-$kernel" unzip
+  DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential dkms gcc-12 "linux-headers-$kernel" unzip
 fi
 
-for command in sha256sum tar make "$kernel_cc" install depmod modprobe python3; do
+for command in sha256sum tar make dkms "$kernel_cc" install depmod modprobe modinfo python3; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is required"
 done
 
@@ -104,7 +106,7 @@ package_root="$(dirname "$(dirname "$(dirname "$header")")")"
 driver_dir="$package_root/linux/driver"
 kernel_major="${kernel%%.*}"
 library_source="$package_root/linux/deploy/lib${kernel_major}.x/libwdt_dio.so"
-[[ -f "$driver_dir/wdt_dio.c" && -f "$driver_dir/wdt_sys.h" ]] || fail "vendor driver source is incomplete"
+[[ -f "$driver_dir/wdt_dio.c" && -f "$driver_dir/wdt_sys.h" && -f "$driver_dir/Makefile" ]] || fail "vendor driver source is incomplete"
 [[ -f "$library_source" ]] || fail "vendor library for kernel major $kernel_major is unavailable"
 
 product="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
@@ -112,15 +114,41 @@ if [[ "$product" != *"POC-451VTC"* ]]; then
   fail "this reviewed installation path is restricted to POC-451VTC; detected: ${product:-unknown}"
 fi
 
-log "Building wdt_dio.ko for $kernel with $kernel_cc"
-make -C "$kernel_build" M="$driver_dir" CC="$kernel_cc" clean >/dev/null
-make -C "$kernel_build" M="$driver_dir" CC="$kernel_cc" modules
+dkms_source="/usr/src/$DKMS_NAME-$VERSION"
+log "Registering $DKMS_NAME v$VERSION with DKMS"
+dkms remove -m "$DKMS_NAME" -v "$VERSION" --all >/dev/null 2>&1 || true
+rm -rf -- "$dkms_source"
+install -d -m 0755 "$dkms_source"
+install -m 0644 "$driver_dir/wdt_dio.c" "$dkms_source/wdt_dio.c"
+install -m 0644 "$driver_dir/wdt_sys.h" "$dkms_source/wdt_sys.h"
+install -m 0644 "$driver_dir/Makefile" "$dkms_source/Makefile"
+cat > "$dkms_source/dkms.conf" <<EOF
+PACKAGE_NAME="$DKMS_NAME"
+PACKAGE_VERSION="$VERSION"
+BUILT_MODULE_NAME[0]="wdt_dio"
+DEST_MODULE_LOCATION[0]="/updates/dkms"
+AUTOINSTALL="yes"
+MAKE[0]="make -C /lib/modules/\${kernelver}/build M=\${dkms_tree}/$DKMS_NAME/$VERSION/build CC=$kernel_cc modules"
+CLEAN="make -C /lib/modules/\${kernelver}/build M=\${dkms_tree}/$DKMS_NAME/$VERSION/build clean"
+EOF
 
-module_target="/lib/modules/$kernel/extra/va-watchdog/wdt_dio.ko"
-install -D -m 0644 "$driver_dir/wdt_dio.ko" "$module_target"
+log "Building wdt_dio.ko for $kernel with DKMS and $kernel_cc"
+dkms add -m "$DKMS_NAME" -v "$VERSION"
+dkms build -m "$DKMS_NAME" -v "$VERSION" -k "$kernel"
+dkms install -m "$DKMS_NAME" -v "$VERSION" -k "$kernel" --force
+dkms status -m "$DKMS_NAME" -v "$VERSION" | grep -Fq "$kernel" || fail "DKMS did not register the driver for $kernel"
+
+# A newer kernel may already be installed but not booted when this repair runs.
+latest_kernel="$(find /lib/modules -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -n 1)"
+if [[ -n "$latest_kernel" && "$latest_kernel" != "$kernel" && -d "/lib/modules/$latest_kernel/build" ]]; then
+  if ! dkms status -m "$DKMS_NAME" -v "$VERSION" | grep -F "$latest_kernel" | grep -qi 'installed'; then
+    log "Prebuilding wdt_dio.ko for installed kernel $latest_kernel"
+    dkms build -m "$DKMS_NAME" -v "$VERSION" -k "$latest_kernel"
+    dkms install -m "$DKMS_NAME" -v "$VERSION" -k "$latest_kernel" --force
+  fi
+fi
+
 install -D -m 0644 "$library_source" "$LIBRARY_PATH"
-install -D -m 0644 "$driver_dir/wdt_dio.c" "/usr/src/neousys-wdt-dio-$VERSION/wdt_dio.c"
-install -D -m 0644 "$driver_dir/wdt_sys.h" "/usr/src/neousys-wdt-dio-$VERSION/wdt_sys.h"
 printf '%s\n' 'wdt_dio' > /etc/modules-load.d/va-watchdog-neousys.conf
 cat > /etc/udev/rules.d/60-va-watchdog-neousys.rules <<'EOF'
 KERNEL=="wdt_dio", OWNER="root", GROUP="root", MODE="0600"
@@ -132,6 +160,8 @@ udevadm control --reload-rules
 udevadm trigger --name-match=wdt_dio || true
 udevadm settle
 [[ -c /dev/wdt_dio ]] || fail "wdt_dio loaded but /dev/wdt_dio was not created"
+module_target="$(modinfo -n wdt_dio 2>/dev/null || true)"
+[[ -n "$module_target" && -f "$module_target" ]] || fail "installed wdt_dio module could not be located"
 
 python3 - "$LIBRARY_PATH" <<'PY'
 import ctypes
@@ -149,6 +179,7 @@ PY
 log "Installed the Neousys driver and library without starting its watchdog"
 log "Device: /dev/wdt_dio"
 log "Module: $module_target"
+log "DKMS: automatic rebuild enabled for future kernel updates"
 log "Library: $LIBRARY_PATH"
 
 if [[ "$ACTIVATE" != 1 ]]; then

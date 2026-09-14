@@ -857,7 +857,7 @@ function renderSettingsPage(){
   const h = lastSettings.hardware_watchdog || {};
   const rec = lastSettings.recovery || {};
   const rs = lastSettings.recording_storage || {};
-  return renderSimplePage('Settings', `<p>Edit common watchdog settings. A backup is made before saving to disk.</p><div class="detail-grid"><div class="mini-card"><h3>Polling and History</h3><label class="label">Poll interval seconds</label><input id="set-poll" type="number" min="2" max="300" value="${escapeHtml(lastSettings.poll_interval_seconds ?? 5)}"><label class="label">History sample seconds</label><input id="set-history-sample" type="number" min="10" max="3600" value="${escapeHtml(r.history_sample_seconds ?? 60)}"><label class="label">History retention days</label><input id="set-history-days" type="number" min="1" max="365" value="${escapeHtml(r.history_retention_days ?? 30)}"><label class="label">Max watchdog storage MB</label><input id="set-max-mb" type="number" min="10" max="4096" value="${escapeHtml(r.max_total_mb ?? 100)}"></div><div class="mini-card"><h3>Storage Thresholds</h3><label class="label">Root warn %</label><input id="set-root-warn" type="number" min="1" max="100" value="${escapeHtml(t.root_disk_warning_percent ?? 80)}"><label class="label">Root critical %</label><input id="set-root-critical" type="number" min="1" max="100" value="${escapeHtml(t.root_disk_critical_percent ?? 95)}"><label class="label">Recordings warn %</label><input id="set-rec-warn" type="number" min="1" max="100" value="${escapeHtml(t.recordings_disk_warning_percent ?? 85)}"><label class="label">Recordings critical %</label><input id="set-rec-critical" type="number" min="1" max="100" value="${escapeHtml(t.recordings_disk_critical_percent ?? 95)}"><label><input id="set-rs-expected-full" type="checkbox" ${rs.expected_full ? 'checked' : ''}> Recording storage is Videosoft managed / expected full</label><label class="label">Recording storage warn below free MB</label><input id="set-rs-min-free-warning" type="number" min="0" max="1048576" value="${escapeHtml(rs.minimum_free_mb_warning ?? '')}" placeholder="blank = disabled"><label class="label">Recording storage critical below free MB</label><input id="set-rs-min-free-critical" type="number" min="0" max="1048576" value="${escapeHtml(rs.minimum_free_mb_critical ?? '')}" placeholder="blank = disabled"><p class="muted">Use expected-full mode when Videosoft manages retention and high used percentage is normal.</p></div><div class="mini-card"><h3>Network</h3><label class="label">Internet hosts, one per line</label><textarea id="set-internet-hosts">${escapeHtml((n.internet_hosts || []).join('\\n'))}</textarea><label class="label">Local targets, one per line</label><textarea id="set-local-targets">${escapeHtml((n.local_targets || []).join('\\n'))}</textarea><label class="label">Remote access services, one per line</label><textarea id="set-remote-services">${escapeHtml((n.remote_access_services || []).join('\\n'))}</textarea></div><div class="mini-card"><h3>Updates and Recovery</h3><label class="label">Update remote</label><input id="set-update-remote" value="${escapeHtml(u.remote || 'origin')}"><label class="label">Update branch</label><input id="set-update-branch" value="${escapeHtml(u.branch || '')}" placeholder="blank = current branch"><label><input id="set-hw-enabled" type="checkbox" ${h.enabled ? 'checked' : ''}> Enable hardware watchdog feed</label><label><input id="set-recovery-enabled" type="checkbox" ${rec.enabled ? 'checked' : ''}> Enable recovery engine</label><label><input id="set-restart-services" type="checkbox" ${rec.restart_failed_services ? 'checked' : ''}> Restart failed critical services</label><label><input id="set-allow-reboot" type="checkbox" ${rec.allow_reboot ? 'checked' : ''}> Allow reboot on persistent critical failure</label></div></div><div class="button-row"><button class="action" onclick="saveSettings()">Save settings</button><button class="ghost" onclick="load()">Reload from service</button></div><p id="settings-feedback"></p><h3>Current config summary</h3><pre>${escapeHtml(JSON.stringify(lastSettings, null, 2))}</pre>${placeholderList(['Service list editor','Install/reconfigure watchdog from Recovery page','Full raw config editor with validation'])}`);
+  return renderSimplePage('Settings', `<p>Edit common watchdog settings. A backup is made before saving to disk.</p><div class="detail-grid"><div class="mini-card"><h3>Polling and History</h3><label class="label">Poll interval seconds</label><input id="set-poll" type="number" min="2" max="300" value="${escapeHtml(lastSettings.poll_interval_seconds ?? 5)}"><label class="label">History sample seconds</label><input id="set-history-sample" type="number" min="10" max="3600" value="${escapeHtml(r.history_sample_seconds ?? 60)}"><label class="label">History retention days</label><input id="set-history-days" type="number" min="1" max="365" value="${escapeHtml(r.history_retention_days ?? 30)}"><label class="label">Max watchdog storage MB</label><input id="set-max-mb" type="number" min="10" max="4096" value="${escapeHtml(r.max_total_mb ?? 100)}"></div><div class="mini-card"><h3>Storage Thresholds</h3><label class="label">Root warn %</label><input id="set-root-warn" type="number" min="1" max="100" value="${escapeHtml(t.root_disk_warning_percent ?? 80)}"><label class="label">Root critical %</label><input id="set-root-critical" type="number" min="1" max="100" value="${escapeHtml(t.root_disk_critical_percent ?? 95)}"><label class="label">Recordings warn %</label><input id="set-rec-warn" type="number" min="1" max="100" value="${escapeHtml(t.recordings_disk_warning_percent ?? 85)}"><label class="label">Recordings critical %</label><input id="set-rec-critical" type="number" min="1" max="100" value="${escapeHtml(t.recordings_disk_critical_percent ?? 95)}"><label><input id="set-rs-expected-full" type="checkbox" ${rs.expected_full ? 'checked' : ''}> Recording storage is Videosoft managed / expected full</label><label class="label">Recording storage warn below free MB</label><input id="set-rs-min-free-warning" type="number" min="0" max="1048576" value="${escapeHtml(rs.minimum_free_mb_warning ?? 5000)}" placeholder="0 = disabled"><label class="label">Recording storage critical below free MB</label><input id="set-rs-min-free-critical" type="number" min="0" max="1048576" value="${escapeHtml(rs.minimum_free_mb_critical ?? 2048)}" placeholder="0 = disabled"><p class="muted">Use expected-full mode when Videosoft manages retention and high used percentage is normal.</p></div><div class="mini-card"><h3>Network</h3><label class="label">Internet hosts, one per line</label><textarea id="set-internet-hosts">${escapeHtml((n.internet_hosts || []).join('\\n'))}</textarea><label class="label">Local targets, one per line</label><textarea id="set-local-targets">${escapeHtml((n.local_targets || []).join('\\n'))}</textarea><label class="label">Remote access services, one per line</label><textarea id="set-remote-services">${escapeHtml((n.remote_access_services || []).join('\\n'))}</textarea></div><div class="mini-card"><h3>Updates and Recovery</h3><label class="label">Update remote</label><input id="set-update-remote" value="${escapeHtml(u.remote || 'origin')}"><label class="label">Update branch</label><input id="set-update-branch" value="${escapeHtml(u.branch || '')}" placeholder="blank = current branch"><label><input id="set-hw-enabled" type="checkbox" ${h.enabled ? 'checked' : ''}> Enable hardware watchdog feed</label><label><input id="set-recovery-enabled" type="checkbox" ${rec.enabled ? 'checked' : ''}> Enable recovery engine</label><label><input id="set-restart-services" type="checkbox" ${rec.restart_failed_services ? 'checked' : ''}> Restart failed critical services</label><label><input id="set-allow-reboot" type="checkbox" ${rec.allow_reboot ? 'checked' : ''}> Allow reboot on persistent critical failure</label></div></div><div class="button-row"><button class="action" onclick="saveSettings()">Save settings</button><button class="ghost" onclick="load()">Reload from service</button></div><p id="settings-feedback"></p><h3>Current config summary</h3><pre>${escapeHtml(JSON.stringify(lastSettings, null, 2))}</pre>${placeholderList(['Service list editor','Install/reconfigure watchdog from Recovery page','Full raw config editor with validation'])}`);
 }
 
 function renderRetentionPage(){
@@ -1764,8 +1764,8 @@ def start_web(cfg):
                 "</div>"
                 f"<label class=\"option-row\"><input name=\"recording_storage_expected_full\" type=\"checkbox\" {'checked' if rec_storage.get('expected_full') else ''}> <span><strong>Videosoft-managed recording storage</strong><br><span class=\"muted\">High used percentage is normal; alert using minimum free space instead.</span></span></label>"
                 "<div class=\"settings-grid\">"
-                f"<div><label class=\"label\">Recording warning below free MB</label><input name=\"recording_storage_minimum_free_mb_warning\" type=\"number\" min=\"0\" max=\"1048576\" value=\"{escape(str(rec_storage.get('minimum_free_mb_warning') or ''))}\" placeholder=\"blank = disabled\"></div>"
-                f"<div><label class=\"label\">Recording critical below free MB</label><input name=\"recording_storage_minimum_free_mb_critical\" type=\"number\" min=\"0\" max=\"1048576\" value=\"{escape(str(rec_storage.get('minimum_free_mb_critical') or ''))}\" placeholder=\"blank = disabled\"></div>"
+                f"<div><label class=\"label\">Recording warning below free MB</label><input name=\"recording_storage_minimum_free_mb_warning\" type=\"number\" min=\"0\" max=\"1048576\" value=\"{escape(str(rec_storage.get('minimum_free_mb_warning', 5000)))}\" placeholder=\"0 = disabled\"></div>"
+                f"<div><label class=\"label\">Recording critical below free MB</label><input name=\"recording_storage_minimum_free_mb_critical\" type=\"number\" min=\"0\" max=\"1048576\" value=\"{escape(str(rec_storage.get('minimum_free_mb_critical', 2048)))}\" placeholder=\"0 = disabled\"></div>"
                 "</div>"
             )
             network_settings = (
@@ -1803,7 +1803,7 @@ def start_web(cfg):
             )
             journal_state = persistent_status()
             journal_settings = (
-                f"<p class=\"{'healthy' if journal_state.get('enabled') else 'warning'}\"><strong>{'Enabled' if journal_state.get('enabled') else 'Disabled or unavailable'}</strong></p>"
+                f"<p class=\"{'healthy' if journal_state.get('healthy') else 'warning'}\"><strong>{escape(str(journal_state.get('summary') or 'Disabled or unavailable'))}</strong></p>"
                 "<p>Persistent journald storage preserves kernel and service evidence across a reboot. Enabling it is an explicit confirmed action and does not overwrite unrelated journald settings.</p>"
                 "<div class=\"button-row\"><a class=\"action\" href=\"/journal-enable-confirm\">Enable or apply safe logging limits</a></div>"
             )
@@ -1839,8 +1839,9 @@ def start_web(cfg):
             watchdog = info.get("watchdog", {})
             modules = watchdog.get("modules", {})
             driver_loaded = bool(modules.get("wdt_dio"))
+            dkms_ready = bool(watchdog.get("dkms", {}).get("current_kernel_installed"))
             watchdog_present = "/dev/wdt_dio" in watchdog_devices
-            watchdog_state = "healthy" if driver_loaded and watchdog_present else "warning"
+            watchdog_state = "healthy" if driver_loaded and watchdog_present and dkms_ready else "warning"
             hardware_rows = "".join([
                 f"<tr><th>CPU</th><td>{escape(str(cpu.get('model', '-')))}</td></tr>",
                 f"<tr><th>Logical CPUs</th><td>{escape(str(cpu.get('cores', '-')))}</td></tr>",
@@ -1854,6 +1855,7 @@ def start_web(cfg):
                 "<h3>Neousys discovery</h3>"
                 "<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>"
                 f"<tr><th>wdt_dio module</th><td>{'Loaded' if driver_loaded else 'Not loaded'}</td></tr>"
+                f"<tr><th>Kernel update protection</th><td>{'DKMS installed for this kernel' if dkms_ready else 'DKMS repair required'}</td></tr>"
                 f"<tr><th>Device</th><td>{'/dev/wdt_dio present' if watchdog_present else '/dev/wdt_dio missing'}</td></tr>"
                 f"<tr><th>Detected watchdog devices</th><td>{escape(', '.join(watchdog_devices) if watchdog_devices else 'None')}</td></tr>"
                 "</tbody></table></div>"
@@ -2545,7 +2547,7 @@ def start_web(cfg):
                     ("Black-box evidence", "Short-interval snapshots retained around a hang or reboot.", "/api/blackbox", ""),
                 ])
                 + "</div>"
-                + f"<div class=\"card\"><h2>Persistent Journal</h2><p class=\"{'healthy' if journal_state.get('enabled') else 'warning'}\">{'Enabled' if journal_state.get('enabled') else 'Disabled or unavailable'}</p><p class=\"muted\">Persistent logging preserves kernel and service evidence across a reboot. Configuration is managed in Settings.</p><div class=\"button-row\"><a class=\"ghost\" href=\"/settings#persistent-journal\">Open logging settings</a></div></div>"
+                + f"<div class=\"card\"><h2>Persistent Journal</h2><p class=\"{'healthy' if journal_state.get('healthy') else 'warning'}\">{escape(str(journal_state.get('summary') or 'Disabled or unavailable'))}</p><p class=\"muted\">Persistent logging preserves kernel and service evidence across a reboot. Configuration is managed in Settings.</p><div class=\"button-row\"><a class=\"ghost\" href=\"/settings#persistent-journal\">Open logging settings</a></div></div>"
                 + disclosure("Stage 0 baseline capture", baseline_card)
                 + disclosure("Advanced technical data", advanced_detail)
             )
@@ -2660,7 +2662,7 @@ def start_web(cfg):
             f"<tr><th>Last heartbeat</th><td>{escape(local_time(heartbeat.get('time')))}</td></tr>"
             f"<tr><th>Heartbeat age</th><td>{escape(str(heartbeat_age_seconds(heartbeat) if heartbeat else '-'))}s</td></tr>"
             f"<tr><th>Previous reboot</th><td>{escape(str(reboot_evidence.get('reset_mechanism') or 'No previous reboot evidence'))}; confidence {escape(str(reboot_evidence.get('confidence') or '-'))}</td></tr>"
-            f"<tr><th>Persistent journal</th><td class=\"{'healthy' if journal.get('enabled') else 'warning'}\">{'Yes' if journal.get('enabled') else 'No'}</td></tr>"
+            f"<tr><th>Persistent journal</th><td class=\"{'healthy' if journal.get('healthy') else 'warning'}\">{escape(str(journal.get('summary') or 'Disabled or unavailable'))}</td></tr>"
             "</tbody></table></div>"
             "<div class=\"button-row\"><a class=\"ghost\" href=\"/diagnostics\">Open incident evidence</a></div>"
         )
@@ -2769,7 +2771,7 @@ def start_web(cfg):
         current = persistent_status()
         body = (
             "<div class=\"card\"><h2>Enable Persistent Journald</h2>"
-            "<p>Current journal persistence status: <strong>" + escape("Enabled" if current.get("enabled") else "Disabled or unavailable") + "</strong></p>"
+            "<p>Current journal persistence status: <strong>" + escape(str(current.get("summary") or "Disabled or unavailable")) + "</strong></p>"
             "<p class=\"muted\">This creates /var/log/journal if required and writes a separate VA-Watchdog drop-in without editing unrelated journald settings. It caps journals at 512 MB, reserves 1 GB free on the OS disk, retains up to 30 days, flushes journald, and restarts only systemd-journald.</p>"
             "<form method=\"post\" action=\"/journal-enable\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> I understand this changes system logging storage.</label>"
             "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Enable persistent logging</button><a class=\"ghost\" href=\"/settings\">Cancel</a></div></form></div>"
@@ -3888,6 +3890,7 @@ def start_web(cfg):
         device = "/dev/wdt_dio"
         identity = str(wdctl.get("identity", ""))
         driver_loaded = bool(modules.get("wdt_dio"))
+        dkms_ready = bool(watchdog.get("dkms", {}).get("current_kernel_installed"))
         identity_ready = "Neousys WDT_DIO" in identity
         feed_enabled = bool(hw_cfg.get("enabled"))
         feed_opened = bool(wdt.get("opened"))
@@ -3899,8 +3902,8 @@ def start_web(cfg):
         rows = [
             {
                 "name": "Neousys WDT_DIO driver",
-                "state": "healthy" if driver_loaded else "warning",
-                "message": "Loaded" if driver_loaded else "Not loaded yet",
+                "state": "healthy" if driver_loaded and dkms_ready else "warning",
+                "message": ("Loaded; automatic kernel rebuild enabled" if driver_loaded and dkms_ready else ("Loaded, but DKMS kernel-update protection is missing" if driver_loaded else "Not loaded yet")),
             },
             {
                 "name": "Watchdog device",
@@ -4900,6 +4903,16 @@ def start_web(cfg):
                 "timeout": str(hw_cfg.get("timeout_seconds") or 30),
                 "raw": "Vendor API backend; Linux wdctl does not apply.",
             })
+        kernel = _run(["uname", "-r"], timeout=3)
+        running_kernel = str(kernel.get("stdout") or "").strip()
+        dkms_status = _run(["dkms", "status", "-m", "neousys-wdt-dio"], timeout=5)
+        dkms_output = str(dkms_status.get("stdout") or "").strip()
+        current_kernel_installed = bool(
+            dkms_status.get("returncode") == 0
+            and running_kernel
+            and running_kernel in dkms_output
+            and "installed" in dkms_output.lower()
+        )
         return {
             "backend": backend,
             "expected_driver": "wdt_dio",
@@ -4907,6 +4920,11 @@ def start_web(cfg):
             "device": device,
             "modules": modules,
             "wdctl": wdctl,
+            "dkms": {
+                "current_kernel": running_kernel,
+                "current_kernel_installed": current_kernel_installed,
+                "status": dkms_output or str(dkms_status.get("stderr") or "DKMS status unavailable"),
+            },
             "owners": watchdog_owner_info(device),
             "legacy_daemon": legacy_watchdog_daemon_info(),
             "systemd_watchdog": systemd_watchdog_info(),
@@ -5481,6 +5499,8 @@ def start_web(cfg):
             "watchdog-device.txt": _run(["bash", "-lc", "ls -l /dev/wdt_dio 2>&1; fuser -v /dev/wdt_dio 2>&1 || true"], timeout=5),
             "watchdog-modules.txt": _run(["bash", "-lc", "grep -E '^wdt_dio ' /proc/modules || true"], timeout=5),
             "neousys-module.txt": _run(["modinfo", "wdt_dio"], timeout=5),
+            "neousys-dkms.txt": _run(["dkms", "status", "-m", "neousys-wdt-dio"], timeout=5),
+            "running-kernel.txt": _run(["uname", "-r"], timeout=5),
             "neousys-files.txt": _run(["bash", "-lc", "ls -l /dev/wdt_dio /usr/local/lib/va-watchdog/vendor/libwdt_dio.so 2>&1; sha256sum /usr/local/lib/va-watchdog/vendor/libwdt_dio.so 2>&1"], timeout=5),
             "network-ip-addr.txt": _run(["ip", "-4", "addr", "show"], timeout=5),
             "network-routes.txt": _run(["ip", "route"], timeout=5),

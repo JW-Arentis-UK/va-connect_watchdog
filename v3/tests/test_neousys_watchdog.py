@@ -6,11 +6,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from va_watchdog.config import _enforce_neousys_watchdog
+from va_watchdog.config import _enforce_neousys_watchdog, _enforce_recording_free_space_reserve
 from va_watchdog.neousys_watchdog import NeousysWatchdog
 from va_watchdog.watchdog_device import HardwareWatchdog
 from va_watchdog.watchdog_feed import FeedWorker
-from va_watchdog.watchdog import hardware_feed_status
+from va_watchdog.watchdog import add_hardware_feed_check, hardware_feed_status
 
 
 class FakeFunction:
@@ -56,6 +56,28 @@ class NeousysWatchdogTests(unittest.TestCase):
         })
 
         self.assertTrue(config["hardware_watchdog"]["enabled"])
+
+    def test_legacy_null_recording_reserve_gets_safe_defaults(self):
+        config = _enforce_recording_free_space_reserve({
+            "recording_storage": {
+                "minimum_free_mb_warning": None,
+                "minimum_free_mb_critical": None,
+            }
+        })
+
+        self.assertEqual(config["recording_storage"]["minimum_free_mb_warning"], 5000)
+        self.assertEqual(config["recording_storage"]["minimum_free_mb_critical"], 2048)
+
+    def test_explicit_zero_recording_reserve_is_preserved(self):
+        config = _enforce_recording_free_space_reserve({
+            "recording_storage": {
+                "minimum_free_mb_warning": 0,
+                "minimum_free_mb_critical": 0,
+            }
+        })
+
+        self.assertEqual(config["recording_storage"]["minimum_free_mb_warning"], 0)
+        self.assertEqual(config["recording_storage"]["minimum_free_mb_critical"], 0)
 
     def test_linux_watchdog_backend_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "unsupported hardware watchdog backend"):
@@ -221,6 +243,59 @@ class NeousysWatchdogTests(unittest.TestCase):
 
         self.assertTrue(status["feeding"])
 
+    def test_missing_device_waits_in_same_feeder_process(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "feed.json"
+            worker = FeedWorker({
+                "events_path": str(Path(temporary) / "events.jsonl"),
+                "hardware_watchdog_feed_state_path": str(state_path),
+                "hardware_watchdog": {
+                    "enabled": True,
+                    "device_retry_seconds": 60,
+                    "timeout_seconds": 30,
+                },
+            })
+
+            def stop_after_retry(_seconds):
+                worker.stop_requested = True
+
+            with patch("va_watchdog.watchdog_feed.load_config", return_value={"hardware_watchdog": {"enabled": True}}), patch.object(
+                worker, "_legacy_conflict", return_value=""
+            ), patch.object(worker, "_wait_interruptibly", side_effect=stop_after_retry):
+                opened = worker._open_when_available()
+
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertFalse(opened)
+        self.assertEqual(worker.error_count, 1)
+        self.assertEqual(state["process_status"], "device_unavailable")
+        self.assertEqual(state["device_retry_seconds"], 60)
+
+    def test_missing_feed_is_critical_but_does_not_request_recovery_reboot(self):
+        status = {
+            "checks": [],
+            "hardware_watchdog_feed": {
+                "enabled": True,
+                "opened": False,
+                "device": "/dev/wdt_dio",
+            },
+        }
+        cfg = {
+            "poll_interval_seconds": 5,
+            "hardware_watchdog": {
+                "enabled": True,
+                "device": "/dev/wdt_dio",
+                "feed_interval_seconds": 10,
+            },
+        }
+
+        result = add_hardware_feed_check(status, cfg)
+        check = next(item for item in result["checks"] if item["name"] == "hardware_watchdog_feed_status")
+
+        self.assertEqual(check["state"], "critical")
+        self.assertFalse(check["critical"])
+        self.assertFalse(result["critical_failed"])
+
     def test_installer_does_not_activate_without_explicit_flag(self):
         script = Path(__file__).parents[1] / "scripts" / "install_neousys_wdt.sh"
         text = script.read_text(encoding="utf-8")
@@ -228,12 +303,22 @@ class NeousysWatchdogTests(unittest.TestCase):
         self.assertIn('if [[ "$ACTIVATE" != 1 ]]', text)
         self.assertIn("configuration was not changed", text)
         self.assertIn('product" != *"POC-451VTC"*', text)
-        self.assertIn('apt-get install -y build-essential gcc-12 "linux-headers-$kernel" unzip', text)
-        self.assertIn('CC="$kernel_cc" modules', text)
+        self.assertIn('apt-get install -y build-essential dkms gcc-12 "linux-headers-$kernel" unzip', text)
+        self.assertIn('AUTOINSTALL="yes"', text)
+        self.assertIn('dkms build -m "$DKMS_NAME" -v "$VERSION" -k "$kernel"', text)
+        self.assertIn('dkms install -m "$DKMS_NAME" -v "$VERSION" -k "$kernel" --force', text)
+        self.assertIn('Prebuilding wdt_dio.ko for installed kernel $latest_kernel', text)
         self.assertIn("blacklist iTCO_wdt", text)
         self.assertIn("apt-get remove -y watchdog", text)
         self.assertIn("systemctl enable va-watchdog.service va-watchdog-feed.service", text)
         self.assertIn('fail "va-watchdog-feed.service is not enabled for reboot"', text)
+
+    def test_feeder_service_uses_controlled_restart_backoff(self):
+        service = Path(__file__).parents[1] / "systemd" / "va-watchdog-feed.service"
+        text = service.read_text(encoding="utf-8")
+
+        self.assertIn("Restart=on-failure", text)
+        self.assertIn("RestartSec=30", text)
 
     def test_web_activation_uses_independent_systemd_job(self):
         web = Path(__file__).parents[1] / "va_watchdog" / "web.py"

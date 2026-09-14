@@ -32,6 +32,7 @@ class HardwareWatchdog:
         self.last_feed = None
         self.feed_count = 0
         self.opened = False
+        self.last_error = ""
 
     def _event(self, level, message, data=None):
         if self.event_log is not None:
@@ -51,12 +52,14 @@ class HardwareWatchdog:
         if not self.enabled:
             return
         if not os.path.exists(self.device):
+            self.last_error = f"{self.device} not found"
             self._event("warning", f"{self.device} not found")
             return
         try:
             self.vendor = NeousysWatchdog(self.library_path, self.timeout_seconds)
             self.vendor.start()
             self.opened = True
+            self.last_error = ""
             self._event("info", f"Started Neousys watchdog through {self.device}")
         except Exception as exc:
             if self.vendor is not None:
@@ -66,6 +69,7 @@ class HardwareWatchdog:
                     pass
             self.vendor = None
             self.opened = False
+            self.last_error = str(exc)
             self._event("critical", f"Failed to start Neousys watchdog: {exc}")
 
     def get_timeout(self):
@@ -91,3 +95,4 @@ class HardwareWatchdog:
         self.vendor.feed()
         self.last_feed = time.time()
         self.feed_count += 1
+        self.last_error = ""
