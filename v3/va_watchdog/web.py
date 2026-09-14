@@ -242,17 +242,19 @@ pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale))
 .page-tabs a { flex:1; padding:calc(10px * var(--scale)); border-radius:6px; color:var(--muted); text-align:center; text-decoration:none; font-weight:800; }
 .page-tabs a.active { background:var(--blue); color:#fff; }
 .event-table { table-layout:fixed; }
-.event-table th:nth-child(1), .event-table td:nth-child(1) { width:calc(132px * var(--scale)); }
+.event-table th:nth-child(1), .event-table td:nth-child(1) { width:calc(190px * var(--scale)); }
 .event-table th:nth-child(2), .event-table td:nth-child(2) { width:calc(82px * var(--scale)); }
 .event-table th:nth-child(3), .event-table td:nth-child(3) { width:calc(125px * var(--scale)); }
 .event-table th:nth-child(5), .event-table td:nth-child(5) { width:calc(92px * var(--scale)); }
 .event-table th:nth-child(6), .event-table td:nth-child(6) { width:calc(78px * var(--scale)); }
 .event-table td { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.event-table .event-time-cell { white-space:nowrap; overflow:visible; text-overflow:clip; }
 .event-table .event-message-cell { font-weight:700; }
-.event-evidence { position:relative; overflow:visible; }
-.event-evidence summary { color:var(--blue); cursor:pointer; font-weight:700; list-style:none; }
-.event-evidence summary::-webkit-details-marker { display:none; }
-.event-evidence[open] .event-evidence-body { position:absolute; z-index:4; right:0; width:min(calc(600px * var(--scale)), 75vw); padding:calc(12px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel); box-shadow:0 12px 30px rgba(0,0,0,.28); }
+.event-view-button { appearance:none; border:0; padding:0; background:transparent; color:var(--blue); cursor:pointer; font:inherit; font-weight:700; }
+.event-detail-row td { width:auto !important; padding:calc(12px * var(--scale)); white-space:normal; overflow:visible; background:var(--input); }
+.event-evidence-body { width:100%; }
+.event-evidence-grid { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:calc(6px * var(--scale)) calc(14px * var(--scale)); margin-bottom:calc(10px * var(--scale)); }
+.event-evidence-grid .value { overflow-wrap:anywhere; }
 .event-evidence-body pre { max-height:calc(260px * var(--scale)); }
 .chart { width:100%; height:calc(180px * var(--scale)); border:1px solid var(--line); border-radius:6px; background:rgba(54,209,95,.08); }
 .chart text { fill:var(--muted); font-size:10px; }
@@ -1553,15 +1555,21 @@ def start_web(cfg):
                 data = event.get("data") if isinstance(event.get("data"), dict) else {}
                 evidence = escape(json.dumps(data, indent=2)) if data else "No additional technical evidence was recorded for this event."
                 rows.append(
-                    "<tr>"
-                    f"<td title=\"{escape(str(event.get('time', '-')))}\">{escape(local_time(event.get('time')))}</td>"
+                    "<tr class=\"event-summary-row\">"
+                    f"<td class=\"event-time-cell\" title=\"{escape(str(event.get('time', '-')))}\">{escape(local_time(event.get('time')))}</td>"
                     f"<td><span class=\"pill {escape(level)}\">{escape(level.upper())}</span></td>"
                     f"<td title=\"{escape(str(event.get('source', '-')))}\">{escape(str(event.get('source', '-')))}</td>"
                     f"<td class=\"event-message-cell\" title=\"{escape(str(event.get('message', '')))}\">{escape(str(event.get('message', '')))}</td>"
                     f"<td class=\"{result_state}\">{result}</td>"
-                    "<td><details class=\"event-evidence\"><summary>View</summary>"
-                    f"<div class=\"event-evidence-body\"><div class=\"label\">Recorded time</div><div class=\"value\">{escape(str(event.get('time', '-')))}</div><div class=\"label\">Technical evidence</div><pre>{evidence}</pre></div>"
-                    "</details></td></tr>"
+                    "<td><button class=\"event-view-button\" type=\"button\" aria-expanded=\"false\" onclick=\"toggleEventEvidence(this)\">View</button></td></tr>"
+                    "<tr class=\"event-detail-row\" hidden><td colspan=\"6\"><div class=\"event-evidence-body\">"
+                    "<div class=\"event-evidence-grid\">"
+                    f"<div class=\"label\">Recorded time</div><div class=\"value\">{escape(str(event.get('time', '-')))}</div>"
+                    f"<div class=\"label\">Source</div><div class=\"value\">{escape(str(event.get('source', '-')))}</div>"
+                    f"<div class=\"label\">Event</div><div class=\"value\">{escape(str(event.get('message', '-')))}</div>"
+                    f"<div class=\"label\">Result</div><div class=\"value {result_state}\">{result}</div>"
+                    "</div><div class=\"label\">Technical evidence</div>"
+                    f"<pre>{evidence}</pre></div></td></tr>"
                 )
             if not rows:
                 rows.append("<tr><td colspan=\"6\">No events match the selected filters.</td></tr>")
@@ -1612,6 +1620,7 @@ def start_web(cfg):
                 f"<p class=\"muted\">Showing {len(visible)} of {len(filtered)} matching events. Newest events appear first; times use the gateway's local timezone.</p>"
                 "<div class=\"table-scroll\"><table class=\"event-table compact-table\"><thead><tr><th>Time / date</th><th>Level</th><th>Source</th><th>Event</th><th>Result</th><th>Evidence</th></tr></thead>"
                 f"<tbody>{''.join(rows)}</tbody></table></div>"
+                "<script>function toggleEventEvidence(button){var summary=button.closest('tr');var detail=summary?summary.nextElementSibling:null;if(!detail||!detail.classList.contains('event-detail-row'))return;var opening=detail.hidden;detail.hidden=!opening;button.textContent=opening?'Hide':'View';button.setAttribute('aria-expanded',opening?'true':'false');}</script>"
                 f"<div class=\"button-row\">{more_link}<a class=\"action\" href=\"/api/events/export.csv{escape(export_suffix)}\" download=\"va-watchdog-events.csv\">Export CSV</a><a class=\"ghost\" href=\"/api/events/export{escape(export_suffix)}\" download=\"va-watchdog-events.json\">Export JSON</a></div>"
                 "</div>"
             )

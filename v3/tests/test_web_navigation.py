@@ -61,6 +61,15 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('feed_recent = bool(wdt.get("feed_live"))', source)
         self.assertIn('"feed_live": feed_live', source)
 
+    def test_event_evidence_expands_as_a_full_width_table_row(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+
+        self.assertIn('class=\\\"event-detail-row\\\" hidden', source)
+        self.assertIn('onclick=\\\"toggleEventEvidence(this)\\\"', source)
+        self.assertIn("detail.hidden=!opening", source)
+        self.assertIn("width:calc(190px * var(--scale))", source)
+        self.assertNotIn(".event-evidence[open] .event-evidence-body", source)
+
     def test_hardware_and_storage_keep_engineering_detail_collapsed(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
         start = source.index("        def hardware_page():")
