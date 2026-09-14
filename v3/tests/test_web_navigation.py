@@ -54,6 +54,13 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn("if(s<=0){clearInterval(t)", source)
         self.assertIn("setTimeout(function(){window.location.reload();},500)", source)
 
+    def test_watchdog_grace_accepts_a_confirmed_live_hardware_feed(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+
+        self.assertIn("feed_live = bool(", source)
+        self.assertIn('feed_recent = bool(wdt.get("feed_live"))', source)
+        self.assertIn('"feed_live": feed_live', source)
+
     def test_hardware_and_storage_keep_engineering_detail_collapsed(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
         start = source.index("        def hardware_page():")

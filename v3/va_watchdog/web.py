@@ -3794,12 +3794,23 @@ def start_web(cfg):
                 age = None
         feed_enabled = bool(feed.get("enabled") or hw_cfg.get("enabled"))
         startup_grace = feed.get("startup_grace", {}) if isinstance(feed.get("startup_grace", {}), dict) else {}
+        feed_live = bool(
+            feed_enabled
+            and feed.get("opened")
+            and feed.get("feeding")
+            and age is not None
+            and age <= stale_after
+        )
         if not feed_enabled:
             feed_state = "warning"
             last_feed_message = "Feed disabled in config/status"
         elif startup_grace.get("active"):
-            feed_state = "waiting"
-            last_feed_message = f"Startup safety window: {startup_grace.get('remaining_seconds', 0)}s remaining"
+            feed_state = "waiting" if feed_live else "warning"
+            last_feed_message = (
+                f"Last feed {round(age, 1)}s ago; enforcement begins in {startup_grace.get('remaining_seconds', 0)}s"
+                if feed_live
+                else "Startup safety window active, but no fresh hardware feed was confirmed"
+            )
         elif age is None:
             feed_state = "warning"
             last_feed_message = "No feed timestamp recorded yet"
@@ -3826,6 +3837,7 @@ def start_web(cfg):
             "feed_count": feed.get("feed_count", 0),
             "configured_timeout_seconds": feed.get("timeout_seconds") or hw_cfg.get("timeout_seconds", 30),
             "feed_state": feed_state,
+            "feed_live": feed_live,
             "last_feed_message": last_feed_message,
             "last_test_message": last_test_message,
             "startup_grace": startup_grace,
@@ -3894,7 +3906,7 @@ def start_web(cfg):
         identity_ready = "Neousys WDT_DIO" in identity
         feed_enabled = bool(hw_cfg.get("enabled"))
         feed_opened = bool(wdt.get("opened"))
-        feed_recent = wdt.get("feed_state") == "healthy"
+        feed_recent = bool(wdt.get("feed_live"))
         startup_grace = wdt.get("startup_grace", {}) if isinstance(wdt.get("startup_grace", {}), dict) else {}
         grace_active = bool(startup_grace.get("active"))
         timeout = int(hw_cfg.get("timeout_seconds", 30) or 30)
