@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
-import subprocess
+import time
 from pathlib import Path
 from .common import CheckResult
+
+_CPU_SAMPLE = None
 
 def _read_temperature():
     """
@@ -52,15 +54,24 @@ def _mem_percent():
         return None
 
 def _cpu_load_percent():
+    global _CPU_SAMPLE
     try:
-        out = subprocess.check_output(["bash", "-lc", "top -bn1 | grep 'Cpu(s)'"], text=True)
-        # Example: %Cpu(s):  1.0 us,  0.3 sy,  0.0 ni, 98.7 id...
-        idle_part = [x for x in out.split(",") if " id" in x]
-        if idle_part:
-            idle = float(idle_part[0].strip().split()[0])
-            return round(100 - idle, 1)
-    except Exception:
-        pass
+        fields = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0].split()[1:]
+        values = [int(value) for value in fields]
+        total = sum(values)
+        idle = values[3] + (values[4] if len(values) > 4 else 0)
+        now = time.monotonic()
+        previous = _CPU_SAMPLE
+        _CPU_SAMPLE = (total, idle, now)
+        if previous is None:
+            return None
+        total_delta = total - previous[0]
+        idle_delta = idle - previous[1]
+        if total_delta <= 0:
+            return None
+        return round(max(0.0, min(100.0, 100.0 * (total_delta - idle_delta) / total_delta)), 1)
+    except (OSError, ValueError, IndexError):
+        return None
     return None
 
 def check_hardware(cfg):

@@ -271,6 +271,50 @@ class NeousysWatchdogTests(unittest.TestCase):
         self.assertEqual(state["process_status"], "device_unavailable")
         self.assertEqual(state["device_retry_seconds"], 60)
 
+    def test_feeder_requests_driver_when_device_is_missing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            worker = FeedWorker({
+                "events_path": str(Path(temporary) / "events.jsonl"),
+                "hardware_watchdog": {"timeout_seconds": 30},
+            })
+            completed = Mock(returncode=0, stdout="", stderr="")
+            with patch("va_watchdog.watchdog_feed.os.path.exists", side_effect=[False, False, True]), patch(
+                "va_watchdog.watchdog_feed.subprocess.run", return_value=completed
+            ) as run, patch("va_watchdog.watchdog_feed.time.sleep"):
+                loaded = worker._ensure_driver_loaded()
+
+        self.assertTrue(loaded)
+        self.assertEqual(run.call_args.args[0], ["modprobe", "wdt_dio"])
+
+    def test_abnormal_feeder_exit_does_not_stop_hardware_timer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            worker = FeedWorker({
+                "events_path": str(Path(temporary) / "events.jsonl"),
+                "hardware_watchdog": {"timeout_seconds": 30},
+            })
+            worker.hw.close = Mock()
+            worker._shutdown_hardware(abnormal_exit=True)
+
+        worker.hw.close.assert_not_called()
+
+    def test_consecutive_feeds_create_boot_specific_proof(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            proof = Path(temporary) / "proof.json"
+            worker = FeedWorker({
+                "events_path": str(Path(temporary) / "events.jsonl"),
+                "hardware_watchdog_proof_path": str(proof),
+                "hardware_watchdog": {"timeout_seconds": 30, "proof_feed_count": 3},
+            })
+            worker.boot_id = "boot-a"
+            worker.hw.feed_count = 3
+            worker.hw.last_feed = time.time()
+            worker._write_protection_proof()
+            state = json.loads(proof.read_text(encoding="utf-8"))
+
+        self.assertTrue(state["proven"])
+        self.assertEqual(state["boot_id"], "boot-a")
+        self.assertEqual(state["feed_count"], 3)
+
     def test_missing_feed_is_critical_but_does_not_request_recovery_reboot(self):
         status = {
             "checks": [],
@@ -318,7 +362,8 @@ class NeousysWatchdogTests(unittest.TestCase):
         text = service.read_text(encoding="utf-8")
 
         self.assertIn("Restart=on-failure", text)
-        self.assertIn("RestartSec=30", text)
+        self.assertIn("ExecStartPre=-/sbin/modprobe wdt_dio", text)
+        self.assertIn("RestartSec=5", text)
 
     def test_web_activation_uses_independent_systemd_job(self):
         web = Path(__file__).parents[1] / "va_watchdog" / "web.py"

@@ -9,10 +9,8 @@ from va_watchdog.services import check_services
 
 
 class ServiceTrendTests(unittest.TestCase):
-    @patch("va_watchdog.services._runtime_stats", return_value={"cpu_percent": 12.5, "memory_mb": 42.0, "uptime_seconds": 90})
-    @patch("va_watchdog.services._restart_count", return_value=2)
-    @patch("va_watchdog.services._is_active", return_value="active")
-    def test_service_check_includes_runtime_metrics(self, _active, _restarts, _runtime):
+    @patch("va_watchdog.services._service_properties", return_value=("active", 2, {"cpu_percent": 12.5, "memory_mb": 42.0, "uptime_seconds": 90}))
+    def test_service_check_includes_runtime_metrics(self, _properties):
         checks = check_services({"services": [{"name": "esg.service", "critical": True}]})
 
         self.assertEqual(checks[0].value["cpu_percent"], 12.5)

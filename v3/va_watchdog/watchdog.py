@@ -18,6 +18,7 @@ from .retention import enforce_retention
 from .systemd_notify import notify as systemd_notify
 from .watchdog_grace import startup_grace_status
 from .watchdog_test import trip_test_active
+from .watchdog_liveness_test import reconcile_liveness_test
 from .web import start_web
 from .heartbeat import HeartbeatPublisher
 from .reboot_evidence import create as create_reboot_evidence
@@ -68,11 +69,11 @@ def add_hardware_feed_check(status, cfg):
             feed,
             False,
         )
-    elif startup_grace.get("active"):
+    elif startup_grace.get("active") and feed.get("feeding"):
         check = CheckResult(
             "hardware_watchdog_feed_status",
-            "warning",
-            f"Hardware watchdog startup safety window active; protection arms in {int(startup_grace.get('remaining_seconds', 0))}s",
+            "healthy",
+            f"Hardware watchdog is feeding; liveness enforcement starts in {int(startup_grace.get('remaining_seconds', 0))}s",
             feed,
             False,
         )
@@ -108,6 +109,14 @@ def add_hardware_feed_check(status, cfg):
             feed,
             False,
         )
+    elif not feed.get("proven_this_boot"):
+        check = CheckResult(
+            "hardware_watchdog_feed_status",
+            "warning",
+            "Hardware feeding has started; waiting for consecutive feeds to prove protection for this boot",
+            feed,
+            False,
+        )
     else:
         check = CheckResult(
             "hardware_watchdog_feed_status",
@@ -134,6 +143,11 @@ def hardware_feed_status(cfg, startup_grace, trip_active=False, trip_summary=Non
         feed = json.loads(feed_path.read_text(encoding="utf-8")) if feed_path.exists() else {}
     except Exception:
         feed = {}
+    proof_path = Path(cfg.get("hardware_watchdog_proof_path") or Path(cfg["events_path"]).parent / "hardware-watchdog-proof.json")
+    try:
+        proof = json.loads(proof_path.read_text(encoding="utf-8")) if proof_path.exists() else {}
+    except Exception:
+        proof = {}
     hw_cfg = cfg.get("hardware_watchdog", {})
     last_feed_unix = feed.get("last_feed_unix")
     try:
@@ -151,7 +165,7 @@ def hardware_feed_status(cfg, startup_grace, trip_active=False, trip_summary=Non
     except (TypeError, ValueError):
         process_alive = False
     process_status = str(feed.get("process_status", "unknown"))
-    reports_open = process_status in {"running", "feeding", "paused_stale_heartbeat", "paused_trip_test"}
+    reports_open = process_status in {"running", "feeding", "paused_stale_heartbeat", "paused_liveness_failure", "paused_trip_test"}
     feed_interval = max(1, int(hw_cfg.get("feed_interval_seconds", 10) or 10))
     fresh_after = max(feed_interval * 3, 30)
     feeding = bool(
@@ -182,6 +196,12 @@ def hardware_feed_status(cfg, startup_grace, trip_active=False, trip_summary=Non
         "feed_process_status": process_status,
         "feed_last_error": feed.get("last_error", ""),
         "feed_error_count": feed.get("error_count", 0),
+        "feed_decision": feed.get("feed_decision", ""),
+        "heartbeat_age_seconds": feed.get("heartbeat_age_seconds"),
+        "health_progress_age_seconds": feed.get("health_progress_age_seconds"),
+        "health_progress_timeout_seconds": feed.get("health_progress_timeout_seconds") or hw_cfg.get("health_progress_timeout_seconds", 90),
+        "protection_proof": proof,
+        "proven_this_boot": bool(proof.get("proven") and proof.get("boot_id") and proof.get("boot_id") == feed.get("boot_id")),
         "trip_countdown": feed.get("trip_countdown", {}),
         "stale_heartbeat_seconds": feed.get("stale_heartbeat_seconds") or hw_cfg.get("stale_heartbeat_seconds", 15),
         "fed_this_cycle": fed,
@@ -195,6 +215,7 @@ def main():
     event_log = EventLog(cfg["events_path"])
     recovery = RecoveryEngine(cfg, event_log)
     last_trip_active = False
+    reconcile_liveness_test(cfg)
     boot_change = check_unexpected_boot(cfg, event_log)
     reboot_evidence = create_reboot_evidence(cfg, boot_change)
     if reboot_evidence and boot_change.get("changed"):

@@ -1,14 +1,16 @@
 [Unit]
 Description=VA-Connect Hardware Watchdog Feeder
-After=local-fs.target
+After=local-fs.target systemd-modules-load.service
 Before=va-watchdog.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
+ExecStartPre=-/sbin/modprobe wdt_dio
 ExecStart=/usr/bin/python3 -m va_watchdog.watchdog_feed
 WorkingDirectory=/opt/va-connect-watchdog-v3/v3
 Restart=on-failure
-RestartSec=30
+RestartSec=5
 User=root
 Group=root
 NoNewPrivileges=true

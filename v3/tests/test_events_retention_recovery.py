@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from va_watchdog.events import purge_events, read_events
+from va_watchdog.events import EventLog, purge_events, read_events
 from va_watchdog.recovery import RecoveryEngine
 from va_watchdog.retention import purge_data
 from va_watchdog.update import launch_update_job
@@ -35,6 +35,38 @@ class EventTests(unittest.TestCase):
 
             self.assertEqual(result["removed"], 1)
             self.assertEqual([row["message"] for row in read_events(path)], ["new"])
+
+    def test_transient_state_change_is_not_logged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "events.jsonl"
+            log = EventLog(path)
+            healthy = SimpleNamespace(name="watchdog_process", state="healthy", to_dict=lambda: {})
+            warning = SimpleNamespace(name="watchdog_process", state="warning", to_dict=lambda: {})
+            log.add_state_changes([healthy])
+            with patch("va_watchdog.events.time.monotonic", side_effect=[0.0, 10.0]):
+                log.add_state_changes([warning])
+                log.add_state_changes([healthy])
+
+            rows = read_events(path)
+
+        self.assertEqual(rows, [])
+
+    def test_sustained_state_change_is_logged_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "events.jsonl"
+            log = EventLog(path)
+            healthy = SimpleNamespace(name="watchdog_process", state="healthy", to_dict=lambda: {})
+            warning = SimpleNamespace(name="watchdog_process", state="warning", to_dict=lambda: {})
+            log.add_state_changes([healthy])
+            with patch("va_watchdog.events.time.monotonic", side_effect=[0.0, 61.0, 62.0]):
+                log.add_state_changes([warning])
+                log.add_state_changes([warning])
+                log.add_state_changes([warning])
+
+            rows = read_events(path)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], "watchdog_process")
 
 
 class RetentionTests(unittest.TestCase):

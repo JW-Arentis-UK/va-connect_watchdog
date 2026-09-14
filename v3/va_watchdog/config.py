@@ -13,6 +13,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "poll_interval_seconds": 5,
     "heartbeat_interval_seconds": 5,
+    "collector_intervals": {
+        "hardware_seconds": 5,
+        "services_seconds": 15,
+        "storage_seconds": 30,
+        "network_seconds": 30,
+        "process_seconds": 5
+    },
     "status_path": "/var/lib/va-watchdog/status.json",
     "events_path": "/var/lib/va-watchdog/events.jsonl",
     "history_path": "/var/lib/va-watchdog/history.jsonl",
@@ -24,6 +31,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "hardware_watchdog_feed_state_path": "/var/lib/va-watchdog/hardware-watchdog-feed.json",
     "hardware_watchdog_previous_state_path": "/var/lib/va-watchdog/hardware-watchdog-feed-previous.json",
     "hardware_watchdog_lifecycle_path": "/var/lib/va-watchdog/hardware-watchdog-lifecycle.jsonl",
+    "hardware_watchdog_proof_path": "/var/lib/va-watchdog/hardware-watchdog-proof.json",
     "hardware_watchdog_lock_path": "/var/lib/va-watchdog/hardware-watchdog.lock",
     "blackbox": {
         "enabled": True,
@@ -57,6 +65,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "feed_interval_seconds": 10,
         "timeout_seconds": 30,
         "stale_heartbeat_seconds": 15,
+        "health_progress_timeout_seconds": 90,
+        "proof_feed_count": 3,
+        "liveness_test_fallback_seconds": 75,
         "device_retry_seconds": 60,
         "magic_close": False,
         "startup_grace_seconds": 300,
@@ -66,6 +77,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "hardware_watchdog_control_path": "/var/lib/va-watchdog/hardware-watchdog-control.json",
     "trip_test_path": "/var/lib/va-watchdog/watchdog-trip-test.json",
+    "liveness_test_path": "/var/lib/va-watchdog/watchdog-liveness-test.json",
     "process_monitor": {
         "enabled": True,
         "cpu_warning_percent": 25,

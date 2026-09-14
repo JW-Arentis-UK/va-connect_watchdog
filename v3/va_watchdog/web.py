@@ -28,6 +28,7 @@ from .storage import apply_recording_service_mount_guards, configure_recording_s
 from .services import _runtime_stats
 from .watchdog_grace import arm_current_boot, delay_current_boot, startup_grace_status
 from .watchdog_test import arm_trip_test, confirm_trip_test, read_trip_test_state, trigger_trip_test, trip_test_summary
+from .watchdog_liveness_test import reconcile_liveness_test, start_liveness_test
 from .update import launch_update_job, load_update_status
 from .speedtest import run_speed_test
 from .heartbeat import heartbeat_paths, read_state, read_tail, heartbeat_age_seconds
@@ -39,16 +40,21 @@ from .identity import configured_identity, identity_slug, identity_summary
 from .recording_activity import recording_activity
 
 VISIBLE_PAGE_GROUPS = (
-    ("Operations", (("Overview", "/"), ("Events", "/events"))),
-    ("System", (("Hardware", "/hardware"), ("Network", "/network"), ("Services", "/services"), ("Watchdog", "/watchdog"))),
-    ("Engineering", (("History", "/history"), ("Diagnostics", "/diagnostics"))),
-    ("Administration", (("Settings", "/settings"),)),
+    ("Gateway", (("Status", "/"), ("Events", "/events"), ("Watchdog", "/watchdog"), ("Evidence", "/evidence"))),
+    ("Administration", (("Setup", "/setup"),)),
 )
 
 LEGACY_PAGE_REDIRECTS = {
-    "/storage": "/hardware#storage",
-    "/recovery": "/settings#recovery",
-    "/updates": "/settings#software-update",
+    "/overview": "/",
+    "/hardware": "/evidence#system",
+    "/network": "/evidence#network",
+    "/services": "/#services",
+    "/history": "/evidence#history",
+    "/diagnostics": "/evidence",
+    "/settings": "/setup",
+    "/storage": "/setup#storage",
+    "/recovery": "/setup#recovery",
+    "/updates": "/setup#software-update",
 }
 
 HTML = """<!doctype html>
@@ -468,698 +474,6 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   window.vaWatchdogCompatibilityLoad();
 }());
 </script>
-<script type="module">
-const PAGE_MODES = {
-  Operations: ['Overview', 'Events'],
-  System: ['Hardware', 'Network', 'Services', 'Watchdog'],
-  Engineering: ['History', 'Diagnostics'],
-  Administration: ['Settings'],
-};
-const PATH_PAGES = {
-  '/': 'Overview', '/events': 'Events', '/hardware': 'Hardware', '/network': 'Network',
-  '/services': 'Services', '/watchdog': 'Watchdog', '/history': 'History',
-  '/diagnostics': 'Diagnostics', '/settings': 'Settings',
-};
-const PAGES = Object.keys(PAGE_MODES).reduce((pages, mode) => pages.concat(PAGE_MODES[mode]), []);
-let currentPage = PATH_PAGES[window.location.pathname] || '__PAGE_TITLE__';
-let lastStatus = null;
-let lastUpdateStatus = null;
-let lastEvents = [];
-let lastConfigSummary = {};
-let lastSystemInfo = {};
-let lastNetworkInfo = {};
-let lastSettings = {};
-let lastRetention = {};
-let lastHardwareInfo = {};
-let lastServiceInfo = {};
-let lastStorageInfo = {};
-let lastHistory = [];
-let lastUpdateLog = {};
-let lastDiagnostics = {};
-let lastVersion = {};
-let lastRecordingActivity = {};
-let refreshTimer = null;
-
-function escapeHtml(value){
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
-
-function findCheck(status, name){
-  return (status.checks || []).find(c => c.name === name) || {};
-}
-
-function statusClass(state){
-  const value = String(state || 'unknown').toLowerCase();
-  return ['healthy','warning','degraded','critical'].includes(value) ? value : 'unknown';
-}
-
-function displayState(status){
-  const critical = !!status.critical_failed;
-  const nonFeedCritical = (status.checks || []).some(c => c.state === 'critical');
-  const degraded = (status.checks || []).some(c => c.state === 'degraded');
-  const warnings = (status.checks || []).some(c => c.state === 'warning' || c.state === 'unknown');
-  if (critical) return 'critical';
-  if (nonFeedCritical) return 'warning';
-  if (degraded) return 'degraded';
-  if (warnings) return 'warning';
-  return 'healthy';
-}
-
-function displayWord(status){
-  return displayState(status).toUpperCase();
-}
-
-function fmtPercent(value){
-  if (value === null || value === undefined || value === '') return '-';
-  return `${value} %`;
-}
-
-function fmtValue(value, suffix=''){
-  if (value === null || value === undefined || value === '') return '-';
-  return `${value}${suffix}`;
-}
-
-function fmtTime(value){
-  if (!value) return '-';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return String(value);
-  const pad = part => String(part).padStart(2, '0');
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-function buildNav(){
-  const nav = document.getElementById('nav');
-  nav.innerHTML = Object.keys(PAGE_MODES).map(mode => {
-    const pageLinks = PAGE_MODES[mode].map(page => `<a class="${page === currentPage ? 'active' : ''}" href="${pathForPage(page)}">${escapeHtml(page)}</a>`).join('');
-    return `<div class="nav-section">${escapeHtml(mode)}</div>${pageLinks}`;
-  }).join('');
-}
-
-function modeForPage(page){
-  return Object.keys(PAGE_MODES).find(mode => PAGE_MODES[mode].includes(page)) || 'Operations';
-}
-
-function pathForPage(page){
-  return Object.keys(PATH_PAGES).find(path => PATH_PAGES[path] === page) || '/';
-}
-
-function setRefreshInterval(value){
-  localStorage.setItem('va_watchdog_refresh_ms', String(value));
-  if (refreshTimer) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
-  }
-  if (currentPage === 'Events') return;
-  const ms = Number(value);
-  if (ms > 0) {
-    refreshTimer = setInterval(load, ms);
-  }
-}
-
-function initRefresh(){
-  let saved = localStorage.getItem('va_watchdog_refresh_ms');
-  if (!saved || saved === '5000') {
-    saved = '30000';
-    localStorage.setItem('va_watchdog_refresh_ms', saved);
-  }
-  const select = document.getElementById('refresh-select');
-  if (currentPage === 'Events') {
-    if (refreshTimer) clearInterval(refreshTimer);
-    refreshTimer = null;
-    select.value = '0';
-    select.disabled = true;
-    select.title = 'Automatic refresh is paused while reviewing events';
-    return;
-  }
-  select.disabled = false;
-  select.value = saved;
-  setRefreshInterval(saved);
-}
-
-function showAdvancedControls(){
-  const items = document.getElementsByClassName('advanced-only');
-  for (const item of items) {
-    item.style.display = '';
-  }
-}
-
-  function setTheme(value){
-    localStorage.setItem('va_watchdog_theme', value);
-    document.cookie = 'va_watchdog_theme=' + encodeURIComponent(value) + '; path=/; max-age=31536000; samesite=lax';
-    document.body.dataset.theme = value;
-  }
-
-function reloadPage(){
-  window.location.reload();
-}
-
-function initTheme(){
-  const cookieMatch = document.cookie.match(/(?:^|; )va_watchdog_theme=([^;]+)/);
-  const saved = (cookieMatch ? decodeURIComponent(cookieMatch[1]) : '') || localStorage.getItem('va_watchdog_theme') || 'light';
-  const select = document.getElementById('theme-select');
-  select.value = saved;
-  setTheme(saved);
-}
-
-async function showPage(page){
-  currentPage = page;
-  const title = document.getElementById('page-title');
-  if (title) title.textContent = `${modeForPage(page)} / ${page}`;
-  buildNav();
-  await load();
-}
-
-function groupChecks(checks){
-  const groups = {
-    hardware: [],
-    services: [],
-    storage: [],
-    recovery: [],
-    system: [],
-  };
-  for (const check of checks || []) {
-    const name = String(check.name || '');
-    if (name === 'temperature' || name === 'ram' || name === 'cpu_load' || name === 'hardware_watchdog_present' || name === 'hardware_watchdog_feed_status') {
-      groups.hardware.push(check);
-    } else if (name.endsWith('.service')) {
-      groups.services.push(check);
-    } else if (name === 'root_disk' || name === 'recordings_disk' || name === 'recording_storage' || name === 'write_test') {
-      groups.storage.push(check);
-    } else if (name === 'network_module') {
-      groups.system.push(check);
-    } else {
-      groups.system.push(check);
-    }
-  }
-  return groups;
-}
-
-function tile(title, check, value, detail, extraClass = ''){
-  const state = statusClass(check.state);
-  return `<div class="tile ${escapeHtml(extraClass)}"><h3>${escapeHtml(title)}</h3><div class="tile-value ${state}">${escapeHtml(value)}</div><div class="tile-detail">${escapeHtml(detail || check.message || '')}</div></div>`;
-}
-
-function serviceRows(status){
-  const checks = (status.checks || []).filter(c => String(c.name || '').endsWith('.service'));
-  const liveServices = lastServiceInfo.services || [];
-  const names = [...new Set([...checks.map(c => c.name), ...liveServices.map(item => item.name)])];
-  return names.map(name => {
-    const check = checks.find(c => c.name === name) || {};
-    const value = check.value || {};
-    const live = liveServices.find(item => item.name === name) || {};
-    const active = value.active || live.active || check.state || '-';
-    const state = String(active).toLowerCase() === 'active' ? 'healthy' : 'warning';
-    return `<tr><td>${escapeHtml(name)}</td><td><span class="pill ${state}">${escapeHtml(String(active).toUpperCase())}</span></td><td>${escapeHtml(live.cpu_percent ?? '-')}</td><td>${escapeHtml(live.memory_mb !== undefined && live.memory_mb !== '-' ? `${live.memory_mb} MB` : '-')}</td><td>${escapeHtml(value.restarts ?? live.restarts ?? '-')}</td><td>${escapeHtml(live.uptime || '-')}</td></tr>`;
-  }).join('');
-}
-
-function renderEvents(events, limit=8){
-  const rows = (events || []).slice(0, limit);
-  if (!rows.length) return '<div class="event"><div class="event-time">-</div><div>No events yet</div></div>';
-  return rows.map(event => `<details class="event-card"><summary class="event-summary"><span class="${statusClass(event.level)}">${escapeHtml((event.level || 'info').toUpperCase())}</span><span class="event-message">${escapeHtml(event.message || '')}</span><span class="event-time">${escapeHtml(fmtTime(event.time))}</span></summary><div class="event-detail"><div class="event-source">Source: ${escapeHtml(event.source || '-')}</div>${event.data ? `<pre class="event-data">${escapeHtml(JSON.stringify(event.data, null, 2))}</pre>` : '<p class="muted">No additional event data.</p>'}</div></details>`).join('');
-}
-
-function renderHistoryChart(rows, key='score'){
-  const points = (rows || []).filter(row => row[key] !== null && row[key] !== undefined).slice(-120);
-  if (!points.length) return '<div class="history-box">No history captured yet</div>';
-  const width = 640;
-  const height = 180;
-  const pad = 24;
-  const values = points.map(row => Number(row[key]));
-  const min = Math.min(0, Math.min(...values));
-  const max = Math.max(100, Math.max(...values));
-  const span = Math.max(1, max - min);
-  const coords = values.map((value, index) => {
-    const x = pad + (index / Math.max(1, values.length - 1)) * (width - pad * 2);
-    const y = height - pad - ((value - min) / span) * (height - pad * 2);
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(' ');
-  return `<svg class="chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none"><line class="grid-line" x1="${pad}" y1="${pad}" x2="${width - pad}" y2="${pad}"></line><line class="grid-line" x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}"></line><text x="4" y="${pad + 4}">${escapeHtml(max)}</text><text x="4" y="${height - pad}">${escapeHtml(min)}</text><polyline points="${coords}"></polyline></svg>`;
-}
-
-function renderGatewaySummary(status){
-  const state = displayState(status);
-  const wdt = findCheck(status, 'hardware_watchdog_present');
-  const hasNonFeedCritical = (status.checks || []).some(c => c.state === 'critical');
-  const warningCount = (status.checks || []).filter(c =>
-    (c.state === 'warning' || c.state === 'unknown')
-    && !(c.name === 'hardware_watchdog_feed_status' && !wdt.value)
-  ).length;
-  const pill = status.critical_failed ? 'Critical issue blocking feed' : (hasNonFeedCritical ? 'Attention needed, feed safe' : (warningCount ? `${warningCount} active warning${warningCount === 1 ? '' : 's'}` : 'No active alerts'));
-  const identity = lastSystemInfo.identity || lastVersion.identity || {};
-  const gatewayName = identity.display_name || identity.site_name || lastSystemInfo.hostname || 'Site not configured';
-  const buildTime = lastVersion.build_at ? fmtTime(lastVersion.build_at) : '-';
-  return `<div class="card summary-card"><div class="summary-panel summary-status"><div class="summary-panel-title">Overall state</div><div class="status-word ${state}">${displayWord(status)}</div><span class="pill ${state}">${escapeHtml(pill)}</span></div><div class="summary-panel"><div class="summary-panel-title">Gateway identity</div><div class="summary-primary">${escapeHtml(gatewayName)}</div><div class="summary-pairs"><div><div class="label">Asset ID</div><div class="value">${escapeHtml(identity.asset_id || '-')}</div></div><div><div class="label">Hostname</div><div class="value">${escapeHtml(identity.hostname || lastSystemInfo.hostname || '-')}</div></div></div></div><div class="summary-panel"><div class="summary-panel-title">Running software</div><div class="label">Build</div><div class="build-badge">${escapeHtml(lastVersion.commit || '-')}</div><div class="label">Build time and date</div><div class="value">${escapeHtml(buildTime)}</div><div class="muted">${escapeHtml(lastVersion.branch || lastUpdateStatus?.branch || '-')}</div><div class="label">Last update</div><div class="value">${escapeHtml(fmtTime(status.time))}</div></div></div>`;
-}
-
-function pageHelp(page){
-  const help = {
-    Overview: ['Is this gateway ready to operate?', 'Shows gateway identity, operational readiness, live metrics, recording availability, and current alerts.'],
-    Hardware: ['Is the hardware healthy?', 'Read-only sensor, CPU, memory, disk, and device discovery details.'],
-    Watchdog: ['Will the gateway recover itself?', 'Configure, verify, and test the hardware and process watchdog protection layers.'],
-    Services: ['Are the Videosoft services running?', 'Shows each monitored service and provides confirmed manual restart controls.'],
-    Storage: ['Will recordings continue?', 'Shows recording storage, mount health, capacity, permissions, retention, and setup tools.'],
-    Network: ['Can the gateway communicate?', 'Shows interfaces, routes, targets, sockets, and remote-access service status.'],
-    Recovery: ['How can this gateway be recovered?', 'Contains service repair, reinstall, reboot policy, and emergency support actions.'],
-    Events: ['What changed recently?', 'Review concise event summaries, expand technical detail, or export the event log.'],
-    History: ['Has gateway health changed over time?', 'Shows retained health trends and previous state samples.'],
-    Settings: ['What should the watchdog monitor?', 'Configure monitoring, display, storage, network, update, and recovery behavior.'],
-    Updates: ['Which build is running?', 'Starts a controlled update and shows the branch, commit, result, and log.'],
-    Diagnostics: ['What evidence is available?', 'Technical toolbox, raw status, black-box snapshots, and downloadable support bundle.'],
-  };
-  const content = help[page] || ['What does this page show?', 'Page help unavailable.'];
-  return `<div class="page-intro"><div><div class="page-kicker">${escapeHtml(modeForPage(page))}</div><h1>${escapeHtml(page)}</h1><div class="page-question">${escapeHtml(content[0])}</div></div><details class="help-popover"><summary title="Page help">?</summary><p>${escapeHtml(content[1])}</p></details></div>`;
-}
-
-function renderOperationalStatus(status){
-  const checks = status.checks || [];
-  const worstState = items => {
-    const rank = {healthy: 0, degraded: 1, warning: 2, unknown: 2, critical: 3};
-    return (items || []).reduce((worst, item) => (rank[item.state] ?? 2) > (rank[worst] ?? 2) ? item.state : worst, 'healthy');
-  };
-  const operatorState = (state, configured=true) => {
-    if (!configured) return ['Not configured', 'unknown'];
-    if (state === 'critical') return ['Failed', 'critical'];
-    if (state === 'healthy') return ['Correct', 'healthy'];
-    return ['Warning', 'warning'];
-  };
-  const row = (area, detail, state, href, configured=true) => {
-    const [label, cssState] = operatorState(state, configured);
-    return `<div class="operational-row"><div class="operational-area">${escapeHtml(area)}</div><div class="operational-detail">${escapeHtml(detail)}</div><div class="operational-state ${cssState}">${escapeHtml(label)}</div><a class="ghost operational-link" href="${escapeHtml(href)}">Details</a></div>`;
-  };
-  const systemChecks = ['temperature', 'cpu_load', 'ram', 'root_disk', 'write_test'].map(name => findCheck(status, name)).filter(check => check.name);
-  const systemState = worstState(systemChecks);
-  const systemIssue = systemChecks.find(check => check.state !== 'healthy');
-  const services = checks.filter(check => String(check.name || '').endsWith('.service'));
-  const healthyServices = services.filter(check => check.state === 'healthy').length;
-  const serviceIssue = services.find(check => check.state !== 'healthy');
-  const recording = status.recording_storage || {};
-  const recordingCheck = findCheck(status, 'recording_storage');
-  const recordingConfigured = Boolean(recording.mode || recording.mountpoint || recordingCheck.name);
-  const network = findCheck(status, 'network_module');
-  const networkConfigured = Boolean(network.name) && !String(network.message || '').toLowerCase().includes('not configured');
-  const feed = status.hardware_watchdog_feed || {};
-  const watchdogPresent = Boolean(findCheck(status, 'hardware_watchdog_present').value);
-  const watchdogConfigured = Boolean(feed.enabled);
-  const watchdogState = watchdogPresent && feed.feeding ? 'healthy' : 'warning';
-  const watchdogDetail = watchdogPresent ? (feed.feeding ? `Feeding ${feed.device || '/dev/wdt_dio'}` : 'Device detected but the hardware feed is stale or inactive') : 'No verified Neousys hardware watchdog device';
-  return `<div class="card"><h2>Operational Status</h2><p class="muted">This list shows what is ready and where attention is needed. Open Details for the relevant setup or evidence.</p><div class="operational-list">${row('System', systemIssue?.message || 'Operating system, CPU, memory and root storage checks are normal.', systemState, '/hardware', systemChecks.length > 0)}${row('Services', serviceIssue?.message || `${healthyServices}/${services.length} monitored services running`, worstState(services), '/services', services.length > 0)}${row('Recording storage', recording.message || recordingCheck.message || 'Recording storage has not been configured.', recording.status || recordingCheck.state || 'unknown', '/hardware#storage', recordingConfigured)}${row('Network', network.message || 'Network checks have not been configured.', network.state || 'unknown', '/network', networkConfigured)}${row('Hardware watchdog', watchdogDetail, watchdogState, '/watchdog', watchdogConfigured)}</div></div>`;
-}
-
-function renderMetricTiles(status){
-  const temp = findCheck(status, 'temperature');
-  const cpu = findCheck(status, 'cpu_load');
-  const ram = findCheck(status, 'ram');
-  const root = findCheck(status, 'root_disk');
-  const recStorage = status.recording_storage || {};
-  const recStorageCheck = {
-    state: recStorage.status || findCheck(status, 'recording_storage').state || 'unknown',
-    message: recStorage.message || findCheck(status, 'recording_storage').message || 'Recording storage status unavailable',
-  };
-  const oldestRecordingFound = Boolean(lastRecordingActivity.oldest?.display_local);
-  const oldestRecordingValue = lastRecordingActivity.oldest?.display_local || (recStorage.mounted ? 'No recording found' : 'Storage unavailable');
-  const oldestRecordingDetail = oldestRecordingFound ? 'Oldest available Videosoft recording' : (recStorage.message || 'No timestamped recording found');
-  const oldestRecordingCheck = {state: oldestRecordingFound ? 'healthy' : (recStorage.mounted ? 'warning' : 'critical')};
-  const dedicatedStorage = recStorage.mode !== 'system_directory';
-  const rootUsed = `${root.value?.used_percent ?? '-'}%`;
-  const storageUsed = `${recStorage.used_percent ?? '-'}%`;
-  const diskValue = dedicatedStorage ? `Root ${rootUsed}` : `Root / Storage ${rootUsed}`;
-  const diskDetail = dedicatedStorage ? (recStorage.mounted ? `Storage ${storageUsed}` : 'Storage unavailable') : `${root.value?.free_gb ?? '-'} GB free`;
-  const diskState = root.state !== 'healthy' ? root.state : (dedicatedStorage ? recStorageCheck.state : root.state);
-  const wdt = findCheck(status, 'hardware_watchdog_present');
-  const wdtFeedCheck = findCheck(status, 'hardware_watchdog_feed_status');
-  const wdtFeed = status.hardware_watchdog_feed || {};
-  const wdtConfig = lastConfigSummary.hardware_watchdog || {};
-  const startupGrace = wdtFeed.startup_grace || {};
-  const graceRemaining = Math.max(0, Number(startupGrace.remaining_seconds || 0));
-  const graceCountdown = `${Math.floor(graceRemaining / 60)}:${String(graceRemaining % 60).padStart(2, '0')}`;
-  const wdtState = startupGrace.active ? 'waiting' : (wdtFeedCheck.state || wdt.state || 'unknown');
-  const wdtValue = startupGrace.active ? `Waiting ${graceCountdown}` : (wdtFeed.feeding ? 'Feeding' : (wdt.value ? 'Feed stale' : 'Not present'));
-  const wdtDetails = startupGrace.active
-    ? `Safety window: ${graceCountdown} remaining`
-    : (wdtFeed.feeding
-      ? `${wdtConfig.timeout_seconds || '-'}s timeout`
-      : (wdt.value ? 'Device detected; feed inactive' : 'No verified hardware watchdog'));
-  return `<div class="grid metric-grid">${tile('CPU Temp', temp, fmtValue(temp.value, ' C'), temp.message)}${tile('CPU Load', cpu, fmtPercent(cpu.value), cpu.message)}${tile('RAM', ram, fmtPercent(ram.value), ram.message)}${tile('Disk Usage', {state: diskState}, diskValue, diskDetail)}${tile('Oldest Recording', oldestRecordingCheck, oldestRecordingValue, oldestRecordingDetail, 'recording-tile')}${tile('Hardware Recovery', {state: wdtState, message: wdtDetails}, wdtValue, wdtDetails)}</div>`;
-}
-
-function renderServices(status){
-  const names = [...new Set([...(status.checks || []).filter(c => String(c.name || '').endsWith('.service')).map(c => c.name), ...(lastServiceInfo.services || []).map(item => item.name)])];
-  const trend = (name, key, color) => {
-    const values = (lastHistory || []).flatMap(row => row.service_metrics || []).filter(item => item.name === name).map(item => Number(item[key])).filter(value => Number.isFinite(value)).slice(-30);
-    if (!values.length) return '<span class="muted">No history yet</span>';
-    const max = Math.max(1, ...values);
-    return `<div class="trend-bars" title="Last ${values.length} retained samples">${values.map(value => `<span class="trend-bar" style="height:${Math.max(4, Math.round((value / max) * 30))}px;background:${color}" title="${value}"></span>`).join('')}</div>`;
-  };
-  const trendRows = names.map(name => `<tr><td>${escapeHtml(name)}</td><td>${trend(name, 'cpu_percent', 'var(--blue)')}</td><td>${trend(name, 'memory_mb', 'var(--green)')}</td></tr>`).join('');
-  const serviceEvents = (lastEvents || []).filter(event => names.some(name => `${event.source || ''} ${event.message || ''}`.includes(name))).slice(0, 5);
-  return `<div class="card"><h2>Services</h2><p class="muted">CPU is the service process reading and may differ from whole-system CPU, especially on a multi-core gateway.</p><table><thead><tr><th>Service</th><th>Status</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Uptime</th></tr></thead><tbody>${serviceRows(status)}</tbody></table></div><div class="grid lower-grid"><div class="card"><h2>Service Trends</h2><p class="muted">Retained samples, normally one per history interval. Blue is CPU; green is memory. Taller bars mean higher usage.</p><table><thead><tr><th>Service</th><th>CPU trend</th><th>Memory trend</th></tr></thead><tbody>${trendRows || '<tr><td colspan="3">No service history captured yet.</td></tr>'}</tbody></table></div><div class="card"><h2>Recent Service Faults</h2>${serviceEvents.length ? renderEvents(serviceEvents, 5) : '<p class="healthy">No recent service-specific events.</p>'}<a class="ghost" href="/events">Open full event history</a></div></div>`;
-}
-
-function renderOperationalAlerts(status){
-  const hardwarePresent = Boolean(findCheck(status, 'hardware_watchdog_present').value);
-  const issues = (status.checks || []).filter(check => check.state !== 'healthy' && !(check.name === 'hardware_watchdog_feed_status' && !hardwarePresent)).slice(0, 6);
-  const alertName = name => name === 'hardware_watchdog_present' ? 'Hardware recovery unavailable' : String(name || 'Unknown check').replaceAll('_', ' ');
-  const rows = issues.length ? issues.map(check => `<div class="issue-row"><span class="pill ${statusClass(check.state)}">${escapeHtml(String(check.state || 'unknown').toUpperCase())}</span><div><div class="value">${escapeHtml(alertName(check.name))}</div><div class="muted">${escapeHtml(check.message || 'No detail')}</div></div></div>`).join('') : '<div class="issue-row"><span class="pill">CLEAR</span><div><div class="value">No active alerts</div><div class="muted">All current checks are healthy.</div></div></div>';
-  return `<div class="card"><h2>Active Alerts</h2><div class="issue-list">${rows}</div><div class="button-row"><a class="ghost" href="/events">Open event history</a></div></div>`;
-}
-
-function renderSystemInfo(status){
-  const rtc = lastSystemInfo.rtc || {};
-  return `<div class="card"><h2>System Information</h2><div class="detail-grid"><div><div class="label">Hostname</div><div class="value">${escapeHtml(lastSystemInfo.hostname || '-')}</div><div class="label">OS</div><div class="value">${escapeHtml(lastSystemInfo.os || '-')}</div><div class="label">Kernel</div><div class="value">${escapeHtml(lastSystemInfo.kernel || '-')}</div><div class="label">Architecture</div><div class="value">${escapeHtml(lastSystemInfo.architecture || '-')}</div><div class="label">Build</div><div class="value">${escapeHtml(lastVersion.branch || '-')} / ${escapeHtml(lastVersion.commit || '-')}</div></div><div><div class="label">Uptime</div><div class="value">${escapeHtml(lastSystemInfo.uptime_seconds ? `${Math.round(lastSystemInfo.uptime_seconds)}s` : '-')}</div><div class="label">Python</div><div class="value">${escapeHtml(lastSystemInfo.python || '-')}</div><div class="label">Timezone</div><div class="value">${escapeHtml((lastSystemInfo.timezone || []).join(' / ') || '-')}</div><div class="label">BIOS/RTC Clock</div><div class="value ${rtc.rtc0_present ? 'healthy' : 'warning'}">${rtc.rtc0_present ? 'RTC present' : 'RTC not confirmed'}</div><div class="label">Config</div><div class="value">${escapeHtml(lastVersion.config_path || '-')}</div></div></div><div class="label">Clock detail</div><pre>${escapeHtml(rtc.hwclock || rtc.timedatectl || 'Clock command output not available')}</pre></div>`;
-}
-
-function renderOverview(status, events){
-  return `${pageHelp('Overview')}<div class="overview-page">${renderGatewaySummary(status)}${renderOperationalStatus(status)}${renderMetricTiles(status)}${renderOperationalAlerts(status)}</div>`;
-}
-
-function renderSimplePage(title, content){
-  return `<div class="card"><h2>${escapeHtml(title)}</h2>${content}</div>`;
-}
-
-function placeholderList(items){
-  return `<ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
-}
-
-function renderIdentitySettingsCard(){
-  const identity = lastSettings.identity || {};
-  return `<div class="card"><h2>Gateway Identity</h2><div class="detail-grid"><div><label class="label">Site name</label><input id="set-site-name" maxlength="80" value="${escapeHtml(identity.site_name || '')}" placeholder="e.g. Ellingers"><p class="muted">Shown throughout the watchdog and included in downloaded evidence.</p><label class="label">Asset ID (optional)</label><input id="set-asset-id" maxlength="64" value="${escapeHtml(identity.asset_id || '')}" placeholder="e.g. GW-017"></div><div><div class="label">Hostname</div><div class="value">${escapeHtml(identity.hostname || '-')}</div><div class="label">Hardware fingerprint</div><div class="value">${escapeHtml(identity.hardware_fingerprint || '-')}</div><div class="label">OS disk serial</div><div class="value">${escapeHtml(identity.os_disk?.serial || '-')}</div><div class="label">Recording disk serial</div><div class="value">${escapeHtml(identity.recording_disk?.serial || '-')}</div></div></div><p class="warning">Confirm these serials before changing a remote gateway. Cloned units may share the same hostname.</p></div>`;
-}
-
-function renderSettingsPage(){
-  const t = lastSettings.thresholds || {};
-  const r = lastSettings.retention || {};
-  const n = lastSettings.network || {};
-  const u = lastSettings.update || {};
-  const h = lastSettings.hardware_watchdog || {};
-  const rec = lastSettings.recovery || {};
-  const rs = lastSettings.recording_storage || {};
-  return renderSimplePage('Settings', `<p>Edit common watchdog settings. A backup is made before saving to disk.</p><div class="detail-grid"><div class="mini-card"><h3>Polling and History</h3><label class="label">Poll interval seconds</label><input id="set-poll" type="number" min="2" max="300" value="${escapeHtml(lastSettings.poll_interval_seconds ?? 5)}"><label class="label">History sample seconds</label><input id="set-history-sample" type="number" min="10" max="3600" value="${escapeHtml(r.history_sample_seconds ?? 60)}"><label class="label">History retention days</label><input id="set-history-days" type="number" min="1" max="365" value="${escapeHtml(r.history_retention_days ?? 30)}"><label class="label">Max watchdog storage MB</label><input id="set-max-mb" type="number" min="10" max="4096" value="${escapeHtml(r.max_total_mb ?? 100)}"></div><div class="mini-card"><h3>Storage Thresholds</h3><label class="label">Root warn %</label><input id="set-root-warn" type="number" min="1" max="100" value="${escapeHtml(t.root_disk_warning_percent ?? 80)}"><label class="label">Root critical %</label><input id="set-root-critical" type="number" min="1" max="100" value="${escapeHtml(t.root_disk_critical_percent ?? 95)}"><label class="label">Recordings warn %</label><input id="set-rec-warn" type="number" min="1" max="100" value="${escapeHtml(t.recordings_disk_warning_percent ?? 85)}"><label class="label">Recordings critical %</label><input id="set-rec-critical" type="number" min="1" max="100" value="${escapeHtml(t.recordings_disk_critical_percent ?? 95)}"><label><input id="set-rs-expected-full" type="checkbox" ${rs.expected_full ? 'checked' : ''}> Recording storage is Videosoft managed / expected full</label><label class="label">Recording storage warn below free MB</label><input id="set-rs-min-free-warning" type="number" min="0" max="1048576" value="${escapeHtml(rs.minimum_free_mb_warning ?? 5000)}" placeholder="0 = disabled"><label class="label">Recording storage critical below free MB</label><input id="set-rs-min-free-critical" type="number" min="0" max="1048576" value="${escapeHtml(rs.minimum_free_mb_critical ?? 2048)}" placeholder="0 = disabled"><p class="muted">Use expected-full mode when Videosoft manages retention and high used percentage is normal.</p></div><div class="mini-card"><h3>Network</h3><label class="label">Internet hosts, one per line</label><textarea id="set-internet-hosts">${escapeHtml((n.internet_hosts || []).join('\\n'))}</textarea><label class="label">Local targets, one per line</label><textarea id="set-local-targets">${escapeHtml((n.local_targets || []).join('\\n'))}</textarea><label class="label">Remote access services, one per line</label><textarea id="set-remote-services">${escapeHtml((n.remote_access_services || []).join('\\n'))}</textarea></div><div class="mini-card"><h3>Updates and Recovery</h3><label class="label">Update remote</label><input id="set-update-remote" value="${escapeHtml(u.remote || 'origin')}"><label class="label">Update branch</label><input id="set-update-branch" value="${escapeHtml(u.branch || '')}" placeholder="blank = current branch"><label><input id="set-hw-enabled" type="checkbox" ${h.enabled ? 'checked' : ''}> Enable hardware watchdog feed</label><label><input id="set-recovery-enabled" type="checkbox" ${rec.enabled ? 'checked' : ''}> Enable recovery engine</label><label><input id="set-restart-services" type="checkbox" ${rec.restart_failed_services ? 'checked' : ''}> Restart failed critical services</label><label><input id="set-allow-reboot" type="checkbox" ${rec.allow_reboot ? 'checked' : ''}> Allow reboot on persistent critical failure</label></div></div><div class="button-row"><button class="action" onclick="saveSettings()">Save settings</button><button class="ghost" onclick="load()">Reload from service</button></div><p id="settings-feedback"></p><h3>Current config summary</h3><pre>${escapeHtml(JSON.stringify(lastSettings, null, 2))}</pre>${placeholderList(['Service list editor','Install/reconfigure watchdog from Recovery page','Full raw config editor with validation'])}`);
-}
-
-function renderRetentionPage(){
-  return `<div class="card"><h2>Watchdog Data Storage</h2><p>Used ${escapeHtml(lastRetention.used_mb ?? '-')} MB of ${escapeHtml(lastRetention.max_total_mb ?? '-')} MB (${escapeHtml(lastRetention.used_percent ?? '-')}%).</p><div class="button-row"><button class="action" onclick="purgeOldData()">Purge old data</button><button class="ghost" onclick="purgeAllData()">Purge all non-status data</button></div><pre>${escapeHtml(JSON.stringify(lastRetention, null, 2))}</pre></div>`;
-}
-
-function renderNetworkPage(){
-  const pings = (lastNetworkInfo.pings || []).map(item => `<tr><td>${escapeHtml(item.target)}</td><td class="${item.ok ? 'healthy' : 'warning'}">${item.ok ? 'OK' : 'Failed'}</td><td>${escapeHtml(item.detail || '-')}</td></tr>`).join('');
-  const remote = (lastNetworkInfo.remote_access || []).map(item => `<tr><td>${escapeHtml(item.service)}</td><td class="${item.active ? 'healthy' : 'warning'}">${escapeHtml(item.state || '-')}</td><td>${escapeHtml(item.note || '')}</td></tr>`).join('');
-  return `<div class="grid lower-grid"><div class="card"><h2>Network</h2><div class="label">IP Addresses</div><div class="value">${escapeHtml(lastNetworkInfo.ip_addresses || '-')}</div><div class="label">Default Route</div><div class="value">${escapeHtml(lastNetworkInfo.default_route || '-')}</div><div class="label">DNS</div><pre>${escapeHtml(lastNetworkInfo.dns || '-')}</pre></div><div class="card"><h2>Connectivity</h2><table><thead><tr><th>Target</th><th>Status</th><th>Detail</th></tr></thead><tbody>${pings || '<tr><td colspan="3">No network targets configured</td></tr>'}</tbody></table><h3>Remote Access</h3><table><thead><tr><th>Service</th><th>Status</th><th>Note</th></tr></thead><tbody>${remote || '<tr><td>TeamViewer</td><td class="muted">Placeholder</td><td>Add/check service name when confirmed</td></tr>'}</tbody></table>${placeholderList(['Forwarder reachability','Gateway software web forwarding status','Local recorder/camera targets'])}</div></div>`;
-}
-
-function renderUpdatesPage(updateStatus){
-  return renderSimplePage('Updates', `<p class="${statusClass(updateStatus.state)}">${escapeHtml((updateStatus.state || 'unknown').toUpperCase())}</p><p>${escapeHtml(updateStatus.message || '')}</p><div class="detail-grid"><div><div class="label">Branch</div><div class="value">${escapeHtml(updateStatus.branch || '-')}</div><div class="label">Commit</div><div class="value">${escapeHtml(updateStatus.commit || '-')}</div><div class="label">Updated</div><div class="value">${escapeHtml(updateStatus.updated_at || '-')}</div></div><div><div class="label">Log file</div><div class="value">${escapeHtml(lastUpdateLog.path || '-')}</div><div class="label">Last log update</div><div class="value">${escapeHtml(lastUpdateLog.modified_unix ? new Date(lastUpdateLog.modified_unix * 1000).toLocaleString() : '-')}</div></div></div><div class="button-row"><button class="action" id="update-button" onclick="triggerUpdate()">Update watchdog now</button><button class="ghost" onclick="load()">Refresh update status</button></div><p id="update-feedback"></p><h3>Update Log Tail</h3><pre>${escapeHtml(lastUpdateLog.tail || 'No update log yet')}</pre>${placeholderList(['Check for updates without applying','Show local and remote commit comparison','Rollback placeholder'])}`);
-}
-
-function renderDiagnosticsPage(status, updateStatus){
-  return renderSimplePage('Diagnostics', `<p>Advanced troubleshooting and support bundle tools. Raw JSON is intentionally kept here.</p><div class="detail-grid"><div><h3>Watchdog Service</h3><pre>${escapeHtml(lastDiagnostics.service_status || 'Not available')}</pre></div><div><h3>Journal Tail</h3><pre>${escapeHtml(lastDiagnostics.journal_tail || 'Not available')}</pre></div></div>${placeholderList(['Hardware probes detail','Network command output bundle','Support bundle export file'])}<h3>Raw status</h3><pre>${escapeHtml(JSON.stringify(status, null, 2))}</pre><h3>Update status</h3><pre>${escapeHtml(JSON.stringify(updateStatus, null, 2))}</pre>`);
-}
-
-function renderHardwarePage(grouped){
-  const cpu = lastHardwareInfo.cpu || {};
-  const memory = lastHardwareInfo.memory || {};
-  const block = lastHardwareInfo.block_devices || [];
-  return `<div class="grid metric-grid">${grouped.hardware.map(c => tile(c.name, c, c.value === true ? 'Present' : fmtValue(c.value), c.message)).join('')}</div><div class="grid lower-grid"><div class="card"><h2>CPU and Memory</h2><div class="label">CPU</div><div class="value">${escapeHtml(cpu.model || '-')}</div><div class="label">Cores</div><div class="value">${escapeHtml(cpu.cores || '-')}</div><div class="label">RAM Total</div><div class="value">${escapeHtml(memory.total_mb !== undefined ? `${memory.total_mb} MB` : '-')}</div><div class="label">RAM Available</div><div class="value">${escapeHtml(memory.available_mb !== undefined ? `${memory.available_mb} MB` : '-')}</div></div><div class="card"><h2>Detected Block Devices</h2><pre>${escapeHtml(block.join('\\n') || 'No block device detail available')}</pre>${placeholderList(['USB/controller/device inventory','More temperature sensors','Watchdog device discovery detail'])}</div></div>`;
-}
-
-function renderStoragePage(grouped){
-  const rows = (lastStorageInfo.volumes || []).map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.path)}</td><td>${escapeHtml(item.used_percent)}%</td><td>${escapeHtml(item.free_gb)} GB</td><td>${escapeHtml(item.warning_percent)}%</td><td>${escapeHtml(item.critical_percent)}%</td><td>${item.always_full_expected ? 'Yes' : 'No'}</td></tr>`).join('');
-  const rec = lastStatus.recording_storage || {};
-  const recStatus = rec.status || 'unknown';
-  const recRows = [
-    ['Status', recStatus.toUpperCase()],
-    ['Mode', rec.mode === 'system_directory' ? 'One drive / OS filesystem' : 'Dedicated recording storage'],
-    ['Device', rec.device || '-'],
-    ['Mountpoint', rec.mountpoint || '-'],
-    ['Recordings folder', rec.recordings_path || '-'],
-    ['Owner', `${rec.owner || '-'}:${rec.group || '-'}`],
-    ['Label', `${rec.label || '-'} / expected ${rec.expected_label || '-'}`],
-    ['Filesystem', `${rec.filesystem || '-'} / expected ${rec.expected_filesystem || '-'}`],
-    ['Capacity', rec.total_gb !== null && rec.total_gb !== undefined ? `${rec.total_gb} GB` : '-'],
-    ['Free space', rec.free_gb !== null && rec.free_gb !== undefined ? `${rec.free_gb} GB` : '-'],
-    ['Used %', rec.used_percent !== null && rec.used_percent !== undefined ? `${rec.used_percent}%` : '-'],
-    ['Used warn / critical', `${rec.used_warning_percent ?? '-'}% / ${rec.used_critical_percent ?? '-'}%`],
-    ['Expected full mode', rec.expected_full ? 'Enabled' : 'Disabled'],
-    ['Minimum free MB warn / critical', `${rec.minimum_free_mb_warning ?? '-'} / ${rec.minimum_free_mb_critical ?? '-'}`],
-    ['Legacy free warning', rec.free_warning_enabled ? `${rec.free_warning_percent ?? '-'}% free` : 'Disabled'],
-    ['Writable', rec.writable ? 'Yes' : 'No'],
-    ['SMART', rec.smart_status || '-'],
-    ['Temperature', rec.temperature_c !== null && rec.temperature_c !== undefined ? `${rec.temperature_c} C` : '-'],
-    ['Last successful check', rec.last_successful_check || rec.checked_at || '-'],
-  ].map(row => `<tr><td>${escapeHtml(row[0])}</td><td>${escapeHtml(row[1])}</td></tr>`).join('');
-  const guards = rec.recording_service_mount_guards || [];
-  const guardRows = guards.length ? guards.map(item => `<tr><td>${escapeHtml(item.service || '-')}</td><td>${escapeHtml(item.mountpoint || '-')}</td><td class="${item.configured ? 'healthy' : 'warning'}">${item.configured ? 'Configured' : 'Not configured'}</td></tr>`).join('') : '<tr><td colspan="3">No recording services configured. Add service names to recording_storage.recording_services when known.</td></tr>';
-  const recordingPanel = `<div class="card"><h2>Recording Storage</h2><p class="${escapeHtml(recStatus)}">${escapeHtml(rec.message || 'Recording storage status unavailable')}</p><table><tbody>${recRows}</tbody></table><h3>Recording Service Mount Guard</h3><table><thead><tr><th>Service</th><th>Requires mount</th><th>Status</th></tr></thead><tbody>${guardRows}</tbody></table><div class="button-row"><a class="action" href="/recording-storage-configure">Configure recording storage</a><a class="ghost" href="/api/status">Raw status</a></div><form class="inline" method="post" action="/recording-storage-guard-apply"><label><input type="checkbox" name="ack" value="1"> Apply RequiresMountsFor to configured recording services</label> <button class="ghost" type="submit">Apply service guard</button></form></div>`;
-  return `<div class="grid metric-grid">${grouped.storage.map(c => tile(c.name, c, c.value?.used_percent !== undefined ? fmtPercent(c.value.used_percent) : fmtValue(c.value), c.message)).join('')}</div>${recordingPanel}<div class="card"><h2>Configured Storage Limits</h2><table><thead><tr><th>Name</th><th>Path</th><th>Used</th><th>Free</th><th>Warn</th><th>Critical</th><th>Full expected</th></tr></thead><tbody>${rows || '<tr><td colspan="7">No monitored paths configured</td></tr>'}</tbody></table></div>${renderRetentionPage()}`;
-}
-
-function renderHistoryPage(){
-  const latest = (lastHistory || []).slice(-1)[0] || {};
-  const serviceNames = [...new Set((lastHistory || []).flatMap(row => (row.service_metrics || []).map(item => item.name)))];
-  const serviceTrend = (name, key, color) => {
-    const values = (lastHistory || []).flatMap(row => row.service_metrics || []).filter(item => item.name === name).map(item => Number(item[key])).filter(value => Number.isFinite(value)).slice(-30);
-    if (!values.length) return '<span class="muted">No samples yet</span>';
-    const max = Math.max(1, ...values);
-    return `<div class="trend-bars" title="Last ${values.length} retained samples">${values.map(value => `<span class="trend-bar" style="height:${Math.max(4, Math.round((value / max) * 30))}px;background:${color}" title="${value}"></span>`).join('')}</div>`;
-  };
-  const serviceRows = serviceNames.map(name => `<tr><td>${escapeHtml(name)}</td><td>${serviceTrend(name, 'cpu_percent', 'var(--blue)')}</td><td>${serviceTrend(name, 'memory_mb', 'var(--green)')}</td></tr>`).join('');
-  const serviceHistory = `<div class="card"><h3>Service History</h3><p class="muted">CPU and memory samples retained with the normal history interval. New samples appear after the watchdog has completed a history interval.</p><table><thead><tr><th>Service</th><th>CPU trend</th><th>Memory trend</th></tr></thead><tbody>${serviceRows || '<tr><td colspan="3">No service history has been captured yet.</td></tr>'}</tbody></table></div>`;
-  return renderSimplePage('History', `<div class="detail-grid"><div><h3>Health Score</h3>${renderHistoryChart(lastHistory, 'score')}</div><div><h3>Recent Snapshot</h3><div class="label">Samples</div><div class="value">${escapeHtml((lastHistory || []).length)}</div><div class="label">Latest score</div><div class="value">${escapeHtml(latest.score ?? '-')}%</div><div class="label">Latest RAM</div><div class="value">${escapeHtml(latest.ram ?? '-')}%</div><div class="label">Latest CPU temp</div><div class="value">${escapeHtml(latest.temperature ?? '-')}</div><div class="label">Latest root disk</div><div class="value">${escapeHtml(latest.root_disk ?? '-')}%</div></div></div>${serviceHistory}${placeholderList(['Selectable time ranges','CPU temp/load trend','RAM trend','Disk trend','Service failure timeline'])}`);
-}
-
-function renderPage(status, updateStatus, events){
-  const grouped = groupChecks(status.checks || []);
-  if (currentPage === 'Overview') return renderOverview(status, events);
-  if (currentPage === 'Hardware') return `${pageHelp('Hardware')}${renderHardwarePage(grouped)}`;
-  if (currentPage === 'Services') return `${pageHelp('Services')}${renderServices(status)}`;
-  if (currentPage === 'Storage') return `${pageHelp('Storage')}${renderStoragePage(grouped)}`;
-  if (currentPage === 'Network') return `${pageHelp('Network')}${renderNetworkPage()}`;
-  if (currentPage === 'Recovery') return `${pageHelp('Recovery')}${renderSimplePage('Recovery', `<p class="${escapeHtml(status.recovery?.state || 'unknown')}">${escapeHtml((status.recovery?.state || 'unknown').toUpperCase())}</p><p>${escapeHtml(status.recovery?.message || 'No recovery state available.')}</p>${placeholderList(['Enable/disable recovery','Restart service policy','Reboot grace period','Install/configure hardware watchdog','Last reboot reason'])}`)}`;
-  if (currentPage === 'History') return `${pageHelp('History')}${renderHistoryPage()}`;
-  if (currentPage === 'Settings') return `${pageHelp('Settings')}${renderIdentitySettingsCard()}${renderSettingsPage()}`;
-  if (currentPage === 'Updates') return `${pageHelp('Updates')}${renderUpdatesPage(updateStatus)}`;
-  if (currentPage === 'Diagnostics') return `${pageHelp('Diagnostics')}${renderDiagnosticsPage(status, updateStatus)}`;
-  return renderOverview(status, events);
-}
-
-async function load(){
-  lastStatus = await fetchJson('/api/status', lastStatus || {});
-  render();
-
-  const core = await Promise.allSettled([
-    fetchJson('/api/update-status', lastUpdateStatus || {}),
-    fetchJson(currentPage === 'Events' ? '/api/events?limit=5000' : '/api/events?limit=10', lastEvents || []),
-    fetchJson('/api/config-summary', lastConfigSummary || {}),
-    fetchJson('/api/system-info', lastSystemInfo || {}),
-    fetchJson('/api/settings-summary', lastSettings || {}),
-    fetchJson('/api/retention', lastRetention || {}),
-    fetchJson('/api/version', lastVersion || {}),
-  ]);
-  if (core[0].status === 'fulfilled') lastUpdateStatus = core[0].value;
-  if (core[1].status === 'fulfilled') lastEvents = core[1].value;
-  if (core[2].status === 'fulfilled') lastConfigSummary = core[2].value;
-  if (core[3].status === 'fulfilled') lastSystemInfo = core[3].value;
-  if (core[4].status === 'fulfilled') lastSettings = core[4].value;
-  if (core[5].status === 'fulfilled') lastRetention = core[5].value;
-  if (core[6].status === 'fulfilled') {
-    lastVersion = core[6].value;
-  }
-
-  const pageFetches = [];
-  if (currentPage === 'Overview' || currentPage === 'Services') {
-    pageFetches.push(fetchJson('/api/services-info', lastServiceInfo || {}).then(value => { lastServiceInfo = value; }));
-    pageFetches.push(fetchJson('/api/history', lastHistory || []).then(value => { lastHistory = value; }));
-  }
-  if (currentPage === 'Overview' || currentPage === 'Storage') {
-    pageFetches.push(fetchJson('/api/recording-activity', lastRecordingActivity || {}).then(value => { lastRecordingActivity = value; }));
-  }
-  if (currentPage === 'Hardware') {
-    pageFetches.push(fetchJson('/api/hardware-info', lastHardwareInfo || {}).then(value => { lastHardwareInfo = value; }));
-  }
-  if (currentPage === 'Storage') {
-    pageFetches.push(fetchJson('/api/storage-info', lastStorageInfo || {}).then(value => { lastStorageInfo = value; }));
-  }
-  if (currentPage === 'Network') {
-    pageFetches.push(fetchJson('/api/network-info', lastNetworkInfo || {}).then(value => { lastNetworkInfo = value; }));
-  }
-  if (currentPage === 'History') {
-    pageFetches.push(fetchJson('/api/history', lastHistory || []).then(value => { lastHistory = value; }));
-  }
-  if (currentPage === 'Updates') {
-    pageFetches.push(fetchJson('/api/update-log', lastUpdateLog || {}).then(value => { lastUpdateLog = value; }));
-  }
-  if (currentPage === 'Diagnostics') {
-    pageFetches.push(fetchJson('/api/diagnostics', lastDiagnostics || {}).then(value => { lastDiagnostics = value; }));
-  }
-  await Promise.allSettled(pageFetches);
-  render();
-}
-
-async function fetchJson(path, fallback){
-  try {
-    const response = await fetchWithTimeout(path, 4500);
-    if (!response.ok) return fallback;
-    return response.json();
-  } catch (error) {
-    return fallback;
-  }
-}
-
-function fetchWithTimeout(path, timeoutMs){
-  if (typeof AbortController === 'undefined') {
-    return fetch(path);
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  return fetch(path, { signal: controller.signal }).finally(() => clearTimeout(timer));
-}
-
-function render(){
-  if (!lastStatus) return;
-  document.getElementById('page-title').textContent = `${modeForPage(currentPage)} / ${currentPage}`;
-  document.getElementById('last-update').textContent = `Last update: ${fmtTime(lastStatus.time)}`;
-  document.getElementById('side-state').textContent = displayWord(lastStatus);
-  document.getElementById('side-state').className = `value ${displayState(lastStatus)}`;
-  document.getElementById('app').innerHTML = renderPage(lastStatus, lastUpdateStatus || {}, lastEvents || []);
-}
-
-async function triggerUpdate(){
-  const button = document.getElementById('update-button');
-  const feedback = document.getElementById('update-feedback');
-  if (!button || !feedback) return;
-  if (!confirm('Start a watchdog update now? The service will restart when the update finishes.')) {
-    return;
-  }
-  button.disabled = true;
-  feedback.textContent = 'Starting update...';
-  try {
-    const response = await fetch('/api/update', { method: 'POST' });
-    const payload = await response.json();
-    feedback.textContent = payload.message || 'Update request sent.';
-  } catch (error) {
-    feedback.textContent = `Update failed: ${error}`;
-  } finally {
-    button.disabled = false;
-    setTimeout(load, 3000);
-  }
-}
-
-function linesFromTextarea(id){
-  return String(document.getElementById(id)?.value || '')
-    .split(/\\r?\\n/)
-    .map(item => item.trim())
-    .filter(Boolean);
-}
-
-function numberValue(id){
-  return Number(document.getElementById(id)?.value);
-}
-
-function nullableNumberValue(id){
-  const raw = String(document.getElementById(id)?.value ?? '').trim();
-  return raw === '' ? null : Number(raw);
-}
-
-async function saveSettings(){
-  const feedback = document.getElementById('settings-feedback');
-  const allowReboot = !!document.getElementById('set-allow-reboot')?.checked;
-  if (allowReboot && !confirm('Allowing automatic reboot can restart the gateway if critical checks remain failed. Continue?')) {
-    return;
-  }
-  const payload = {
-    identity: {
-      site_name: String(document.getElementById('set-site-name')?.value || '').trim(),
-      asset_id: String(document.getElementById('set-asset-id')?.value || '').trim(),
-    },
-    poll_interval_seconds: numberValue('set-poll'),
-    thresholds: {
-      root_disk_warning_percent: numberValue('set-root-warn'),
-      root_disk_critical_percent: numberValue('set-root-critical'),
-      recordings_disk_warning_percent: numberValue('set-rec-warn'),
-      recordings_disk_critical_percent: numberValue('set-rec-critical'),
-    },
-    retention: {
-      max_total_mb: numberValue('set-max-mb'),
-      history_sample_seconds: numberValue('set-history-sample'),
-      history_retention_days: numberValue('set-history-days'),
-    },
-    network: {
-      internet_hosts: linesFromTextarea('set-internet-hosts'),
-      local_targets: linesFromTextarea('set-local-targets'),
-      remote_access_services: linesFromTextarea('set-remote-services'),
-    },
-    update: {
-      remote: String(document.getElementById('set-update-remote')?.value || 'origin').trim(),
-      branch: String(document.getElementById('set-update-branch')?.value || '').trim(),
-    },
-    hardware_watchdog: {
-      enabled: !!document.getElementById('set-hw-enabled')?.checked,
-    },
-    recording_storage: {
-      expected_full: !!document.getElementById('set-rs-expected-full')?.checked,
-      minimum_free_mb_warning: nullableNumberValue('set-rs-min-free-warning'),
-      minimum_free_mb_critical: nullableNumberValue('set-rs-min-free-critical'),
-    },
-    recovery: {
-      enabled: !!document.getElementById('set-recovery-enabled')?.checked,
-      restart_failed_services: !!document.getElementById('set-restart-services')?.checked,
-      allow_reboot: allowReboot,
-    },
-  };
-  feedback.textContent = 'Saving settings...';
-  try {
-    const response = await fetch('/api/settings', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload),
-    });
-    const result = await response.json();
-    if (!response.ok || !result.ok) {
-      feedback.textContent = result.error || 'Settings save failed.';
-      return;
-    }
-    feedback.textContent = `Saved to ${result.path}. Backup created if a config already existed.`;
-    window.location.reload();
-  } catch (error) {
-    feedback.textContent = `Settings save failed: ${error}`;
-  }
-}
-
-async function purgeOldData(){
-  if (!confirm('Purge watchdog data older than the configured retention window?')) return;
-  const days = lastRetention.events_retention_days || 30;
-  await fetch(`/api/purge?mode=old&older_than_days=${encodeURIComponent(days)}`, { method: 'POST' });
-  await load();
-}
-
-async function purgeAllData(){
-  if (!confirm('Purge all non-status watchdog data? This removes events and update logs.')) return;
-  await fetch('/api/purge?mode=all', { method: 'POST' });
-  await load();
-}
-window.setRefreshInterval = setRefreshInterval;
-window.setTheme = setTheme;
-window.reloadPage = reloadPage;
-window.showPage = showPage;
-window.load = load;
-window.triggerUpdate = triggerUpdate;
-window.saveSettings = saveSettings;
-window.purgeOldData = purgeOldData;
-window.purgeAllData = purgeAllData;
-const LIVE_RENDERED_PAGES = ['Overview'];
-initTheme();
-if (LIVE_RENDERED_PAGES.includes(currentPage)) {
-  buildNav();
-  showAdvancedControls();
-  initRefresh();
-  load();
-}
-</script>
 </body>
 </html>
 """
@@ -1212,9 +526,16 @@ def start_web(cfg):
     page_modes = VISIBLE_PAGE_GROUPS
     server_pages = [item for _, pages in page_modes for item in pages]
     legacy_page_names = {
-        "Storage": "Hardware",
-        "Recovery": "Settings",
-        "Updates": "Settings",
+        "Overview": "Status",
+        "Hardware": "Evidence",
+        "Network": "Evidence",
+        "Services": "Status",
+        "History": "Evidence",
+        "Diagnostics": "Evidence",
+        "Settings": "Setup",
+        "Storage": "Setup",
+        "Recovery": "Setup",
+        "Updates": "Setup",
     }
 
     request_context = local()
@@ -1247,15 +568,11 @@ def start_web(cfg):
 
     def page_help_html(page):
         help_map = {
-            "Overview": ("Is this gateway ready to operate?", "Shows live health, current alerts, the four Videosoft services, and the actions used most often."),
-            "Hardware": ("Is the hardware and recording storage healthy?", "Shows sensors, CPU, memory, devices, recording storage health, capacity, permissions, and setup tools."),
-            "Services": ("Are the gateway services running?", "Shows the four Videosoft services and the VA-Connect process monitor, with resource use and confirmed restart controls."),
+            "Status": ("Is this gateway ready to operate?", "Shows the small set of live facts an operator needs: gateway state, storage, recordings, services, and protection."),
             "Watchdog": ("Will the gateway recover itself?", "Shows Neousys hardware protection, the independent feeder, the latest feed, and the controls needed to set up or test it."),
-            "Network": ("Can the gateway communicate?", "Shows interfaces, routes, targets, sockets, and remote-access service status."),
             "Events": ("What changed recently?", "Review concise event records, filter the list, inspect evidence, or export it."),
-            "History": ("Has gateway health changed over time?", "Shows retained gateway and service trends without mixing them into the live event list."),
-            "Diagnostics": ("What evidence is available?", "Downloads support bundles and exposes black-box, baseline, and raw engineering evidence."),
-            "Settings": ("How is this gateway configured and recovered?", "Configure monitoring, updates, recovery, identity, storage, network, and watchdog behaviour."),
+            "Evidence": ("What evidence is available?", "Download an investigation bundle and open retained history, black-box, hardware, storage, and network details when needed."),
+            "Setup": ("How is this gateway configured?", "Installation-time identity, storage, logging, update, recovery, and advanced configuration tools."),
         }
         question, detail = help_map.get(page, ("What does this page show?", "Page help unavailable."))
         return (
@@ -1268,12 +585,12 @@ def start_web(cfg):
 
     def page_name_for_path(route_path):
         if route_path in ("", "/"):
-            return "Overview"
+            return "Status"
         cleaned = route_path.strip("/").lower()
         for name, path in server_pages:
             if cleaned == path.strip("/").lower():
                 return name
-        return "Overview"
+        return "Status"
 
     def server_nav_html(current_page):
         current_page = legacy_page_names.get(current_page, current_page)
@@ -1308,11 +625,11 @@ def start_web(cfg):
         except Exception:
             return text
 
-    def basic_dashboard_html(page="Overview"):
+    def basic_dashboard_html(page="Status"):
         status = status_snapshot()
         version = version_info()
         update_status = load_update_status(cfg)
-        overview_recording_activity = recording_activity(cfg) if page == "Overview" else {}
+        overview_recording_activity = recording_activity(cfg) if page == "Status" else {}
         critical = bool(status.get("critical_failed", False))
         checks = [check for check in status.get("checks", []) or [] if isinstance(check, dict)]
         check_map = {str(check.get("name", "")): check for check in checks}
@@ -1898,8 +1215,11 @@ def start_web(cfg):
             feed_check = by_name.get("Live feed", {})
             process_check = by_name.get("Process watchdog", {})
             trip_test = watchdog.get("trip_test", trip_test_summary(cfg))
+            liveness_test = reconcile_liveness_test(cfg)
             legacy = watchdog.get("legacy_daemon", {})
             feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
+            proof = feed.get("protection_proof", {}) if isinstance(feed.get("protection_proof", {}), dict) else {}
+            proven_this_boot = bool(feed.get("proven_this_boot"))
 
             timeout = int(hw_cfg.get("timeout_seconds", 30) or 30)
             feed_interval = int(hw_cfg.get("feed_interval_seconds", 10) or 10)
@@ -1928,10 +1248,14 @@ def start_web(cfg):
                 protection_state = "waiting"
                 protection_word = "SAFETY WINDOW"
                 protection_message = f"Neousys protection is feeding. Full stale-heartbeat enforcement starts in {grace_countdown}."
-            elif ready:
+            elif ready and proven_this_boot:
                 protection_state = "healthy"
                 protection_word = "ACTIVE"
-                protection_message = "The independent feeder owns /dev/wdt_dio and is resetting the Neousys hardware timer."
+                protection_message = "Protection is proven on this boot: the device opened and consecutive Neousys feeds completed."
+            elif ready:
+                protection_state = "waiting"
+                protection_word = "VERIFYING"
+                protection_message = "The feeder is running. Waiting for consecutive feeds to prove protection on this boot."
             elif legacy_problem:
                 protection_state = "critical"
                 protection_word = "CONFLICT"
@@ -1970,16 +1294,14 @@ def start_web(cfg):
             )
 
             detail_rows = [
-                ("Protection", protection_word),
-                ("Hardware", "Neousys WDT_DIO"),
-                ("Device", setup_config.get("device", "/dev/wdt_dio")),
-                ("Feeder", feed_process),
+                ("Protection proven this boot", "Yes" if proven_this_boot else "No"),
+                ("Proven at", local_time(proof.get("verified_at")) if proof.get("verified_at") else "Not yet"),
                 ("Last successful feed", last_feed_text),
                 ("Feed age", feed_age_text),
                 ("Feed count", feed_count),
-                ("Feed interval", f"{feed_interval} seconds"),
-                ("Hardware timeout", f"{timeout} seconds"),
-                ("Software process watchdog", process_check.get("message", "Unknown")),
+                ("Main heartbeat age", f"{feed.get('heartbeat_age_seconds', '-')} seconds"),
+                ("Health progress age", f"{feed.get('health_progress_age_seconds', '-')} seconds"),
+                ("Feeder decision", feed.get("feed_decision", "-")),
             ]
             detail_html = "".join(
                 f"<tr><th>{escape(str(label))}</th><td>{escape(str(value))}</td></tr>"
@@ -2056,33 +1378,30 @@ def start_web(cfg):
                 f"{config_html}</tbody></table></div>"
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run read-only probe</a>"
                 "<a class=\"ghost\" href=\"/hardware-watchdog-prepare-confirm\">Repair Neousys setup</a>"
-                "<a class=\"ghost\" href=\"/diagnostics\">Open diagnostics</a></div>"
+                + ("<a class=\"ghost\" href=\"/watchdog-liveness-confirm\">Test full liveness path</a>" if proven_this_boot and not liveness_test.get("active") else "")
+                + "<a class=\"ghost\" href=\"/evidence\">Open evidence</a></div>"
             )
 
             return (
-                summary_strip([
-                    ("Protection", protection_word, protection_message, protection_state),
-                    ("Neousys driver", "LOADED" if driver.get("state") == "healthy" else "NOT READY", driver.get("message", "-"), driver.get("state", "warning")),
-                    ("Device", "/dev/wdt_dio", device.get("message", "-"), device.get("state", "warning")),
-                    ("Hardware feed", "FEEDING" if feed_recent else "NOT FEEDING", feed_age_text, "healthy" if feed_recent else "critical"),
-                    ("Timeout", f"{timeout}s", f"Feed every {feed_interval}s", "healthy"),
-                ])
-                + f"<div class=\"card action-panel {escape(protection_state)}\"><h2>{escape(protection_word.replace('_', ' ').title())}</h2>"
+                f"<div class=\"card action-panel {escape(protection_state)}\"><div class=\"label\">Neousys hardware watchdog</div><div class=\"status-word {escape(protection_state)}\">{escape(protection_word)}</div>"
                 f"<p class=\"{escape(protection_state)}\">{escape(protection_message)}</p>"
+                f"<p class=\"muted\">Feed {escape(feed_age_text)} | {escape(str(timeout))}s timeout | every {escape(str(feed_interval))}s</p>"
                 f"<div class=\"button-row\">{primary_action}{repair_action}</div></div>"
                 + grace_controls
                 + conflict_html
-                + "<div class=\"grid lower-grid\"><div class=\"card\"><h2>Protection Details</h2>"
-                f"<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>{detail_html}</tbody></table></div></div>"
                 + "<div class=\"card\"><h2>Last Deliberate Test</h2>"
                 f"<div class=\"status-word {'healthy' if trip_test.get('completed_previous_boot') else 'muted'}\">{escape(trip_state.upper())}</div>"
                 f"<p>{escape(trip_result)}</p>"
                 f"<div class=\"button-row\">{trip_button}</div>"
-                "<p class=\"muted\">This intentionally stops feeding and should reboot the gateway if hardware protection is working.</p></div></div>"
-                + "<div class=\"card\"><h2>Timeout</h2><p class=\"muted\">Keep 30 seconds for normal operation. Extend it temporarily only when investigating a reboot loop.</p>"
-                "<form method=\"post\" action=\"/watchdog-timeout-set\"><div class=\"toolbar\"><label>Hardware timeout "
-                f"<select name=\"timeout_seconds\">{timeout_options}</select></label><button class=\"ghost\" type=\"submit\">Save timeout</button></div></form></div>"
-                + disclosure("Advanced diagnostics", advanced_html, opened=legacy_problem)
+                "<p class=\"muted\">This intentionally stops feeding and should reboot the gateway if hardware protection is working.</p></div>"
+                + disclosure(
+                    "Protection details and setup",
+                    "<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>" + detail_html + "</tbody></table></div>"
+                    + "<h3>Timeout</h3><form method=\"post\" action=\"/watchdog-timeout-set\"><div class=\"toolbar\"><label>Hardware timeout "
+                    + f"<select name=\"timeout_seconds\">{timeout_options}</select></label><button class=\"ghost\" type=\"submit\">Save timeout</button></div></form>"
+                    + advanced_html,
+                    opened=legacy_problem,
+                )
             )
 
         def storage_page():
@@ -2556,7 +1875,7 @@ def start_web(cfg):
                     ("Black-box evidence", "Short-interval snapshots retained around a hang or reboot.", "/api/blackbox", ""),
                 ])
                 + "</div>"
-                + f"<div class=\"card\"><h2>Persistent Journal</h2><p class=\"{'healthy' if journal_state.get('healthy') else 'warning'}\">{escape(str(journal_state.get('summary') or 'Disabled or unavailable'))}</p><p class=\"muted\">Persistent logging preserves kernel and service evidence across a reboot. Configuration is managed in Settings.</p><div class=\"button-row\"><a class=\"ghost\" href=\"/settings#persistent-journal\">Open logging settings</a></div></div>"
+                + f"<div class=\"card\"><h2>Persistent Journal</h2><p class=\"{'healthy' if journal_state.get('healthy') else 'warning'}\">{escape(str(journal_state.get('summary') or 'Disabled or unavailable'))}</p><p class=\"muted\">Persistent logging preserves kernel and service evidence across a reboot. Configuration is managed in Setup.</p><div class=\"button-row\"><a class=\"ghost\" href=\"/setup#persistent-journal\">Open logging setup</a></div></div>"
                 + disclosure("Stage 0 baseline capture", baseline_card)
                 + disclosure("Advanced technical data", advanced_detail)
             )
@@ -2617,9 +1936,11 @@ def start_web(cfg):
         network_configured = bool(network_check) and "not configured" not in network_message.lower()
         watchdog_present = bool(check_value("hardware_watchdog_present", False))
         watchdog_configured = bool(feed.get("enabled"))
-        watchdog_state = "healthy" if watchdog_present and feed.get("feeding") else "warning"
-        if watchdog_present and feed.get("feeding"):
-            watchdog_detail = f"Feeding {feed.get('device') or '/dev/wdt_dio'}"
+        watchdog_state = "healthy" if watchdog_present and feed.get("feeding") and feed.get("proven_this_boot") else "warning"
+        if watchdog_present and feed.get("feeding") and feed.get("proven_this_boot"):
+            watchdog_detail = f"Protection proven this boot; feeding {feed.get('device') or '/dev/wdt_dio'}"
+        elif watchdog_present and feed.get("feeding"):
+            watchdog_detail = "Hardware feed started; waiting for current-boot proof"
         elif watchdog_present:
             watchdog_detail = "Device detected but the hardware feed is stale or inactive"
         else:
@@ -2630,28 +1951,28 @@ def start_web(cfg):
                     "System",
                     (system_issue or {}).get("message") or "Operating system, CPU, memory and root storage checks are normal.",
                     worst_check_state(system_checks),
-                    "/hardware",
+                    "/evidence#system",
                     bool(system_checks),
                 ),
                 operational_row(
                     "Services",
                     (service_issue or {}).get("message") or f"{healthy_service_count}/{len(service_checks)} monitored services running",
                     worst_check_state(service_checks),
-                    "/services",
+                    "/#services",
                     bool(service_checks),
                 ),
                 operational_row(
                     "Recording storage",
                     recording.get("message") or recording_check.get("message") or "Recording storage has not been configured.",
                     str(recording.get("status") or recording_check.get("state") or "unknown"),
-                    "/hardware#storage",
+                    "/evidence#system",
                     bool(recording.get("mode") or recording.get("mountpoint") or recording_check),
                 ),
                 operational_row(
                     "Network",
                     network_message,
                     str(network_check.get("state") or "unknown"),
-                    "/network",
+                    "/evidence#network",
                     network_configured,
                 ),
                 operational_row(
@@ -2673,7 +1994,7 @@ def start_web(cfg):
             f"<tr><th>Previous reboot</th><td>{escape(str(reboot_evidence.get('reset_mechanism') or 'No previous reboot evidence'))}; confidence {escape(str(reboot_evidence.get('confidence') or '-'))}</td></tr>"
             f"<tr><th>Persistent journal</th><td class=\"{'healthy' if journal.get('healthy') else 'warning'}\">{escape(str(journal.get('summary') or 'Disabled or unavailable'))}</td></tr>"
             "</tbody></table></div>"
-            "<div class=\"button-row\"><a class=\"ghost\" href=\"/diagnostics\">Open incident evidence</a></div>"
+            "<div class=\"button-row\"><a class=\"ghost\" href=\"/evidence\">Open incident evidence</a></div>"
         )
         overview_html = (
             "<div class=\"card summary-card\">"
@@ -2708,35 +2029,30 @@ def start_web(cfg):
             + metric_tiles()
             + operational_alerts_card()
             + disclosure("Stability evidence", stability_detail)
-            + disclosure("Service details", services_card())
+            + "<section id=\"services\">" + disclosure("Service details", services_card()) + "</section>"
         )
 
-        if page == "Overview":
+        if page == "Status":
             return page_help_html(page) + "<div class=\"overview-page\">" + overview_html + "</div>"
-        if page == "Hardware":
-            return (
-                page_help_html(page)
-                + hardware_page()
-                + "<section id=\"storage\" class=\"moved-section\"><div class=\"moved-section-heading\"><h2>Recording Storage</h2><p>Mount health, recording availability, capacity, permissions, and storage setup.</p></div>"
-                + storage_page()
-                + "</section>"
-            )
-        if page == "Services":
-            return page_help_html(page) + services_card()
         if page == "Watchdog":
             return page_help_html(page) + watchdog_page()
-        if page == "Network":
-            return page_help_html(page) + network_page()
         if page == "Events":
             return page_help_html(page) + events_page()
-        if page == "History":
-            return page_help_html(page) + history_page()
-        if page == "Diagnostics":
-            return page_help_html(page) + diagnostics_page()
-        if page == "Settings":
+        if page == "Evidence":
+            return (
+                page_help_html(page)
+                + diagnostics_page()
+                + "<section id=\"history\">" + disclosure("History and trends", history_page()) + "</section>"
+                + "<section id=\"system\">" + disclosure("System hardware and storage", hardware_page()) + "</section>"
+                + "<section id=\"network\">" + disclosure("Network evidence", network_page()) + "</section>"
+            )
+        if page == "Setup":
             return (
                 page_help_html(page)
                 + settings_card()
+                + "<section id=\"storage\" class=\"moved-section\">"
+                + disclosure("Recording storage setup", storage_page())
+                + "</section>"
                 + "<section id=\"software-update\" class=\"moved-section\">"
                 + disclosure("Software update", updates_card(), opened=True)
                 + "</section>"
@@ -2744,7 +2060,7 @@ def start_web(cfg):
                 + disclosure("Recovery and repair tools", recovery_page())
                 + "</section>"
             )
-        return page_help_html("Overview") + overview_html
+        return page_help_html("Status") + overview_html
 
     def html_page(route_path="/"):
         page = page_name_for_path(route_path)
@@ -2756,8 +2072,8 @@ def start_web(cfg):
                 f"<h2>{escape(page)} Page Error</h2>"
                 "<p class=\"critical\">This page hit a runtime error while collecting live gateway details.</p>"
                 f"<pre>{escape(str(exc))}</pre>"
-                "<p class=\"muted\">The watchdog service can still be running even if this page failed. Use Evidence and Diagnostics or /api/status to check health while this is investigated.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/\">Overview</a><a class=\"ghost\" href=\"/diagnostics\">Diagnostics</a><a class=\"ghost\" href=\"/api/status\">Raw status</a></div>"
+                "<p class=\"muted\">The watchdog service can still be running even if this page failed. Use Evidence or /api/status to check health while this is investigated.</p>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/\">Status</a><a class=\"ghost\" href=\"/evidence\">Evidence</a><a class=\"ghost\" href=\"/api/status\">Raw status</a></div>"
                 "</div>"
             )
         return page_shell(body, page)
@@ -3569,6 +2885,34 @@ def start_web(cfg):
             body_parts.append("<p class=\"warning\">A trip test is already active for this boot.</p>")
         body_parts.append("</div>")
         return page_shell("".join(body_parts), "Watchdog")
+
+    def watchdog_liveness_confirm_html():
+        state = reconcile_liveness_test(cfg)
+        feed = status_snapshot().get("hardware_watchdog_feed", {})
+        ready = bool(feed.get("proven_this_boot") and feed.get("feeding") and not state.get("active"))
+        body = (
+            "<div class=\"card\"><h2>Test Full Watchdog Liveness Path</h2>"
+            "<p class=\"critical\">This test intentionally stops the main VA-Connect monitor and should reboot the gateway.</p>"
+            "<p>The independent feeder must detect the stale heartbeat, stop feeding, and allow the Neousys hardware timer to reset the PC. If no reset occurs, a separate fallback starts the main monitor again on the same boot.</p>"
+            f"<p class=\"{'healthy' if ready else 'warning'}\">Protection proven this boot: {'Yes' if feed.get('proven_this_boot') else 'No'}; feed current: {'Yes' if feed.get('feeding') else 'No'}.</p>"
+            "<form method=\"post\" action=\"/watchdog-liveness-run\">"
+            "<label class=\"option-row\"><input type=\"checkbox\" name=\"ack_risk\" value=\"1\"><span><strong>I understand the gateway should reboot</strong><br><span class=\"muted\">Remote access will be interrupted. Use this only during an attended test.</span></span></label>"
+            f"<div class=\"button-row\"><button class=\"danger\" type=\"submit\" {'disabled' if not ready else ''}>Run full liveness test</button><a class=\"ghost\" href=\"/watchdog\">Cancel</a></div>"
+            "</form></div>"
+        )
+        return page_shell(body, "Watchdog")
+
+    def watchdog_liveness_result_html(result):
+        ok = bool(result.get("ok"))
+        body = (
+            "<div class=\"card\"><h2>Full Watchdog Liveness Test</h2>"
+            f"<p class=\"{'warning' if ok else 'critical'}\">{escape(str(result.get('message', 'Test request processed.')))}</p>"
+            "<p class=\"muted\">This page will keep checking for the watchdog after the expected reboot or safe fallback.</p>"
+            "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog\">Return to Watchdog</a></div>"
+            "<script>(function poll(){setTimeout(function(){fetch('/api/status',{cache:'no-store'}).then(function(r){if(r.ok){window.location.href='/watchdog';}else{poll();}}).catch(poll);},5000);}());</script>"
+            "</div>"
+        )
+        return page_shell(body, "Watchdog")
 
     def watchdog_arm_now_confirm_html():
         grace = startup_grace_status(cfg, trip_test_summary(cfg))
@@ -5538,11 +4882,13 @@ def start_web(cfg):
             "last-reboot-reason.json": Path(cfg.get("last_reboot_reason_path") or data_dir / "last-reboot-reason.json"),
             "hardware-watchdog-control.json": Path(cfg.get("hardware_watchdog_control_path") or data_dir / "hardware-watchdog-control.json"),
             "watchdog-trip-test.json": Path(cfg.get("trip_test_path") or data_dir / "watchdog-trip-test.json"),
+            "watchdog-liveness-test.json": Path(cfg.get("liveness_test_path") or data_dir / "watchdog-liveness-test.json"),
             "heartbeat-state.json": Path(cfg.get("heartbeat_state_path") or data_dir / "heartbeat-state.json"),
             "heartbeat.jsonl": Path(cfg.get("heartbeat_path") or data_dir / "heartbeat.jsonl"),
             "reboot-evidence.jsonl": Path(cfg.get("reboot_evidence_path") or data_dir / "reboot-evidence.jsonl"),
             "last-reboot-evidence.json": Path(cfg.get("reboot_evidence_path") or data_dir / "reboot-evidence.jsonl").with_name("last-reboot-evidence.json"),
             "hardware-watchdog-feed.json": Path(cfg.get("hardware_watchdog_feed_state_path") or data_dir / "hardware-watchdog-feed.json"),
+            "hardware-watchdog-proof.json": Path(cfg.get("hardware_watchdog_proof_path") or data_dir / "hardware-watchdog-proof.json"),
             "hardware-watchdog-feed-previous.json": Path(cfg.get("hardware_watchdog_previous_state_path") or data_dir / "hardware-watchdog-feed-previous.json"),
             "hardware-watchdog-lifecycle.jsonl": Path(cfg.get("hardware_watchdog_lifecycle_path") or data_dir / "hardware-watchdog-lifecycle.jsonl"),
             "kernel-fault-state.json": Path(cfg.get("kernel_fault_state_path") or data_dir / "kernel-fault-state.json"),
@@ -5802,6 +5148,15 @@ def start_web(cfg):
                 return
             if route_path == "/watchdog-trip-confirm":
                 body = watchdog_trip_confirm_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/watchdog-liveness-confirm":
+                body = watchdog_liveness_confirm_html().encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
@@ -6414,6 +5769,29 @@ def start_web(cfg):
                     result,
                 )
                 body = watchdog_trip_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 409)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/watchdog-liveness-run":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    acknowledged = form.get("ack_risk", [""])[0] in {"1", "on", "true", "True", "yes"}
+                    result = start_liveness_test(cfg, acknowledged)
+                except Exception as exc:
+                    result = {"ok": False, "message": str(exc)}
+                append_web_event(
+                    "warning" if result.get("ok") else "critical",
+                    "watchdog_liveness_test",
+                    result.get("message", "Full liveness test processed"),
+                    result,
+                )
+                body = watchdog_liveness_result_html(result).encode("utf-8")
                 self.send_response(200 if result.get("ok") else 409)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))

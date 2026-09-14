@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from va_watchdog.heartbeat import HeartbeatPublisher, heartbeat_age_seconds, read_state
+from va_watchdog.heartbeat import HeartbeatPublisher, heartbeat_age_seconds, health_progress_age_seconds, read_state
 from va_watchdog.incident_archive import archive_previous_boot, list_archives
 from va_watchdog.reboot_evidence import classify, create
 from va_watchdog.watchdog_feed import FeedWorker
@@ -56,6 +56,11 @@ class ForensicPhase1Tests(unittest.TestCase):
         self.assertEqual(heartbeat_age_seconds(state, current_uptime=112.5), 12.5)
         self.assertEqual(heartbeat_age_seconds(state, current_uptime=99.0), 0.0)
 
+    def test_health_progress_age_uses_monotonic_uptime(self):
+        state = {"last_health_sample_monotonic_uptime": 100.0}
+        self.assertEqual(health_progress_age_seconds(state, current_uptime=112.5), 12.5)
+        self.assertEqual(health_progress_age_seconds(state, current_uptime=99.0), 0.0)
+
     def test_partial_heartbeat_state_is_ignored(self):
         with self.subTest("malformed state"):
             with patch("va_watchdog.heartbeat.heartbeat_paths", return_value=(Path("C:/does-not-exist/heartbeat-state.json"), Path("C:/does-not-exist/heartbeat.jsonl"))):
@@ -76,6 +81,25 @@ class ForensicPhase1Tests(unittest.TestCase):
         heartbeat = {"monotonic_uptime": 100.0, "boot_id": "boot", "feed_allowed": True}
         grace = {"active": False, "boot_id": "boot"}
         self.assertFalse(worker.heartbeat_allows_feed(heartbeat, grace, current_uptime=116.0))
+
+    def test_fresh_heartbeat_with_stalled_health_loop_stops_feeding(self):
+        worker = FeedWorker({
+            "events_path": "/tmp/events.jsonl",
+            "hardware_watchdog": {
+                "timeout_seconds": 30,
+                "stale_heartbeat_seconds": 15,
+                "health_progress_timeout_seconds": 90,
+            },
+        })
+        heartbeat = {
+            "monotonic_uptime": 195.0,
+            "last_health_sample_monotonic_uptime": 100.0,
+            "boot_id": "boot",
+            "feed_allowed": True,
+        }
+        grace = {"active": False, "boot_id": "boot"}
+        self.assertFalse(worker.heartbeat_allows_feed(heartbeat, grace, current_uptime=200.0))
+        self.assertEqual(worker.last_decision, "health loop stopped advancing")
 
     def test_trip_test_overrides_startup_grace(self):
         worker = FeedWorker({

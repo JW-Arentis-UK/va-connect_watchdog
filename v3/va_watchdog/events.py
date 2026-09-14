@@ -75,6 +75,7 @@ class EventLog:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.previous_states = {}
         self.resource_candidates = {}
+        self.state_candidates = {}
 
     def add(self, level: str, source: str, message: str, data=None):
         event = {
@@ -90,10 +91,34 @@ class EventLog:
 
     def add_state_changes(self, checks):
         for check in checks:
+            if check.name == "recording_storage":
+                continue
             old = self.previous_states.get(check.name)
-            if old is not None and old != check.state:
-                self.add(check.state, check.name, f"{check.name} changed from {old} to {check.state}", check.to_dict())
+            if old is None:
+                self.previous_states[check.name] = check.state
+                continue
+            if old == check.state:
+                self.state_candidates.pop(check.name, None)
+                continue
+            now = time.monotonic()
+            candidate = self.state_candidates.get(check.name)
+            if not candidate or candidate.get("state") != check.state:
+                candidate = {"state": check.state, "since": now}
+                self.state_candidates[check.name] = candidate
+            required = {
+                "critical": 15.0,
+                "degraded": 30.0,
+                "warning": 60.0,
+                "unknown": 60.0,
+                "healthy": 30.0,
+            }.get(check.state, 30.0)
+            if now - float(candidate.get("since", now)) < required:
+                continue
+            data = check.to_dict()
+            data["sustained_seconds"] = required
+            self.add(check.state, check.name, f"{check.name} changed from {old} to {check.state}", data)
             self.previous_states[check.name] = check.state
+            self.state_candidates.pop(check.name, None)
 
     def add_service_resource_changes(self, checks, cfg=None):
         limits = (cfg or {}).get("service_resource_limits", {})

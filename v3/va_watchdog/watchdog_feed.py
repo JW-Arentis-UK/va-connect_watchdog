@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from .config import load_config
-from .heartbeat import heartbeat_age_seconds, read_state
+from .heartbeat import heartbeat_age_seconds, health_progress_age_seconds, read_state
 from .watchdog_device import HardwareWatchdog
 from .watchdog_grace import startup_grace_status
 from .watchdog_test import fail_trip_test, trip_test_active
@@ -38,8 +38,12 @@ class FeedWorker:
         self.timeout = max(5, int(hw_cfg.get("timeout_seconds", 30) or 30))
         configured_stale = float(hw_cfg.get("stale_heartbeat_seconds", 15) or 15)
         self.stale_seconds = max(5.0, min(configured_stale, float(self.timeout) - 2.0))
+        configured_health_timeout = float(hw_cfg.get("health_progress_timeout_seconds", 90) or 90)
+        self.health_progress_timeout = max(self.stale_seconds + 5.0, configured_health_timeout)
         self.device_retry_seconds = max(10, int(hw_cfg.get("device_retry_seconds", 60) or 60))
         self.state_path = Path(cfg.get("hardware_watchdog_feed_state_path") or Path(cfg["events_path"]).parent / "hardware-watchdog-feed.json")
+        self.proof_path = Path(cfg.get("hardware_watchdog_proof_path") or Path(cfg["events_path"]).parent / "hardware-watchdog-proof.json")
+        self.proof_feed_count = max(2, int(hw_cfg.get("proof_feed_count", 3) or 3))
         self.lock_path = Path(cfg.get("hardware_watchdog_lock_path") or Path(cfg["events_path"]).parent / "hardware-watchdog.lock")
         self.stop_requested = False
         self.lock_handle = None
@@ -54,6 +58,10 @@ class FeedWorker:
         )
         self.last_error = ""
         self.error_count = 0
+        self.last_decision = "starting"
+        self.last_heartbeat_age = None
+        self.last_health_progress_age = None
+        self.proof_written = False
         self.magic_close = bool(hw_cfg.get("magic_close", False))
         self.nowayout = self._read_nowayout()
         configured_verify = float(hw_cfg.get("trip_countdown_verify_seconds", 8) or 8)
@@ -77,16 +85,29 @@ class FeedWorker:
 
     def heartbeat_allows_feed(self, heartbeat, grace, trip_active=False, current_uptime=None):
         if trip_active:
+            self.last_decision = "deliberate trip test active"
             return False
         if grace.get("active"):
+            self.last_decision = "startup grace; stale enforcement delayed"
             return True
         age = heartbeat_age_seconds(heartbeat, current_uptime=current_uptime)
-        return bool(
-            age is not None
-            and age <= self.stale_seconds
-            and heartbeat.get("boot_id") == grace.get("boot_id")
-            and heartbeat.get("feed_allowed", True)
-        )
+        health_age = health_progress_age_seconds(heartbeat, current_uptime=current_uptime)
+        self.last_heartbeat_age = age
+        self.last_health_progress_age = health_age
+        if age is None or age > self.stale_seconds:
+            self.last_decision = "main heartbeat stale"
+            return False
+        if heartbeat.get("boot_id") != grace.get("boot_id"):
+            self.last_decision = "heartbeat belongs to another boot"
+            return False
+        if not heartbeat.get("feed_allowed", True):
+            self.last_decision = "feed explicitly disabled"
+            return False
+        if health_age is not None and health_age > self.health_progress_timeout:
+            self.last_decision = "health loop stopped advancing"
+            return False
+        self.last_decision = "main process and health loop are fresh"
+        return True
 
     def stop(self, *_args):
         if _args:
@@ -110,6 +131,10 @@ class FeedWorker:
             "interval_seconds": self.interval,
             "timeout_seconds": self.hw.get_timeout(),
             "stale_heartbeat_seconds": self.stale_seconds,
+            "health_progress_timeout_seconds": self.health_progress_timeout,
+            "heartbeat_age_seconds": self.last_heartbeat_age,
+            "health_progress_age_seconds": self.last_health_progress_age,
+            "feed_decision": self.last_decision,
             "device_retry_seconds": self.device_retry_seconds,
             "magic_close_requested": self.magic_close,
             "shutdown_behavior": self._shutdown_behavior(),
@@ -134,6 +159,39 @@ class FeedWorker:
             # State reporting must never interrupt hardware feeding.
             pass
         self._record_lifecycle(status, payload)
+
+    def _write_protection_proof(self):
+        if self.proof_written or self.hw.feed_count < self.proof_feed_count:
+            return
+        module_root = Path("/sys/module/wdt_dio")
+        driver = {}
+        for name in ("version", "srcversion", "taint"):
+            path = module_root / name
+            try:
+                driver[name] = path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+        payload = {
+            "proven": True,
+            "boot_id": self.boot_id,
+            "verified_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "kernel": os.uname().release if hasattr(os, "uname") else "",
+            "backend": self.backend,
+            "device": self.device,
+            "driver": driver,
+            "pid": os.getpid(),
+            "feed_count": self.hw.feed_count,
+            "feed_interval_seconds": self.interval,
+            "timeout_seconds": self.hw.get_timeout(),
+            "last_feed_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.hw.last_feed or time.time())),
+            "evidence": "device opened and consecutive feed calls completed on this boot",
+        }
+        try:
+            atomic_write_json(self.proof_path, payload)
+            self.proof_written = True
+            self.log_lifecycle("protection_proven", payload)
+        except OSError as exc:
+            self.last_error = f"could not record protection proof: {exc}"
 
     def _record_lifecycle(self, status, payload, force=False):
         now = time.monotonic()
@@ -288,6 +346,34 @@ class FeedWorker:
         while not self.stop_requested and time.monotonic() < deadline:
             time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
 
+    def _ensure_driver_loaded(self):
+        if os.path.exists(self.device):
+            return True
+        command = "/sbin/modprobe" if os.path.exists("/sbin/modprobe") else "modprobe"
+        try:
+            result = subprocess.run(
+                [command, "wdt_dio"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.log_lifecycle("driver_load_failed", {"error": str(exc)})
+            return False
+        if result.returncode != 0:
+            error = (result.stderr or result.stdout or "modprobe failed").strip()
+            self.log_lifecycle("driver_load_failed", {"error": error, "returncode": result.returncode})
+            return False
+        self.log_lifecycle("driver_load_requested")
+        for _ in range(20):
+            if os.path.exists(self.device):
+                return True
+            if self.stop_requested:
+                return False
+            time.sleep(0.1)
+        return os.path.exists(self.device)
+
     def _open_when_available(self):
         """Wait in one supervised process so a missing driver cannot create a restart storm."""
         while not self.stop_requested:
@@ -305,6 +391,7 @@ class FeedWorker:
                 self._wait_interruptibly(self.device_retry_seconds)
                 continue
 
+            self._ensure_driver_loaded()
             self.hw.open()
             if self.hw.opened:
                 self.last_error = ""
@@ -317,6 +404,21 @@ class FeedWorker:
             self.write_state("device_unavailable")
             self._wait_interruptibly(self.device_retry_seconds)
         return False
+
+    def _shutdown_hardware(self, abnormal_exit):
+        if abnormal_exit:
+            self.log_lifecycle("hardware_left_armed_after_exception", {"feed_count": self.hw.feed_count})
+            return
+        self.write_state("stopping")
+        try:
+            self.log_lifecycle("stop_wdt_requested", {"opened": self.hw.opened, "feed_count": self.hw.feed_count})
+            self.hw.close(magic_close=bool(self.cfg.get("hardware_watchdog", {}).get("magic_close", False)))
+            self.log_lifecycle("stop_wdt_completed", {"opened": self.hw.opened})
+        except Exception as exc:
+            self.last_error = f"orderly watchdog stop failed: {exc}"
+            self.error_count += 1
+            self.write_state("stop_error")
+            self.log_lifecycle("stop_wdt_error", {"error": str(exc)})
 
     def run(self):
         signal.signal(signal.SIGTERM, self.stop)
@@ -336,6 +438,7 @@ class FeedWorker:
                 self.lock_handle.close()
             return 0
         self.write_state("starting")
+        abnormal_exit = False
         try:
             if not self._open_when_available():
                 return 0
@@ -357,36 +460,31 @@ class FeedWorker:
                         self.hw.feed()
                         self.last_error = ""
                         self.write_state("feeding")
+                        self._write_protection_proof()
                     except Exception as exc:
                         self.last_error = str(exc)
                         self.error_count += 1
                         self.write_state("feed_error")
                 elif not allowed:
-                    self.write_state("paused_stale_heartbeat" if not effective_trip_active else "paused_trip_test")
+                    paused_status = "paused_trip_test" if effective_trip_active else "paused_liveness_failure"
+                    self.write_state(paused_status)
                 self._wait_interruptibly(min(1, self.interval))
         except Exception as exc:
+            abnormal_exit = True
             self.last_error = str(exc)
             self.error_count += 1
+            self.last_decision = "feeder exception; hardware timer intentionally left armed"
+            self.write_state("exception_timer_armed")
             self.log_lifecycle("feeder_exception", {"error": str(exc), "feed_count": self.hw.feed_count})
             raise
         finally:
             if self.received_signal:
                 self.log_lifecycle("signal_received", {"signal": self.received_signal})
-            self.write_state("stopping")
-            try:
-                self.log_lifecycle("stop_wdt_requested", {"opened": self.hw.opened, "feed_count": self.hw.feed_count})
-                self.hw.close(magic_close=bool(self.cfg.get("hardware_watchdog", {}).get("magic_close", False)))
-                self.log_lifecycle("stop_wdt_completed", {"opened": self.hw.opened})
-            except Exception as exc:
-                self.last_error = f"orderly watchdog stop failed: {exc}"
-                self.error_count += 1
-                self.write_state("stop_error")
-                self.log_lifecycle("stop_wdt_error", {"error": str(exc)})
-            finally:
-                if self.lock_handle:
-                    if fcntl is not None:
-                        fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_UN)
-                    self.lock_handle.close()
+            self._shutdown_hardware(abnormal_exit)
+            if self.lock_handle:
+                if fcntl is not None:
+                    fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_UN)
+                self.lock_handle.close()
         return 0
 
 

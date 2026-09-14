@@ -5,32 +5,35 @@ from va_watchdog.web import LEGACY_PAGE_REDIRECTS, VISIBLE_PAGE_GROUPS
 
 
 class WebNavigationTests(unittest.TestCase):
-    def test_visible_navigation_separates_operational_and_engineering_responsibilities(self):
+    def test_visible_navigation_is_reduced_to_five_operator_pages(self):
         pages = [page for _, group_pages in VISIBLE_PAGE_GROUPS for page in group_pages]
 
         self.assertEqual(pages, [
-            ("Overview", "/"),
+            ("Status", "/"),
             ("Events", "/events"),
-            ("Hardware", "/hardware"),
-            ("Network", "/network"),
-            ("Services", "/services"),
             ("Watchdog", "/watchdog"),
-            ("History", "/history"),
-            ("Diagnostics", "/diagnostics"),
-            ("Settings", "/settings"),
+            ("Evidence", "/evidence"),
+            ("Setup", "/setup"),
         ])
 
     def test_removed_pages_redirect_to_their_replacement_sections(self):
         self.assertEqual(LEGACY_PAGE_REDIRECTS, {
-            "/storage": "/hardware#storage",
-            "/recovery": "/settings#recovery",
-            "/updates": "/settings#software-update",
+            "/overview": "/",
+            "/hardware": "/evidence#system",
+            "/network": "/evidence#network",
+            "/services": "/#services",
+            "/history": "/evidence#history",
+            "/diagnostics": "/evidence",
+            "/settings": "/setup",
+            "/storage": "/setup#storage",
+            "/recovery": "/setup#recovery",
+            "/updates": "/setup#software-update",
         })
 
-    def test_services_and_watchdog_have_separate_server_renderers(self):
+    def test_status_and_watchdog_have_separate_server_renderers(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 
-        self.assertIn('if page == "Services":\n            return page_help_html(page) + services_card()', source)
+        self.assertIn('if page == "Status":', source)
         self.assertIn('if page == "Watchdog":\n            return page_help_html(page) + watchdog_page()', source)
         self.assertNotIn('/services#watchdog', source)
 
@@ -41,9 +44,10 @@ class WebNavigationTests(unittest.TestCase):
         watchdog_renderer = source[start:end]
 
         self.assertIn("Neousys WDT_DIO", watchdog_renderer)
-        self.assertIn("Protection Details", watchdog_renderer)
+        self.assertIn("Protection details and setup", watchdog_renderer)
+        self.assertIn("Protection proven this boot", watchdog_renderer)
         self.assertIn("Last Deliberate Test", watchdog_renderer)
-        self.assertIn("Advanced diagnostics", watchdog_renderer)
+        self.assertNotIn("Advanced diagnostics", watchdog_renderer)
         self.assertNotIn("Safe Watchdog Test", watchdog_renderer)
         self.assertNotIn("Existing watchdogs and cleanup", watchdog_renderer)
 
@@ -105,6 +109,12 @@ class WebNavigationTests(unittest.TestCase):
 
         self.assertIn('disclosure("Stability evidence", stability_detail)', source)
         self.assertIn('disclosure("Service details", services_card())', source)
+
+    def test_obsolete_client_renderer_is_not_activated(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("LIVE_RENDERED_PAGES", source)
+        self.assertNotIn("renderOverview(status, events)", source)
 
 
 if __name__ == "__main__":

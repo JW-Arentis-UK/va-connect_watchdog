@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any
 from .common import CheckResult
 
+_SMART_CACHE = {}
+SMART_CACHE_SECONDS = 6 * 60 * 60
+
 DEFAULT_RECORDING_STORAGE = {
     "enabled": True,
     "mode": "dedicated_mount",
@@ -174,10 +177,17 @@ def _parent_disk(device):
     return f"/dev/{parent_name}" if parent_name else None
 
 def _smart_info(device):
+    now = time.monotonic()
+    cache_key = str(device or "")
+    cached = _SMART_CACHE.get(cache_key)
+    if cached and now - cached[0] < SMART_CACHE_SECONDS:
+        return dict(cached[1])
     disk = _parent_disk(device) or device
     result = _run(["smartctl", "-H", "-A", "-j", str(disk)], timeout=15)
     if result["returncode"] is None or "No such file" in result["stderr"]:
-        return {"status": "unavailable", "temperature_c": None, "device": disk, "message": "smartctl unavailable"}
+        value = {"status": "unavailable", "temperature_c": None, "device": disk, "message": "smartctl unavailable"}
+        _SMART_CACHE[cache_key] = (now, value)
+        return dict(value)
     raw = result["stdout"] or result["stderr"]
     try:
         payload = json.loads(raw) if raw else {}
@@ -209,12 +219,14 @@ def _smart_info(device):
         temperature = int(float(temperature)) if temperature is not None else None
     except (TypeError, ValueError):
         temperature = None
-    return {
+    value = {
         "status": smart_status,
         "temperature_c": temperature,
         "device": disk,
         "message": result["stderr"] or result["stdout"] or "",
     }
+    _SMART_CACHE[cache_key] = (now, value)
+    return dict(value)
 
 def _recording_writable(mountpoint):
     p = Path(mountpoint)

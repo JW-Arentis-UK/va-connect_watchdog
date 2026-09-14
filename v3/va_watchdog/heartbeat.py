@@ -213,3 +213,19 @@ def heartbeat_age_seconds(state: dict[str, Any], current_uptime: float | None = 
         return round(max(0.0, now - float(state["monotonic_uptime"])), 3)
     except (TypeError, ValueError):
         return None
+
+
+def health_progress_age_seconds(
+    state: dict[str, Any], current_uptime: float | None = None
+) -> float | None:
+    """Return health-loop age using monotonic uptime, not the wall clock."""
+    if not isinstance(state, dict):
+        return None
+    sampled_uptime = state.get("last_health_sample_monotonic_uptime")
+    if sampled_uptime is None:
+        return None
+    try:
+        now = monotonic_uptime() if current_uptime is None else float(current_uptime)
+        return round(max(0.0, now - float(sampled_uptime)), 3)
+    except (TypeError, ValueError):
+        return None

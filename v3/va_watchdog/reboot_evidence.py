@@ -11,6 +11,7 @@ from typing import Any
 from .heartbeat import heartbeat_paths, read_tail
 from .incident_archive import archive_previous_boot
 from .watchdog_test import read_trip_test_state
+from .watchdog_liveness_test import confirmed_for_boot, read_liveness_test_state
 
 
 def _run(command, timeout=10):
@@ -103,14 +104,15 @@ def _apply_confirmed_trip(evidence: dict[str, Any], trip_state: dict[str, Any]) 
     return True
 
 
-def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], previous_reboot_reason: dict[str, Any], kernel_text: str, last_x: str, reset_reason: str = "", trip_state: dict[str, Any] | None = None) -> dict[str, Any]:
+def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], previous_reboot_reason: dict[str, Any], kernel_text: str, last_x: str, reset_reason: str = "", trip_state: dict[str, Any] | None = None, liveness_state: dict[str, Any] | None = None) -> dict[str, Any]:
     previous_boot = str(boot_change.get("previous_boot_id") or "")
     previous_rows = [row for row in heartbeats if str(row.get("boot_id")) == previous_boot]
     last_heartbeat = previous_rows[-1] if previous_rows else (heartbeats[-1] if heartbeats else {})
     faults = _faults(kernel_text)
     requested = bool(previous_reboot_reason)
     deliberate_trip = _confirmed_trip(trip_state or {}, previous_boot)
-    watchdog_evidence = bool(deliberate_trip) or bool(reset_reason and "watchdog" in reset_reason.lower()) or any(item["category"] == "watchdog_reset" for item in faults)
+    liveness_trip = confirmed_for_boot(liveness_state or {}, previous_boot)
+    watchdog_evidence = bool(deliberate_trip) or bool(liveness_trip) or bool(reset_reason and "watchdog" in reset_reason.lower()) or any(item["category"] == "watchdog_reset" for item in faults)
     kernel_fault = any(item["category"] in {"oom", "hung_task", "soft_lockup", "hard_lockup", "kernel_panic"} for item in faults)
     storage_fault = any(item["category"] == "storage_io" for item in faults)
     recent_session = _previous_session_lines(last_x)
@@ -120,7 +122,7 @@ def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], prev
         confidence = "High"
     elif watchdog_evidence:
         mechanism = "Watchdog reset"
-        confidence = "High" if reset_reason or deliberate_trip else "Medium"
+        confidence = "High" if reset_reason or deliberate_trip or liveness_trip else "Medium"
     elif clean:
         mechanism = "Clean reboot"
         confidence = "Medium"
@@ -145,6 +147,8 @@ def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], prev
         evidence_used.append(f"Platform reset reason: {reset_reason}")
     if deliberate_trip:
         evidence_used.append("A confirmed deliberate watchdog trip was recorded for the previous boot ID.")
+    if liveness_trip:
+        evidence_used.append("A full liveness-path test stopped the main monitor on the previous boot before this reboot.")
     if watchdog_evidence:
         evidence_used.append("The platform or previous-boot kernel log explicitly reported a watchdog reset.")
     if clean:
@@ -172,6 +176,7 @@ def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], prev
         "last_x": last_x[-5000:],
         "reset_reason": reset_reason,
         "deliberate_trip_test": deliberate_trip,
+        "liveness_path_test": liveness_trip,
         "created_at": time.time(),
     }
 
@@ -187,6 +192,7 @@ def _previous_session_lines(last_x: str) -> list[str]:
 def create(cfg: dict[str, Any], boot_change: dict[str, Any], feed_state: dict[str, Any] | None = None) -> dict[str, Any]:
     path = Path(cfg.get("reboot_evidence_path") or Path(cfg["events_path"]).parent / "reboot-evidence.jsonl")
     trip_state = read_trip_test_state(cfg)
+    liveness_state = read_liveness_test_state(cfg)
     if not boot_change.get("changed"):
         latest = path.with_name("last-reboot-evidence.json")
         try:
@@ -212,7 +218,7 @@ def create(cfg: dict[str, Any], boot_change: dict[str, Any], feed_state: dict[st
         reason = {}
     kernel = _run(["journalctl", "-b", "-1", "-k", "--no-pager"], timeout=15)
     last_x = _run(["last", "-x"], timeout=10)
-    evidence = classify(boot_change, heartbeats, reason if isinstance(reason, dict) else {}, kernel, last_x, str((feed_state or {}).get("reset_reason") or _reset_reason()), trip_state)
+    evidence = classify(boot_change, heartbeats, reason if isinstance(reason, dict) else {}, kernel, last_x, str((feed_state or {}).get("reset_reason") or _reset_reason()), trip_state, liveness_state)
     try:
         archive = archive_previous_boot(cfg, boot_change, evidence, kernel, last_x)
     except Exception as exc:

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
 import secrets
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Tuple
@@ -21,6 +24,44 @@ def current_boot_id() -> str:
         return path.read_text(encoding="utf-8").strip() or "-"
     except Exception:
         return "-"
+
+
+def test_environment() -> dict[str, Any]:
+    driver = {}
+    module_root = Path("/sys/module/wdt_dio")
+    for name in ("version", "srcversion", "taint"):
+        try:
+            driver[name] = (module_root / name).read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+    build = ""
+    build_time = ""
+    try:
+        result = subprocess.run(
+            ["git", "show", "-s", "--format=%h%n%cI", "HEAD"],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        lines = result.stdout.strip().splitlines()
+        if result.returncode == 0 and lines:
+            build = lines[0]
+            build_time = lines[1] if len(lines) > 1 else ""
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return {
+        "boot_id": current_boot_id(),
+        "kernel": platform.release(),
+        "machine": platform.machine(),
+        "build": build,
+        "build_time": build_time,
+        "watchdog_device_present": Path("/dev/wdt_dio").exists(),
+        "watchdog_driver_loaded": module_root.exists(),
+        "watchdog_driver": driver,
+        "pid": os.getpid(),
+    }
 
 
 def read_trip_test_state(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -144,11 +185,14 @@ def trigger_trip_test(cfg: dict[str, Any], ack_risk: bool) -> dict[str, Any]:
     state["triggered_at_unix"] = now
     state["triggered_at"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
     state["triggered_boot_id"] = boot_id
+    environment = test_environment()
+    state["trigger_environment"] = environment
     result = {
         "ok": True,
         "message": "Trip test confirmed: watchdog feed paused for this boot. The gateway should reboot if the hardware watchdog is healthy.",
         "tested_at": state["triggered_at"],
         "triggered_boot_id": boot_id,
+        "environment": environment,
     }
     state["last_result"] = result
     write_trip_test_state(cfg, state)
