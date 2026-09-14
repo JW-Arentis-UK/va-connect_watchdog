@@ -1360,8 +1360,7 @@ def start_web(cfg):
                     f"<div class=\"score\" id=\"watchdog-grace-countdown\" data-seconds=\"{remaining_seconds}\">{grace_countdown}</div>"
                     "<p class=\"muted\">The Neousys timer is still being fed. This delay only gives remote access time before stale-heartbeat enforcement starts.</p>"
                     "<div class=\"button-row\"><form class=\"inline\" method=\"post\" action=\"/watchdog-grace-delay\"><input type=\"hidden\" name=\"delay_seconds\" value=\"900\"><button class=\"ghost\" type=\"submit\">Add 15 minutes</button></form>"
-                    "<a class=\"ghost\" href=\"/watchdog-arm-now-confirm\">End delay now</a>"
-                    "<a class=\"danger\" href=\"/hardware-watchdog-disable-confirm\">Disable feed safely</a></div>"
+                    "<a class=\"ghost\" href=\"/watchdog-arm-now-confirm\">End delay now</a></div>"
                     "<script>(function(){var e=document.getElementById('watchdog-grace-countdown');if(!e)return;var s=Number(e.getAttribute('data-seconds')||0);var k='va-watchdog-grace-reload';if(s>0){sessionStorage.removeItem(k);}var t=setInterval(function(){if(s>0){s-=1;e.textContent=Math.floor(s/60)+':' + String(s%60).padStart(2,'0');}if(s<=0){clearInterval(t);if(sessionStorage.getItem(k)!=='1'){sessionStorage.setItem(k,'1');setTimeout(function(){window.location.reload();},500);}}},1000);}());</script>"
                     "</div>"
                 )
@@ -1378,7 +1377,7 @@ def start_web(cfg):
                 f"{config_html}</tbody></table></div>"
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog-hardware-probe-confirm\">Run read-only probe</a>"
                 "<a class=\"ghost\" href=\"/hardware-watchdog-prepare-confirm\">Repair Neousys setup</a>"
-                + ("<a class=\"ghost\" href=\"/watchdog-liveness-confirm\">Test full liveness path</a>" if proven_this_boot and not liveness_test.get("active") else "")
+                + ("<a class=\"ghost\" href=\"/watchdog-liveness-confirm\">Test full liveness path</a>" if proven_this_boot and not grace_active and not liveness_test.get("active") else "")
                 + "<a class=\"ghost\" href=\"/evidence\">Open evidence</a></div>"
             )
 
@@ -2889,12 +2888,13 @@ def start_web(cfg):
     def watchdog_liveness_confirm_html():
         state = reconcile_liveness_test(cfg)
         feed = status_snapshot().get("hardware_watchdog_feed", {})
-        ready = bool(feed.get("proven_this_boot") and feed.get("feeding") and not state.get("active"))
+        grace = startup_grace_status(cfg, trip_test_summary(cfg))
+        ready = bool(feed.get("proven_this_boot") and feed.get("feeding") and not grace.get("active") and not state.get("active"))
         body = (
             "<div class=\"card\"><h2>Test Full Watchdog Liveness Path</h2>"
             "<p class=\"critical\">This test intentionally stops the main VA-Connect monitor and should reboot the gateway.</p>"
             "<p>The independent feeder must detect the stale heartbeat, stop feeding, and allow the Neousys hardware timer to reset the PC. If no reset occurs, a separate fallback starts the main monitor again on the same boot.</p>"
-            f"<p class=\"{'healthy' if ready else 'warning'}\">Protection proven this boot: {'Yes' if feed.get('proven_this_boot') else 'No'}; feed current: {'Yes' if feed.get('feeding') else 'No'}.</p>"
+            f"<p class=\"{'healthy' if ready else 'warning'}\">Protection proven this boot: {'Yes' if feed.get('proven_this_boot') else 'No'}; feed current: {'Yes' if feed.get('feeding') else 'No'}; startup delay active: {'Yes' if grace.get('active') else 'No'}.</p>"
             "<form method=\"post\" action=\"/watchdog-liveness-run\">"
             "<label class=\"option-row\"><input type=\"checkbox\" name=\"ack_risk\" value=\"1\"><span><strong>I understand the gateway should reboot</strong><br><span class=\"muted\">Remote access will be interrupted. Use this only during an attended test.</span></span></label>"
             f"<div class=\"button-row\"><button class=\"danger\" type=\"submit\" {'disabled' if not ready else ''}>Run full liveness test</button><a class=\"ghost\" href=\"/watchdog\">Cancel</a></div>"
@@ -2917,19 +2917,19 @@ def start_web(cfg):
     def watchdog_arm_now_confirm_html():
         grace = startup_grace_status(cfg, trip_test_summary(cfg))
         feed = status_snapshot().get("hardware_watchdog_feed", {})
-        can_arm = bool(cfg.get("hardware_watchdog", {}).get("enabled")) and bool(grace.get("active")) and not bool(feed.get("opened"))
+        can_arm = bool(cfg.get("hardware_watchdog", {}).get("enabled")) and bool(grace.get("active")) and bool(feed.get("feeding"))
         remaining = int(grace.get("remaining_seconds", 0) or 0)
         body = (
-            "<div class=\"card\"><h2>Confirm Arm Hardware Watchdog Now</h2>"
-            "<p class=\"warning\">This ends the startup safety window for this boot.</p>"
-            "<p>The independent feeder will start the Neousys timer when the safety window ends. Once started, use only the attended controls on this page.</p>"
+            "<div class=\"card\"><h2>Confirm End Startup Safety Delay</h2>"
+            "<p class=\"warning\">This starts stale-heartbeat enforcement immediately for this boot.</p>"
+            "<p>The Neousys timer remains fed. Ending this delay only allows the feeder to stop feeding if the main heartbeat or health loop becomes stale.</p>"
             f"<div class=\"label\">Safety time remaining</div><div class=\"value\">{remaining} seconds</div>"
-            f"<div class=\"label\">Device currently opened</div><div class=\"value\">{'Yes' if feed.get('opened') else 'No'}</div>"
+            f"<div class=\"label\">Hardware feed current</div><div class=\"value\">{'Yes' if feed.get('feeding') else 'No'}</div>"
         )
         if can_arm:
-            body += "<form class=\"inline\" method=\"post\" action=\"/watchdog-arm-now\"><button class=\"action\" type=\"submit\">Arm hardware watchdog now</button></form> "
+            body += "<form class=\"inline\" method=\"post\" action=\"/watchdog-arm-now\"><button class=\"action\" type=\"submit\">End safety delay now</button></form> "
         else:
-            body += "<p class=\"warning\">Arm now is only available while an enabled watchdog is inside its startup safety window.</p>"
+            body += "<p class=\"warning\">The delay can only end while the Neousys feed is current.</p>"
         body += "<a class=\"ghost\" href=\"/watchdog\">Cancel</a></div>"
         return page_shell(body, "Watchdog")
 
@@ -3975,15 +3975,15 @@ def start_web(cfg):
         grace = current_watchdog_grace()
         if not cfg.get("hardware_watchdog", {}).get("enabled"):
             return {"ok": False, "message": "Hardware watchdog feed is disabled in configuration.", "command": "", "output": ""}
-        if feed.get("opened"):
-            return {"ok": False, "message": "The hardware watchdog device is already opened.", "command": "", "output": ""}
+        if not feed.get("feeding"):
+            return {"ok": False, "message": "The startup delay cannot end until the Neousys feed is current.", "command": "", "output": ""}
         if not grace.get("active"):
             return {"ok": False, "message": "There is no active startup safety window to end.", "command": "", "output": json.dumps(grace, indent=2)}
         updated = arm_current_boot(cfg)
         append_web_event("warning", "hardware_watchdog", "Hardware watchdog startup safety window ended manually", updated)
         return {
             "ok": True,
-            "message": "Safety window ended. VA-Connect will open and feed the hardware watchdog on the next health loop.",
+            "message": "Safety delay ended. The Neousys timer remains fed and stale-heartbeat enforcement is now active.",
             "command": "Current-boot arm-now override",
             "output": json.dumps(updated, indent=2),
         }

@@ -6,7 +6,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .watchdog_test import current_boot_id
+from .watchdog_grace import startup_grace_status
+from .watchdog_test import current_boot_id, trip_test_summary
 
 
 def liveness_test_path(cfg: dict[str, Any]) -> Path:
@@ -82,6 +83,9 @@ def start_liveness_test(cfg: dict[str, Any], acknowledged: bool) -> dict[str, An
         return {"ok": False, "message": "Confirm that the gateway may reboot before starting the test."}
 
     boot_id = current_boot_id()
+    grace = startup_grace_status(cfg, trip_test_summary(cfg))
+    if grace.get("active"):
+        return {"ok": False, "message": "End the startup safety delay before testing the full liveness path."}
     state = reconcile_liveness_test(cfg)
     if state.get("active") and state.get("triggered_boot_id") == boot_id:
         return {"ok": False, "message": "A full liveness test is already active on this boot."}

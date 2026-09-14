@@ -65,6 +65,16 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('feed_recent = bool(wdt.get("feed_live"))', source)
         self.assertIn('"feed_live": feed_live', source)
 
+    def test_ending_startup_delay_keeps_live_hardware_feed(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+        start = source.index("    def arm_hardware_watchdog_now():")
+        end = source.index("    def disable_hardware_watchdog_during_grace():", start)
+        action = source[start:end]
+
+        self.assertIn('if not feed.get("feeding"):', action)
+        self.assertNotIn('if feed.get("opened"):', action)
+        self.assertIn("stale-heartbeat enforcement is now active", action)
+
     def test_event_evidence_expands_as_a_full_width_table_row(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 

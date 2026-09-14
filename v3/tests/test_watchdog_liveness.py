@@ -31,6 +31,17 @@ class WatchdogLivenessTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("not been proven", result["message"])
 
+    def test_full_liveness_test_is_blocked_during_startup_delay(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cfg = self._cfg(Path(temporary))
+            with patch("va_watchdog.watchdog_liveness_test.current_boot_id", return_value="boot-a"), patch(
+                "va_watchdog.watchdog_liveness_test.startup_grace_status", return_value={"active": True}
+            ):
+                result = start_liveness_test(cfg, acknowledged=True)
+
+        self.assertFalse(result["ok"])
+        self.assertIn("End the startup safety delay", result["message"])
+
     def test_full_liveness_test_schedules_stop_with_safe_fallback(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
