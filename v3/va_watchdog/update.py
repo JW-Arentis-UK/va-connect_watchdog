@@ -80,15 +80,41 @@ def launch_update_job(cfg: dict[str, Any]) -> dict[str, Any]:
     log_path.touch(exist_ok=True)
     unit_name = f"va-watchdog-update-{int(time.time())}"
     systemd_run = shutil.which("systemd-run")
+    active_branch = branch or _git_value(["rev-parse", "--abbrev-ref", "HEAD"])
+    _write_state(state_path, "queued", f"Waiting for {unit_name} to start", active_branch, before_commit)
+
+    def _launch_direct() -> dict[str, Any]:
+        try:
+            with log_path.open("ab") as log_handle:
+                subprocess.Popen(
+                    cmd,
+                    cwd=str(_checkout_root()),
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            return {
+                "ok": True,
+                "message": "Update started in background process.",
+                "command": cmd,
+                "log_path": str(log_path),
+                "before_commit": before_commit,
+                "branch": active_branch,
+                "mode": "direct",
+            }
+        except Exception as exc:
+            _write_state(state_path, "failed", f"Update could not be launched: {exc}", branch, before_commit)
+            return {
+                "ok": False,
+                "message": f"Update could not be started: {exc}",
+                "command": cmd,
+                "log_path": str(log_path),
+                "before_commit": before_commit,
+                "branch": active_branch,
+            }
+
     if not systemd_run:
-        return {
-            "ok": False,
-            "message": "Update could not start because systemd-run is unavailable.",
-            "command": cmd,
-            "log_path": str(log_path),
-            "before_commit": before_commit,
-            "branch": branch or _git_value(["rev-parse", "--abbrev-ref", "HEAD"]),
-        }
+        return _launch_direct()
 
     launch_cmd = [
         systemd_run,
@@ -99,8 +125,6 @@ def launch_update_job(cfg: dict[str, Any]) -> dict[str, Any]:
         f"--setenv=VA_WATCHDOG_LOG_FILE={log_path}",
         *cmd,
     ]
-    active_branch = branch or _git_value(["rev-parse", "--abbrev-ref", "HEAD"])
-    _write_state(state_path, "queued", f"Waiting for {unit_name} to start", active_branch, before_commit)
     try:
         result = subprocess.run(
             launch_cmd,
@@ -110,18 +134,15 @@ def launch_update_job(cfg: dict[str, Any]) -> dict[str, Any]:
             timeout=10,
             check=False,
         )
-    except Exception as exc:
-        _write_state(state_path, "failed", f"Update could not be launched: {exc}", branch, before_commit)
-        return {
-            "ok": False,
-            "message": f"Update could not be started: {exc}",
-            "command": launch_cmd,
-            "log_path": str(log_path),
-            "before_commit": before_commit,
-            "branch": branch or _git_value(["rev-parse", "--abbrev-ref", "HEAD"]),
-        }
+    except Exception:
+        return _launch_direct()
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "systemd-run failed").strip()
+        direct = _launch_direct()
+        if direct.get("ok"):
+            direct["message"] = f"Update started without systemd-run after fallback: {detail}"
+            direct["command"] = cmd
+            return direct
         _write_state(state_path, "failed", detail, branch, before_commit)
         return {
             "ok": False,

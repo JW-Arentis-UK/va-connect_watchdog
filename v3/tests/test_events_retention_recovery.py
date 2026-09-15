@@ -154,6 +154,54 @@ class UpdateTests(unittest.TestCase):
             state = json.loads((root / "update-state.json").read_text(encoding="utf-8"))
             self.assertEqual(state["state"], "queued")
 
+    @patch("va_watchdog.update._git_value", side_effect=["abc1234", "codex/gui-refresh"])
+    @patch("va_watchdog.update.subprocess.Popen")
+    @patch("va_watchdog.update.shutil.which", return_value=None)
+    def test_update_falls_back_when_systemd_run_is_unavailable(self, _which, popen, _git):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cfg = {
+                "events_path": str(root / "events.jsonl"),
+                "update": {
+                    "remote": "origin",
+                    "branch": "",
+                    "state_path": str(root / "update-state.json"),
+                    "log_path": str(root / "update.log"),
+                },
+            }
+
+            result = launch_update_job(cfg)
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["mode"], "direct")
+            popen.assert_called_once()
+            self.assertEqual(popen.call_args.args[0][-1], "origin")
+
+    @patch("va_watchdog.update._git_value", side_effect=["abc1234", "codex/gui-refresh"])
+    @patch("va_watchdog.update.subprocess.Popen")
+    @patch("va_watchdog.update.subprocess.run")
+    @patch("va_watchdog.update.shutil.which", return_value="/usr/bin/systemd-run")
+    def test_update_falls_back_when_systemd_run_rejects_job(self, _which, run, popen, _git):
+        run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="unit rejected")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cfg = {
+                "events_path": str(root / "events.jsonl"),
+                "update": {
+                    "remote": "origin",
+                    "branch": "",
+                    "state_path": str(root / "update-state.json"),
+                    "log_path": str(root / "update.log"),
+                },
+            }
+
+            result = launch_update_job(cfg)
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["mode"], "direct")
+            self.assertIn("unit rejected", result["message"])
+            popen.assert_called_once()
+
     def test_update_restarts_independent_hardware_feeder(self):
         script = Path(__file__).parents[1] / "scripts" / "update.sh"
         source = script.read_text(encoding="utf-8")
