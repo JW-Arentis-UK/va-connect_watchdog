@@ -1215,6 +1215,7 @@ def start_web(cfg):
             feed_check = by_name.get("Live feed", {})
             process_check = by_name.get("Process watchdog", {})
             trip_test = watchdog.get("trip_test", trip_test_summary(cfg))
+            trip_in_progress = bool(trip_test.get("triggered"))
             liveness_test = reconcile_liveness_test(cfg)
             legacy = watchdog.get("legacy_daemon", {})
             feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
@@ -1244,7 +1245,11 @@ def start_web(cfg):
             last_feed_text = local_time(feed.get("last_feed_utc")) if feed.get("last_feed_utc") else feed_age_text
             feed_process = str(feed.get("process_status") or feed.get("feed_process_status") or "unknown")
 
-            if grace_active and feed_opened and feed_recent:
+            if trip_in_progress:
+                protection_state = "waiting"
+                protection_word = "TEST IN PROGRESS"
+                protection_message = f"Hardware feeding has intentionally stopped. Waiting for the {timeout}-second watchdog reset."
+            elif grace_active and feed_opened and feed_recent:
                 protection_state = "waiting"
                 protection_word = "SAFETY WINDOW"
                 protection_message = f"Neousys protection is feeding. Full stale-heartbeat enforcement starts in {grace_countdown}."
@@ -1265,7 +1270,10 @@ def start_web(cfg):
                 protection_word = "SETUP NEEDED"
                 protection_message = "Neousys hardware is not fully protecting this gateway. Run setup or repair."
 
-            if ready:
+            if trip_in_progress:
+                primary_action = "<button class=\"action\" disabled>Waiting for reboot</button>"
+                repair_action = ""
+            elif ready:
                 primary_action = (
                     "<a class=\"action\" href=\"/watchdog-trip-confirm\">Run deliberate test</a>"
                     if trip_ready
@@ -1280,18 +1288,18 @@ def start_web(cfg):
                 repair_action = ""
 
             trip_state = (
-                "Triggered on this boot"
-                if trip_test.get("triggered")
-                else "Completed on previous boot"
+                "Test in progress"
+                if trip_in_progress
+                else "Successful on previous boot"
                 if trip_test.get("completed_previous_boot")
-                else "Ready"
+                else "No completed test"
             )
-            trip_result = str(trip_test.get("last_result_message") or "No deliberate test recorded yet")
-            trip_button = (
-                "<a class=\"action\" href=\"/watchdog-trip-confirm\">Run deliberate test</a>"
-                if trip_ready
-                else "<button class=\"action\" disabled>Test unavailable</button>"
-            )
+            if trip_in_progress:
+                trip_result = f"The feeder has been stopped deliberately. The gateway should restart after the {timeout}-second hardware timeout."
+            elif trip_test.get("completed_previous_boot"):
+                trip_result = "The previous deliberate test caused a new boot, confirming the hardware reset path."
+            else:
+                trip_result = str(trip_test.get("last_result_message") or "No deliberate test has completed yet.")
 
             detail_rows = [
                 ("Protection proven this boot", "Yes" if proven_this_boot else "No"),
@@ -1388,11 +1396,10 @@ def start_web(cfg):
                 f"<div class=\"button-row\">{primary_action}{repair_action}</div></div>"
                 + grace_controls
                 + conflict_html
-                + "<div class=\"card\"><h2>Last Deliberate Test</h2>"
+                + "<div class=\"card\"><h2>Last Test Result</h2>"
                 f"<div class=\"status-word {'healthy' if trip_test.get('completed_previous_boot') else 'muted'}\">{escape(trip_state.upper())}</div>"
                 f"<p>{escape(trip_result)}</p>"
-                f"<div class=\"button-row\">{trip_button}</div>"
-                "<p class=\"muted\">This intentionally stops feeding and should reboot the gateway if hardware protection is working.</p></div>"
+                f"<p class=\"muted\">Last action: {escape(local_time(trip_test.get('last_result_time'))) if trip_test.get('last_result_time') else 'Not recorded'}</p></div>"
                 + disclosure(
                     "Protection details and setup",
                     "<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>" + detail_html + "</tbody></table></div>"
