@@ -14,6 +14,56 @@ from .watchdog_test import read_trip_test_state
 from .watchdog_liveness_test import confirmed_for_boot, read_liveness_test_state
 
 
+def recent_restarts(cfg: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
+    """Return a compact, newest-first view without loading full evidence history."""
+    path = Path(cfg.get("reboot_evidence_path") or Path(cfg["events_path"]).parent / "reboot-evidence.jsonl")
+    if not path.exists():
+        return []
+
+    requested = max(1, min(int(limit), 50))
+    scan_lines = max(50, requested * 5)
+    data = b""
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            position = handle.tell()
+            while position > 0 and data.count(b"\n") <= scan_lines and len(data) < 4 * 1024 * 1024:
+                chunk_size = min(64 * 1024, position)
+                position -= chunk_size
+                handle.seek(position)
+                data = handle.read(chunk_size) + data
+    except OSError:
+        return []
+
+    lines = data.splitlines()
+    if position > 0 and lines:
+        lines = lines[1:]
+
+    rows = []
+    seen_boots = set()
+    for line in reversed(lines[-scan_lines:]):
+        try:
+            payload = json.loads(line.decode("utf-8", errors="ignore"))
+        except (TypeError, ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        boot_id = str(payload.get("current_boot_id") or "").strip()
+        dedupe_key = boot_id or str(payload.get("created_at") or "")
+        if not dedupe_key or dedupe_key in seen_boots:
+            continue
+        seen_boots.add(dedupe_key)
+        rows.append({
+            "boot_id": boot_id,
+            "created_at": payload.get("created_at"),
+            "classification": str(payload.get("reset_mechanism") or payload.get("classification") or "Unknown"),
+            "confidence": str(payload.get("confidence") or "Low"),
+        })
+        if len(rows) >= requested:
+            break
+    return rows
+
+
 def _run(command, timeout=10):
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)

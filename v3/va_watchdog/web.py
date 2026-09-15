@@ -38,6 +38,7 @@ from .incident_archive import archive_config, list_archives
 from .baseline_capture import baseline_paths, baseline_status, completed_archive, start_baseline
 from .identity import configured_identity, identity_slug, identity_summary
 from .recording_activity import recording_activity
+from .reboot_evidence import recent_restarts
 
 VISIBLE_PAGE_GROUPS = (
     ("Gateway", (("Status", "/"), ("Events", "/events"), ("Watchdog", "/watchdog"), ("Evidence", "/evidence"))),
@@ -173,6 +174,10 @@ label { display:block; margin:calc(6px * var(--scale)) 0; }
 .operational-list { display:grid; gap:0; }
 .operational-row { display:grid; grid-template-columns:minmax(calc(135px * var(--scale)), .75fr) minmax(calc(240px * var(--scale)), 2fr) auto auto; gap:calc(12px * var(--scale)); align-items:center; padding:calc(11px * var(--scale)) calc(4px * var(--scale)); border-top:1px solid var(--line); }
 .operational-row:first-child { border-top:0; }
+.restart-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:calc(7px * var(--scale)); }
+.restart-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:calc(9px * var(--scale)); align-items:center; padding:calc(9px * var(--scale)) calc(10px * var(--scale)); border:1px solid var(--line); border-radius:7px; background:var(--panel-2); }
+.restart-number { min-width:calc(42px * var(--scale)); color:var(--muted); font-size:calc(11px * var(--scale)); text-transform:uppercase; letter-spacing:.04em; }
+.restart-time { font-weight:700; white-space:nowrap; }
 .operational-area { font-weight:800; }
 .operational-detail { color:var(--muted); overflow-wrap:anywhere; }
 .operational-state { min-width:calc(105px * var(--scale)); font-weight:800; text-align:right; }
@@ -332,7 +337,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   .operations-grid { grid-template-columns:1fr; }
   .page-intro { align-items:flex-start; }
   .quick-actions { grid-template-columns:1fr; }
-  .summary-strip, .tool-grid, .settings-grid { grid-template-columns:1fr; }
+  .summary-strip, .tool-grid, .settings-grid, .restart-list { grid-template-columns:1fr; }
   .event-summary { grid-template-columns:auto 1fr; }
   .event-summary .event-time { grid-column:2; }
   .page-tabs { display:grid; grid-template-columns:1fr; }
@@ -1017,6 +1022,36 @@ def start_web(cfg):
                 "<div class=\"card\"><h2>Active Alerts</h2>"
                 f"<div class=\"issue-list\">{''.join(rows)}</div>"
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/events\">Open event history</a></div></div>"
+            )
+
+        def recent_restarts_card():
+            restarts = recent_restarts(cfg, limit=10)
+            rows = []
+            for index, restart in enumerate(restarts):
+                classification = str(restart.get("classification") or "Unknown")
+                classification_key = classification.lower()
+                classification_state = (
+                    "healthy"
+                    if classification_key in {"watchdog reset", "clean reboot", "requested reboot"}
+                    else "critical"
+                    if classification_key == "kernel fault"
+                    else "warning"
+                )
+                rows.append(
+                    "<div class=\"restart-row\">"
+                    f"<div class=\"restart-number\">{'Latest' if index == 0 else f'#{index + 1}'}</div>"
+                    f"<div class=\"restart-time\">{escape(unix_time(restart.get('created_at')))}</div>"
+                    f"<span class=\"pill {classification_state}\">{escape(classification)}</span>"
+                    "</div>"
+                )
+            if not rows:
+                rows.append("<div class=\"restart-row\"><div class=\"restart-number\">-</div><div>No restart history recorded yet.</div></div>")
+            return (
+                "<div class=\"card\"><div class=\"section-lead\"><div><h2>Recent Restarts</h2>"
+                "<p class=\"muted\">The latest ten gateway starts, newest first.</p></div>"
+                "<a class=\"ghost\" href=\"/evidence\">Evidence</a></div>"
+                f"<div class=\"restart-list\">{''.join(rows)}</div>"
+                "<p class=\"muted\">Times use the gateway's local timezone and are recorded when the watchdog starts, normally a few seconds after boot.</p></div>"
             )
 
         def updates_card():
@@ -2034,6 +2069,7 @@ def start_web(cfg):
             f"<div class=\"operational-list\">{operational_rows}</div></div>"
             + metric_tiles()
             + operational_alerts_card()
+            + recent_restarts_card()
             + disclosure("Stability evidence", stability_detail)
             + "<section id=\"services\">" + disclosure("Service details", services_card()) + "</section>"
         )
