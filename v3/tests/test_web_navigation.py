@@ -127,7 +127,8 @@ class WebNavigationTests(unittest.TestCase):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 
         self.assertIn("def recent_restarts_card():", source)
-        self.assertIn("The latest ten gateway starts, newest first.", source)
+        self.assertIn("Planned tests are labelled separately from automatic recovery.", source)
+        self.assertIn('restart.get("restart_type")', source)
         self.assertIn("+ recent_restarts_card()", source)
 
     def test_obsolete_client_renderer_is_not_activated(self):

@@ -1028,11 +1028,13 @@ def start_web(cfg):
             restarts = recent_restarts(cfg, limit=10)
             rows = []
             for index, restart in enumerate(restarts):
-                classification = str(restart.get("classification") or "Unknown")
-                classification_key = classification.lower()
+                restart_type = str(restart.get("restart_type") or restart.get("classification") or "Unknown")
+                classification_key = restart_type.lower()
                 classification_state = (
                     "healthy"
-                    if classification_key in {"watchdog reset", "clean reboot", "requested reboot"}
+                    if classification_key in {"automatic watchdog recovery", "clean reboot", "requested reboot"}
+                    else "warning"
+                    if classification_key in {"deliberate trip test", "full liveness test"}
                     else "critical"
                     if classification_key == "kernel fault"
                     else "warning"
@@ -1041,14 +1043,14 @@ def start_web(cfg):
                     "<div class=\"restart-row\">"
                     f"<div class=\"restart-number\">{'Latest' if index == 0 else f'#{index + 1}'}</div>"
                     f"<div class=\"restart-time\">{escape(unix_time(restart.get('created_at')))}</div>"
-                    f"<span class=\"pill {classification_state}\">{escape(classification)}</span>"
+                    f"<span class=\"pill {classification_state}\">{escape(restart_type)}</span>"
                     "</div>"
                 )
             if not rows:
                 rows.append("<div class=\"restart-row\"><div class=\"restart-number\">-</div><div>No restart history recorded yet.</div></div>")
             return (
                 "<div class=\"card\"><div class=\"section-lead\"><div><h2>Recent Restarts</h2>"
-                "<p class=\"muted\">The latest ten gateway starts, newest first.</p></div>"
+                "<p class=\"muted\">The latest ten gateway starts. Planned tests are labelled separately from automatic recovery.</p></div>"
                 "<a class=\"ghost\" href=\"/evidence\">Evidence</a></div>"
                 f"<div class=\"restart-list\">{''.join(rows)}</div>"
                 "<p class=\"muted\">Times use the gateway's local timezone and are recorded when the watchdog starts, normally a few seconds after boot.</p></div>"

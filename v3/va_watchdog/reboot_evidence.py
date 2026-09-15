@@ -53,10 +53,22 @@ def recent_restarts(cfg: dict[str, Any], limit: int = 10) -> list[dict[str, Any]
         if not dedupe_key or dedupe_key in seen_boots:
             continue
         seen_boots.add(dedupe_key)
+        classification = str(payload.get("reset_mechanism") or payload.get("classification") or "Unknown")
+        deliberate = payload.get("deliberate_trip_test", {})
+        liveness = payload.get("liveness_path_test", {})
+        if isinstance(deliberate, dict) and deliberate.get("confirmed"):
+            restart_type = "Deliberate trip test"
+        elif isinstance(liveness, dict) and liveness.get("confirmed"):
+            restart_type = "Full liveness test"
+        elif classification == "Watchdog reset":
+            restart_type = "Automatic watchdog recovery"
+        else:
+            restart_type = classification
         rows.append({
             "boot_id": boot_id,
             "created_at": payload.get("created_at"),
-            "classification": str(payload.get("reset_mechanism") or payload.get("classification") or "Unknown"),
+            "classification": classification,
+            "restart_type": restart_type,
             "confidence": str(payload.get("confidence") or "Low"),
         })
         if len(rows) >= requested:
