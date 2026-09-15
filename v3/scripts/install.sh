@@ -30,14 +30,15 @@ fail() {
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
 command -v systemctl >/dev/null 2>&1 || fail "systemd is required"
 
-PRODUCT_NAME="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
-if [[ -f "$APP_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" && "$PRODUCT_NAME" == *"POC-451VTC"* ]]; then
-  log "Installing bundled Neousys WDT_DIO driver without activating hardware feeding"
-  apt-get update
-  apt-get install -y build-essential dkms gcc-12 "linux-headers-$(uname -r)" unzip
-  /bin/bash "$APP_DIR/scripts/install_neousys_wdt.sh"
-elif [[ -f "$APP_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" ]]; then
-  log "Skipping POC-451VTC watchdog driver on unsupported model: ${PRODUCT_NAME:-unknown}"
+if [[ -f "$APP_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" ]]; then
+  if HARDWARE_PROFILE="$(PYTHONPATH="$APP_DIR" python3 -m va_watchdog.hardware_profile 2>&1)"; then
+    log "Installing bundled Neousys WDT_DIO driver on $HARDWARE_PROFILE without activating hardware feeding"
+    apt-get update
+    apt-get install -y build-essential dkms gcc-12 "linux-headers-$(uname -r)" unzip
+    /bin/bash "$APP_DIR/scripts/install_neousys_wdt.sh"
+  else
+    log "Skipping POC-451VTC watchdog driver: $HARDWARE_PROFILE"
+  fi
 fi
 
 log "Validating Python modules and example configuration"

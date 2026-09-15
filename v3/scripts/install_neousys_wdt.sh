@@ -8,6 +8,7 @@ DKMS_NAME="neousys-wdt-dio"
 CONFIG_PATH="${VA_WATCHDOG_CONFIG_PATH:-/etc/va-watchdog/config.json}"
 LIBRARY_PATH="/usr/local/lib/va-watchdog/vendor/libwdt_dio.so"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEFAULT_BUNDLE="$SCRIPT_DIR/../vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip"
 ACTIVATE=0
 
@@ -56,10 +57,11 @@ fi
 
 [[ -f "$BUNDLE" ]] || fail "vendor bundle not found: $BUNDLE"
 [[ "$(uname -m)" == "x86_64" ]] || fail "the supplied vendor library supports x86_64 only"
-product="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
-if [[ "$product" != *"POC-451VTC"* ]]; then
-  fail "this reviewed installation path is restricted to POC-451VTC; detected: ${product:-unknown}"
+command -v python3 >/dev/null 2>&1 || fail "python3 is required"
+if ! hardware_profile="$(PYTHONPATH="$APP_DIR" python3 -m va_watchdog.hardware_profile 2>&1)"; then
+  fail "this reviewed installation path is restricted to verified POC-451VTC hardware; $hardware_profile"
 fi
+log "Hardware accepted: $hardware_profile"
 kernel="$(uname -r)"
 kernel_build="/lib/modules/$kernel/build"
 kernel_cc="x86_64-linux-gnu-gcc-12"

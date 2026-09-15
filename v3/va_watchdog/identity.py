@@ -8,21 +8,13 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
+from .hardware_profile import hardware_identity
+
 
 DEFAULT_IDENTITY = {
     "site_name": "",
     "asset_id": "",
 }
-
-
-def hardware_identity(dmi_root: Path = Path("/sys/class/dmi/id")) -> dict[str, str]:
-    """Return the concise DMI identity printed on the Status page."""
-    return {
-        "manufacturer": _read_text(dmi_root / "sys_vendor"),
-        "model": _read_text(dmi_root / "product_name"),
-        "version": _read_text(dmi_root / "product_version"),
-        "board": _read_text(dmi_root / "board_name"),
-    }
 
 
 def configured_identity(cfg: dict[str, Any]) -> dict[str, Any]:

@@ -43,6 +43,11 @@ LSBLK = {
 
 
 class IdentityTests(unittest.TestCase):
+    @staticmethod
+    def write_dmi(dmi_root, **values):
+        for name, value in values.items():
+            (dmi_root / name).write_text(f"{value}\n", encoding="ascii")
+
     def test_hardware_identity_reads_dmi_manufacturer_and_model(self):
         with tempfile.TemporaryDirectory() as temporary:
             dmi_root = Path(temporary)
@@ -57,6 +62,64 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(identity["model"], "POC-400 Series")
         self.assertEqual(identity["version"], "Rev A")
         self.assertEqual(identity["board"], "POC-400")
+        self.assertFalse(identity["wdt_supported"])
+
+    def test_exact_poc451_model_is_supported(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dmi_root = Path(temporary)
+            self.write_dmi(
+                dmi_root,
+                sys_vendor="Neousys Technology Inc.",
+                product_name="POC-451VTC",
+            )
+
+            identity = hardware_identity(dmi_root)
+
+        self.assertEqual(identity["display_model"], "POC-451VTC")
+        self.assertTrue(identity["wdt_supported"])
+        self.assertEqual(identity["model_note"], "Exact model reported by BIOS")
+
+    def test_verified_stamford_legacy_bios_profile_is_supported(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dmi_root = Path(temporary)
+            self.write_dmi(
+                dmi_root,
+                sys_vendor="Neousys Technology Inc.",
+                product_name="POC-400 Series",
+                product_version="Rev. ES2",
+                board_vendor="Neousys Technology Inc.",
+                board_name="POC-400 Series",
+                board_version="Rev. ES2",
+                bios_version="Build220614",
+                bios_date="06/14/2022",
+            )
+
+            identity = hardware_identity(dmi_root)
+
+        self.assertEqual(identity["model"], "POC-400 Series")
+        self.assertEqual(identity["display_model"], "POC-451VTC")
+        self.assertEqual(identity["model_note"], "Legacy BIOS reports POC-400 Series")
+        self.assertTrue(identity["wdt_supported"])
+
+    def test_other_generic_poc400_profile_remains_unsupported(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dmi_root = Path(temporary)
+            self.write_dmi(
+                dmi_root,
+                sys_vendor="Neousys Technology Inc.",
+                product_name="POC-400 Series",
+                product_version="Rev. ES2",
+                board_vendor="Neousys Technology Inc.",
+                board_name="POC-400 Series",
+                board_version="Rev. ES2",
+                bios_version="Build220615",
+                bios_date="06/15/2022",
+            )
+
+            identity = hardware_identity(dmi_root)
+
+        self.assertEqual(identity["display_model"], "POC-400 Series")
+        self.assertFalse(identity["wdt_supported"])
 
     def test_hardware_identity_tolerates_unavailable_dmi(self):
         identity = hardware_identity(Path("/path/that/does/not/exist"))

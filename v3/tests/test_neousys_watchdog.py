@@ -40,7 +40,7 @@ class NeousysWatchdogTests(unittest.TestCase):
     def test_installer_rejects_unsupported_hardware_before_package_changes(self):
         source = (Path(__file__).parents[1] / "scripts" / "install_neousys_wdt.sh").read_text(encoding="utf-8")
 
-        model_check = source.index('product="$(cat /sys/class/dmi/id/product_name')
+        model_check = source.index("python3 -m va_watchdog.hardware_profile")
         package_install = source.index("apt-get update")
         self.assertLess(model_check, package_install)
 
@@ -50,9 +50,8 @@ class NeousysWatchdogTests(unittest.TestCase):
         update = (scripts / "update.sh").read_text(encoding="utf-8")
 
         for source in (install, update):
-            self.assertIn('PRODUCT_NAME="$(cat /sys/class/dmi/id/product_name', source)
-            self.assertIn('"$PRODUCT_NAME" == *"POC-451VTC"*', source)
-            self.assertIn("skipping poc-451vtc watchdog driver on unsupported model", source.lower())
+            self.assertIn("python3 -m va_watchdog.hardware_profile", source)
+            self.assertIn("skipping poc-451vtc watchdog driver", source.lower())
 
     def test_migrating_an_enabled_linux_backend_is_safely_disabled(self):
         config = _enforce_neousys_watchdog({
@@ -363,7 +362,8 @@ class NeousysWatchdogTests(unittest.TestCase):
         self.assertIn("EXPECTED_SHA256=", text)
         self.assertIn('if [[ "$ACTIVATE" != 1 ]]', text)
         self.assertIn("configuration was not changed", text)
-        self.assertIn('product" != *"POC-451VTC"*', text)
+        self.assertIn("python3 -m va_watchdog.hardware_profile", text)
+        self.assertIn("restricted to verified POC-451VTC hardware", text)
         self.assertIn('apt-get install -y build-essential dkms gcc-12 "linux-headers-$kernel" unzip', text)
         self.assertIn('AUTOINSTALL="yes"', text)
         self.assertIn('dkms build -m "$DKMS_NAME" -v "$VERSION" -k "$kernel"', text)

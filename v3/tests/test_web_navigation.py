@@ -135,7 +135,8 @@ class WebNavigationTests(unittest.TestCase):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 
         self.assertIn('gateway_hardware = hardware_identity()', source)
-        self.assertIn('tile("Hardware", hardware_model, hardware_manufacturer, hardware_state)', source)
+        self.assertIn('tile("Hardware", hardware_model, hardware_detail, hardware_state)', source)
+        self.assertIn('gateway_hardware.get("display_model")', source)
 
     def test_build_badge_reports_the_code_loaded_by_the_running_process(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")

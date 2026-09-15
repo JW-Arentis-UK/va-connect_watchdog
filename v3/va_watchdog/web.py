@@ -724,8 +724,8 @@ def start_web(cfg):
             rec_storage = status.get("recording_storage", {}) if isinstance(status.get("recording_storage", {}), dict) else {}
             watchdog_feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
             gateway_hardware = hardware_identity()
-            hardware_model = str(gateway_hardware.get("model") or "Unknown model")
-            hardware_manufacturer = str(gateway_hardware.get("manufacturer") or "Manufacturer unavailable")
+            hardware_model = str(gateway_hardware.get("display_model") or gateway_hardware.get("model") or "Unknown model")
+            hardware_detail = str(gateway_hardware.get("model_note") or gateway_hardware.get("manufacturer") or "Manufacturer unavailable")
             hardware_state = "healthy" if gateway_hardware.get("model") else "warning"
             startup_grace = watchdog_feed.get("startup_grace", {}) if isinstance(watchdog_feed.get("startup_grace", {}), dict) else {}
             if startup_grace.get("active"):
@@ -773,7 +773,7 @@ def start_web(cfg):
                 + tile("RAM", f"{escape(str(check_value('ram', '-')))}%", check_message("ram", ""), check_state("ram", "healthy"))
                 + tile("Disk Usage", disk_value, disk_detail, disk_state)
                 + tile("Oldest Recording", oldest_recording_value, oldest_recording_detail, oldest_recording_state, "recording-tile")
-                + tile("Hardware", hardware_model, hardware_manufacturer, hardware_state)
+                + tile("Hardware", hardware_model, hardware_detail, hardware_state)
                 + tile(
                     "Hardware Recovery",
                     watchdog_value,
@@ -1203,6 +1203,7 @@ def start_web(cfg):
 
         def hardware_page():
             info = hardware_info()
+            gateway_hardware = hardware_identity()
             cpu = info.get("cpu", {})
             memory = info.get("memory", {})
             block_devices = info.get("block_devices", [])
@@ -1213,7 +1214,13 @@ def start_web(cfg):
             dkms_ready = bool(watchdog.get("dkms", {}).get("current_kernel_installed"))
             watchdog_present = "/dev/wdt_dio" in watchdog_devices
             watchdog_state = "healthy" if driver_loaded and watchdog_present and dkms_ready else "warning"
+            reported_model = str(gateway_hardware.get("model") or "-")
+            display_model = str(gateway_hardware.get("display_model") or reported_model)
             hardware_rows = "".join([
+                f"<tr><th>Gateway model</th><td>{escape(display_model)}</td></tr>",
+                f"<tr><th>BIOS-reported model</th><td>{escape(reported_model)}</td></tr>",
+                f"<tr><th>BIOS</th><td>{escape(str(gateway_hardware.get('bios_version') or '-'))} / {escape(str(gateway_hardware.get('bios_date') or '-'))}</td></tr>",
+                f"<tr><th>Mainboard</th><td>{escape(str(gateway_hardware.get('board') or '-'))} / {escape(str(gateway_hardware.get('board_version') or '-'))}</td></tr>",
                 f"<tr><th>CPU</th><td>{escape(str(cpu.get('model', '-')))}</td></tr>",
                 f"<tr><th>Logical CPUs</th><td>{escape(str(cpu.get('cores', '-')))}</td></tr>",
                 f"<tr><th>Architecture</th><td>{escape(str(cpu.get('architecture', '-')))}</td></tr>",
