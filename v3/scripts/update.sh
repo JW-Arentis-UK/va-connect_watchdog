@@ -62,7 +62,8 @@ log "update started branch=$BRANCH remote=$REMOTE commit=$commit_before"
 commit_after="$("${GIT[@]}" rev-parse --short HEAD)"
 log "update pulled commit=$commit_after"
 
-if [ -f "$ROOT_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" ]; then
+PRODUCT_NAME="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
+if [ -f "$ROOT_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" ] && [[ "$PRODUCT_NAME" == *"POC-451VTC"* ]]; then
   log "installing bundled Neousys WDT_DIO driver without activating hardware feeding"
   if ! command -v gcc >/dev/null 2>&1 || [ ! -d "/lib/modules/$(uname -r)/build" ]; then
     apt-get update
@@ -70,6 +71,8 @@ if [ -f "$ROOT_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" ]; then
   fi
   /bin/bash "$ROOT_DIR/scripts/install_neousys_wdt.sh"
   log "Neousys WDT_DIO driver installed"
+elif [ -f "$ROOT_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" ]; then
+  log "skipping POC-451VTC watchdog driver on unsupported model: ${PRODUCT_NAME:-unknown}"
 fi
 
 if [ -f "$ROOT_DIR/systemd/va-watchdog.service" ]; then

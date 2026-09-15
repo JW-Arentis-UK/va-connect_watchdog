@@ -44,6 +44,16 @@ class NeousysWatchdogTests(unittest.TestCase):
         package_install = source.index("apt-get update")
         self.assertLess(model_check, package_install)
 
+    def test_application_install_and_update_skip_model_specific_driver_when_unsupported(self):
+        scripts = Path(__file__).parents[1] / "scripts"
+        install = (scripts / "install.sh").read_text(encoding="utf-8")
+        update = (scripts / "update.sh").read_text(encoding="utf-8")
+
+        for source in (install, update):
+            self.assertIn('PRODUCT_NAME="$(cat /sys/class/dmi/id/product_name', source)
+            self.assertIn('"$PRODUCT_NAME" == *"POC-451VTC"*', source)
+            self.assertIn("skipping poc-451vtc watchdog driver on unsupported model", source.lower())
+
     def test_migrating_an_enabled_linux_backend_is_safely_disabled(self):
         config = _enforce_neousys_watchdog({
             "hardware_watchdog": {

@@ -509,19 +509,22 @@ def start_web(cfg):
     def repo_root():
         return Path(__file__).resolve().parents[1]
 
+    root = repo_root()
+    running_version = {
+        "branch": _quick_run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=root),
+        "commit": _quick_run(["git", "rev-parse", "--short", "HEAD"], cwd=root),
+        "build_at": _quick_run(["git", "show", "-s", "--format=%cI", "HEAD"], cwd=root),
+        "remote": _quick_run(["git", "config", "--get", "remote.origin.url"], cwd=root),
+    }
+
     def version_info():
-        root = repo_root()
-        commit = _quick_run(["git", "rev-parse", "--short", "HEAD"], cwd=root)
-        build_at = _quick_run(["git", "show", "-s", "--format=%cI", "HEAD"], cwd=root)
-        branch = _quick_run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=root)
-        remote = _quick_run(["git", "config", "--get", "remote.origin.url"], cwd=root)
         return {
             "name": "VA-Connect Watchdog",
-            "branch": branch,
-            "commit": commit,
-            "commit_id": commit,
-            "build_at": build_at,
-            "remote": remote,
+            "branch": running_version["branch"],
+            "commit": running_version["commit"],
+            "commit_id": running_version["commit"],
+            "build_at": running_version["build_at"],
+            "remote": running_version["remote"],
             "repo_root": str(root),
             "config_path": str(active_config_path()),
             "data_dir": str(data_dir),
