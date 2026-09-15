@@ -123,6 +123,13 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('disclosure("Stability evidence", stability_detail)', source)
         self.assertIn('disclosure("Service details", services_card())', source)
 
+    def test_overview_names_the_problem_instead_of_using_watchdog_safe_wording(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+
+        self.assertIn('"recording_storage": "Recording storage"', source)
+        self.assertIn('issue_summary = f"{primary_issue_name} needs attention"', source)
+        self.assertNotIn("Attention needed, watchdog feed safe", source)
+
     def test_status_shows_compact_recent_restart_history(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 

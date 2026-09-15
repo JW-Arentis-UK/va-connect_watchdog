@@ -1941,12 +1941,29 @@ def start_web(cfg):
         error_html = ""
         if status.get("error"):
             error_html = f"<p class=\"critical\">{escape(str(status.get('error')))}</p>"
+        issue_checks = [check for check in checks if check.get("state") in ("critical", "warning", "unknown")]
+        issue_names = {
+            "recording_storage": "Recording storage",
+            "root_disk": "Root disk",
+            "hardware_watchdog_present": "Hardware recovery",
+            "hardware_watchdog_feed_status": "Hardware recovery",
+            "network_module": "Network",
+        }
+        primary_issue = issue_checks[0] if issue_checks else {}
+        primary_issue_name = issue_names.get(
+            str(primary_issue.get("name") or ""),
+            str(primary_issue.get("name") or "Gateway").replace("_", " ").strip().title(),
+        )
+        additional_issue_count = max(0, len(issue_checks) - 1)
+        issue_summary = f"{primary_issue_name} needs attention"
+        if additional_issue_count:
+            issue_summary += f" +{additional_issue_count} more"
         if critical:
-            issue_pill = "<span class=\"pill critical\">Critical issue</span>"
+            issue_pill = f"<span class=\"pill critical\">{escape(issue_summary)}</span>"
         elif has_any_critical:
-            issue_pill = "<span class=\"pill warning\">Attention needed, watchdog feed safe</span>"
+            issue_pill = f"<span class=\"pill warning\">{escape(issue_summary)}</span>"
         elif has_warning:
-            issue_pill = "<span class=\"pill warning\">Warning</span>"
+            issue_pill = f"<span class=\"pill warning\">{escape(issue_summary)}</span>"
         else:
             issue_pill = "<span class=\"pill\">No critical issues</span>"
         service_checks = [check for check in checks if str(check.get("name", "")).endswith(".service")]
