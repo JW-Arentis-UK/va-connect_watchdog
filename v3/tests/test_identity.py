@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from va_watchdog.identity import configured_identity, identity_slug, identity_summary
+from va_watchdog.identity import configured_identity, hardware_identity, identity_slug, identity_summary
 
 
 LSBLK = {
@@ -43,6 +43,27 @@ LSBLK = {
 
 
 class IdentityTests(unittest.TestCase):
+    def test_hardware_identity_reads_dmi_manufacturer_and_model(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dmi_root = Path(temporary)
+            (dmi_root / "sys_vendor").write_text("Neousys Technology Inc.\n", encoding="ascii")
+            (dmi_root / "product_name").write_text("POC-400 Series\n", encoding="ascii")
+            (dmi_root / "product_version").write_text("Rev A\n", encoding="ascii")
+            (dmi_root / "board_name").write_text("POC-400\n", encoding="ascii")
+
+            identity = hardware_identity(dmi_root)
+
+        self.assertEqual(identity["manufacturer"], "Neousys Technology Inc.")
+        self.assertEqual(identity["model"], "POC-400 Series")
+        self.assertEqual(identity["version"], "Rev A")
+        self.assertEqual(identity["board"], "POC-400")
+
+    def test_hardware_identity_tolerates_unavailable_dmi(self):
+        identity = hardware_identity(Path("/path/that/does/not/exist"))
+
+        self.assertEqual(identity["manufacturer"], "")
+        self.assertEqual(identity["model"], "")
+
     def test_configured_identity_has_safe_unconfigured_fallback(self):
         identity = configured_identity({})
         self.assertFalse(identity["configured"])
@@ -66,12 +87,14 @@ class IdentityTests(unittest.TestCase):
                 },
                 runner=lambda _command: json.dumps(LSBLK),
                 machine_id_path=machine_id,
+                dmi_root=Path(temporary) / "missing-dmi",
             )
 
         self.assertEqual(summary["display_name"], "Ellingers")
         self.assertEqual(summary["hostname"], "POC-451VTC")
         self.assertEqual(summary["os_disk"]["serial"], "OS-123")
         self.assertEqual(summary["recording_disk"]["serial"], "REC-456")
+        self.assertEqual(summary["hardware"]["model"], "")
         self.assertEqual(len(summary["hardware_fingerprint"]), 12)
 
     def test_summary_tolerates_missing_lsblk_and_machine_id(self):

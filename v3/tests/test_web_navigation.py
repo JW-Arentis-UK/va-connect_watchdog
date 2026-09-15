@@ -131,6 +131,12 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('restart.get("restart_type")', source)
         self.assertIn("+ recent_restarts_card()", source)
 
+    def test_status_shows_gateway_hardware_tile(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+
+        self.assertIn('gateway_hardware = hardware_identity()', source)
+        self.assertIn('tile("Hardware", hardware_model, hardware_manufacturer, hardware_state)', source)
+
     def test_obsolete_client_renderer_is_not_activated(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 

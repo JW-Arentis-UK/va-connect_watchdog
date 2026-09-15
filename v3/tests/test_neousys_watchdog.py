@@ -37,6 +37,13 @@ class FakeLibrary:
 
 
 class NeousysWatchdogTests(unittest.TestCase):
+    def test_installer_rejects_unsupported_hardware_before_package_changes(self):
+        source = (Path(__file__).parents[1] / "scripts" / "install_neousys_wdt.sh").read_text(encoding="utf-8")
+
+        model_check = source.index('product="$(cat /sys/class/dmi/id/product_name')
+        package_install = source.index("apt-get update")
+        self.assertLess(model_check, package_install)
+
     def test_migrating_an_enabled_linux_backend_is_safely_disabled(self):
         config = _enforce_neousys_watchdog({
             "hardware_watchdog": {

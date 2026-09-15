@@ -56,6 +56,10 @@ fi
 
 [[ -f "$BUNDLE" ]] || fail "vendor bundle not found: $BUNDLE"
 [[ "$(uname -m)" == "x86_64" ]] || fail "the supplied vendor library supports x86_64 only"
+product="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
+if [[ "$product" != *"POC-451VTC"* ]]; then
+  fail "this reviewed installation path is restricted to POC-451VTC; detected: ${product:-unknown}"
+fi
 kernel="$(uname -r)"
 kernel_build="/lib/modules/$kernel/build"
 kernel_cc="x86_64-linux-gnu-gcc-12"
@@ -108,11 +112,6 @@ kernel_major="${kernel%%.*}"
 library_source="$package_root/linux/deploy/lib${kernel_major}.x/libwdt_dio.so"
 [[ -f "$driver_dir/wdt_dio.c" && -f "$driver_dir/wdt_sys.h" && -f "$driver_dir/Makefile" ]] || fail "vendor driver source is incomplete"
 [[ -f "$library_source" ]] || fail "vendor library for kernel major $kernel_major is unavailable"
-
-product="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
-if [[ "$product" != *"POC-451VTC"* ]]; then
-  fail "this reviewed installation path is restricted to POC-451VTC; detected: ${product:-unknown}"
-fi
 
 dkms_source="/usr/src/$DKMS_NAME-$VERSION"
 log "Registering $DKMS_NAME v$VERSION with DKMS"

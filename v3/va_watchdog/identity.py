@@ -15,6 +15,16 @@ DEFAULT_IDENTITY = {
 }
 
 
+def hardware_identity(dmi_root: Path = Path("/sys/class/dmi/id")) -> dict[str, str]:
+    """Return the concise DMI identity printed on the Status page."""
+    return {
+        "manufacturer": _read_text(dmi_root / "sys_vendor"),
+        "model": _read_text(dmi_root / "product_name"),
+        "version": _read_text(dmi_root / "product_version"),
+        "board": _read_text(dmi_root / "board_name"),
+    }
+
+
 def configured_identity(cfg: dict[str, Any]) -> dict[str, Any]:
     value = cfg.get("identity", {})
     identity = value if isinstance(value, dict) else {}
@@ -39,6 +49,7 @@ def identity_summary(
     cfg: dict[str, Any],
     runner: Callable[[list[str]], str] | None = None,
     machine_id_path: Path = Path("/etc/machine-id"),
+    dmi_root: Path = Path("/sys/class/dmi/id"),
 ) -> dict[str, Any]:
     configured = configured_identity(cfg)
     run = runner or _run
@@ -74,6 +85,7 @@ def identity_summary(
         "hostname": platform.node(),
         "hardware_fingerprint": fingerprint,
         "machine_id_hash": hashlib.sha256(machine_id.encode("utf-8")).hexdigest()[:12].upper() if machine_id else "",
+        "hardware": hardware_identity(dmi_root),
         "os_disk": _public_disk(os_disk),
         "recording_disk": _public_disk(recording_disk),
     }

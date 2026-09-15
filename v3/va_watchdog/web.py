@@ -36,7 +36,7 @@ from .journal import persistent_status, enable_persistent
 from .crash_evidence import pstore_status
 from .incident_archive import archive_config, list_archives
 from .baseline_capture import baseline_paths, baseline_status, completed_archive, start_baseline
-from .identity import configured_identity, identity_slug, identity_summary
+from .identity import configured_identity, hardware_identity, identity_slug, identity_summary
 from .recording_activity import recording_activity
 from .reboot_evidence import recent_restarts
 
@@ -158,7 +158,7 @@ label { display:block; margin:calc(6px * var(--scale)) 0; }
 .help-popover p { position:absolute; z-index:5; right:0; width:calc(300px * var(--scale)); margin:calc(8px * var(--scale)) 0 0; padding:calc(12px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text); box-shadow:0 10px 30px rgba(0,0,0,.2); }
 .grid { display:grid; gap:calc(12px * var(--scale)); }
 .top-grid { grid-template-columns: minmax(0, 1.6fr) minmax(300px, 0.9fr); }
-.metric-grid { grid-template-columns: repeat(6, minmax(calc(130px * var(--scale)), 1fr)); }
+.metric-grid { grid-template-columns: repeat(7, minmax(calc(125px * var(--scale)), 1fr)); }
 .lower-grid { grid-template-columns: minmax(0, 1.1fr) minmax(330px, 0.9fr); }
 .operations-grid { grid-template-columns:repeat(2, minmax(0,1fr)); }
 .bottom-grid { grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr); }
@@ -720,6 +720,10 @@ def start_web(cfg):
         def metric_tiles():
             rec_storage = status.get("recording_storage", {}) if isinstance(status.get("recording_storage", {}), dict) else {}
             watchdog_feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
+            gateway_hardware = hardware_identity()
+            hardware_model = str(gateway_hardware.get("model") or "Unknown model")
+            hardware_manufacturer = str(gateway_hardware.get("manufacturer") or "Manufacturer unavailable")
+            hardware_state = "healthy" if gateway_hardware.get("model") else "warning"
             startup_grace = watchdog_feed.get("startup_grace", {}) if isinstance(watchdog_feed.get("startup_grace", {}), dict) else {}
             if startup_grace.get("active"):
                 watchdog_seconds = int(startup_grace.get("remaining_seconds", 0) or 0)
@@ -766,6 +770,7 @@ def start_web(cfg):
                 + tile("RAM", f"{escape(str(check_value('ram', '-')))}%", check_message("ram", ""), check_state("ram", "healthy"))
                 + tile("Disk Usage", disk_value, disk_detail, disk_state)
                 + tile("Oldest Recording", oldest_recording_value, oldest_recording_detail, oldest_recording_state, "recording-tile")
+                + tile("Hardware", hardware_model, hardware_manufacturer, hardware_state)
                 + tile(
                     "Hardware Recovery",
                     watchdog_value,
