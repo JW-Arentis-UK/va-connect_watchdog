@@ -168,6 +168,13 @@ The newest archive is always retained. Reboot classification only reports a watc
 or kernel reset when direct evidence supports it; informational messages such as
 `NMI watchdog: Enabled` do not establish a reset cause.
 
+The Evidence page also provides a dedicated Neousys report. Its readable summary and
+raw evidence cover DMI/BIOS identity, OS and kernel, CPU and memory, disks and SMART,
+PCI/USB driver bindings, DKMS and WDT_DIO module details, power-management settings,
+watchdog configuration and tests, and compact recent-incident summaries. It does not
+intentionally collect CCTV recordings, configured IP addresses/routes, credentials,
+or complete application journals. The same report is embedded in support bundles.
+
 The explicit persistent-journal action writes a separate
 `/etc/systemd/journald.conf.d/va-watchdog-persistent.conf` drop-in. It limits journal
 storage to 512 MB, reserves 1 GB free on the OS disk, and retains up to 30 days

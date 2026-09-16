@@ -123,6 +123,13 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('disclosure("Stability evidence", stability_detail)', source)
         self.assertIn('disclosure("Service details", services_card())', source)
 
+    def test_evidence_offers_a_dedicated_neousys_report(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+
+        self.assertIn("Download Neousys report", source)
+        self.assertIn('/api/diagnostics/manufacturer-report.zip', source)
+        self.assertIn('NEOUSYS-SYSTEM-REPORT.txt', source)
+
     def test_overview_names_the_problem_instead_of_using_watchdog_safe_wording(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 

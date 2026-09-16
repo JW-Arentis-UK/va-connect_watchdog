@@ -37,6 +37,7 @@ from .crash_evidence import pstore_status
 from .incident_archive import archive_config, list_archives
 from .baseline_capture import baseline_paths, baseline_status, completed_archive, start_baseline
 from .identity import configured_identity, hardware_identity, identity_slug, identity_summary
+from .manufacturer_report import collect_manufacturer_report, manufacturer_report_bundle, render_manufacturer_report
 from .recording_activity import recording_activity
 from .reboot_evidence import recent_restarts
 
@@ -1930,6 +1931,7 @@ def start_web(cfg):
                 "<p class=\"muted\">Start with the support bundle after a lockup or unexpected reboot. It combines the evidence needed for investigation.</p>"
                 + tool_grid([
                     ("Download support bundle", "Best first step: logs, status, history, reboot, storage, network, and watchdog evidence.", "/api/diagnostics/support-bundle.zip", "primary"),
+                    ("Download Neousys report", "Manufacturer-ready hardware, BIOS, software, driver, storage, and watchdog test evidence.", "/api/diagnostics/manufacturer-report.zip", ""),
                     ("Black-box evidence", "Short-interval snapshots retained around a hang or reboot.", "/api/blackbox", ""),
                 ])
                 + "</div>"
@@ -4916,6 +4918,11 @@ def start_web(cfg):
         generated = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
         status = status_snapshot()
         gateway_identity = identity_summary(cfg)
+        manufacturer = collect_manufacturer_report(
+            cfg,
+            identity=gateway_identity,
+            app_version=version_info(),
+        )
         services = cfg.get("services", []) if isinstance(cfg.get("services", []), list) else []
         service_names = [str(item.get("name", "")).strip() for item in services if isinstance(item, dict) and item.get("name")]
         watched_services = ["va-watchdog", "va-watchdog-feed"] + service_names
@@ -4992,6 +4999,13 @@ def start_web(cfg):
             archive.writestr("hardware-info.json", json.dumps(hardware_info(), indent=2))
             archive.writestr("network-info.json", json.dumps(network_info(), indent=2))
             archive.writestr("services-info.json", json.dumps(service_info(), indent=2))
+            archive.writestr("NEOUSYS-SYSTEM-REPORT.txt", render_manufacturer_report(manufacturer))
+            archive.writestr(
+                "NEOUSYS-SYSTEM-REPORT.json",
+                json.dumps({key: value for key, value in manufacturer.items() if key != "evidence"}, indent=2),
+            )
+            for name, content in manufacturer.get("evidence", {}).items():
+                archive.writestr(f"manufacturer-evidence/{name}", str(content))
             blackbox_state = blackbox_summary(cfg)
             blackbox_rows = read_blackbox(cfg, limit=blackbox_state.get("max_rows", 450))
             archive.writestr("blackbox-summary.json", json.dumps(blackbox_state, indent=2))
@@ -5387,6 +5401,18 @@ def start_web(cfg):
             if route_path == "/api/diagnostics/support-bundle.zip":
                 try:
                     data, filename = support_bundle_bytes()
+                    self._send_bytes(data, content_type="application/zip", filename=filename)
+                except Exception as exc:
+                    self._send_json({"error": str(exc)}, status=500)
+                return
+            if route_path == "/api/diagnostics/manufacturer-report.zip":
+                try:
+                    payload = collect_manufacturer_report(
+                        cfg,
+                        identity=identity_summary(cfg),
+                        app_version=version_info(),
+                    )
+                    data, filename = manufacturer_report_bundle(payload, identity_slug(cfg))
                     self._send_bytes(data, content_type="application/zip", filename=filename)
                 except Exception as exc:
                     self._send_json({"error": str(exc)}, status=500)
