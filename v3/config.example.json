@@ -102,6 +102,14 @@
     "local_targets": [],
     "remote_access_services": ["teamviewerd"]
   },
+  "mobile_router": {
+    "enabled": false,
+    "address": "",
+    "port": 502,
+    "unit_id": 1,
+    "timeout_seconds": 2,
+    "poll_interval_seconds": 60
+  },
   "storage": {
     "root_path": "/",
     "recordings_path": "/home/vsuser/recordings",

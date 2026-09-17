@@ -8,6 +8,7 @@ from .storage import check_storage
 from .services import check_services
 from .network import check_network
 from .process_monitor import check_watchdog_process
+from .mobile_router import check_mobile_router
 
 _COLLECTOR_CACHE = {}
 
@@ -90,6 +91,9 @@ def collect_health(cfg):
     checks.extend(_cached_checks("storage", intervals.get("storage_seconds", 30), lambda: check_storage(cfg)))
     checks.extend(_cached_checks("services", intervals.get("services_seconds", 15), lambda: check_services(cfg)))
     checks.extend(_cached_checks("network", intervals.get("network_seconds", 30), lambda: check_network(cfg)))
+    router_cfg = cfg.get("mobile_router", {}) if isinstance(cfg.get("mobile_router", {}), dict) else {}
+    router_interval = router_cfg.get("poll_interval_seconds", intervals.get("router_seconds", 60))
+    checks.extend(_cached_checks("router", router_interval, lambda: check_mobile_router(cfg)))
     checks.extend(_cached_checks("process", intervals.get("process_seconds", 5), lambda: [check_watchdog_process(cfg)]))
 
     critical_failed = any(c.state == "critical" and c.critical for c in checks)

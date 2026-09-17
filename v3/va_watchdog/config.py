@@ -18,6 +18,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "services_seconds": 15,
         "storage_seconds": 30,
         "network_seconds": 30,
+        "router_seconds": 60,
         "process_seconds": 5
     },
     "status_path": "/var/lib/va-watchdog/status.json",
@@ -177,6 +178,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "internet_hosts": ["1.1.1.1", "8.8.8.8"],
         "local_targets": [],
         "remote_access_services": ["teamviewerd"]
+    },
+    "mobile_router": {
+        "enabled": False,
+        "address": "",
+        "port": 502,
+        "unit_id": 1,
+        "timeout_seconds": 2,
+        "poll_interval_seconds": 60
     },
     "retention": {
         "max_total_mb": 100,

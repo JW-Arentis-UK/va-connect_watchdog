@@ -1096,6 +1096,7 @@ def start_web(cfg):
             thresholds = cfg.get("thresholds", {})
             retention = cfg.get("retention", {})
             network = cfg.get("network", {})
+            router_cfg = cfg.get("mobile_router", {}) if isinstance(cfg.get("mobile_router", {}), dict) else {}
             update = cfg.get("update", {})
             recovery = cfg.get("recovery", {})
             rec_storage = cfg.get("recording_storage", {}) if isinstance(cfg.get("recording_storage", {}), dict) else {}
@@ -1147,6 +1148,15 @@ def start_web(cfg):
                 f"<div><label class=\"label\">Remote access services, one per line</label><textarea name=\"remote_access_services\">{escape(chr(10).join(network.get('remote_access_services', [])))}</textarea><p class=\"muted\">Systemd units such as TeamViewer support.</p></div>"
                 "</div>"
             )
+            router_settings = (
+                f"<label class=\"option-row\"><input name=\"mobile_router_enabled\" type=\"checkbox\" {'checked' if router_cfg.get('enabled') else ''}> <span><strong>Monitor the local mobile router</strong><br><span class=\"muted\">Evidence only. Router availability never controls the Neousys watchdog feed.</span></span></label>"
+                "<div class=\"settings-grid\">"
+                f"<div><label class=\"label\">Router IP address</label><input name=\"mobile_router_address\" maxlength=\"253\" value=\"{escape(str(router_cfg.get('address', '')))}\" placeholder=\"e.g. 192.168.1.1\"><p class=\"muted\">Local LAN address of the RUT router.</p></div>"
+                f"<div><label class=\"label\">Modbus TCP port</label><input name=\"mobile_router_port\" type=\"number\" min=\"1\" max=\"65535\" value=\"{escape(str(router_cfg.get('port', 502)))}\"><p class=\"muted\">Normally 502.</p></div>"
+                f"<div><label class=\"label\">Collection interval</label><input name=\"mobile_router_poll_interval_seconds\" type=\"number\" min=\"30\" max=\"300\" value=\"{escape(str(router_cfg.get('poll_interval_seconds', 60)))}\"><p class=\"muted\">Seconds between lightweight router readings.</p></div>"
+                "</div>"
+                "<p class=\"muted\">On the RUT, enable the Modbus TCP server for LAN access only. Keep remote access disabled.</p>"
+            )
             recovery_settings = (
                 "<div class=\"settings-grid\">"
                 f"<div><label class=\"label\">Update remote</label><input name=\"update_remote\" value=\"{escape(str(update.get('remote', 'origin')))}\"></div>"
@@ -1195,6 +1205,7 @@ def start_web(cfg):
                 + "<div id=\"persistent-journal\">" + disclosure("Persistent evidence logging", journal_settings) + "</div>"
                 + disclosure("Storage alerts", storage_settings)
                 + disclosure("Network and remote access", network_settings)
+                + disclosure("Mobile router monitoring", router_settings)
                 + disclosure("Recovery and updates", recovery_settings)
                 + disclosure("Advanced configuration", advanced_settings)
                 + "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Save settings</button><a class=\"ghost\" href=\"/settings\">Cancel</a></div>"
@@ -1587,6 +1598,9 @@ def start_web(cfg):
 
         def network_page():
             info = network_info()
+            router_check = check_map.get("mobile_router", {})
+            router_value = router_check.get("value", {}) if isinstance(router_check.get("value", {}), dict) else {}
+            router_enabled = bool(cfg.get("mobile_router", {}).get("enabled", False))
             local_web = info.get("local_web", {})
             interfaces = []
             for item in info.get("interfaces", []):
@@ -1653,6 +1667,23 @@ def start_web(cfg):
                 + "<h3>Routes and sockets</h3>" + route_detail
                 + all_checks_table("Health-engine network check", {"network_module"})
             )
+            router_rows = "".join([
+                f"<tr><th>Router</th><td>{escape(str(router_value.get('device_name') or router_value.get('hostname') or router_value.get('address') or '-'))}</td></tr>",
+                f"<tr><th>Address</th><td>{escape(str(router_value.get('address') or cfg.get('mobile_router', {}).get('address') or '-'))}</td></tr>",
+                f"<tr><th>Connection</th><td>{escape(str(router_value.get('network_type') or '-'))}; {escape(str(router_value.get('registration') or '-'))}</td></tr>",
+                f"<tr><th>Signal</th><td>{escape(str(router_value.get('signal_dbm') if router_value.get('signal_dbm') is not None else '-'))} dBm</td></tr>",
+                f"<tr><th>Operator / SIM</th><td>{escape(str(router_value.get('operator') or '-'))} / {escape(str(router_value.get('active_sim') or '-'))}</td></tr>",
+                f"<tr><th>Router temperature</th><td>{escape(str(router_value.get('temperature_c') if router_value.get('temperature_c') is not None else '-'))} C</td></tr>",
+                f"<tr><th>Router uptime</th><td>{escape(str(router_value.get('uptime_seconds') if router_value.get('uptime_seconds') is not None else '-'))} seconds</td></tr>",
+                f"<tr><th>Last reading</th><td>{escape(local_time(router_value.get('collected_at')))}</td></tr>",
+            ])
+            router_card = (
+                "<div class=\"card\"><div class=\"section-lead\"><div><h2>Mobile Router</h2>"
+                f"<p class=\"{escape(str(router_check.get('state') or 'unknown'))}\">{escape(str(router_check.get('message') or 'Waiting for router data'))}</p></div>"
+                "<a class=\"ghost\" href=\"/setup\">Configure</a></div>"
+                f"<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>{router_rows}</tbody></table></div></div>"
+                if router_enabled else ""
+            )
             return (
                 summary_strip([
                     ("Gateway", info.get("hostname", "-"), info.get("ip_addresses", "-") or "-", "healthy"),
@@ -1665,7 +1696,8 @@ def start_web(cfg):
                 "<p class=\"section-lead\">Configured internet and local reachability checks. Add or change targets in Settings.</p>"
                 "<div class=\"table-scroll\"><table><thead><tr><th>Target</th><th>Check</th><th>Status</th><th>Detail</th></tr></thead>"
                 f"<tbody>{''.join(ping_rows)}</tbody></table></div></div>"
-                "<div class=\"card\"><div class=\"section-lead\"><div><h2>Remote Access</h2><p class=\"muted\">Configured support service state.</p></div><a class=\"ghost\" href=\"/settings\">Edit network settings</a></div>"
+                + router_card
+                + "<div class=\"card\"><div class=\"section-lead\"><div><h2>Remote Access</h2><p class=\"muted\">Configured support service state.</p></div><a class=\"ghost\" href=\"/settings\">Edit network settings</a></div>"
                 "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Status</th><th>Enabled</th></tr></thead>"
                 f"<tbody>{''.join(remote_rows)}</tbody></table></div>"
                 "</div>"
@@ -2009,6 +2041,8 @@ def start_web(cfg):
         service_issue = next((check for check in service_checks if check.get("state") != "healthy"), None)
         recording_check = check_map.get("recording_storage", {})
         network_check = check_map.get("network_module", {})
+        router_check = check_map.get("mobile_router", {})
+        router_configured = bool(cfg.get("mobile_router", {}).get("enabled", False))
         network_message = str(network_check.get("message") or "Network checks have not been configured.")
         network_configured = bool(network_check) and "not configured" not in network_message.lower()
         watchdog_present = bool(check_value("hardware_watchdog_present", False))
@@ -2051,6 +2085,16 @@ def start_web(cfg):
                     str(network_check.get("state") or "unknown"),
                     "/evidence#network",
                     network_configured,
+                ),
+                (
+                    operational_row(
+                        "Mobile router",
+                        str(router_check.get("message") or "Waiting for local mobile router data."),
+                        str(router_check.get("state") or "unknown"),
+                        "/evidence#network",
+                        True,
+                    )
+                    if router_configured else ""
                 ),
                 operational_row(
                     "Hardware watchdog",
@@ -3088,6 +3132,14 @@ def start_web(cfg):
                 "internet_hosts": lines("internet_hosts"),
                 "local_targets": lines("local_targets"),
                 "remote_access_services": lines("remote_access_services"),
+            },
+            "mobile_router": {
+                "enabled": "mobile_router_enabled" in form,
+                "address": first("mobile_router_address", ""),
+                "port": first("mobile_router_port", "502"),
+                "unit_id": "1",
+                "timeout_seconds": "2",
+                "poll_interval_seconds": first("mobile_router_poll_interval_seconds", "60"),
             },
             "update": {
                 "remote": first("update_remote", "origin"),
@@ -4597,6 +4649,7 @@ def start_web(cfg):
             "thresholds": cfg.get("thresholds", {}),
             "services": cfg.get("services", []),
             "network": cfg.get("network", {}),
+            "mobile_router": cfg.get("mobile_router", {}),
             "recovery": cfg.get("recovery", {}),
             "retention": cfg.get("retention", {}),
             "update": cfg.get("update", {}),
@@ -4641,12 +4694,21 @@ def start_web(cfg):
             raise ValueError(f"{name} must be {maximum} characters or fewer")
         return text
 
+    def _router_address(value):
+        text = _identity_text(value, "mobile_router address", 253)
+        if not text:
+            return ""
+        if not re.fullmatch(r"[A-Za-z0-9.-]+", text) or ".." in text or text.startswith(".") or text.endswith("."):
+            raise ValueError("mobile router address must be an IPv4 address or local hostname")
+        return text
+
     def apply_settings(payload):
         if not isinstance(payload, dict):
             raise ValueError("settings payload must be an object")
         thresholds = payload.get("thresholds", {})
         retention = payload.get("retention", {})
         network = payload.get("network", {})
+        mobile_router = payload.get("mobile_router", cfg.get("mobile_router", {}))
         update = payload.get("update", {})
         hardware = payload.get("hardware_watchdog", {})
         process_monitor = payload.get("process_monitor", {})
@@ -4677,6 +4739,19 @@ def start_web(cfg):
                 "internet_hosts": _string_list(network.get("internet_hosts", []), "internet_hosts"),
                 "local_targets": _string_list(network.get("local_targets", []), "local_targets"),
                 "remote_access_services": _string_list(network.get("remote_access_services", []), "remote_access_services"),
+            },
+            "mobile_router": {
+                "enabled": bool(mobile_router.get("enabled", False)),
+                "address": _router_address(mobile_router.get("address", "")),
+                "port": _int_range({"port": mobile_router.get("port", 502)}, "port", 1, 65535),
+                "unit_id": _int_range({"unit_id": mobile_router.get("unit_id", 1)}, "unit_id", 0, 255),
+                "timeout_seconds": _int_range({"timeout_seconds": mobile_router.get("timeout_seconds", 2)}, "timeout_seconds", 1, 10),
+                "poll_interval_seconds": _int_range(
+                    {"poll_interval_seconds": mobile_router.get("poll_interval_seconds", 60)},
+                    "poll_interval_seconds",
+                    30,
+                    300,
+                ),
             },
             "update": {
                 "remote": str(update.get("remote", "origin")).strip() or "origin",
@@ -4724,6 +4799,8 @@ def start_web(cfg):
             raise ValueError("watchdog CPU warning must be lower than critical")
         if updates["process_monitor"]["memory_warning_mb"] >= updates["process_monitor"]["memory_critical_mb"]:
             raise ValueError("watchdog memory warning must be lower than critical")
+        if updates["mobile_router"]["enabled"] and not updates["mobile_router"]["address"]:
+            raise ValueError("enter the local mobile router IP address before enabling monitoring")
         if cfg.get("hardware_watchdog", {}).get("enabled") and not updates["hardware_watchdog"]["enabled"]:
             raise ValueError("hardware watchdog feed cannot be disabled from general Settings; use the guarded Watchdog startup safety control")
         rs_warning = updates["recording_storage"]["minimum_free_mb_warning"]

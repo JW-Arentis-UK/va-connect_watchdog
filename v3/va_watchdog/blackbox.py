@@ -11,6 +11,8 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any
 
+from .mobile_router import blackbox_snapshot as latest_router_snapshot
+
 
 _ACTIVE_RECORDER: "BlackBoxRecorder | None" = None
 
@@ -199,6 +201,7 @@ class ProcSampler:
             "kernel": collect("kernel", self.kernel.sample, {"available": False}),
             "videosoft": collect("videosoft", lambda: self._videosoft(started), {}),
             "heartbeat": collect("heartbeat", lambda: self._heartbeat(uptime), {}),
+            "mobile_router": collect("mobile_router", latest_router_snapshot, {}),
         }
         finished = time.monotonic()
         sample["sample_duration_ms"] = round((finished - started) * 1000, 2)
