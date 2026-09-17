@@ -160,6 +160,8 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('if router_configured else ""', source)
         self.assertIn("Evidence only. Router availability never controls the Neousys watchdog feed.", source)
         self.assertIn("enable the Modbus TCP server for LAN access only", source)
+        self.assertIn("_format_duration(router_value.get('uptime_seconds'))", source)
+        self.assertIn("local_time(router_value.get('started_at'))", source)
 
     def test_build_badge_reports_the_code_loaded_by_the_running_process(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")

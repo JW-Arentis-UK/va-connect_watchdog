@@ -1674,7 +1674,7 @@ def start_web(cfg):
                 f"<tr><th>Signal</th><td>{escape(str(router_value.get('signal_dbm') if router_value.get('signal_dbm') is not None else '-'))} dBm</td></tr>",
                 f"<tr><th>Operator / SIM</th><td>{escape(str(router_value.get('operator') or '-'))} / {escape(str(router_value.get('active_sim') or '-'))}</td></tr>",
                 f"<tr><th>Router temperature</th><td>{escape(str(router_value.get('temperature_c') if router_value.get('temperature_c') is not None else '-'))} C</td></tr>",
-                f"<tr><th>Router uptime</th><td>{escape(str(router_value.get('uptime_seconds') if router_value.get('uptime_seconds') is not None else '-'))} seconds</td></tr>",
+                f"<tr><th>Router uptime</th><td>{escape((_format_duration(router_value.get('uptime_seconds')) + ' (' + local_time(router_value.get('started_at')) + ')') if router_value.get('uptime_seconds') is not None else '-')}</td></tr>",
                 f"<tr><th>Last reading</th><td>{escape(local_time(router_value.get('collected_at')))}</td></tr>",
             ])
             router_card = (

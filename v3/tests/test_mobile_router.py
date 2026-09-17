@@ -1,8 +1,13 @@
 import struct
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from va_watchdog import mobile_router
+from va_watchdog.common import CheckResult
+from va_watchdog.events import EventLog
 
 
 def _set_int32(registers, offset, value):
@@ -78,6 +83,7 @@ class MobileRouterTests(unittest.TestCase):
 
         self.assertEqual(connection.requests, [(1, 86), (87, 48)])
         self.assertEqual(result["uptime_seconds"], 86400)
+        self.assertTrue(result["started_at"])
         self.assertEqual(result["signal_dbm"], -95)
         self.assertEqual(result["temperature_c"], 46.3)
         self.assertEqual(result["hostname"], "RUTX50-Ellingers")
@@ -127,6 +133,30 @@ class MobileRouterTests(unittest.TestCase):
         self.assertEqual(second.state, "warning")
         self.assertTrue(second.value["restart_detected"])
         self.assertIn("restart detected", second.message.lower())
+
+    def test_router_restart_is_logged_immediately_and_only_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "events.jsonl"
+            event_log = EventLog(str(path))
+            check = CheckResult(
+                "mobile_router",
+                "warning",
+                "Mobile router restart detected",
+                {
+                    "restart_detected": True,
+                    "address": "192.168.1.1",
+                    "collected_at": "2026-09-17T17:00:00+00:00",
+                    "uptime_seconds": 20,
+                },
+                False,
+            )
+
+            event_log.add_state_changes([check])
+            event_log.add_state_changes([check])
+            rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["message"], "Mobile router restart detected")
 
 
 if __name__ == "__main__":

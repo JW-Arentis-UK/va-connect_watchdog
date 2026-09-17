@@ -76,6 +76,7 @@ class EventLog:
         self.previous_states = {}
         self.resource_candidates = {}
         self.state_candidates = {}
+        self.immediate_markers = {}
 
     def add(self, level: str, source: str, message: str, data=None):
         event = {
@@ -93,6 +94,13 @@ class EventLog:
         for check in checks:
             if check.name == "recording_storage":
                 continue
+            check_value = getattr(check, "value", None)
+            value = check_value if isinstance(check_value, dict) else {}
+            if check.name == "mobile_router" and value.get("restart_detected"):
+                marker = f"{value.get('address')}:{value.get('collected_at')}:{value.get('uptime_seconds')}"
+                if self.immediate_markers.get(check.name) != marker:
+                    self.add("warning", "mobile_router", "Mobile router restart detected", check.to_dict())
+                    self.immediate_markers[check.name] = marker
             old = self.previous_states.get(check.name)
             if old is None:
                 self.previous_states[check.name] = check.state

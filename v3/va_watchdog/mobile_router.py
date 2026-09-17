@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import struct
+from datetime import datetime, timedelta
 from threading import Lock
 from typing import Any
 
@@ -25,6 +26,7 @@ def blackbox_snapshot() -> dict[str, Any]:
         "address",
         "collected_at",
         "uptime_seconds",
+        "started_at",
         "signal_dbm",
         "temperature_c",
         "active_sim",
@@ -91,11 +93,15 @@ def read_router(address: str, port: int = 502, unit_id: int = 1, timeout: float 
         first = _read_registers(connection, 1, unit_id, 1, 86)
         second = _read_registers(connection, 2, unit_id, 87, 48)
 
+    collected_at = now_iso()
+    uptime_seconds = _uint32(first, 0)
+    started_at = (datetime.fromisoformat(collected_at) - timedelta(seconds=uptime_seconds)).isoformat()
     return {
         "address": address,
         "port": port,
-        "collected_at": now_iso(),
-        "uptime_seconds": _uint32(first, 0),
+        "collected_at": collected_at,
+        "uptime_seconds": uptime_seconds,
+        "started_at": started_at,
         "signal_dbm": _int32(first, 2),
         "temperature_c": round(_int32(first, 4) / 10.0, 1),
         "hostname": _text(first, 6),
