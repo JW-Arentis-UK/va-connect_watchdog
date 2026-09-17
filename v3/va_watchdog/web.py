@@ -38,6 +38,7 @@ from .incident_archive import archive_config, list_archives
 from .baseline_capture import baseline_paths, baseline_status, completed_archive, start_baseline
 from .identity import configured_identity, hardware_identity, identity_slug, identity_summary
 from .manufacturer_report import collect_manufacturer_report, manufacturer_report_bundle, render_manufacturer_report
+from .mobile_router import signal_quality
 from .recording_activity import recording_activity
 from .reboot_evidence import recent_restarts
 
@@ -230,6 +231,8 @@ input[type="radio"] { width:18px; height:18px; }
 .trend-bars { display:flex; align-items:flex-end; gap:2px; height:34px; min-width:150px; padding:4px 0; }
 .trend-bar { flex:1; min-width:2px; background:var(--blue); border-radius:2px 2px 0 0; opacity:.8; }
 .top-watchdog { display:flex; align-items:center; gap:calc(8px * var(--scale)); border:1px solid var(--line); border-radius:8px; padding:calc(5px * var(--scale)) calc(8px * var(--scale)); background:var(--panel); white-space:nowrap; }
+.top-resource { color:var(--muted); padding-left:calc(8px * var(--scale)); border-left:1px solid var(--line); }
+.top-resource strong { color:var(--text); }
 pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale)); background:var(--input); border:1px solid var(--line); border-radius:6px; padding:calc(12px * var(--scale)); }
 .detail-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:calc(10px * var(--scale)); }
 .mini-card { border:1px solid var(--line); border-radius:6px; padding:calc(10px * var(--scale)); background:rgba(255,255,255,.03); min-width:0; }
@@ -359,7 +362,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
     <header class="topbar">
       <div id="page-title">__SITE_NAME__ / __PAGE_MODE__ / __PAGE_TITLE__</div>
       <div class="topbar-right">
-        <div class="top-watchdog"><span>Watchdog</span><strong id="side-state" class="value">Loading</strong><span class="label">Build</span><strong>__BUILD_ID__</strong></div>
+        <div class="top-watchdog"><span>Watchdog</span><strong id="side-state" class="value">Loading</strong><span class="top-resource">CPU <strong id="watchdog-cpu">-</strong></span><span class="top-resource">RAM <strong id="watchdog-memory">-</strong></span><span class="label">Build</span><strong>__BUILD_ID__</strong></div>
         <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="light">Light</option><option value="dark">Dark</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
         <span class="advanced-only"><label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label></span>
         <button class="ghost advanced-only" onclick="load()">Refresh now</button>
@@ -401,16 +404,21 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   function renderBasic(status){
     var lastUpdate = document.getElementById('last-update');
     var sideState = document.getElementById('side-state');
+    var watchdogCpu = document.getElementById('watchdog-cpu');
+    var watchdogMemory = document.getElementById('watchdog-memory');
     var checks = status.checks || [];
     var hasIssue = false;
+    var processValue = status.watchdog_process || {};
     for (var i = 0; i < checks.length; i++) {
+      if (checks[i].name === 'watchdog_process' && checks[i].value) processValue = checks[i].value;
       if (checks[i].state === 'critical' || checks[i].state === 'warning' || checks[i].state === 'unknown') {
         hasIssue = true;
-        break;
       }
     }
     var state = status.critical_failed ? 'critical' : (hasIssue ? 'warning' : 'healthy');
     if (lastUpdate) lastUpdate.textContent = 'Last update: ' + (status.time || '-');
+    if (watchdogCpu) watchdogCpu.textContent = processValue.cpu_percent === null || processValue.cpu_percent === undefined ? '-' : processValue.cpu_percent + '%';
+    if (watchdogMemory) watchdogMemory.textContent = processValue.memory_mb === null || processValue.memory_mb === undefined ? '-' : processValue.memory_mb + ' MB';
     if (sideState) {
       sideState.textContent = state.toUpperCase();
       sideState.className = 'value ' + state;
@@ -1667,11 +1675,36 @@ def start_web(cfg):
                 + "<h3>Routes and sockets</h3>" + route_detail
                 + all_checks_table("Health-engine network check", {"network_module"})
             )
+            router_history = mobile_router_history_summary(
+                read_history(cfg, limit=1600),
+                read_events(events_path, limit=5000),
+            )
+            current_signal = router_value.get("signal_dbm")
+            current_quality = signal_quality(current_signal)
+            signal_display = f"{current_signal} dBm" if current_signal is not None else "-"
+            signal_range = router_history["signal_range"]
+            recent_router_restarts = "".join(
+                "<div class=\"restart-row\">"
+                f"<div class=\"restart-number\">#{index}</div>"
+                f"<div class=\"restart-time\">{escape(local_time(item.get('time')))}</div>"
+                f"<div class=\"pill warning\">Router restart</div></div>"
+                for index, item in enumerate(router_history["recent_restarts"], 1)
+            ) or "<p class=\"muted\">No router restarts have been detected yet.</p>"
+            router_monitoring = (
+                summary_strip([
+                    ("Signal now", signal_display, current_quality["label"], current_quality["state"]),
+                    ("Signal over 24h", signal_range, f"{router_history['signal_samples']} readings", router_history["signal_state"]),
+                    ("Router outages", str(router_history["outage_count"]), f"{_format_duration(router_history['outage_seconds'])} total over 24h", "warning" if router_history["outage_count"] else "healthy"),
+                    ("Internet overlap", f"{router_history['correlated_outages']}/{router_history['internet_outages']}", "Internet outages also showing router loss/restart", "warning" if router_history["correlated_outages"] else "healthy"),
+                ])
+                + disclosure("Recent router restarts", recent_router_restarts)
+                + "<p class=\"muted\">An overlap means the gateway's internet check failed while the router was unreachable or restarting. It is evidence of timing, not proof that mobile signal caused the outage.</p>"
+            )
             router_rows = "".join([
                 f"<tr><th>Router</th><td>{escape(str(router_value.get('device_name') or router_value.get('hostname') or router_value.get('address') or '-'))}</td></tr>",
                 f"<tr><th>Address</th><td>{escape(str(router_value.get('address') or cfg.get('mobile_router', {}).get('address') or '-'))}</td></tr>",
                 f"<tr><th>Connection</th><td>{escape(str(router_value.get('network_type') or '-'))}; {escape(str(router_value.get('registration') or '-'))}</td></tr>",
-                f"<tr><th>Signal</th><td>{escape(str(router_value.get('signal_dbm') if router_value.get('signal_dbm') is not None else '-'))} dBm</td></tr>",
+                f"<tr><th>Signal</th><td class=\"{escape(current_quality['state'])}\"><strong>{escape(signal_display)}</strong> ({escape(current_quality['label'])})</td></tr>",
                 f"<tr><th>Operator / SIM</th><td>{escape(str(router_value.get('operator') or '-'))} / {escape(str(router_value.get('active_sim') or '-'))}</td></tr>",
                 f"<tr><th>Router temperature</th><td>{escape(str(router_value.get('temperature_c') if router_value.get('temperature_c') is not None else '-'))} C</td></tr>",
                 f"<tr><th>Router uptime</th><td>{escape((_format_duration(router_value.get('uptime_seconds')) + ' (' + local_time(router_value.get('started_at')) + ')') if router_value.get('uptime_seconds') is not None else '-')}</td></tr>",
@@ -1681,7 +1714,7 @@ def start_web(cfg):
                 "<div class=\"card\"><div class=\"section-lead\"><div><h2>Mobile Router</h2>"
                 f"<p class=\"{escape(str(router_check.get('state') or 'unknown'))}\">{escape(str(router_check.get('message') or 'Waiting for router data'))}</p></div>"
                 "<a class=\"ghost\" href=\"/setup\">Configure</a></div>"
-                f"<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>{router_rows}</tbody></table></div></div>"
+                f"<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>{router_rows}</tbody></table></div>{router_monitoring}</div>"
                 if router_enabled else ""
             )
             return (
@@ -3667,6 +3700,103 @@ def start_web(cfg):
             "state_counts": state_counts,
             "first_time": rows[0].get("time") if rows else "-",
             "last_time": rows[-1].get("time") if rows else "-",
+        }
+
+    def mobile_router_history_summary(rows, events):
+        def timestamp(value):
+            try:
+                return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+            except (TypeError, ValueError):
+                return None
+
+        timed_rows = []
+        for row in rows:
+            row_time = timestamp(row.get("time"))
+            if row_time is not None:
+                timed_rows.append((row_time, row))
+        timed_rows.sort(key=lambda item: item[0])
+        anchor = timed_rows[-1][0] if timed_rows else time.time()
+        recent_rows = [(row_time, row) for row_time, row in timed_rows if row_time >= anchor - 86400]
+
+        signals = []
+        for _, row in recent_rows:
+            try:
+                signal = row.get("mobile_router_signal_dbm")
+                if signal is not None:
+                    signals.append(float(signal))
+            except (TypeError, ValueError):
+                continue
+        if signals:
+            signal_range = f"min {min(signals):.0f} / avg {sum(signals) / len(signals):.0f} / max {max(signals):.0f} dBm"
+            signal_state = signal_quality(min(signals))["state"]
+        else:
+            signal_range = "No readings yet"
+            signal_state = "unknown"
+
+        outage_count = 0
+        outage_seconds = 0.0
+        outage_started = None
+        previous_available = None
+        for row_time, row in recent_rows:
+            available = row.get("mobile_router_available")
+            if available is None:
+                continue
+            available = bool(available)
+            if not available and previous_available is not False:
+                outage_count += 1
+                outage_started = row_time
+            elif available and previous_available is False and outage_started is not None:
+                outage_seconds += max(0.0, row_time - outage_started)
+                outage_started = None
+            previous_available = available
+        if previous_available is False and outage_started is not None:
+            outage_seconds += max(0.0, anchor - outage_started)
+
+        restart_events = []
+        restart_times = []
+        for event in events:
+            if event.get("source") != "mobile_router" or "restart" not in str(event.get("message", "")).lower():
+                continue
+            event_time = timestamp(event.get("time"))
+            restart_events.append(event)
+            if event_time is not None and event_time >= anchor - 86400:
+                restart_times.append(event_time)
+
+        internet_outages = 0
+        correlated_outages = 0
+        active_start = None
+        active_correlated = False
+        previous_failed = False
+        for row_time, row in recent_rows:
+            network_state = row.get("network_module_state")
+            if network_state is None:
+                continue
+            failed = str(network_state) != "healthy"
+            router_problem = row.get("mobile_router_available") is False or bool(row.get("mobile_router_restart_detected"))
+            if failed and not previous_failed:
+                internet_outages += 1
+                active_start = row_time
+                active_correlated = router_problem or any(abs(restart_time - row_time) <= 300 for restart_time in restart_times)
+            elif failed:
+                active_correlated = active_correlated or router_problem
+            elif previous_failed:
+                if active_correlated or any(active_start is not None and active_start - 300 <= restart_time <= row_time + 300 for restart_time in restart_times):
+                    correlated_outages += 1
+                active_start = None
+                active_correlated = False
+            previous_failed = failed
+        if previous_failed and (active_correlated or any(active_start is not None and restart_time >= active_start - 300 for restart_time in restart_times)):
+            correlated_outages += 1
+
+        return {
+            "signal_range": signal_range,
+            "signal_state": signal_state,
+            "signal_samples": len(signals),
+            "outage_count": outage_count,
+            "outage_seconds": round(outage_seconds),
+            "internet_outages": internet_outages,
+            "correlated_outages": correlated_outages,
+            "recent_restarts": restart_events[:10],
         }
 
     def history_chart(rows, key, min_value=0, max_value=100, suffix=""):

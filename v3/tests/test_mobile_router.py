@@ -119,6 +119,21 @@ class MobileRouterTests(unittest.TestCase):
         self.assertFalse(check.critical)
         self.assertFalse(check.value["available"])
 
+    def test_signal_quality_uses_clear_operator_bands(self):
+        self.assertEqual(mobile_router.signal_quality(-67), {"label": "Strong", "state": "healthy"})
+        self.assertEqual(mobile_router.signal_quality(-90), {"label": "Fair", "state": "warning"})
+        self.assertEqual(mobile_router.signal_quality(-105), {"label": "Low", "state": "critical"})
+
+    def test_low_signal_is_a_noncritical_warning(self):
+        cfg = {"mobile_router": {"enabled": True, "address": "192.168.1.1"}}
+        sample = {"available": True, "uptime_seconds": 5000, "network_type": "LTE", "signal_dbm": -105}
+        with patch("va_watchdog.mobile_router.read_router", return_value=sample):
+            check = mobile_router.check_mobile_router(cfg)[0]
+
+        self.assertEqual(check.state, "warning")
+        self.assertFalse(check.critical)
+        self.assertEqual(check.value["signal_quality"], "Low")
+
     def test_uptime_reset_reports_router_restart_for_one_sample(self):
         cfg = {"mobile_router": {"enabled": True, "address": "192.168.1.1"}}
         samples = [

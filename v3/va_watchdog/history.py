@@ -30,6 +30,7 @@ def append_history(cfg: dict[str, Any], status: dict[str, Any]) -> None:
             sample_gap_seconds = None
     hardware_feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
     recording_storage = status.get("recording_storage", {}) if isinstance(status.get("recording_storage", {}), dict) else {}
+    mobile_router = _check_dict_value(checks, "mobile_router")
     payload = {
         "time": status.get("time"),
         "state": status.get("state"),
@@ -65,6 +66,13 @@ def append_history(cfg: dict[str, Any], status: dict[str, Any]) -> None:
         "recording_storage_expected_full": recording_storage.get("expected_full"),
         "recording_storage_minimum_free_mb_warning": recording_storage.get("minimum_free_mb_warning"),
         "recording_storage_minimum_free_mb_critical": recording_storage.get("minimum_free_mb_critical"),
+        "network_module_state": _check_state(checks, "network_module"),
+        "mobile_router_available": mobile_router.get("available"),
+        "mobile_router_signal_dbm": mobile_router.get("signal_dbm"),
+        "mobile_router_uptime_seconds": mobile_router.get("uptime_seconds"),
+        "mobile_router_started_at": mobile_router.get("started_at"),
+        "mobile_router_registration": mobile_router.get("registration"),
+        "mobile_router_restart_detected": bool(mobile_router.get("restart_detected", False)),
     }
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, separators=(",", ":")) + "\n")
@@ -146,6 +154,11 @@ def _check_message(checks: list[dict[str, Any]], name: str) -> Any:
         if check.get("name") == name:
             return check.get("message")
     return None
+
+
+def _check_dict_value(checks: list[dict[str, Any]], name: str) -> dict[str, Any]:
+    value = _check_value(checks, name)
+    return value if isinstance(value, dict) else {}
 
 
 def _check_names(checks: list[dict[str, Any]], state: str) -> str:

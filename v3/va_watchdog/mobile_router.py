@@ -14,6 +14,19 @@ _LATEST_SNAPSHOT: dict[str, Any] = {}
 _PREVIOUS_UPTIME: dict[str, int] = {}
 
 
+def signal_quality(signal_dbm: Any) -> dict[str, str]:
+    """Return a simple operator-facing RSSI quality without affecting watchdog safety."""
+    try:
+        value = int(signal_dbm)
+    except (TypeError, ValueError):
+        return {"label": "Unknown", "state": "unknown"}
+    if value >= -80:
+        return {"label": "Strong", "state": "healthy"}
+    if value >= -100:
+        return {"label": "Fair", "state": "warning"}
+    return {"label": "Low", "state": "critical"}
+
+
 def latest_snapshot() -> dict[str, Any]:
     with _SNAPSHOT_LOCK:
         return dict(_LATEST_SNAPSHOT)
@@ -143,9 +156,14 @@ def check_mobile_router(cfg: dict[str, Any]) -> list[CheckResult]:
         _publish(snapshot)
         network = str(snapshot.get("network_type") or "Mobile connected")
         signal = snapshot.get("signal_dbm")
-        detail = f"{network}; signal {signal} dBm" if signal is not None else network
+        quality = signal_quality(signal)
+        snapshot["signal_quality"] = quality["label"]
+        snapshot["signal_state"] = quality["state"]
+        detail = f"{network}; signal {signal} dBm ({quality['label'].lower()})" if signal is not None else network
         if restarted:
             return [CheckResult("mobile_router", "warning", "Mobile router restart detected", snapshot, False)]
+        if quality["state"] == "critical":
+            return [CheckResult("mobile_router", "warning", f"Low mobile signal; {signal} dBm", snapshot, False)]
         return [CheckResult("mobile_router", "healthy", detail, snapshot, False)]
     except Exception as exc:
         snapshot = {
