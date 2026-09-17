@@ -42,7 +42,7 @@ class ServiceTrendTests(unittest.TestCase):
                 "time": "2026-09-17T12:00:00+00:00",
                 "checks": [
                     {"name": "network_module", "state": "warning", "value": {}},
-                    {"name": "mobile_router", "state": "healthy", "value": {"available": True, "signal_dbm": -67, "uptime_seconds": 3600, "started_at": "2026-09-17T11:00:00+00:00", "registration": "Registered, home"}},
+                    {"name": "mobile_router", "state": "healthy", "value": {"available": True, "signal_dbm": -67, "rsrp_dbm": -91, "rsrq_db": -11, "sinr_db": 18, "uptime_seconds": 3600, "started_at": "2026-09-17T11:00:00+00:00", "registration": "Registered, home"}},
                 ],
             }
 
@@ -52,6 +52,9 @@ class ServiceTrendTests(unittest.TestCase):
             self.assertEqual(row["network_module_state"], "warning")
             self.assertTrue(row["mobile_router_available"])
             self.assertEqual(row["mobile_router_signal_dbm"], -67)
+            self.assertEqual(row["mobile_router_rsrp_dbm"], -91)
+            self.assertEqual(row["mobile_router_rsrq_db"], -11)
+            self.assertEqual(row["mobile_router_sinr_db"], 18)
             self.assertEqual(row["mobile_router_uptime_seconds"], 3600)
 
 

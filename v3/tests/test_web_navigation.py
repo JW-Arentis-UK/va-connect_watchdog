@@ -159,18 +159,22 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('"Mobile router",\n                        str(router_check.get("message")', source)
         self.assertIn('if router_configured else ""', source)
         self.assertIn("Evidence only. Router availability never controls the Neousys watchdog feed.", source)
-        self.assertIn("enable the Modbus TCP server for LAN access only", source)
+        self.assertIn("enable Modbus TCP and SNMP for LAN access only", source)
         self.assertIn("_format_duration(router_value.get('uptime_seconds'))", source)
         self.assertIn("local_time(router_value.get('started_at'))", source)
         self.assertIn('mobile_router_history_summary(', source)
-        self.assertIn('("Signal over 24h", signal_range', source)
+        self.assertIn('("Radio quality", overall_radio["label"]', source)
         self.assertIn('disclosure("Recent router restarts"', source)
+        self.assertIn('disclosure("24-hour radio quality"', source)
+        self.assertIn('mobile_router_snmp_community', source)
+        self.assertIn('router_settings.pop("snmp_community", "")', source)
 
     def test_header_shows_watchdog_process_overhead(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 
         self.assertIn('id="watchdog-cpu"', source)
         self.assertIn('id="watchdog-memory"', source)
+        self.assertIn('id="watchdog-disk"', source)
         self.assertIn("status.watchdog_process || {}", source)
 
     def test_build_badge_reports_the_code_loaded_by_the_running_process(self):

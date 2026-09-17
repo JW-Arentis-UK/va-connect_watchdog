@@ -108,7 +108,10 @@
     "port": 502,
     "unit_id": 1,
     "timeout_seconds": 2,
-    "poll_interval_seconds": 60
+    "poll_interval_seconds": 60,
+    "snmp_enabled": false,
+    "snmp_port": 161,
+    "snmp_community": ""
   },
   "storage": {
     "root_path": "/",

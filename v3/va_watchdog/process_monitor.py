@@ -11,6 +11,7 @@ class ProcessMonitor:
     def __init__(self):
         self.pid = os.getpid()
         self.previous_cpu_ticks = None
+        self.previous_io = None
         self.previous_time = None
         self.cpu_high_since = None
         self.memory_high_since = None
@@ -22,12 +23,20 @@ class ProcessMonitor:
 
         now = time.monotonic()
         cpu_ticks = self._cpu_ticks()
+        io_bytes = self._io_bytes()
         cpu_percent = None
-        if cpu_ticks is not None and self.previous_cpu_ticks is not None and self.previous_time is not None:
+        disk_read_kbps = None
+        disk_write_kbps = None
+        if self.previous_time is not None:
             elapsed = max(0.001, now - self.previous_time)
-            ticks_per_second = os.sysconf("SC_CLK_TCK")
-            cpu_percent = round(max(0.0, (cpu_ticks - self.previous_cpu_ticks) / ticks_per_second / elapsed * 100), 1)
+            if cpu_ticks is not None and self.previous_cpu_ticks is not None:
+                ticks_per_second = os.sysconf("SC_CLK_TCK")
+                cpu_percent = round(max(0.0, (cpu_ticks - self.previous_cpu_ticks) / ticks_per_second / elapsed * 100), 1)
+            if io_bytes is not None and self.previous_io is not None:
+                disk_read_kbps = round(max(0, io_bytes[0] - self.previous_io[0]) / elapsed / 1024, 1)
+                disk_write_kbps = round(max(0, io_bytes[1] - self.previous_io[1]) / elapsed / 1024, 1)
         self.previous_cpu_ticks = cpu_ticks
+        self.previous_io = io_bytes
         self.previous_time = now
 
         memory_mb = self._memory_mb()
@@ -66,6 +75,8 @@ class ProcessMonitor:
             "pid": self.pid,
             "cpu_percent": cpu_percent,
             "memory_mb": memory_mb,
+            "disk_read_kbps": disk_read_kbps,
+            "disk_write_kbps": disk_write_kbps,
             "uptime_seconds": uptime_seconds,
             "cpu_warning_percent": cpu_warning,
             "cpu_critical_percent": cpu_critical,
@@ -96,6 +107,17 @@ class ProcessMonitor:
         except (OSError, IndexError, ValueError):
             pass
         return None
+
+    def _io_bytes(self):
+        try:
+            values = {}
+            for line in Path(f"/proc/{self.pid}/io").read_text(encoding="utf-8").splitlines():
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                    values[key] = int(value.strip())
+            return values.get("read_bytes", 0), values.get("write_bytes", 0)
+        except (OSError, ValueError):
+            return None
 
     def _uptime_seconds(self):
         try:

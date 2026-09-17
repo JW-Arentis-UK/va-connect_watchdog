@@ -10,6 +10,8 @@ class ProcessMonitorTests(unittest.TestCase):
         self.assertEqual(result.name, "watchdog_process")
         self.assertIn("pid", result.value)
         self.assertIn("memory_mb", result.value)
+        self.assertIn("disk_read_kbps", result.value)
+        self.assertIn("disk_write_kbps", result.value)
         self.assertIn("sustained_seconds", result.value)
         self.assertIn(result.state, {"healthy", "warning", "critical"})
 

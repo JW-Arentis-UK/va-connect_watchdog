@@ -38,7 +38,7 @@ from .incident_archive import archive_config, list_archives
 from .baseline_capture import baseline_paths, baseline_status, completed_archive, start_baseline
 from .identity import configured_identity, hardware_identity, identity_slug, identity_summary
 from .manufacturer_report import collect_manufacturer_report, manufacturer_report_bundle, render_manufacturer_report
-from .mobile_router import signal_quality
+from .mobile_router import radio_quality, signal_quality
 from .recording_activity import recording_activity
 from .reboot_evidence import recent_restarts
 
@@ -327,6 +327,8 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
   .status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .top-grid, .lower-grid, .bottom-grid { grid-template-columns: 1fr; }
   .tool-grid { grid-template-columns:repeat(2, minmax(0,1fr)); }
+  .topbar { height:auto; min-height:calc(58px * var(--scale)); padding-top:calc(7px * var(--scale)); padding-bottom:calc(7px * var(--scale)); }
+  .topbar-right { flex-wrap:wrap; justify-content:flex-end; }
 }
 @media (max-width: 760px) {
   .shell { grid-template-columns: 1fr; }
@@ -362,7 +364,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
     <header class="topbar">
       <div id="page-title">__SITE_NAME__ / __PAGE_MODE__ / __PAGE_TITLE__</div>
       <div class="topbar-right">
-        <div class="top-watchdog"><span>Watchdog</span><strong id="side-state" class="value">Loading</strong><span class="top-resource">CPU <strong id="watchdog-cpu">-</strong></span><span class="top-resource">RAM <strong id="watchdog-memory">-</strong></span><span class="label">Build</span><strong>__BUILD_ID__</strong></div>
+        <div class="top-watchdog"><span>Watchdog</span><strong id="side-state" class="value">Loading</strong><span class="top-resource">CPU <strong id="watchdog-cpu">-</strong></span><span class="top-resource">RAM <strong id="watchdog-memory">-</strong></span><span class="top-resource">Disk R/W <strong id="watchdog-disk">-</strong></span><span class="label">Build</span><strong>__BUILD_ID__</strong></div>
         <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="light">Light</option><option value="dark">Dark</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
         <span class="advanced-only"><label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label></span>
         <button class="ghost advanced-only" onclick="load()">Refresh now</button>
@@ -406,6 +408,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
     var sideState = document.getElementById('side-state');
     var watchdogCpu = document.getElementById('watchdog-cpu');
     var watchdogMemory = document.getElementById('watchdog-memory');
+    var watchdogDisk = document.getElementById('watchdog-disk');
     var checks = status.checks || [];
     var hasIssue = false;
     var processValue = status.watchdog_process || {};
@@ -419,6 +422,11 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
     if (lastUpdate) lastUpdate.textContent = 'Last update: ' + (status.time || '-');
     if (watchdogCpu) watchdogCpu.textContent = processValue.cpu_percent === null || processValue.cpu_percent === undefined ? '-' : processValue.cpu_percent + '%';
     if (watchdogMemory) watchdogMemory.textContent = processValue.memory_mb === null || processValue.memory_mb === undefined ? '-' : processValue.memory_mb + ' MB';
+    if (watchdogDisk) {
+      var diskRead = processValue.disk_read_kbps === null || processValue.disk_read_kbps === undefined ? '-' : processValue.disk_read_kbps;
+      var diskWrite = processValue.disk_write_kbps === null || processValue.disk_write_kbps === undefined ? '-' : processValue.disk_write_kbps;
+      watchdogDisk.textContent = diskRead + '/' + diskWrite + ' KB/s';
+    }
     if (sideState) {
       sideState.textContent = state.toUpperCase();
       sideState.className = 'value ' + state;
@@ -1163,7 +1171,12 @@ def start_web(cfg):
                 f"<div><label class=\"label\">Modbus TCP port</label><input name=\"mobile_router_port\" type=\"number\" min=\"1\" max=\"65535\" value=\"{escape(str(router_cfg.get('port', 502)))}\"><p class=\"muted\">Normally 502.</p></div>"
                 f"<div><label class=\"label\">Collection interval</label><input name=\"mobile_router_poll_interval_seconds\" type=\"number\" min=\"30\" max=\"300\" value=\"{escape(str(router_cfg.get('poll_interval_seconds', 60)))}\"><p class=\"muted\">Seconds between lightweight router readings.</p></div>"
                 "</div>"
-                "<p class=\"muted\">On the RUT, enable the Modbus TCP server for LAN access only. Keep remote access disabled.</p>"
+                f"<label class=\"option-row\"><input name=\"mobile_router_snmp_enabled\" type=\"checkbox\" {'checked' if router_cfg.get('snmp_enabled') else ''}> <span><strong>Collect detailed radio quality</strong><br><span class=\"muted\">Uses read-only SNMP v2c for RSRP, RSRQ and SINR. This remains evidence-only.</span></span></label>"
+                "<div class=\"settings-grid\">"
+                f"<div><label class=\"label\">SNMP port</label><input name=\"mobile_router_snmp_port\" type=\"number\" min=\"1\" max=\"65535\" value=\"{escape(str(router_cfg.get('snmp_port', 161)))}\"><p class=\"muted\">Normally 161.</p></div>"
+                f"<div><label class=\"label\">Read-only community</label><input name=\"mobile_router_snmp_community\" type=\"password\" maxlength=\"64\" value=\"\" placeholder=\"{'Configured - leave blank to keep' if router_cfg.get('snmp_community') else 'Enter the RUT community'}\"><p class=\"muted\">Stored locally and never shown in evidence exports.</p></div>"
+                "</div>"
+                "<p class=\"muted\">On the RUT, enable Modbus TCP and SNMP for LAN access only. Create a read-only SNMP community restricted to this gateway IP; keep remote access disabled.</p>"
             )
             recovery_settings = (
                 "<div class=\"settings-grid\">"
@@ -1683,6 +1696,20 @@ def start_web(cfg):
             current_quality = signal_quality(current_signal)
             signal_display = f"{current_signal} dBm" if current_signal is not None else "-"
             signal_range = router_history["signal_range"]
+            radio_items = []
+            for key, label, suffix in (("rsrp_dbm", "RSRP", "dBm"), ("rsrq_db", "RSRQ", "dB"), ("sinr_db", "SINR", "dB")):
+                value = router_value.get(key)
+                quality = radio_quality(key, value)
+                display = f"{value:g} {suffix}" if isinstance(value, (int, float)) else "-"
+                radio_items.append((key, label, suffix, display, quality))
+            available_radio = [item for item in radio_items if item[3] != "-"]
+            radio_rank = {"unknown": 0, "healthy": 1, "warning": 2, "critical": 3}
+            overall_radio = max((item[4] for item in available_radio), key=lambda item: radio_rank[item["state"]], default={"label": "Not configured", "state": "unknown"})
+            radio_detail = " / ".join(f"{item[1]} {item[3]}" for item in available_radio) or "Enable read-only SNMP in Setup"
+            radio_history_rows = "".join(
+                f"<tr><th>{escape(label)}</th><td class=\"{escape(router_history['radio_ranges'][key]['state'])}\">{escape(router_history['radio_ranges'][key]['display'])}</td></tr>"
+                for key, label, _ in (("rsrp_dbm", "RSRP", "dBm"), ("rsrq_db", "RSRQ", "dB"), ("sinr_db", "SINR", "dB"))
+            )
             recent_router_restarts = "".join(
                 "<div class=\"restart-row\">"
                 f"<div class=\"restart-number\">#{index}</div>"
@@ -1693,10 +1720,11 @@ def start_web(cfg):
             router_monitoring = (
                 summary_strip([
                     ("Signal now", signal_display, current_quality["label"], current_quality["state"]),
-                    ("Signal over 24h", signal_range, f"{router_history['signal_samples']} readings", router_history["signal_state"]),
+                    ("Radio quality", overall_radio["label"], radio_detail, overall_radio["state"]),
                     ("Router outages", str(router_history["outage_count"]), f"{_format_duration(router_history['outage_seconds'])} total over 24h", "warning" if router_history["outage_count"] else "healthy"),
                     ("Internet overlap", f"{router_history['correlated_outages']}/{router_history['internet_outages']}", "Internet outages also showing router loss/restart", "warning" if router_history["correlated_outages"] else "healthy"),
                 ])
+                + disclosure("24-hour radio quality", "<div class=\"table-scroll\"><table class=\"compact-table\"><tbody><tr><th>RSSI</th><td class=\"" + escape(router_history["signal_state"]) + "\">" + escape(signal_range) + "</td></tr>" + radio_history_rows + "</tbody></table></div><p class=\"muted\">Green thresholds: RSRP -90 dBm or better, RSRQ -10 dB or better, and SINR 10 dB or better. Red means RSRP below -105, RSRQ below -15, or SINR below 0.</p>")
                 + disclosure("Recent router restarts", recent_router_restarts)
                 + "<p class=\"muted\">An overlap means the gateway's internet check failed while the router was unreachable or restarting. It is evidence of timing, not proof that mobile signal caused the outage.</p>"
             )
@@ -1705,6 +1733,10 @@ def start_web(cfg):
                 f"<tr><th>Address</th><td>{escape(str(router_value.get('address') or cfg.get('mobile_router', {}).get('address') or '-'))}</td></tr>",
                 f"<tr><th>Connection</th><td>{escape(str(router_value.get('network_type') or '-'))}; {escape(str(router_value.get('registration') or '-'))}</td></tr>",
                 f"<tr><th>Signal</th><td class=\"{escape(current_quality['state'])}\"><strong>{escape(signal_display)}</strong> ({escape(current_quality['label'])})</td></tr>",
+                *[
+                    f"<tr><th>{escape(label)}</th><td class=\"{escape(quality['state'])}\"><strong>{escape(display)}</strong> ({escape(quality['label'])})</td></tr>"
+                    for _, label, _, display, quality in radio_items
+                ],
                 f"<tr><th>Operator / SIM</th><td>{escape(str(router_value.get('operator') or '-'))} / {escape(str(router_value.get('active_sim') or '-'))}</td></tr>",
                 f"<tr><th>Router temperature</th><td>{escape(str(router_value.get('temperature_c') if router_value.get('temperature_c') is not None else '-'))} C</td></tr>",
                 f"<tr><th>Router uptime</th><td>{escape((_format_duration(router_value.get('uptime_seconds')) + ' (' + local_time(router_value.get('started_at')) + ')') if router_value.get('uptime_seconds') is not None else '-')}</td></tr>",
@@ -3173,6 +3205,9 @@ def start_web(cfg):
                 "unit_id": "1",
                 "timeout_seconds": "2",
                 "poll_interval_seconds": first("mobile_router_poll_interval_seconds", "60"),
+                "snmp_enabled": "mobile_router_snmp_enabled" in form,
+                "snmp_port": first("mobile_router_snmp_port", "161"),
+                "snmp_community": first("mobile_router_snmp_community", "") or str(cfg.get("mobile_router", {}).get("snmp_community", "")),
             },
             "update": {
                 "remote": first("update_remote", "origin"),
@@ -3733,6 +3768,28 @@ def start_web(cfg):
             signal_range = "No readings yet"
             signal_state = "unknown"
 
+        radio_ranges = {}
+        for key, history_key, suffix in (
+            ("rsrp_dbm", "mobile_router_rsrp_dbm", "dBm"),
+            ("rsrq_db", "mobile_router_rsrq_db", "dB"),
+            ("sinr_db", "mobile_router_sinr_db", "dB"),
+        ):
+            values = []
+            for _, row in recent_rows:
+                try:
+                    value = row.get(history_key)
+                    if value is not None:
+                        values.append(float(value))
+                except (TypeError, ValueError):
+                    continue
+            if values:
+                display = f"min {min(values):.0f} / avg {sum(values) / len(values):.0f} / max {max(values):.0f} {suffix}"
+                state = radio_quality(key, min(values))["state"]
+            else:
+                display = "No readings yet"
+                state = "unknown"
+            radio_ranges[key] = {"display": display, "state": state, "samples": len(values)}
+
         outage_count = 0
         outage_seconds = 0.0
         outage_started = None
@@ -3792,6 +3849,7 @@ def start_web(cfg):
             "signal_range": signal_range,
             "signal_state": signal_state,
             "signal_samples": len(signals),
+            "radio_ranges": radio_ranges,
             "outage_count": outage_count,
             "outage_seconds": round(outage_seconds),
             "internet_outages": internet_outages,
@@ -4766,6 +4824,8 @@ def start_web(cfg):
         }
 
     def settings_summary():
+        router_settings = dict(cfg.get("mobile_router", {})) if isinstance(cfg.get("mobile_router", {}), dict) else {}
+        router_settings["snmp_community_configured"] = bool(router_settings.pop("snmp_community", ""))
         return {
             "config_path": str(active_config_path()),
             "identity": identity_summary(cfg),
@@ -4779,7 +4839,7 @@ def start_web(cfg):
             "thresholds": cfg.get("thresholds", {}),
             "services": cfg.get("services", []),
             "network": cfg.get("network", {}),
-            "mobile_router": cfg.get("mobile_router", {}),
+            "mobile_router": router_settings,
             "recovery": cfg.get("recovery", {}),
             "retention": cfg.get("retention", {}),
             "update": cfg.get("update", {}),
@@ -4881,6 +4941,13 @@ def start_web(cfg):
                     "poll_interval_seconds",
                     30,
                     300,
+                ),
+                "snmp_enabled": bool(mobile_router.get("snmp_enabled", cfg.get("mobile_router", {}).get("snmp_enabled", False))),
+                "snmp_port": _int_range({"snmp_port": mobile_router.get("snmp_port", cfg.get("mobile_router", {}).get("snmp_port", 161))}, "snmp_port", 1, 65535),
+                "snmp_community": _identity_text(
+                    mobile_router.get("snmp_community", cfg.get("mobile_router", {}).get("snmp_community", "")),
+                    "SNMP community",
+                    64,
                 ),
             },
             "update": {
@@ -5074,6 +5141,16 @@ def start_web(cfg):
             "recording_storage_expected_full",
             "recording_storage_minimum_free_mb_warning",
             "recording_storage_minimum_free_mb_critical",
+            "network_module_state",
+            "mobile_router_available",
+            "mobile_router_signal_dbm",
+            "mobile_router_rsrp_dbm",
+            "mobile_router_rsrq_db",
+            "mobile_router_sinr_db",
+            "mobile_router_uptime_seconds",
+            "mobile_router_started_at",
+            "mobile_router_registration",
+            "mobile_router_restart_detected",
         ]
         lines = [",".join(columns)]
         identity = configured_identity(cfg)

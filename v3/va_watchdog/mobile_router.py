@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 import socket
 import struct
+import time
 from datetime import datetime, timedelta
 from threading import Lock
 from typing import Any
@@ -12,6 +14,12 @@ from .common import CheckResult, now_iso
 _SNAPSHOT_LOCK = Lock()
 _LATEST_SNAPSHOT: dict[str, Any] = {}
 _PREVIOUS_UPTIME: dict[str, int] = {}
+
+_RADIO_OIDS = {
+    "sinr_db": "1.3.6.1.4.1.48690.2.2.1.19.1",
+    "rsrp_dbm": "1.3.6.1.4.1.48690.2.2.1.20.1",
+    "rsrq_db": "1.3.6.1.4.1.48690.2.2.1.21.1",
+}
 
 
 def signal_quality(signal_dbm: Any) -> dict[str, str]:
@@ -25,6 +33,133 @@ def signal_quality(signal_dbm: Any) -> dict[str, str]:
     if value >= -100:
         return {"label": "Fair", "state": "warning"}
     return {"label": "Low", "state": "critical"}
+
+
+def radio_quality(name: str, value: Any) -> dict[str, str]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return {"label": "Unknown", "state": "unknown"}
+    if name == "rsrp_dbm":
+        if number >= -90:
+            return {"label": "Good", "state": "healthy"}
+        return {"label": "Fair", "state": "warning"} if number >= -105 else {"label": "Low", "state": "critical"}
+    if name == "rsrq_db":
+        if number >= -10:
+            return {"label": "Good", "state": "healthy"}
+        return {"label": "Fair", "state": "warning"} if number >= -15 else {"label": "Low", "state": "critical"}
+    if name == "sinr_db":
+        if number >= 10:
+            return {"label": "Good", "state": "healthy"}
+        return {"label": "Fair", "state": "warning"} if number >= 0 else {"label": "Low", "state": "critical"}
+    return {"label": "Unknown", "state": "unknown"}
+
+
+def _ber_length(length: int) -> bytes:
+    if length < 0x80:
+        return bytes((length,))
+    encoded = length.to_bytes((length.bit_length() + 7) // 8, "big")
+    return bytes((0x80 | len(encoded),)) + encoded
+
+
+def _ber_tlv(tag: int, value: bytes) -> bytes:
+    return bytes((tag,)) + _ber_length(len(value)) + value
+
+
+def _ber_integer(value: int) -> bytes:
+    length = max(1, (value.bit_length() + 8) // 8)
+    encoded = value.to_bytes(length, "big", signed=True)
+    while len(encoded) > 1 and encoded[0] == 0 and not encoded[1] & 0x80:
+        encoded = encoded[1:]
+    return _ber_tlv(0x02, encoded)
+
+
+def _ber_oid(value: str) -> bytes:
+    parts = [int(part) for part in value.strip(".").split(".")]
+    if len(parts) < 2:
+        raise ValueError("SNMP OID is incomplete")
+    encoded = bytearray((parts[0] * 40 + parts[1],))
+    for part in parts[2:]:
+        chunks = [part & 0x7F]
+        part >>= 7
+        while part:
+            chunks.append(0x80 | (part & 0x7F))
+            part >>= 7
+        encoded.extend(reversed(chunks))
+    return _ber_tlv(0x06, bytes(encoded))
+
+
+def _read_tlv(data: bytes, offset: int = 0) -> tuple[int, bytes, int]:
+    if offset + 2 > len(data):
+        raise ValueError("SNMP response is truncated")
+    tag = data[offset]
+    offset += 1
+    length = data[offset]
+    offset += 1
+    if length & 0x80:
+        count = length & 0x7F
+        if not count or offset + count > len(data):
+            raise ValueError("SNMP response has an invalid length")
+        length = int.from_bytes(data[offset:offset + count], "big")
+        offset += count
+    end = offset + length
+    if end > len(data):
+        raise ValueError("SNMP response value is truncated")
+    return tag, data[offset:end], end
+
+
+def _snmp_value(tag: int, value: bytes) -> float | None:
+    if tag == 0x02:
+        return float(int.from_bytes(value, "big", signed=True))
+    if tag in (0x41, 0x42, 0x43, 0x46):
+        return float(int.from_bytes(value, "big", signed=False))
+    if tag == 0x04:
+        match = re.search(rb"[-+]?\d+(?:\.\d+)?", value)
+        return float(match.group(0)) if match else None
+    return None
+
+
+def read_radio_signal(address: str, community: str, port: int = 161, timeout: float = 2.0) -> dict[str, float]:
+    request_id = int(time.monotonic() * 1000) & 0x7FFFFFFF
+    varbinds = b"".join(_ber_tlv(0x30, _ber_oid(oid) + _ber_tlv(0x05, b"")) for oid in _RADIO_OIDS.values())
+    pdu = _ber_integer(request_id) + _ber_integer(0) + _ber_integer(0) + _ber_tlv(0x30, varbinds)
+    packet = _ber_tlv(0x30, _ber_integer(1) + _ber_tlv(0x04, community.encode("utf-8")) + _ber_tlv(0xA0, pdu))
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as connection:
+        connection.settimeout(timeout)
+        connection.sendto(packet, (address, port))
+        response, _ = connection.recvfrom(8192)
+
+    tag, message, _ = _read_tlv(response)
+    if tag != 0x30:
+        raise ValueError("Router returned a malformed SNMP message")
+    _, _, offset = _read_tlv(message, 0)
+    _, _, offset = _read_tlv(message, offset)
+    pdu_tag, response_pdu, _ = _read_tlv(message, offset)
+    if pdu_tag != 0xA2:
+        raise ValueError("Router did not return an SNMP response")
+    _, _, pdu_offset = _read_tlv(response_pdu, 0)
+    _, error_value, pdu_offset = _read_tlv(response_pdu, pdu_offset)
+    if int.from_bytes(error_value, "big", signed=True):
+        raise ValueError("Router returned an SNMP error")
+    _, _, pdu_offset = _read_tlv(response_pdu, pdu_offset)
+    list_tag, varbind_list, _ = _read_tlv(response_pdu, pdu_offset)
+    if list_tag != 0x30:
+        raise ValueError("Router returned malformed SNMP variables")
+
+    results: dict[str, float] = {}
+    offset = 0
+    for name in _RADIO_OIDS:
+        bind_tag, bind, offset = _read_tlv(varbind_list, offset)
+        if bind_tag != 0x30:
+            continue
+        _, _, bind_offset = _read_tlv(bind, 0)
+        value_tag, value, _ = _read_tlv(bind, bind_offset)
+        parsed = _snmp_value(value_tag, value)
+        if parsed is not None:
+            results[name] = parsed
+    if not results:
+        raise ValueError("Router returned no radio quality values")
+    return results
 
 
 def latest_snapshot() -> dict[str, Any]:
@@ -41,6 +176,9 @@ def blackbox_snapshot() -> dict[str, Any]:
         "uptime_seconds",
         "started_at",
         "signal_dbm",
+        "rsrp_dbm",
+        "rsrq_db",
+        "sinr_db",
         "temperature_c",
         "active_sim",
         "registration",
@@ -148,6 +286,23 @@ def check_mobile_router(cfg: dict[str, Any]) -> list[CheckResult]:
             int(settings.get("unit_id", 1) or 1),
             float(settings.get("timeout_seconds", 2) or 2),
         )
+        snmp_error = ""
+        if settings.get("snmp_enabled", False):
+            community = str(settings.get("snmp_community") or "").strip()
+            if community:
+                try:
+                    snapshot.update(read_radio_signal(
+                        address,
+                        community,
+                        int(settings.get("snmp_port", 161) or 161),
+                        float(settings.get("timeout_seconds", 2) or 2),
+                    ))
+                except Exception as exc:
+                    snmp_error = str(exc)
+                    snapshot["radio_metrics_error"] = snmp_error
+            else:
+                snmp_error = "SNMP community is not configured"
+                snapshot["radio_metrics_error"] = snmp_error
         uptime = int(snapshot.get("uptime_seconds") or 0)
         previous = _PREVIOUS_UPTIME.get(address)
         restarted = previous is not None and uptime + 30 < previous
@@ -159,9 +314,19 @@ def check_mobile_router(cfg: dict[str, Any]) -> list[CheckResult]:
         quality = signal_quality(signal)
         snapshot["signal_quality"] = quality["label"]
         snapshot["signal_state"] = quality["state"]
+        low_radio = []
+        for metric, label in (("rsrp_dbm", "RSRP"), ("rsrq_db", "RSRQ"), ("sinr_db", "SINR")):
+            metric_quality = radio_quality(metric, snapshot.get(metric))
+            snapshot[f"{metric}_quality"] = metric_quality["label"]
+            if metric_quality["state"] == "critical":
+                low_radio.append(f"{label} {snapshot.get(metric):g}")
         detail = f"{network}; signal {signal} dBm ({quality['label'].lower()})" if signal is not None else network
         if restarted:
             return [CheckResult("mobile_router", "warning", "Mobile router restart detected", snapshot, False)]
+        if snmp_error:
+            return [CheckResult("mobile_router", "warning", "Router reachable; detailed radio metrics unavailable", snapshot, False)]
+        if low_radio:
+            return [CheckResult("mobile_router", "warning", f"Low mobile radio quality; {', '.join(low_radio)}", snapshot, False)]
         if quality["state"] == "critical":
             return [CheckResult("mobile_router", "warning", f"Low mobile signal; {signal} dBm", snapshot, False)]
         return [CheckResult("mobile_router", "healthy", detail, snapshot, False)]

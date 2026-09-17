@@ -185,7 +185,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "port": 502,
         "unit_id": 1,
         "timeout_seconds": 2,
-        "poll_interval_seconds": 60
+        "poll_interval_seconds": 60,
+        "snmp_enabled": False,
+        "snmp_port": 161,
+        "snmp_community": ""
     },
     "retention": {
         "max_total_mb": 100,
