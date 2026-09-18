@@ -1208,7 +1208,7 @@ def start_web(cfg):
                 f"<div class=\"operational-list\">{router_checklist}</div>"
                 "<div class=\"button-row\"><button class=\"ghost\" type=\"submit\" formaction=\"/mobile-router-test\" formmethod=\"post\">Test saved router settings</button>"
                 + (f"<a class=\"ghost\" href=\"https://{escape(str(router_cfg.get('address')))}\" target=\"_blank\" rel=\"noopener noreferrer\">Open RUT WebUI</a>" if router_cfg.get("address") else "")
-                + "<a class=\"ghost\" href=\"/help/rutx50\" target=\"_blank\" rel=\"noopener\">Open RUTX50 setup help</a>"
+                + "<a class=\"ghost\" href=\"/help/rutx50\">Open RUTX50 setup help</a>"
                 + "</div>"
                 + "<p class=\"muted\">Save changes before testing. The test reads the saved configuration and does not alter the RUT.</p>"
             )
@@ -1873,7 +1873,7 @@ def start_web(cfg):
             body = (
                 "<div class=\"card\"><div class=\"section-lead\"><div><div class=\"eyebrow\">SETUP HELP</div>"
                 "<h1>RUTX50 Monitoring Setup</h1><p class=\"muted\">Enable read-only monitoring for the VA-Connect Watchdog.</p></div>"
-                "<button class=\"ghost\" type=\"button\" onclick=\"window.close()\">Close window</button></div></div>"
+                "<a class=\"ghost\" href=\"/setup\">Back to Setup</a></div></div>"
                 "<div class=\"card\"><h2>1. Enable Modbus TCP</h2>"
                 "<p>In the RUTX50 WebUI, open <strong>Services &gt; Modbus &gt; Modbus TCP Server</strong>. Enable the server on port <strong>502</strong>.</p>"
                 "<p>Allow LAN access only and leave remote or WAN access disabled.</p></div>"
