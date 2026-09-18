@@ -6237,7 +6237,9 @@ def start_web(cfg):
                     self.rfile.read(length)
                 result = test_mobile_router_settings()
                 body = mobile_router_test_result_html(result).encode("utf-8")
-                self.send_response(200 if result.get("ok") else 409)
+                # VA-Connect replaces non-2xx HTML with a generic proxy error page.
+                # Keep diagnostic failures in the rendered result instead.
+                self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()

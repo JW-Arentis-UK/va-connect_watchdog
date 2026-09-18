@@ -192,6 +192,10 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn("Connection checklist", source)
         self.assertIn('formaction=\\"/mobile-router-test\\"', source)
         self.assertIn('if route_path == "/mobile-router-test":', source)
+        router_test_handler = source[source.index('if route_path == "/mobile-router-test":'):]
+        router_test_handler = router_test_handler[:router_test_handler.index('if route_path == "/journal-enable":')]
+        self.assertIn("self.send_response(200)", router_test_handler)
+        self.assertNotIn("else 409", router_test_handler)
         self.assertIn("Open RUT WebUI", source)
 
     def test_watchdog_process_warning_requires_sustained_usage(self):
