@@ -1217,7 +1217,10 @@ def start_web(cfg):
                 for label, ready, detail in router_live_items
             )
             router_verified = all(ready for _, ready, _ in router_live_items)
-            router_quality_warning = str(router_live_check.get("state") or "unknown") != "healthy"
+            router_quality_warning = (
+                str(router_live_value.get("radio_score_state") or "") == "critical"
+                or str(router_live_value.get("signal_state") or "") == "critical"
+            )
             router_verification = (
                 "<div class=\"notice healthy\"><strong>Monitoring verified:</strong> Modbus and SNMP detailed radio readings are working.</div>"
                 if router_verified
@@ -1225,7 +1228,7 @@ def start_web(cfg):
             )
             if router_verified and router_quality_warning:
                 router_verification += (
-                    "<div class=\"notice warning\"><strong>Signal warning:</strong> Monitoring is working, but the current radio reading needs attention. "
+                    "<div class=\"notice warning\"><strong>Signal advisory:</strong> Monitoring is working, but the current radio reading is below the preferred range. "
                     f"{escape(str(router_live_check.get('message') or 'Open Evidence for the measured signal values.'))}</div>"
                 )
             router_setup_help = (

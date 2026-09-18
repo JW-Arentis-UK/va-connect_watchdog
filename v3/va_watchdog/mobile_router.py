@@ -392,10 +392,12 @@ def check_mobile_router(cfg: dict[str, Any]) -> list[CheckResult]:
         detail = f"{network}; signal {signal} dBm ({quality['label'].lower()})" if signal is not None else network
         if restarted:
             return [CheckResult("mobile_router", "warning", "Mobile router restart detected", snapshot, False)]
+        if snapshot["mobile_reconnected"]:
+            return [CheckResult("mobile_router", "warning", "Mobile connection restarted", snapshot, False)]
         if snmp_error:
-            return [CheckResult("mobile_router", "warning", "Router reachable; detailed radio metrics unavailable", snapshot, False)]
+            return [CheckResult("mobile_router", "healthy", "Router connected; detailed radio metrics unavailable", snapshot, False)]
         if low_radio:
-            return [CheckResult("mobile_router", "warning", f"Router connected; low radio quality: {', '.join(low_radio)}", snapshot, False)]
+            return [CheckResult("mobile_router", "healthy", f"Router connected; radio advisory: {', '.join(low_radio)}", snapshot, False)]
         has_detailed_radio = any(snapshot.get(metric) is not None for metric in ("rsrp_dbm", "rsrq_db", "sinr_db"))
         if has_detailed_radio and score["state"] == "critical":
             limiting_key = {"RSRP": "rsrp_dbm", "RSRQ": "rsrq_db", "SINR": "sinr_db"}.get(score["limiting"])
@@ -404,13 +406,13 @@ def check_mobile_router(cfg: dict[str, Any]) -> list[CheckResult]:
             limiting_detail = f" {limiting_value:g} {limiting_unit}" if isinstance(limiting_value, (int, float)) else ""
             return [CheckResult(
                 "mobile_router",
-                "warning",
-                f"Router connected; poor radio quality, limited by {score['limiting']}{limiting_detail}",
+                "healthy",
+                f"Router connected; radio advisory limited by {score['limiting']}{limiting_detail}",
                 snapshot,
                 False,
             )]
         if quality["state"] == "critical":
-            return [CheckResult("mobile_router", "warning", f"Router connected; low mobile signal {signal} dBm", snapshot, False)]
+            return [CheckResult("mobile_router", "healthy", f"Router connected; signal advisory {signal} dBm", snapshot, False)]
         return [CheckResult("mobile_router", "healthy", detail, snapshot, False)]
     except Exception as exc:
         snapshot = {

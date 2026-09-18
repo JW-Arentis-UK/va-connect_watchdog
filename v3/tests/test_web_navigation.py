@@ -198,7 +198,7 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn("Connection checklist", source)
         self.assertIn("Monitoring verified:", source)
         self.assertIn("router_verified = all", source)
-        self.assertIn("Signal warning:", source)
+        self.assertIn("Signal advisory:", source)
         self.assertIn('"/evidence?router_period=24#network"', source)
         self.assertNotIn("Save and test router settings", source)
         self.assertNotIn('route_path == "/mobile-router-test"', source)

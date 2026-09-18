@@ -185,17 +185,18 @@ class MobileRouterTests(unittest.TestCase):
         self.assertEqual(score["label"], "Good")
         self.assertEqual(score["limiting"], "RSSI")
 
-    def test_low_signal_is_a_noncritical_warning(self):
+    def test_low_signal_is_advisory_while_router_is_connected(self):
         cfg = {"mobile_router": {"enabled": True, "address": "192.168.1.1"}}
         sample = {"available": True, "uptime_seconds": 5000, "network_type": "LTE", "signal_dbm": -105}
         with patch("va_watchdog.mobile_router.read_router", return_value=sample):
             check = mobile_router.check_mobile_router(cfg)[0]
 
-        self.assertEqual(check.state, "warning")
+        self.assertEqual(check.state, "healthy")
         self.assertFalse(check.critical)
         self.assertEqual(check.value["signal_quality"], "Low")
+        self.assertIn("advisory", check.message)
 
-    def test_low_detailed_radio_metric_is_a_noncritical_warning(self):
+    def test_low_detailed_radio_metric_is_advisory_while_connected(self):
         cfg = {"mobile_router": {"enabled": True, "address": "192.168.1.1", "snmp_enabled": True, "snmp_community": "private-read"}}
         sample = {"available": True, "uptime_seconds": 5000, "network_type": "LTE", "signal_dbm": -75}
         with patch("va_watchdog.mobile_router.read_router", return_value=sample), patch(
@@ -204,11 +205,11 @@ class MobileRouterTests(unittest.TestCase):
         ):
             check = mobile_router.check_mobile_router(cfg)[0]
 
-        self.assertEqual(check.state, "warning")
+        self.assertEqual(check.state, "healthy")
         self.assertFalse(check.critical)
         self.assertIn("RSRP", check.message)
 
-    def test_poor_composite_radio_score_is_a_noncritical_warning(self):
+    def test_poor_composite_radio_score_is_advisory_while_connected(self):
         cfg = {"mobile_router": {"enabled": True, "address": "192.168.1.1", "snmp_enabled": True, "snmp_community": "private-read"}}
         sample = {"available": True, "uptime_seconds": 5000, "network_type": "LTE", "signal_dbm": -75}
         with patch("va_watchdog.mobile_router.read_router", return_value=sample), patch(
@@ -217,7 +218,7 @@ class MobileRouterTests(unittest.TestCase):
         ):
             check = mobile_router.check_mobile_router(cfg)[0]
 
-        self.assertEqual(check.state, "warning")
+        self.assertEqual(check.state, "healthy")
         self.assertFalse(check.critical)
         self.assertIn("limited by RSRQ", check.message)
         self.assertIn("Router connected", check.message)
@@ -258,6 +259,8 @@ class MobileRouterTests(unittest.TestCase):
         self.assertFalse(first.value["mobile_reconnected"])
         self.assertTrue(second.value["cell_changed"])
         self.assertTrue(second.value["mobile_reconnected"])
+        self.assertEqual(second.state, "warning")
+        self.assertIn("connection restarted", second.message.lower())
 
     def test_router_restart_is_logged_immediately_and_only_once(self):
         with tempfile.TemporaryDirectory() as temporary:
