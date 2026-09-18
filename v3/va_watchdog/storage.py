@@ -12,6 +12,7 @@ from typing import Any
 from .common import CheckResult
 
 _SMART_CACHE = {}
+_RECORDING_WARNING_STATE = {}
 SMART_CACHE_SECONDS = 6 * 60 * 60
 
 DEFAULT_RECORDING_STORAGE = {
@@ -32,6 +33,8 @@ DEFAULT_RECORDING_STORAGE = {
     "expected_full": False,
     "minimum_free_mb_warning": 5000,
     "minimum_free_mb_critical": 2048,
+    "warning_sustained_seconds": 120,
+    "warning_recovery_margin_mb": 256,
     "free_warning_percent": None,
     "free_warning_enabled": False,
     "temperature_warning_c": 55,
@@ -888,10 +891,70 @@ def _usage_check(name, path, warn, crit, critical):
     except Exception as e:
         return CheckResult(name, "unknown", str(e), None, critical)
 
+
+def _stabilize_recording_storage_warning(recording, cfg, now=None):
+    """Suppress short Videosoft rotation dips without delaying critical storage faults."""
+    now = time.monotonic() if now is None else float(now)
+    rec_cfg = recording_storage_cfg(cfg)
+    key = str(recording.get("monitored_path") or recording.get("mountpoint") or "recording_storage")
+    state = _RECORDING_WARNING_STATE.setdefault(key, {"low_since": None, "active": False})
+    raw_status = str(recording.get("status") or "unknown")
+    raw_message = str(recording.get("message") or "")
+    low_reserve = raw_status == "warning" and raw_message == "Recording storage low free MB"
+    sustained_seconds = max(0, int(rec_cfg.get("warning_sustained_seconds", 120) or 0))
+    recovery_margin_mb = max(0.0, float(rec_cfg.get("warning_recovery_margin_mb", 256) or 0))
+    warning_threshold = recording.get("minimum_free_mb_warning")
+    free_mb = recording.get("free_mb")
+
+    stabilized = dict(recording)
+    stabilized.update({
+        "raw_status": raw_status,
+        "raw_message": raw_message,
+        "warning_sustained_seconds": sustained_seconds,
+        "warning_recovery_margin_mb": recovery_margin_mb,
+        "warning_pending_seconds": 0,
+    })
+
+    if raw_status in {"critical", "unknown"}:
+        state.update({"low_since": None, "active": False})
+        return stabilized
+
+    if low_reserve:
+        if state["low_since"] is None:
+            state["low_since"] = now
+        elapsed = max(0.0, now - float(state["low_since"]))
+        stabilized["warning_pending_seconds"] = round(elapsed, 1)
+        if state["active"] or elapsed >= sustained_seconds:
+            state["active"] = True
+            return stabilized
+        stabilized["status"] = "healthy"
+        stabilized["message"] = "Recording storage reserve briefly low; monitoring before warning"
+        return stabilized
+
+    state["low_since"] = None
+    if state["active"] and raw_status == "healthy":
+        try:
+            recovered = (
+                warning_threshold is None
+                or free_mb is None
+                or float(free_mb) >= float(warning_threshold) + recovery_margin_mb
+            )
+        except (TypeError, ValueError):
+            recovered = True
+        if not recovered:
+            stabilized["status"] = "warning"
+            stabilized["message"] = "Recording storage reserve recovering"
+            return stabilized
+        state["active"] = False
+    elif raw_status != "healthy":
+        state["active"] = False
+    return stabilized
+
+
 def check_storage(cfg):
     th = cfg["thresholds"]
     st = cfg["storage"]
-    recording = recording_storage_status(cfg)
+    recording = _stabilize_recording_storage_warning(recording_storage_status(cfg), cfg)
     checks = [
         _usage_check("root_disk", st["root_path"], th["root_disk_warning_percent"], th["root_disk_critical_percent"], True),
         _usage_check("recordings_disk", st["recordings_path"], th["recordings_disk_warning_percent"], th["recordings_disk_critical_percent"], False),

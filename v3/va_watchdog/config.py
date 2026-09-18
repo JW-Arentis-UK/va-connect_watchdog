@@ -155,6 +155,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "expected_full": False,
         "minimum_free_mb_warning": 5000,
         "minimum_free_mb_critical": 2048,
+        "warning_sustained_seconds": 120,
+        "warning_recovery_margin_mb": 256,
         "free_warning_percent": None,
         "free_warning_enabled": False,
         "temperature_warning_c": 55,

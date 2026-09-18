@@ -5,10 +5,18 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from va_watchdog.storage import recording_storage_status, validate_system_recording_directory
+from va_watchdog.storage import (
+    _RECORDING_WARNING_STATE,
+    _stabilize_recording_storage_warning,
+    recording_storage_status,
+    validate_system_recording_directory,
+)
 
 
 class RecordingStorageModeTests(unittest.TestCase):
+    def setUp(self):
+        _RECORDING_WARNING_STATE.clear()
+
     def _cfg(self, directory: str):
         return {
             "recording_storage": {
@@ -96,6 +104,66 @@ class RecordingStorageModeTests(unittest.TestCase):
 
         self.assertEqual(status["status"], "warning")
         self.assertEqual(status["message"], "Recording storage low free MB")
+
+    def test_brief_low_reserve_does_not_raise_overall_warning(self):
+        cfg = {
+            "recording_storage": {
+                "warning_sustained_seconds": 120,
+                "warning_recovery_margin_mb": 256,
+            }
+        }
+        reading = {
+            "status": "warning",
+            "message": "Recording storage low free MB",
+            "monitored_path": "/recordings",
+            "free_mb": 4900,
+            "minimum_free_mb_warning": 5000,
+        }
+
+        first = _stabilize_recording_storage_warning(reading, cfg, now=100)
+        second = _stabilize_recording_storage_warning(reading, cfg, now=160)
+        sustained = _stabilize_recording_storage_warning(reading, cfg, now=221)
+
+        self.assertEqual(first["status"], "healthy")
+        self.assertEqual(second["status"], "healthy")
+        self.assertEqual(first["raw_status"], "warning")
+        self.assertEqual(sustained["status"], "warning")
+
+    def test_critical_recording_fault_is_never_delayed(self):
+        reading = {
+            "status": "critical",
+            "message": "Recording storage below minimum free MB",
+            "monitored_path": "/recordings",
+            "free_mb": 1900,
+            "minimum_free_mb_warning": 5000,
+        }
+
+        result = _stabilize_recording_storage_warning(reading, {"recording_storage": {}}, now=100)
+
+        self.assertEqual(result["status"], "critical")
+
+    def test_active_warning_uses_recovery_margin_to_prevent_flicker(self):
+        cfg = {
+            "recording_storage": {
+                "warning_sustained_seconds": 120,
+                "warning_recovery_margin_mb": 256,
+            }
+        }
+        low = {
+            "status": "warning",
+            "message": "Recording storage low free MB",
+            "monitored_path": "/recordings",
+            "free_mb": 4900,
+            "minimum_free_mb_warning": 5000,
+        }
+        _stabilize_recording_storage_warning(low, cfg, now=100)
+        _stabilize_recording_storage_warning(low, cfg, now=221)
+
+        near_threshold = dict(low, status="healthy", message="Recording storage healthy", free_mb=5100)
+        recovered = dict(near_threshold, free_mb=5300)
+
+        self.assertEqual(_stabilize_recording_storage_warning(near_threshold, cfg, now=230)["status"], "warning")
+        self.assertEqual(_stabilize_recording_storage_warning(recovered, cfg, now=240)["status"], "healthy")
 
     @patch(
         "va_watchdog.storage._findmnt_for_path",
