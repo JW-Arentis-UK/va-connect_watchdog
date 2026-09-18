@@ -5,11 +5,12 @@ from va_watchdog.web import LEGACY_PAGE_REDIRECTS, VISIBLE_PAGE_GROUPS
 
 
 class WebNavigationTests(unittest.TestCase):
-    def test_visible_navigation_is_reduced_to_five_operator_pages(self):
+    def test_visible_navigation_keeps_web_links_beside_status(self):
         pages = [page for _, group_pages in VISIBLE_PAGE_GROUPS for page in group_pages]
 
         self.assertEqual(pages, [
             ("Status", "/"),
+            ("Web Links", "/links"),
             ("Events", "/events"),
             ("Watchdog", "/watchdog"),
             ("Evidence", "/evidence"),
@@ -152,23 +153,18 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('tile("Hardware", hardware_model, hardware_detail, hardware_state)', source)
         self.assertIn('gateway_hardware.get("display_model")', source)
 
-    def test_status_offers_direct_rut_webui_route_test(self):
+    def test_web_links_page_groups_launchers_above_editors(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 
-        self.assertIn("Test RUT WebUI", source)
-        self.assertIn('href=\\"https://{escape(router_address)}\\"', source)
-        self.assertIn('target=\\"_blank\\" rel=\\"noopener noreferrer\\"', source)
-        self.assertIn("Videosoft browser route does not expose the router LAN address", source)
-        self.assertIn("if router_configured and router_address", source)
-
-    def test_status_offers_compact_camera_webui_route_test(self):
-        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
-
-        self.assertIn("Camera WebUI test", source)
-        self.assertIn("for host in range(71, 77)", source)
-        self.assertIn("openCameraWebUI('http')", source)
-        self.assertIn("openCameraWebUI('https')", source)
-        self.assertIn("no camera credentials are stored", source)
+        self.assertIn("def web_links_page():", source)
+        self.assertLess(source.index("launch_html ="), source.index("management ="))
+        self.assertIn("Add Web Link", source)
+        self.assertIn("Edit Existing Links", source)
+        self.assertIn('/web-link-add', source)
+        self.assertIn('/web-link-update', source)
+        self.assertIn('/web-link-delete', source)
+        self.assertIn('if page == "Web Links":', source)
+        self.assertNotIn("Camera WebUI test", source)
 
     def test_mobile_router_is_compact_optional_evidence(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
@@ -194,6 +190,7 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn("Connection checklist", source)
         self.assertIn('formaction=\\"/mobile-router-test\\"', source)
         self.assertIn('if route_path == "/mobile-router-test":', source)
+        self.assertIn("Open RUT WebUI", source)
 
     def test_watchdog_process_warning_requires_sustained_usage(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "process_monitor.py").read_text(encoding="utf-8")

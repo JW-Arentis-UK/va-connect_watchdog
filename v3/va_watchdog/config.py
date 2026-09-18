@@ -191,6 +191,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "snmp_port": 161,
         "snmp_community": ""
     },
+    "web_links": [],
     "retention": {
         "max_total_mb": 100,
         "events_retention_days": 30,

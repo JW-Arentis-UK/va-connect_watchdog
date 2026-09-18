@@ -41,9 +41,10 @@ from .manufacturer_report import collect_manufacturer_report, manufacturer_repor
 from .mobile_router import read_radio_signal, read_router, radio_metric_score, radio_quality, radio_score, signal_quality
 from .recording_activity import recording_activity
 from .reboot_evidence import recent_restarts
+from .web_links import LINK_GROUPS, MAX_LINKS, configured_web_links, normalize_web_link
 
 VISIBLE_PAGE_GROUPS = (
-    ("Gateway", (("Status", "/"), ("Events", "/events"), ("Watchdog", "/watchdog"), ("Evidence", "/evidence"))),
+    ("Gateway", (("Status", "/"), ("Web Links", "/links"), ("Events", "/events"), ("Watchdog", "/watchdog"), ("Evidence", "/evidence"))),
     ("Administration", (("Setup", "/setup"),)),
 )
 
@@ -599,6 +600,7 @@ def start_web(cfg):
     def page_help_html(page):
         help_map = {
             "Status": ("Is this gateway ready to operate?", "Shows the small set of live facts an operator needs: gateway state, storage, recordings, services, and protection."),
+            "Web Links": ("Which local device page do you need?", "Open saved RUT, camera, and other local web pages, then manage their names and addresses below."),
             "Watchdog": ("Will the gateway recover itself?", "Shows Neousys hardware protection, the independent feeder, the latest feed, and the controls needed to set up or test it."),
             "Events": ("What changed recently?", "Review concise event records, filter the list, inspect evidence, or export it."),
             "Evidence": ("What evidence is available?", "Download an investigation bundle and open retained history, black-box, hardware, storage, and network details when needed."),
@@ -1211,8 +1213,10 @@ def start_web(cfg):
                 "</div>"
                 "<h3>Connection checklist</h3>"
                 f"<div class=\"operational-list\">{router_checklist}</div>"
-                "<div class=\"button-row\"><button class=\"ghost\" type=\"submit\" formaction=\"/mobile-router-test\" formmethod=\"post\">Test saved router settings</button></div>"
-                "<p class=\"muted\">Save changes before testing. The test reads the saved configuration and does not alter the RUT.</p>"
+                "<div class=\"button-row\"><button class=\"ghost\" type=\"submit\" formaction=\"/mobile-router-test\" formmethod=\"post\">Test saved router settings</button>"
+                + (f"<a class=\"ghost\" href=\"https://{escape(str(router_cfg.get('address')))}\" target=\"_blank\" rel=\"noopener noreferrer\">Open RUT WebUI</a>" if router_cfg.get("address") else "")
+                + "</div>"
+                + "<p class=\"muted\">Save changes before testing. The test reads the saved configuration and does not alter the RUT.</p>"
                 + disclosure("RUTX50 setup help", router_setup_help)
             )
             recovery_settings = (
@@ -2118,6 +2122,58 @@ def start_web(cfg):
                 + disclosure("Advanced technical data", advanced_detail)
             )
 
+        def web_links_page():
+            links = configured_web_links(cfg)
+            group_titles = {"rut": "RUT", "camera": "Cameras", "other": "Other"}
+            grouped_sections = []
+            for group in LINK_GROUPS:
+                group_links = [item for item in links if item.get("group") == group]
+                if not group_links:
+                    continue
+                launchers = "".join(
+                    "<a class=\"tool-card\" href=\"" + escape(item["url"]) + "\" target=\"_blank\" rel=\"noopener noreferrer\">"
+                    "<strong>" + escape(item["name"]) + "</strong><span>" + escape(item["url"]) + "</span></a>"
+                    for item in group_links
+                )
+                grouped_sections.append(
+                    f"<div class=\"card\"><h2>{escape(group_titles[group])}</h2><div class=\"tool-grid\">{launchers}</div></div>"
+                )
+            launch_html = "".join(grouped_sections) or (
+                "<div class=\"card\"><h2>No web links configured</h2>"
+                "<p class=\"muted\">Add the RUT, cameras, or another local webpage below.</p></div>"
+            )
+
+            def type_options(selected):
+                return "".join(
+                    f"<option value=\"{group}\" {'selected' if selected == group else ''}>{escape(group_titles[group])}</option>"
+                    for group in LINK_GROUPS
+                )
+            editors = []
+            for index, item in enumerate(links):
+                editors.append(
+                    "<div class=\"mini-card\"><form method=\"post\" action=\"/web-link-update\">"
+                    f"<input type=\"hidden\" name=\"index\" value=\"{index}\">"
+                    "<div class=\"settings-grid\">"
+                    f"<div><label class=\"label\">Name</label><input name=\"name\" maxlength=\"80\" required value=\"{escape(item['name'])}\"></div>"
+                    f"<div><label class=\"label\">IP address or URL</label><input name=\"url\" maxlength=\"512\" required value=\"{escape(item['url'])}\"></div>"
+                    f"<div><label class=\"label\">Type</label><select name=\"group\">{type_options(item['group'])}</select></div>"
+                    "</div><div class=\"button-row\"><button class=\"ghost\" type=\"submit\">Save entry</button>"
+                    "<button class=\"danger\" type=\"submit\" formaction=\"/web-link-delete\" formnovalidate>Delete</button>"
+                    "</div></form></div>"
+                )
+            edit_html = "".join(editors) or "<p class=\"muted\">No existing entries to edit.</p>"
+            management = (
+                "<div class=\"card\"><h2>Add Web Link</h2>"
+                f"<p class=\"muted\">Up to {MAX_LINKS} links. Enter a complete HTTP/HTTPS URL or a local IP address. Login details are never stored.</p>"
+                "<form method=\"post\" action=\"/web-link-add\"><div class=\"settings-grid\">"
+                "<div><label class=\"label\">Name</label><input name=\"name\" maxlength=\"80\" required placeholder=\"e.g. Front camera\"></div>"
+                "<div><label class=\"label\">IP address or URL</label><input name=\"url\" maxlength=\"512\" required placeholder=\"e.g. 192.168.1.71 or https://192.168.1.1\"></div>"
+                f"<div><label class=\"label\">Type</label><select name=\"group\">{type_options('camera')}</select></div>"
+                "</div><div class=\"button-row\"><button class=\"action\" type=\"submit\">Add link</button></div></form></div>"
+                "<div class=\"card\"><h2>Edit Existing Links</h2><div class=\"grid\">" + edit_html + "</div></div>"
+            )
+            return launch_html + management
+
         error_html = ""
         if status.get("error"):
             error_html = f"<p class=\"critical\">{escape(str(status.get('error')))}</p>"
@@ -2189,26 +2245,6 @@ def start_web(cfg):
         network_check = check_map.get("network_module", {})
         router_check = check_map.get("mobile_router", {})
         router_configured = bool(cfg.get("mobile_router", {}).get("enabled", False))
-        router_address = str(cfg.get("mobile_router", {}).get("address") or "").strip()
-        camera_test_options = "".join(
-            f"<option value=\"192.168.1.{host}\">192.168.1.{host}</option>"
-            for host in range(71, 77)
-        )
-        router_webui_test = (
-            "<div class=\"button-row\">"
-            f"<a class=\"ghost\" href=\"https://{escape(router_address)}\" target=\"_blank\" rel=\"noopener noreferrer\">Test RUT WebUI</a>"
-            "<span class=\"muted\">Opens the RUT directly in a new tab. A certificate warning may appear; failure means the Videosoft browser route does not expose the router LAN address.</span>"
-            "</div>"
-            "<div class=\"button-row\">"
-            "<label class=\"inline\" for=\"camera-webui-address\"><strong>Camera WebUI test</strong></label>"
-            f"<select id=\"camera-webui-address\" aria-label=\"Camera address\">{camera_test_options}</select>"
-            "<button class=\"ghost\" type=\"button\" onclick=\"openCameraWebUI('http')\">Open HTTP</button>"
-            "<button class=\"ghost\" type=\"button\" onclick=\"openCameraWebUI('https')\">Open HTTPS</button>"
-            "<span class=\"muted\">Temporary route test only; no camera credentials are stored.</span>"
-            "<script>function openCameraWebUI(protocol){var e=document.getElementById('camera-webui-address');if(e&&e.value){window.open(protocol+'://'+e.value,'_blank','noopener,noreferrer');}}</script>"
-            "</div>"
-            if router_configured and router_address else ""
-        )
         network_message = str(network_check.get("message") or "Network checks have not been configured.")
         network_configured = bool(network_check) and "not configured" not in network_message.lower()
         watchdog_present = bool(check_value("hardware_watchdog_present", False))
@@ -2312,7 +2348,7 @@ def start_web(cfg):
             "</div>"
             "<div class=\"card\"><h2>Operational Status</h2>"
             "<p class=\"muted\">This list shows what is ready and where attention is needed. Open Details for the relevant setup or evidence.</p>"
-            f"<div class=\"operational-list\">{operational_rows}</div>{router_webui_test}</div>"
+            f"<div class=\"operational-list\">{operational_rows}</div></div>"
             + metric_tiles()
             + operational_alerts_card()
             + recent_restarts_card()
@@ -2322,6 +2358,8 @@ def start_web(cfg):
 
         if page == "Status":
             return page_help_html(page) + "<div class=\"overview-page\">" + overview_html + "</div>"
+        if page == "Web Links":
+            return page_help_html(page) + web_links_page()
         if page == "Watchdog":
             return page_help_html(page) + watchdog_page()
         if page == "Events":
@@ -2459,6 +2497,14 @@ def start_web(cfg):
             "</div>"
         )
         return page_shell(body, "Settings")
+
+    def web_link_action_result_html(result):
+        body = (
+            "<div class=\"card\"><h2>Web Links</h2>"
+            f"<p class=\"{'healthy' if result.get('ok') else 'critical'}\">{escape(str(result.get('message') or 'Web link action completed'))}</p>"
+            "<div class=\"button-row\"><a class=\"ghost\" href=\"/links\">Back to Web Links</a></div></div>"
+        )
+        return page_shell(body, "Web Links")
 
     def storage_purge_confirm_html():
         body = (
@@ -5684,6 +5730,37 @@ def start_web(cfg):
             "checks": checks,
         }
 
+    def change_web_link(action, name="", url="", group="other", index=None):
+        links = configured_web_links(cfg)
+        if action == "add":
+            if len(links) >= MAX_LINKS:
+                raise ValueError(f"a maximum of {MAX_LINKS} web links is allowed")
+            link = normalize_web_link(name, url, group)
+            links.append(link)
+            message = f"Added web link: {link['name']}"
+        else:
+            try:
+                selected = int(index)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("select a valid web link entry") from exc
+            if selected < 0 or selected >= len(links):
+                raise ValueError("the selected web link no longer exists")
+            previous = links[selected]
+            if action == "update":
+                link = normalize_web_link(name, url, group)
+                links[selected] = link
+                message = f"Updated web link: {link['name']}"
+            elif action == "delete":
+                links.pop(selected)
+                message = f"Deleted web link: {previous['name']}"
+            else:
+                raise ValueError("unsupported web link action")
+
+        saved_path = save_raw_config(deep_merge(load_raw_config(), {"web_links": links}))
+        cfg["web_links"] = links
+        append_web_event("info", "web_links", message, {"count": len(links)})
+        return {"ok": True, "message": message, "path": str(saved_path)}
+
     def config_summary():
         hardware = cfg.get("hardware_watchdog", {})
         return {
@@ -6078,6 +6155,35 @@ def start_web(cfg):
         def do_POST(self):
             request_context.theme = self._request_theme()
             route_path = self.path.split("?", 1)[0]
+            if route_path in {"/web-link-add", "/web-link-update", "/web-link-delete"}:
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+                    form = parse_qs(raw_body, keep_blank_values=True)
+                    action = route_path.rsplit("-", 1)[-1]
+                    result = change_web_link(
+                        action,
+                        name=form.get("name", [""])[0],
+                        url=form.get("url", [""])[0],
+                        group=form.get("group", ["other"])[0],
+                        index=form.get("index", [""])[0],
+                    )
+                except Exception as exc:
+                    result = {"ok": False, "message": str(exc)}
+                if result.get("ok"):
+                    self.send_response(303)
+                    self.send_header("Location", "/links")
+                    self._send_no_cache_headers()
+                    self.end_headers()
+                else:
+                    body = web_link_action_result_html(result).encode("utf-8")
+                    self.send_response(400)
+                    self.send_header("Content-Type", "text/html")
+                    self.send_header("Content-Length", str(len(body)))
+                    self._send_no_cache_headers()
+                    self.end_headers()
+                    self.wfile.write(body)
+                return
             if route_path == "/stage0-baseline-start":
                 length = int(self.headers.get("Content-Length", "0"))
                 form = parse_qs(self.rfile.read(length).decode("utf-8") if length else "", keep_blank_values=True)
