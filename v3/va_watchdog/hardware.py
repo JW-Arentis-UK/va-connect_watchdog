@@ -99,7 +99,10 @@ def check_hardware(cfg):
         checks.append(CheckResult("ram", "healthy", "RAM usage OK", ram))
 
     cpu = _cpu_load_percent()
-    checks.append(CheckResult("cpu_load", "healthy" if cpu is not None else "unknown", "CPU load", cpu))
+    if cpu is None:
+        checks.append(CheckResult("cpu_load", "healthy", "CPU load sampling", None))
+    else:
+        checks.append(CheckResult("cpu_load", "healthy", "CPU load", cpu))
 
     wdt_device = cfg["hardware_watchdog"]["device"]
     checks.append(CheckResult(

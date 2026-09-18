@@ -687,6 +687,10 @@ def start_web(cfg):
         def check_state(name, default="unknown"):
             return str(check_map.get(name, {}).get("state", default))
 
+        def percent_value(name, unavailable="Sampling"):
+            value = check_value(name)
+            return unavailable if value is None or value == "-" else f"{value}%"
+
         def disk_used(name):
             value = check_value(name, {})
             if isinstance(value, dict):
@@ -793,8 +797,8 @@ def start_web(cfg):
             return (
                 "<div class=\"grid metric-grid\">"
                 + tile("CPU Temp", check_value("temperature", "-"), check_message("temperature", ""), check_state("temperature", "healthy"))
-                + tile("CPU Load", f"{escape(str(check_value('cpu_load', '-')))}%", check_message("cpu_load", ""), check_state("cpu_load", "healthy"))
-                + tile("RAM", f"{escape(str(check_value('ram', '-')))}%", check_message("ram", ""), check_state("ram", "healthy"))
+                + tile("CPU Load", percent_value("cpu_load"), check_message("cpu_load", ""), check_state("cpu_load", "healthy"))
+                + tile("RAM", percent_value("ram", "Unavailable"), check_message("ram", ""), check_state("ram", "healthy"))
                 + tile("Disk Usage", disk_value, disk_detail, disk_state)
                 + tile("Oldest Recording", oldest_recording_value, oldest_recording_detail, oldest_recording_state, "recording-tile")
                 + tile("Hardware", hardware_model, hardware_detail, hardware_state)
