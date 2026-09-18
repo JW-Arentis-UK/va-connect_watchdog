@@ -2189,6 +2189,14 @@ def start_web(cfg):
         network_check = check_map.get("network_module", {})
         router_check = check_map.get("mobile_router", {})
         router_configured = bool(cfg.get("mobile_router", {}).get("enabled", False))
+        router_address = str(cfg.get("mobile_router", {}).get("address") or "").strip()
+        router_webui_test = (
+            "<div class=\"button-row\">"
+            f"<a class=\"ghost\" href=\"https://{escape(router_address)}\" target=\"_blank\" rel=\"noopener noreferrer\">Test RUT WebUI</a>"
+            "<span class=\"muted\">Opens the RUT directly in a new tab. A certificate warning may appear; if it cannot connect, the Videosoft browser route does not expose the router LAN address.</span>"
+            "</div>"
+            if router_configured and router_address else ""
+        )
         network_message = str(network_check.get("message") or "Network checks have not been configured.")
         network_configured = bool(network_check) and "not configured" not in network_message.lower()
         watchdog_present = bool(check_value("hardware_watchdog_present", False))
@@ -2292,7 +2300,7 @@ def start_web(cfg):
             "</div>"
             "<div class=\"card\"><h2>Operational Status</h2>"
             "<p class=\"muted\">This list shows what is ready and where attention is needed. Open Details for the relevant setup or evidence.</p>"
-            f"<div class=\"operational-list\">{operational_rows}</div></div>"
+            f"<div class=\"operational-list\">{operational_rows}</div>{router_webui_test}</div>"
             + metric_tiles()
             + operational_alerts_card()
             + recent_restarts_card()

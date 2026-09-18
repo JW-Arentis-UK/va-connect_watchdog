@@ -152,6 +152,15 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('tile("Hardware", hardware_model, hardware_detail, hardware_state)', source)
         self.assertIn('gateway_hardware.get("display_model")', source)
 
+    def test_status_offers_direct_rut_webui_route_test(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+
+        self.assertIn("Test RUT WebUI", source)
+        self.assertIn('href=\\"https://{escape(router_address)}\\"', source)
+        self.assertIn('target=\\"_blank\\" rel=\\"noopener noreferrer\\"', source)
+        self.assertIn("Videosoft browser route does not expose the router LAN address", source)
+        self.assertIn("if router_configured and router_address", source)
+
     def test_mobile_router_is_compact_optional_evidence(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 
