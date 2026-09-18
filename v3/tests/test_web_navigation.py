@@ -148,6 +148,8 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn("restart-test", source)
         self.assertIn("restart-fault", source)
         self.assertIn("restart-unknown", source)
+        self.assertIn(".restart-row .pill.restart-test", source)
+        self.assertIn(".restart-row .pill.restart-unknown", source)
         self.assertIn("+ recent_restarts_card()", source)
 
     def test_status_shows_gateway_hardware_tile(self):
@@ -196,6 +198,8 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn("Connection checklist", source)
         self.assertIn("Monitoring verified:", source)
         self.assertIn("router_verified = all", source)
+        self.assertIn("Signal warning:", source)
+        self.assertIn('"/evidence?router_period=24#network"', source)
         self.assertNotIn("Save and test router settings", source)
         self.assertNotIn('route_path == "/mobile-router-test"', source)
         self.assertIn("Open RUT WebUI", source)

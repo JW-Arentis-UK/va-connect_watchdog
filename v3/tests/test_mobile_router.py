@@ -220,6 +220,8 @@ class MobileRouterTests(unittest.TestCase):
         self.assertEqual(check.state, "warning")
         self.assertFalse(check.critical)
         self.assertIn("limited by RSRQ", check.message)
+        self.assertIn("Router connected", check.message)
+        self.assertIn("-14", check.message)
 
     def test_uptime_reset_reports_router_restart_for_one_sample(self):
         cfg = {"mobile_router": {"enabled": True, "address": "192.168.1.1"}}

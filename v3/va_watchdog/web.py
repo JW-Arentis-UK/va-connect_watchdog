@@ -184,11 +184,6 @@ label { display:block; margin:calc(6px * var(--scale)) 0; }
 .restart-row.restart-test { border-left:4px solid #1d64d8; }
 .restart-row.restart-fault { border-left:4px solid #c6283a; }
 .restart-row.restart-unknown { border-left:4px solid #b36b00; }
-.pill.restart-watchdog { background:#087f5b; color:#fff; }
-.pill.restart-clean { background:#168a3a; color:#fff; }
-.pill.restart-test { background:#1d64d8; color:#fff; }
-.pill.restart-fault { background:#c6283a; color:#fff; }
-.pill.restart-unknown { background:#b36b00; color:#fff; }
 .restart-number { min-width:calc(42px * var(--scale)); color:var(--muted); font-size:calc(11px * var(--scale)); text-transform:uppercase; letter-spacing:.04em; }
 .restart-time { font-weight:700; white-space:nowrap; }
 .operational-area { font-weight:800; }
@@ -206,6 +201,11 @@ label { display:block; margin:calc(6px * var(--scale)) 0; }
 .pill { display:inline-block; border-radius:999px; padding:calc(4px * var(--scale)) calc(8px * var(--scale)); background:#0d2b17; color:var(--green); font-size:calc(12px * var(--scale)); font-weight:700; }
 .pill.warning { background:rgba(255,191,60,.14); color:var(--amber); }
 .pill.critical { background:rgba(255,79,100,.14); color:var(--red); }
+.restart-row .pill.restart-watchdog { background:#087f5b; color:#fff; }
+.restart-row .pill.restart-clean { background:#168a3a; color:#fff; }
+.restart-row .pill.restart-test { background:#1d64d8; color:#fff; }
+.restart-row .pill.restart-fault { background:#c6283a; color:#fff; }
+.restart-row .pill.restart-unknown { background:#b36b00; color:#fff; }
 .label { color:var(--muted); font-size:calc(12px * var(--scale)); margin-top:calc(8px * var(--scale)); }
 .value { font-weight:700; overflow-wrap:anywhere; }
 .tile-value { font-size:calc(24px * var(--scale)); font-weight:800; margin:calc(8px * var(--scale)) 0 calc(4px * var(--scale)); }
@@ -1217,11 +1217,17 @@ def start_web(cfg):
                 for label, ready, detail in router_live_items
             )
             router_verified = all(ready for _, ready, _ in router_live_items)
+            router_quality_warning = str(router_live_check.get("state") or "unknown") != "healthy"
             router_verification = (
                 "<div class=\"notice healthy\"><strong>Monitoring verified:</strong> Modbus and SNMP detailed radio readings are working.</div>"
                 if router_verified
                 else "<div class=\"notice warning\"><strong>Setup incomplete:</strong> Save settings, reload this page, then follow the first checklist item marked Needed.</div>"
             )
+            if router_verified and router_quality_warning:
+                router_verification += (
+                    "<div class=\"notice warning\"><strong>Signal warning:</strong> Monitoring is working, but the current radio reading needs attention. "
+                    f"{escape(str(router_live_check.get('message') or 'Open Evidence for the measured signal values.'))}</div>"
+                )
             router_setup_help = (
                 "<h3>1. Enable Modbus TCP</h3>"
                 "<p>In the RUTX50 WebUI, open <strong>Services &gt; Modbus &gt; Modbus TCP Server</strong>. Enable the server on port <strong>502</strong>.</p>"
@@ -2306,7 +2312,7 @@ def start_web(cfg):
                         "Mobile router",
                         str(router_check.get("message") or "Waiting for local mobile router data."),
                         str(router_check.get("state") or "unknown"),
-                        "/evidence#network",
+                        "/evidence?router_period=24#network",
                         True,
                     )
                     if router_configured else ""
