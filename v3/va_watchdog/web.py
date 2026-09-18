@@ -38,7 +38,7 @@ from .incident_archive import archive_config, list_archives
 from .baseline_capture import baseline_paths, baseline_status, completed_archive, start_baseline
 from .identity import configured_identity, hardware_identity, identity_slug, identity_summary
 from .manufacturer_report import collect_manufacturer_report, manufacturer_report_bundle, render_manufacturer_report
-from .mobile_router import read_radio_signal, read_router, radio_metric_score, radio_quality, radio_score, signal_quality
+from .mobile_router import radio_metric_score, radio_quality, radio_score, signal_quality
 from .recording_activity import recording_activity
 from .reboot_evidence import recent_restarts
 from .web_links import LINK_GROUPS, MAX_LINKS, configured_web_links, normalize_web_link
@@ -179,6 +179,16 @@ label { display:block; margin:calc(6px * var(--scale)) 0; }
 .operational-row:first-child { border-top:0; }
 .restart-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:calc(7px * var(--scale)); }
 .restart-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:calc(9px * var(--scale)); align-items:center; padding:calc(9px * var(--scale)) calc(10px * var(--scale)); border:1px solid var(--line); border-radius:7px; background:var(--panel-2); }
+.restart-row.restart-watchdog { border-left:4px solid #087f5b; }
+.restart-row.restart-clean { border-left:4px solid #168a3a; }
+.restart-row.restart-test { border-left:4px solid #1d64d8; }
+.restart-row.restart-fault { border-left:4px solid #c6283a; }
+.restart-row.restart-unknown { border-left:4px solid #b36b00; }
+.pill.restart-watchdog { background:#087f5b; color:#fff; }
+.pill.restart-clean { background:#168a3a; color:#fff; }
+.pill.restart-test { background:#1d64d8; color:#fff; }
+.pill.restart-fault { background:#c6283a; color:#fff; }
+.pill.restart-unknown { background:#b36b00; color:#fff; }
 .restart-number { min-width:calc(42px * var(--scale)); color:var(--muted); font-size:calc(11px * var(--scale)); text-transform:uppercase; letter-spacing:.04em; }
 .restart-time { font-weight:700; white-space:nowrap; }
 .operational-area { font-weight:800; }
@@ -370,7 +380,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
     <header class="topbar">
       <div id="page-title">__SITE_NAME__ / __PAGE_MODE__ / __PAGE_TITLE__</div>
       <div class="topbar-right">
-        <div class="top-watchdog"><span>Watchdog</span><strong id="side-state" class="value">Loading</strong><span class="top-resource">CPU <strong id="watchdog-cpu">-</strong></span><span class="top-resource">RAM <strong id="watchdog-memory">-</strong></span><span class="top-resource">Disk R/W <strong id="watchdog-disk">-</strong></span><span class="label">Build</span><strong>__BUILD_ID__</strong></div>
+        <div class="top-watchdog"><span>Watchdog</span><strong id="side-state" class="value">Loading</strong><span class="top-resource">CPU <strong id="watchdog-cpu">-</strong></span><span class="top-resource">RAM <strong id="watchdog-memory">-</strong></span><span class="top-resource">Disk <strong id="watchdog-disk">-</strong></span><span class="label">Build</span><strong>__BUILD_ID__</strong></div>
         <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="light">Light</option><option value="dark">Dark</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
         <span class="advanced-only"><label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label></span>
         <button class="ghost advanced-only" onclick="load()">Refresh now</button>
@@ -431,7 +441,10 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
     if (watchdogDisk) {
       var diskRead = processValue.disk_read_kbps === null || processValue.disk_read_kbps === undefined ? '-' : processValue.disk_read_kbps;
       var diskWrite = processValue.disk_write_kbps === null || processValue.disk_write_kbps === undefined ? '-' : processValue.disk_write_kbps;
-      watchdogDisk.textContent = diskRead + '/' + diskWrite + ' KB/s';
+      var dataUsed = processValue.data_used_mb;
+      var dataLimit = processValue.data_limit_mb;
+      var dataUsage = dataUsed === null || dataUsed === undefined ? '-' : dataUsed + '/' + (dataLimit || '-') + ' MB';
+      watchdogDisk.textContent = dataUsage + ' · R/W ' + diskRead + '/' + diskWrite + ' KB/s';
     }
     if (sideState) {
       sideState.textContent = state.toUpperCase();
@@ -1075,11 +1088,22 @@ def start_web(cfg):
                     if classification_key == "kernel fault"
                     else "warning"
                 )
+                classification_style = (
+                    "restart-watchdog"
+                    if classification_key == "automatic watchdog recovery"
+                    else "restart-clean"
+                    if classification_key in {"clean reboot", "requested reboot"}
+                    else "restart-test"
+                    if classification_key in {"deliberate trip test", "full liveness test"}
+                    else "restart-fault"
+                    if classification_key == "kernel fault"
+                    else "restart-unknown"
+                )
                 rows.append(
-                    "<div class=\"restart-row\">"
+                    f"<div class=\"restart-row {classification_style}\">"
                     f"<div class=\"restart-number\">{'Latest' if index == 0 else f'#{index + 1}'}</div>"
                     f"<div class=\"restart-time\">{escape(unix_time(restart.get('created_at')))}</div>"
-                    f"<span class=\"pill {classification_state}\">{escape(restart_type)}</span>"
+                    f"<span class=\"pill {classification_state} {classification_style}\">{escape(restart_type)}</span>"
                     "</div>"
                 )
             if not rows:
@@ -1192,6 +1216,12 @@ def start_web(cfg):
                 "</div>"
                 for label, ready, detail in router_live_items
             )
+            router_verified = all(ready for _, ready, _ in router_live_items)
+            router_verification = (
+                "<div class=\"notice healthy\"><strong>Monitoring verified:</strong> Modbus and SNMP detailed radio readings are working.</div>"
+                if router_verified
+                else "<div class=\"notice warning\"><strong>Setup incomplete:</strong> Save settings, reload this page, then follow the first checklist item marked Needed.</div>"
+            )
             router_setup_help = (
                 "<h3>1. Enable Modbus TCP</h3>"
                 "<p>In the RUTX50 WebUI, open <strong>Services &gt; Modbus &gt; Modbus TCP Server</strong>. Enable the server on port <strong>502</strong>.</p>"
@@ -1217,10 +1247,9 @@ def start_web(cfg):
                 "</div>"
                 "<h3>Connection checklist</h3>"
                 f"<div class=\"operational-list\">{router_checklist}</div>"
-                "<div class=\"button-row\"><button class=\"ghost\" type=\"submit\" name=\"settings_action\" value=\"test_mobile_router\">Save and test router settings</button>"
-                + (f"<a class=\"ghost\" href=\"https://{escape(str(router_cfg.get('address')))}\" target=\"_blank\" rel=\"noopener noreferrer\">Open RUT WebUI</a>" if router_cfg.get("address") else "")
-                + "</div>"
-                + "<p class=\"muted\">This saves the Setup form, then reads the RUT. It does not alter the router.</p>"
+                + router_verification
+                + (f"<div class=\"button-row\"><a class=\"ghost\" href=\"https://{escape(str(router_cfg.get('address')))}\" target=\"_blank\" rel=\"noopener noreferrer\">Open RUT WebUI</a></div>" if router_cfg.get("address") else "")
+                + "<p class=\"muted\">The checklist uses the latest live reading. After changing router settings, save at the bottom and reload this page.</p>"
                 + disclosure("RUTX50 setup help", router_setup_help)
             )
             recovery_settings = (
@@ -1859,26 +1888,6 @@ def start_web(cfg):
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/network\">Back to Network</a></div></div>"
             )
             return page_shell(body, "Network")
-
-        def mobile_router_test_result_html(result):
-            checks = result.get("checks", []) if isinstance(result.get("checks", []), list) else []
-            rows = "".join(
-                "<tr>"
-                f"<th>{escape(str(item.get('name') or '-'))}</th>"
-                f"<td class=\"{'healthy' if item.get('ok') else 'warning'}\">{'Ready' if item.get('ok') else 'Needs attention'}</td>"
-                f"<td>{escape(str(item.get('detail') or '-'))}</td>"
-                "</tr>"
-                for item in checks
-            )
-            body = (
-                "<div class=\"card\"><h2>Mobile Router Connection Test</h2>"
-                f"<p class=\"{'healthy' if result.get('ok') else 'warning'}\"><strong>{escape(str(result.get('message') or 'Test complete'))}</strong></p>"
-                "<div class=\"table-scroll\"><table class=\"compact-table\"><thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>"
-                f"<tbody>{rows}</tbody></table></div>"
-                "<p class=\"muted\">This test only reads the RUT using the saved watchdog settings. It does not change the router.</p>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/setup\">Back to Setup</a></div></div>"
-            )
-            return page_shell(body, "Setup")
 
         def recovery_page():
             recovery = status.get("recovery", {}) if isinstance(status.get("recovery", {}), dict) else {}
@@ -5675,65 +5684,6 @@ def start_web(cfg):
                     archive.writestr(f"pstore/{pstore_name}/read-error.txt", str(exc))
         return buffer.getvalue(), f"va-watchdog-support-{identity_slug(cfg)}-{generated}.zip"
 
-    def test_mobile_router_settings():
-        settings = cfg.get("mobile_router", {}) if isinstance(cfg.get("mobile_router", {}), dict) else {}
-        address = str(settings.get("address") or "").strip()
-        checks = []
-        if not address:
-            return {
-                "ok": False,
-                "message": "Save the RUT LAN address before running the connection test.",
-                "checks": [{"name": "Configuration", "ok": False, "detail": "Router IP address is missing"}],
-            }
-
-        try:
-            reading = read_router(
-                address,
-                int(settings.get("port", 502) or 502),
-                int(settings.get("unit_id", 1) or 1),
-                float(settings.get("timeout_seconds", 2) or 2),
-            )
-            checks.append({
-                "name": "Modbus TCP",
-                "ok": True,
-                "detail": f"Connected to {address}; {reading.get('device_name') or reading.get('hostname') or 'RUT router'}",
-            })
-        except Exception as exc:
-            checks.append({"name": "Modbus TCP", "ok": False, "detail": f"{address}: {exc}"})
-
-        snmp_enabled = bool(settings.get("snmp_enabled"))
-        community = str(settings.get("snmp_community") or "").strip()
-        if not snmp_enabled:
-            checks.append({"name": "SNMP v2c", "ok": False, "detail": "Detailed radio collection is disabled in watchdog settings"})
-        elif not community:
-            checks.append({"name": "SNMP v2c", "ok": False, "detail": "Read-only community is not configured"})
-        else:
-            try:
-                radio = read_radio_signal(
-                    address,
-                    community,
-                    int(settings.get("snmp_port", 161) or 161),
-                    float(settings.get("timeout_seconds", 2) or 2),
-                )
-                expected_values = {
-                    "RSRP": "rsrp_dbm",
-                    "RSRQ": "rsrq_db",
-                    "SINR": "sinr_db",
-                    "Cell ID": "cell_id",
-                    "connection uptime": "connection_uptime_seconds",
-                }
-                received = [label for label, key in expected_values.items() if radio.get(key) is not None]
-                checks.append({"name": "SNMP v2c", "ok": bool(received), "detail": "Received " + ", ".join(received) if received else "SNMP replied without the required Teltonika values"})
-            except Exception as exc:
-                checks.append({"name": "SNMP v2c", "ok": False, "detail": str(exc)})
-
-        ok = all(item.get("ok") for item in checks)
-        return {
-            "ok": ok,
-            "message": "RUT monitoring is fully ready." if ok else "RUT monitoring setup still needs attention.",
-            "checks": checks,
-        }
-
     def change_web_link(action, name="", url="", group="other", index=None):
         links = configured_web_links(cfg)
         if action == "add":
@@ -6254,30 +6204,15 @@ def start_web(cfg):
                 self.wfile.write(body)
                 return
             if route_path == "/settings-save":
-                test_mobile_router = False
                 try:
                     length = int(self.headers.get("Content-Length", "0"))
                     raw_body = self.rfile.read(length).decode("utf-8") if length else ""
                     form = parse_qs(raw_body, keep_blank_values=True)
-                    test_mobile_router = form.get("settings_action", [""])[0] == "test_mobile_router"
                     result = apply_settings(settings_payload_from_form(form))
                 except Exception as exc:
                     result = {"ok": False, "error": str(exc)}
-                if test_mobile_router:
-                    if result.get("ok"):
-                        test_result = test_mobile_router_settings()
-                    else:
-                        test_result = {
-                            "ok": False,
-                            "message": "Router settings could not be saved.",
-                            "checks": [{"name": "Configuration", "ok": False, "detail": result.get("error", "Settings save failed")}],
-                        }
-                    body = mobile_router_test_result_html(test_result).encode("utf-8")
-                    response_status = 200
-                else:
-                    body = settings_saved_html(result).encode("utf-8")
-                    response_status = 200 if result.get("ok") else 400
-                self.send_response(response_status)
+                body = settings_saved_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 400)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()

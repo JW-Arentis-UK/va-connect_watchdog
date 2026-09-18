@@ -13,6 +13,8 @@ class ProcessMonitorTests(unittest.TestCase):
         self.assertIn("memory_mb", result.value)
         self.assertIn("disk_read_kbps", result.value)
         self.assertIn("disk_write_kbps", result.value)
+        self.assertIn("data_used_mb", result.value)
+        self.assertEqual(result.value["data_limit_mb"], 100)
         self.assertIn("sustained_seconds", result.value)
         self.assertIn(result.state, {"healthy", "warning", "critical"})
 

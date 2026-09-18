@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from .common import CheckResult
+from .retention import data_dir, dir_size
 
 
 class ProcessMonitor:
@@ -15,6 +16,8 @@ class ProcessMonitor:
         self.previous_time = None
         self.cpu_high_since = None
         self.memory_high_since = None
+        self.data_usage_sampled_at = None
+        self.data_used_mb = None
 
     def sample(self, cfg: dict) -> CheckResult:
         settings = cfg.get("process_monitor", {}) if isinstance(cfg.get("process_monitor", {}), dict) else {}
@@ -41,6 +44,8 @@ class ProcessMonitor:
 
         memory_mb = self._memory_mb()
         uptime_seconds = self._uptime_seconds()
+        data_used_mb = self._data_usage_mb(cfg, now)
+        data_limit_mb = int(cfg.get("retention", {}).get("max_total_mb", 100) or 100)
         cpu_warning = float(settings.get("cpu_warning_percent", 25) or 25)
         cpu_critical = float(settings.get("cpu_critical_percent", 75) or 75)
         memory_warning = float(settings.get("memory_warning_mb", 100) or 100)
@@ -81,6 +86,8 @@ class ProcessMonitor:
             "memory_mb": memory_mb,
             "disk_read_kbps": disk_read_kbps,
             "disk_write_kbps": disk_write_kbps,
+            "data_used_mb": data_used_mb,
+            "data_limit_mb": data_limit_mb,
             "uptime_seconds": uptime_seconds,
             "cpu_warning_percent": cpu_warning,
             "cpu_critical_percent": cpu_critical,
@@ -96,6 +103,19 @@ class ProcessMonitor:
         # This check is deliberately non-critical to the hardware feed. If the
         # process is unhealthy, systemd must enforce the restart boundary.
         return CheckResult("watchdog_process", state, message, value, False)
+
+    def _data_usage_mb(self, cfg, now):
+        if self.data_usage_sampled_at is not None and now - self.data_usage_sampled_at < 60:
+            return self.data_used_mb
+        self.data_usage_sampled_at = now
+        if not cfg.get("events_path"):
+            self.data_used_mb = None
+            return None
+        try:
+            self.data_used_mb = round(dir_size(data_dir(cfg)) / 1024 / 1024, 2)
+        except OSError:
+            self.data_used_mb = None
+        return self.data_used_mb
 
     def _cpu_ticks(self):
         try:

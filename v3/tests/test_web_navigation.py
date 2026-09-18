@@ -144,6 +144,10 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn("def recent_restarts_card():", source)
         self.assertIn("Planned tests are labelled separately from automatic recovery.", source)
         self.assertIn('restart.get("restart_type")', source)
+        self.assertIn("restart-watchdog", source)
+        self.assertIn("restart-test", source)
+        self.assertIn("restart-fault", source)
+        self.assertIn("restart-unknown", source)
         self.assertIn("+ recent_restarts_card()", source)
 
     def test_status_shows_gateway_hardware_tile(self):
@@ -190,8 +194,9 @@ class WebNavigationTests(unittest.TestCase):
         self.assertNotIn('/help/rutx50', source)
         self.assertIn("Services &gt; Modbus &gt; Modbus TCP Server", source)
         self.assertIn("Connection checklist", source)
-        self.assertIn('name=\\"settings_action\\" value=\\"test_mobile_router\\"', source)
-        self.assertIn('form.get("settings_action", [""])[0] == "test_mobile_router"', source)
+        self.assertIn("Monitoring verified:", source)
+        self.assertIn("router_verified = all", source)
+        self.assertNotIn("Save and test router settings", source)
         self.assertNotIn('route_path == "/mobile-router-test"', source)
         self.assertIn("Open RUT WebUI", source)
 
@@ -208,6 +213,8 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('id="watchdog-cpu"', source)
         self.assertIn('id="watchdog-memory"', source)
         self.assertIn('id="watchdog-disk"', source)
+        self.assertIn("processValue.data_used_mb", source)
+        self.assertIn("processValue.data_limit_mb", source)
         self.assertIn("status.watchdog_process || {}", source)
 
     def test_build_badge_reports_the_code_loaded_by_the_running_process(self):
