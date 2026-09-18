@@ -2190,10 +2190,22 @@ def start_web(cfg):
         router_check = check_map.get("mobile_router", {})
         router_configured = bool(cfg.get("mobile_router", {}).get("enabled", False))
         router_address = str(cfg.get("mobile_router", {}).get("address") or "").strip()
+        camera_test_options = "".join(
+            f"<option value=\"192.168.1.{host}\">192.168.1.{host}</option>"
+            for host in range(71, 77)
+        )
         router_webui_test = (
             "<div class=\"button-row\">"
             f"<a class=\"ghost\" href=\"https://{escape(router_address)}\" target=\"_blank\" rel=\"noopener noreferrer\">Test RUT WebUI</a>"
-            "<span class=\"muted\">Opens the RUT directly in a new tab. A certificate warning may appear; if it cannot connect, the Videosoft browser route does not expose the router LAN address.</span>"
+            "<span class=\"muted\">Opens the RUT directly in a new tab. A certificate warning may appear; failure means the Videosoft browser route does not expose the router LAN address.</span>"
+            "</div>"
+            "<div class=\"button-row\">"
+            "<label class=\"inline\" for=\"camera-webui-address\"><strong>Camera WebUI test</strong></label>"
+            f"<select id=\"camera-webui-address\" aria-label=\"Camera address\">{camera_test_options}</select>"
+            "<button class=\"ghost\" type=\"button\" onclick=\"openCameraWebUI('http')\">Open HTTP</button>"
+            "<button class=\"ghost\" type=\"button\" onclick=\"openCameraWebUI('https')\">Open HTTPS</button>"
+            "<span class=\"muted\">Temporary route test only; no camera credentials are stored.</span>"
+            "<script>function openCameraWebUI(protocol){var e=document.getElementById('camera-webui-address');if(e&&e.value){window.open(protocol+'://'+e.value,'_blank','noopener,noreferrer');}}</script>"
             "</div>"
             if router_configured and router_address else ""
         )

@@ -161,6 +161,15 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn("Videosoft browser route does not expose the router LAN address", source)
         self.assertIn("if router_configured and router_address", source)
 
+    def test_status_offers_compact_camera_webui_route_test(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+
+        self.assertIn("Camera WebUI test", source)
+        self.assertIn("for host in range(71, 77)", source)
+        self.assertIn("openCameraWebUI('http')", source)
+        self.assertIn("openCameraWebUI('https')", source)
+        self.assertIn("no camera credentials are stored", source)
+
     def test_mobile_router_is_compact_optional_evidence(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 
