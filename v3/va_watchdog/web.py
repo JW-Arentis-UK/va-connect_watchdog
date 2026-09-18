@@ -1192,6 +1192,17 @@ def start_web(cfg):
                 "</div>"
                 for label, ready, detail in router_live_items
             )
+            router_setup_help = (
+                "<h3>1. Enable Modbus TCP</h3>"
+                "<p>In the RUTX50 WebUI, open <strong>Services &gt; Modbus &gt; Modbus TCP Server</strong>. Enable the server on port <strong>502</strong>.</p>"
+                "<p>Allow LAN access only and leave remote or WAN access disabled.</p>"
+                "<h3>2. Enable read-only SNMP</h3>"
+                "<p>Open <strong>Services &gt; SNMP</strong>. Enable the SNMP service and <strong>SNMP v2c</strong> on port <strong>161</strong>. Leave remote and WAN access disabled.</p>"
+                "<h3>3. Add a restricted community</h3>"
+                "<p>Create a community with <strong>Read-Only</strong> access. Restrict its source IP to the Videosoft gateway where RutOS permits it.</p>"
+                "<p>Enter the same community above, save the watchdog settings, then run <strong>Test saved router settings</strong>.</p>"
+                "<div class=\"notice warning\"><strong>Security:</strong> Do not enable WAN access and do not use a read-write SNMP community. The watchdog only reads evidence and never configures the router.</div>"
+            )
             router_settings = (
                 f"<label class=\"option-row\"><input name=\"mobile_router_enabled\" type=\"checkbox\" {'checked' if router_cfg.get('enabled') else ''}> <span><strong>Monitor the local mobile router</strong><br><span class=\"muted\">Evidence only. Router availability never controls the Neousys watchdog feed.</span></span></label>"
                 "<div class=\"settings-grid\">"
@@ -1208,9 +1219,9 @@ def start_web(cfg):
                 f"<div class=\"operational-list\">{router_checklist}</div>"
                 "<div class=\"button-row\"><button class=\"ghost\" type=\"submit\" formaction=\"/mobile-router-test\" formmethod=\"post\">Test saved router settings</button>"
                 + (f"<a class=\"ghost\" href=\"https://{escape(str(router_cfg.get('address')))}\" target=\"_blank\" rel=\"noopener noreferrer\">Open RUT WebUI</a>" if router_cfg.get("address") else "")
-                + "<a class=\"ghost\" href=\"/help/rutx50\">Open RUTX50 setup help</a>"
                 + "</div>"
                 + "<p class=\"muted\">Save changes before testing. The test reads the saved configuration and does not alter the RUT.</p>"
+                + disclosure("RUTX50 setup help", router_setup_help)
             )
             recovery_settings = (
                 "<div class=\"settings-grid\">"
@@ -1866,26 +1877,6 @@ def start_web(cfg):
                 f"<tbody>{rows}</tbody></table></div>"
                 "<p class=\"muted\">This test only reads the RUT using the saved watchdog settings. It does not change the router.</p>"
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/setup\">Back to Setup</a></div></div>"
-            )
-            return page_shell(body, "Setup")
-
-        def rutx50_help_html():
-            body = (
-                "<div class=\"card\"><div class=\"section-lead\"><div><div class=\"eyebrow\">SETUP HELP</div>"
-                "<h1>RUTX50 Monitoring Setup</h1><p class=\"muted\">Enable read-only monitoring for the VA-Connect Watchdog.</p></div>"
-                "<a class=\"ghost\" href=\"/setup\">Back to Setup</a></div></div>"
-                "<div class=\"card\"><h2>1. Enable Modbus TCP</h2>"
-                "<p>In the RUTX50 WebUI, open <strong>Services &gt; Modbus &gt; Modbus TCP Server</strong>. Enable the server on port <strong>502</strong>.</p>"
-                "<p>Allow LAN access only and leave remote or WAN access disabled.</p></div>"
-                "<div class=\"card\"><h2>2. Enable read-only SNMP</h2>"
-                "<p>Open <strong>Services &gt; SNMP</strong>. Enable the SNMP service and <strong>SNMP v2c</strong> on port <strong>161</strong>.</p>"
-                "<p>Leave remote and WAN access disabled.</p></div>"
-                "<div class=\"card\"><h2>3. Add a restricted community</h2>"
-                "<p>Create a community with <strong>Read-Only</strong> access. Restrict its source IP to the Videosoft gateway where RutOS permits it.</p>"
-                "<p>Enter the same community in the watchdog's Mobile router monitoring settings, save, then run <strong>Test saved router settings</strong>.</p>"
-                "<div class=\"notice warning\"><strong>Security:</strong> Do not enable WAN access and do not use a read-write SNMP community. The watchdog only reads evidence and never configures the router.</div>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"https://wiki.teltonika-networks.com/view/RUTX50_SNMP\" target=\"_blank\" rel=\"noopener noreferrer\">Official RUTX50 SNMP help</a>"
-                "<a class=\"ghost\" href=\"/setup\">Open watchdog Setup</a></div></div>"
             )
             return page_shell(body, "Setup")
 
@@ -5875,15 +5866,6 @@ def start_web(cfg):
             server_paths = {path for _, path in server_pages}
             if route_path in server_paths or route_path.startswith("/index") or route_path.startswith("/basic"):
                 body = html_page(route_path).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html")
-                self.send_header("Content-Length", str(len(body)))
-                self._send_no_cache_headers()
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            if route_path == "/help/rutx50":
-                body = rutx50_help_html().encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
