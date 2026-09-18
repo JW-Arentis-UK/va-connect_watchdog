@@ -45,6 +45,7 @@ class ProcessMonitor:
         cpu_critical = float(settings.get("cpu_critical_percent", 75) or 75)
         memory_warning = float(settings.get("memory_warning_mb", 100) or 100)
         memory_critical = float(settings.get("memory_critical_mb", 200) or 200)
+        warning_sustained = max(15, int(settings.get("warning_sustained_seconds", 60) or 60))
         sustained = max(30, int(settings.get("sustained_seconds", 300) or 300))
 
         if cpu_percent is not None and cpu_percent >= cpu_warning:
@@ -63,9 +64,12 @@ class ProcessMonitor:
         if sustained_cpu or sustained_memory:
             state = "critical"
             message = "Watchdog process resource usage remains high"
-        elif self.cpu_high_since or self.memory_high_since:
+        elif cpu_high_for >= warning_sustained or memory_high_for >= warning_sustained:
             state = "warning"
-            message = "Watchdog process resource usage is above the warning threshold"
+            message = "Watchdog process resource usage remains above the warning threshold"
+        elif self.cpu_high_since or self.memory_high_since:
+            state = "healthy"
+            message = "Brief watchdog process resource activity is being observed"
         else:
             state = "healthy"
             message = "Watchdog process resource usage is normal"
@@ -82,6 +86,7 @@ class ProcessMonitor:
             "cpu_critical_percent": cpu_critical,
             "memory_warning_mb": memory_warning,
             "memory_critical_mb": memory_critical,
+            "warning_sustained_seconds": warning_sustained,
             "sustained_seconds": sustained,
             "cpu_high_for_seconds": cpu_high_for,
             "memory_high_for_seconds": memory_high_for,

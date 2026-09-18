@@ -38,7 +38,7 @@ from .incident_archive import archive_config, list_archives
 from .baseline_capture import baseline_paths, baseline_status, completed_archive, start_baseline
 from .identity import configured_identity, hardware_identity, identity_slug, identity_summary
 from .manufacturer_report import collect_manufacturer_report, manufacturer_report_bundle, render_manufacturer_report
-from .mobile_router import radio_metric_score, radio_quality, radio_score, signal_quality
+from .mobile_router import read_radio_signal, read_router, radio_metric_score, radio_quality, radio_score, signal_quality
 from .recording_activity import recording_activity
 from .reboot_evidence import recent_restarts
 
@@ -1169,6 +1169,34 @@ def start_web(cfg):
                 f"<div><label class=\"label\">Remote access services, one per line</label><textarea name=\"remote_access_services\">{escape(chr(10).join(network.get('remote_access_services', [])))}</textarea><p class=\"muted\">Systemd units such as TeamViewer support.</p></div>"
                 "</div>"
             )
+            router_live_check = check_map.get("mobile_router", {})
+            router_live_value = router_live_check.get("value", {}) if isinstance(router_live_check.get("value", {}), dict) else {}
+            router_live_items = (
+                ("Router address saved", bool(router_cfg.get("address")), str(router_cfg.get("address") or "Enter the RUT LAN address")),
+                ("Modbus TCP responding", bool(router_live_value.get("available")), "Router readings received" if router_live_value.get("available") else "Waiting for port 502"),
+                ("SNMP v2c configured", bool(router_cfg.get("snmp_enabled") and router_cfg.get("snmp_community")), "Read-only community saved" if router_cfg.get("snmp_enabled") and router_cfg.get("snmp_community") else "Enable SNMP and enter its community"),
+                ("Detailed signal received", any(router_live_value.get(key) is not None for key in ("rsrp_dbm", "rsrq_db", "sinr_db")), "RSRP, RSRQ or SINR received" if any(router_live_value.get(key) is not None for key in ("rsrp_dbm", "rsrq_db", "sinr_db")) else "Waiting for SNMP readings"),
+                ("Cell and connection data", router_live_value.get("cell_id") is not None and router_live_value.get("connection_uptime_seconds") is not None, "Cell ID and connection uptime received" if router_live_value.get("cell_id") is not None and router_live_value.get("connection_uptime_seconds") is not None else "Waiting for Teltonika radio data"),
+            )
+            router_checklist = "".join(
+                "<div class=\"operational-row\">"
+                f"<div class=\"operational-area\">{escape(label)}</div>"
+                f"<div class=\"operational-detail\">{escape(detail)}</div>"
+                f"<div class=\"operational-state {'healthy' if ready else 'warning'}\">{'Ready' if ready else 'Needed'}</div>"
+                "</div>"
+                for label, ready, detail in router_live_items
+            )
+            router_setup_help = (
+                "<p>Use the RUTX50 WebUI from the gateway LAN. Menu wording can vary slightly by RutOS version.</p>"
+                "<h3>1. Enable Modbus TCP</h3>"
+                "<p>Open <strong>Services &gt; Modbus &gt; Modbus TCP Server</strong>. Enable the server on port <strong>502</strong>. Allow LAN access only and leave remote or WAN access disabled.</p>"
+                "<h3>2. Enable read-only SNMP</h3>"
+                "<p>Open <strong>Services &gt; SNMP</strong>. Enable the SNMP service and <strong>SNMP v2c</strong> on port <strong>161</strong>. Leave remote access disabled.</p>"
+                "<h3>3. Add a restricted community</h3>"
+                "<p>Create a community with <strong>Read-Only</strong> access. Restrict its source IP to this Videosoft gateway where the RUT permits it. Enter the same community in the watchdog field above.</p>"
+                "<div class=\"notice warning\"><strong>Security:</strong> Do not enable WAN access and do not use a read-write SNMP community. The watchdog only reads evidence and never configures the router.</div>"
+                "<p><a class=\"ghost\" href=\"https://wiki.teltonika-networks.com/view/RUTX50_SNMP\" target=\"_blank\" rel=\"noopener noreferrer\">Open official RUTX50 SNMP help</a></p>"
+            )
             router_settings = (
                 f"<label class=\"option-row\"><input name=\"mobile_router_enabled\" type=\"checkbox\" {'checked' if router_cfg.get('enabled') else ''}> <span><strong>Monitor the local mobile router</strong><br><span class=\"muted\">Evidence only. Router availability never controls the Neousys watchdog feed.</span></span></label>"
                 "<div class=\"settings-grid\">"
@@ -1181,7 +1209,11 @@ def start_web(cfg):
                 f"<div><label class=\"label\">SNMP port</label><input name=\"mobile_router_snmp_port\" type=\"number\" min=\"1\" max=\"65535\" value=\"{escape(str(router_cfg.get('snmp_port', 161)))}\"><p class=\"muted\">Normally 161.</p></div>"
                 f"<div><label class=\"label\">Read-only community</label><input name=\"mobile_router_snmp_community\" type=\"password\" maxlength=\"64\" value=\"\" placeholder=\"{'Configured - leave blank to keep' if router_cfg.get('snmp_community') else 'Enter the RUT community'}\"><p class=\"muted\">Stored locally and never shown in evidence exports.</p></div>"
                 "</div>"
-                "<p class=\"muted\">On the RUT, enable Modbus TCP and SNMP for LAN access only. Create a read-only SNMP community restricted to this gateway IP; keep remote access disabled.</p>"
+                "<h3>Connection checklist</h3>"
+                f"<div class=\"operational-list\">{router_checklist}</div>"
+                "<div class=\"button-row\"><button class=\"ghost\" type=\"submit\" formaction=\"/mobile-router-test\" formmethod=\"post\">Test saved router settings</button></div>"
+                "<p class=\"muted\">Save changes before testing. The test reads the saved configuration and does not alter the RUT.</p>"
+                + disclosure("RUTX50 setup help", router_setup_help)
             )
             recovery_settings = (
                 "<div class=\"settings-grid\">"
@@ -1819,6 +1851,26 @@ def start_web(cfg):
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/network\">Back to Network</a></div></div>"
             )
             return page_shell(body, "Network")
+
+        def mobile_router_test_result_html(result):
+            checks = result.get("checks", []) if isinstance(result.get("checks", []), list) else []
+            rows = "".join(
+                "<tr>"
+                f"<th>{escape(str(item.get('name') or '-'))}</th>"
+                f"<td class=\"{'healthy' if item.get('ok') else 'warning'}\">{'Ready' if item.get('ok') else 'Needs attention'}</td>"
+                f"<td>{escape(str(item.get('detail') or '-'))}</td>"
+                "</tr>"
+                for item in checks
+            )
+            body = (
+                "<div class=\"card\"><h2>Mobile Router Connection Test</h2>"
+                f"<p class=\"{'healthy' if result.get('ok') else 'warning'}\"><strong>{escape(str(result.get('message') or 'Test complete'))}</strong></p>"
+                "<div class=\"table-scroll\"><table class=\"compact-table\"><thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>"
+                f"<tbody>{rows}</tbody></table></div>"
+                "<p class=\"muted\">This test only reads the RUT using the saved watchdog settings. It does not change the router.</p>"
+                "<div class=\"button-row\"><a class=\"ghost\" href=\"/setup\">Back to Setup</a></div></div>"
+            )
+            return page_shell(body, "Setup")
 
         def recovery_page():
             recovery = status.get("recovery", {}) if isinstance(status.get("recovery", {}), dict) else {}
@@ -5187,6 +5239,7 @@ def start_web(cfg):
                 "cpu_critical_percent": _int_range({"cpu_critical_percent": process_monitor.get("cpu_critical_percent", cfg.get("process_monitor", {}).get("cpu_critical_percent", 75))}, "cpu_critical_percent", 1, 100),
                 "memory_warning_mb": _int_range({"memory_warning_mb": process_monitor.get("memory_warning_mb", cfg.get("process_monitor", {}).get("memory_warning_mb", 100))}, "memory_warning_mb", 16, 4096),
                 "memory_critical_mb": _int_range({"memory_critical_mb": process_monitor.get("memory_critical_mb", cfg.get("process_monitor", {}).get("memory_critical_mb", 200))}, "memory_critical_mb", 32, 8192),
+                "warning_sustained_seconds": _int_range({"warning_sustained_seconds": process_monitor.get("warning_sustained_seconds", cfg.get("process_monitor", {}).get("warning_sustained_seconds", 60))}, "warning_sustained_seconds", 15, 600),
                 "sustained_seconds": _int_range({"sustained_seconds": process_monitor.get("sustained_seconds", cfg.get("process_monitor", {}).get("sustained_seconds", 300))}, "sustained_seconds", 30, 3600),
             },
             "recording_storage": {
@@ -5551,6 +5604,65 @@ def start_web(cfg):
                 except OSError as exc:
                     archive.writestr(f"pstore/{pstore_name}/read-error.txt", str(exc))
         return buffer.getvalue(), f"va-watchdog-support-{identity_slug(cfg)}-{generated}.zip"
+
+    def test_mobile_router_settings():
+        settings = cfg.get("mobile_router", {}) if isinstance(cfg.get("mobile_router", {}), dict) else {}
+        address = str(settings.get("address") or "").strip()
+        checks = []
+        if not address:
+            return {
+                "ok": False,
+                "message": "Save the RUT LAN address before running the connection test.",
+                "checks": [{"name": "Configuration", "ok": False, "detail": "Router IP address is missing"}],
+            }
+
+        try:
+            reading = read_router(
+                address,
+                int(settings.get("port", 502) or 502),
+                int(settings.get("unit_id", 1) or 1),
+                float(settings.get("timeout_seconds", 2) or 2),
+            )
+            checks.append({
+                "name": "Modbus TCP",
+                "ok": True,
+                "detail": f"Connected to {address}; {reading.get('device_name') or reading.get('hostname') or 'RUT router'}",
+            })
+        except Exception as exc:
+            checks.append({"name": "Modbus TCP", "ok": False, "detail": f"{address}: {exc}"})
+
+        snmp_enabled = bool(settings.get("snmp_enabled"))
+        community = str(settings.get("snmp_community") or "").strip()
+        if not snmp_enabled:
+            checks.append({"name": "SNMP v2c", "ok": False, "detail": "Detailed radio collection is disabled in watchdog settings"})
+        elif not community:
+            checks.append({"name": "SNMP v2c", "ok": False, "detail": "Read-only community is not configured"})
+        else:
+            try:
+                radio = read_radio_signal(
+                    address,
+                    community,
+                    int(settings.get("snmp_port", 161) or 161),
+                    float(settings.get("timeout_seconds", 2) or 2),
+                )
+                expected_values = {
+                    "RSRP": "rsrp_dbm",
+                    "RSRQ": "rsrq_db",
+                    "SINR": "sinr_db",
+                    "Cell ID": "cell_id",
+                    "connection uptime": "connection_uptime_seconds",
+                }
+                received = [label for label, key in expected_values.items() if radio.get(key) is not None]
+                checks.append({"name": "SNMP v2c", "ok": bool(received), "detail": "Received " + ", ".join(received) if received else "SNMP replied without the required Teltonika values"})
+            except Exception as exc:
+                checks.append({"name": "SNMP v2c", "ok": False, "detail": str(exc)})
+
+        ok = all(item.get("ok") for item in checks)
+        return {
+            "ok": ok,
+            "message": "RUT monitoring is fully ready." if ok else "RUT monitoring setup still needs attention.",
+            "checks": checks,
+        }
 
     def config_summary():
         hardware = cfg.get("hardware_watchdog", {})
@@ -5983,6 +6095,19 @@ def start_web(cfg):
                     }
                 body = speed_test_result_html(result).encode("utf-8")
                 self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/mobile-router-test":
+                length = int(self.headers.get("Content-Length", "0"))
+                if length:
+                    self.rfile.read(length)
+                result = test_mobile_router_settings()
+                body = mobile_router_test_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 409)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()

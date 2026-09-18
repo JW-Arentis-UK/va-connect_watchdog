@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from va_watchdog.process_monitor import ProcessMonitor
 
@@ -20,6 +21,40 @@ class ProcessMonitorTests(unittest.TestCase):
 
         self.assertEqual(result.state, "healthy")
         self.assertFalse(result.value["enabled"])
+
+    def test_short_cpu_burst_does_not_raise_overall_warning(self):
+        monitor = ProcessMonitor()
+        cfg = {"process_monitor": {"enabled": True, "cpu_warning_percent": 25, "warning_sustained_seconds": 60}}
+        with patch("va_watchdog.process_monitor.time.monotonic", side_effect=[0, 10]), patch(
+            "va_watchdog.process_monitor.os.sysconf", return_value=100, create=True
+        ), patch.object(monitor, "_cpu_ticks", side_effect=[0, 300]), patch.object(
+            monitor, "_io_bytes", return_value=None
+        ), patch.object(monitor, "_memory_mb", return_value=20), patch.object(
+            monitor, "_uptime_seconds", return_value=10
+        ):
+            monitor.sample(cfg)
+            result = monitor.sample(cfg)
+
+        self.assertEqual(result.value["cpu_percent"], 30.0)
+        self.assertEqual(result.state, "healthy")
+        self.assertEqual(result.value["warning_sustained_seconds"], 60)
+
+    def test_sustained_cpu_usage_still_raises_warning(self):
+        monitor = ProcessMonitor()
+        cfg = {"process_monitor": {"enabled": True, "cpu_warning_percent": 25, "warning_sustained_seconds": 60}}
+        with patch("va_watchdog.process_monitor.time.monotonic", side_effect=[0, 10, 71]), patch(
+            "va_watchdog.process_monitor.os.sysconf", return_value=100, create=True
+        ), patch.object(monitor, "_cpu_ticks", side_effect=[0, 300, 2130]), patch.object(
+            monitor, "_io_bytes", return_value=None
+        ), patch.object(monitor, "_memory_mb", return_value=20), patch.object(
+            monitor, "_uptime_seconds", return_value=71
+        ):
+            monitor.sample(cfg)
+            monitor.sample(cfg)
+            result = monitor.sample(cfg)
+
+        self.assertEqual(result.value["cpu_percent"], 30.0)
+        self.assertEqual(result.state, "warning")
 
 
 if __name__ == "__main__":

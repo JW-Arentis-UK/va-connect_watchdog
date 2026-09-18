@@ -159,7 +159,7 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('"Mobile router",\n                        str(router_check.get("message")', source)
         self.assertIn('if router_configured else ""', source)
         self.assertIn("Evidence only. Router availability never controls the Neousys watchdog feed.", source)
-        self.assertIn("enable Modbus TCP and SNMP for LAN access only", source)
+        self.assertIn("Allow LAN access only and leave remote or WAN access disabled", source)
         self.assertIn("_format_duration(router_value.get('uptime_seconds'))", source)
         self.assertIn("local_time(router_value.get('started_at'))", source)
         self.assertIn('mobile_router_history_summary(', source)
@@ -171,6 +171,18 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('disclosure(f"{period_label} radio detail"', source)
         self.assertIn('mobile_router_snmp_community', source)
         self.assertIn('router_settings.pop("snmp_community", "")', source)
+        self.assertIn("RUTX50 setup help", source)
+        self.assertIn("Services &gt; Modbus &gt; Modbus TCP Server", source)
+        self.assertIn("Connection checklist", source)
+        self.assertIn('formaction=\\"/mobile-router-test\\"', source)
+        self.assertIn('if route_path == "/mobile-router-test":', source)
+
+    def test_watchdog_process_warning_requires_sustained_usage(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "process_monitor.py").read_text(encoding="utf-8")
+
+        self.assertIn('warning_sustained_seconds", 60', source)
+        self.assertIn("cpu_high_for >= warning_sustained", source)
+        self.assertIn("memory_high_for >= warning_sustained", source)
 
     def test_header_shows_watchdog_process_overhead(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
