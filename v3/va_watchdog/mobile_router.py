@@ -14,11 +14,15 @@ from .common import CheckResult, now_iso
 _SNAPSHOT_LOCK = Lock()
 _LATEST_SNAPSHOT: dict[str, Any] = {}
 _PREVIOUS_UPTIME: dict[str, int] = {}
+_PREVIOUS_CELL: dict[str, str] = {}
+_PREVIOUS_CONNECTION_UPTIME: dict[str, int] = {}
 
 _RADIO_OIDS = {
+    "cell_id": "1.3.6.1.4.1.48690.2.2.1.18.1",
     "sinr_db": "1.3.6.1.4.1.48690.2.2.1.19.1",
     "rsrp_dbm": "1.3.6.1.4.1.48690.2.2.1.20.1",
     "rsrq_db": "1.3.6.1.4.1.48690.2.2.1.21.1",
+    "connection_uptime_seconds": "1.3.6.1.4.1.48690.2.3.0",
 }
 
 
@@ -53,6 +57,44 @@ def radio_quality(name: str, value: Any) -> dict[str, str]:
             return {"label": "Good", "state": "healthy"}
         return {"label": "Fair", "state": "warning"} if number >= 0 else {"label": "Low", "state": "critical"}
     return {"label": "Unknown", "state": "unknown"}
+
+
+def radio_metric_score(name: str, value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    limits = {
+        "signal_dbm": (-110.0, -65.0),
+        "rsrp_dbm": (-120.0, -80.0),
+        "rsrq_db": (-20.0, -5.0),
+        "sinr_db": (-5.0, 25.0),
+    }
+    if name not in limits:
+        return None
+    low, high = limits[name]
+    return round(max(0.0, min(100.0, (number - low) / (high - low) * 100.0)), 1)
+
+
+def radio_score(values: dict[str, Any]) -> dict[str, Any]:
+    metrics = []
+    labels = {"signal_dbm": "RSSI", "rsrp_dbm": "RSRP", "rsrq_db": "RSRQ", "sinr_db": "SINR"}
+    preferred = ("rsrp_dbm", "rsrq_db", "sinr_db")
+    selected = preferred if any(values.get(name) is not None for name in preferred) else ("signal_dbm",)
+    for name in selected:
+        score = radio_metric_score(name, values.get(name))
+        if score is not None:
+            metrics.append((score, name))
+    if not metrics:
+        return {"score": None, "label": "Unknown", "state": "unknown", "limiting": "No radio readings"}
+    score, limiting = min(metrics)
+    if score >= 80:
+        label, state = "Good", "healthy"
+    elif score >= 50:
+        label, state = "Fair", "warning"
+    else:
+        label, state = "Poor", "critical"
+    return {"score": round(score), "label": label, "state": state, "limiting": labels[limiting]}
 
 
 def _ber_length(length: int) -> bytes:
@@ -179,6 +221,13 @@ def blackbox_snapshot() -> dict[str, Any]:
         "rsrp_dbm",
         "rsrq_db",
         "sinr_db",
+        "radio_score",
+        "radio_score_label",
+        "radio_score_limiting",
+        "cell_id",
+        "cell_changed",
+        "connection_uptime_seconds",
+        "mobile_reconnected",
         "temperature_c",
         "active_sim",
         "registration",
@@ -308,7 +357,21 @@ def check_mobile_router(cfg: dict[str, Any]) -> list[CheckResult]:
         restarted = previous is not None and uptime + 30 < previous
         _PREVIOUS_UPTIME[address] = uptime
         snapshot["restart_detected"] = restarted
-        _publish(snapshot)
+        cell_id = str(snapshot.get("cell_id") or "").strip()
+        previous_cell = _PREVIOUS_CELL.get(address)
+        snapshot["cell_changed"] = bool(cell_id and previous_cell and cell_id != previous_cell)
+        if cell_id:
+            _PREVIOUS_CELL[address] = cell_id
+        connection_uptime_raw = snapshot.get("connection_uptime_seconds")
+        connection_uptime = int(connection_uptime_raw) if connection_uptime_raw is not None else None
+        previous_connection_uptime = _PREVIOUS_CONNECTION_UPTIME.get(address)
+        snapshot["mobile_reconnected"] = bool(
+            connection_uptime is not None
+            and previous_connection_uptime is not None
+            and connection_uptime + 30 < previous_connection_uptime
+        )
+        if connection_uptime is not None:
+            _PREVIOUS_CONNECTION_UPTIME[address] = connection_uptime
         network = str(snapshot.get("network_type") or "Mobile connected")
         signal = snapshot.get("signal_dbm")
         quality = signal_quality(signal)
@@ -320,6 +383,12 @@ def check_mobile_router(cfg: dict[str, Any]) -> list[CheckResult]:
             snapshot[f"{metric}_quality"] = metric_quality["label"]
             if metric_quality["state"] == "critical":
                 low_radio.append(f"{label} {snapshot.get(metric):g}")
+        score = radio_score(snapshot)
+        snapshot["radio_score"] = score["score"]
+        snapshot["radio_score_label"] = score["label"]
+        snapshot["radio_score_state"] = score["state"]
+        snapshot["radio_score_limiting"] = score["limiting"]
+        _publish(snapshot)
         detail = f"{network}; signal {signal} dBm ({quality['label'].lower()})" if signal is not None else network
         if restarted:
             return [CheckResult("mobile_router", "warning", "Mobile router restart detected", snapshot, False)]
@@ -327,6 +396,9 @@ def check_mobile_router(cfg: dict[str, Any]) -> list[CheckResult]:
             return [CheckResult("mobile_router", "warning", "Router reachable; detailed radio metrics unavailable", snapshot, False)]
         if low_radio:
             return [CheckResult("mobile_router", "warning", f"Low mobile radio quality; {', '.join(low_radio)}", snapshot, False)]
+        has_detailed_radio = any(snapshot.get(metric) is not None for metric in ("rsrp_dbm", "rsrq_db", "sinr_db"))
+        if has_detailed_radio and score["state"] == "critical":
+            return [CheckResult("mobile_router", "warning", f"Poor mobile radio score; limited by {score['limiting']}", snapshot, False)]
         if quality["state"] == "critical":
             return [CheckResult("mobile_router", "warning", f"Low mobile signal; {signal} dBm", snapshot, False)]
         return [CheckResult("mobile_router", "healthy", detail, snapshot, False)]

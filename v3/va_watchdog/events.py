@@ -98,9 +98,19 @@ class EventLog:
             value = check_value if isinstance(check_value, dict) else {}
             if check.name == "mobile_router" and value.get("restart_detected"):
                 marker = f"{value.get('address')}:{value.get('collected_at')}:{value.get('uptime_seconds')}"
-                if self.immediate_markers.get(check.name) != marker:
+                if self.immediate_markers.get("mobile_router_restart") != marker:
                     self.add("warning", "mobile_router", "Mobile router restart detected", check.to_dict())
-                    self.immediate_markers[check.name] = marker
+                    self.immediate_markers["mobile_router_restart"] = marker
+            if check.name == "mobile_router" and value.get("cell_changed"):
+                marker = f"{value.get('address')}:{value.get('collected_at')}:{value.get('cell_id')}"
+                if self.immediate_markers.get("mobile_router_cell") != marker:
+                    self.add("info", "mobile_router", "Mobile router changed cell", check.to_dict())
+                    self.immediate_markers["mobile_router_cell"] = marker
+            if check.name == "mobile_router" and value.get("mobile_reconnected"):
+                marker = f"{value.get('address')}:{value.get('collected_at')}:{value.get('connection_uptime_seconds')}"
+                if self.immediate_markers.get("mobile_router_reconnect") != marker:
+                    self.add("warning", "mobile_router", "Mobile connection restarted", check.to_dict())
+                    self.immediate_markers["mobile_router_reconnect"] = marker
             old = self.previous_states.get(check.name)
             if old is None:
                 self.previous_states[check.name] = check.state
@@ -120,6 +130,13 @@ class EventLog:
                 "unknown": 60.0,
                 "healthy": 30.0,
             }.get(check.state, 30.0)
+            if check.name == "mobile_router" and check.state == "warning":
+                if value.get("available") is False:
+                    required = 120.0
+                elif value.get("radio_score_state") == "critical" or value.get("signal_state") == "critical":
+                    required = 300.0
+                elif value.get("radio_metrics_error"):
+                    required = 300.0
             if now - float(candidate.get("since", now)) < required:
                 continue
             data = check.to_dict()

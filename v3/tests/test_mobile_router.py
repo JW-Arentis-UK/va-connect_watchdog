@@ -103,6 +103,8 @@ def _snmp_response(values):
 class MobileRouterTests(unittest.TestCase):
     def setUp(self):
         mobile_router._PREVIOUS_UPTIME.clear()
+        mobile_router._PREVIOUS_CELL.clear()
+        mobile_router._PREVIOUS_CONNECTION_UPTIME.clear()
         mobile_router._publish({})
 
     def test_reads_teltonika_monitoring_registers(self):
@@ -122,11 +124,17 @@ class MobileRouterTests(unittest.TestCase):
         self.assertEqual(result["network_type"], "5G-NSA")
 
     def test_reads_detailed_radio_metrics_in_one_snmp_request(self):
-        connection = FakeSnmpSocket(_snmp_response([18, -91, -11]))
+        connection = FakeSnmpSocket(_snmp_response([12345, 18, -91, -11, 3600]))
         with patch("va_watchdog.mobile_router.socket.socket", return_value=connection):
             result = mobile_router.read_radio_signal("192.168.1.1", "private-read")
 
-        self.assertEqual(result, {"sinr_db": 18.0, "rsrp_dbm": -91.0, "rsrq_db": -11.0})
+        self.assertEqual(result, {
+            "cell_id": 12345.0,
+            "sinr_db": 18.0,
+            "rsrp_dbm": -91.0,
+            "rsrq_db": -11.0,
+            "connection_uptime_seconds": 3600.0,
+        })
         self.assertTrue(connection.sent)
 
     def test_disabled_router_adds_no_health_warning(self):
@@ -164,6 +172,19 @@ class MobileRouterTests(unittest.TestCase):
         self.assertEqual(mobile_router.radio_quality("rsrq_db", -12)["state"], "warning")
         self.assertEqual(mobile_router.radio_quality("sinr_db", 18)["state"], "healthy")
 
+    def test_overall_radio_score_uses_the_weakest_detailed_metric(self):
+        score = mobile_router.radio_score({"signal_dbm": -65, "rsrp_dbm": -88, "rsrq_db": -16, "sinr_db": 18})
+
+        self.assertEqual(score["label"], "Poor")
+        self.assertEqual(score["state"], "critical")
+        self.assertEqual(score["limiting"], "RSRQ")
+
+    def test_overall_radio_score_falls_back_to_rssi(self):
+        score = mobile_router.radio_score({"signal_dbm": -70})
+
+        self.assertEqual(score["label"], "Good")
+        self.assertEqual(score["limiting"], "RSSI")
+
     def test_low_signal_is_a_noncritical_warning(self):
         cfg = {"mobile_router": {"enabled": True, "address": "192.168.1.1"}}
         sample = {"available": True, "uptime_seconds": 5000, "network_type": "LTE", "signal_dbm": -105}
@@ -187,6 +208,19 @@ class MobileRouterTests(unittest.TestCase):
         self.assertFalse(check.critical)
         self.assertIn("RSRP", check.message)
 
+    def test_poor_composite_radio_score_is_a_noncritical_warning(self):
+        cfg = {"mobile_router": {"enabled": True, "address": "192.168.1.1", "snmp_enabled": True, "snmp_community": "private-read"}}
+        sample = {"available": True, "uptime_seconds": 5000, "network_type": "LTE", "signal_dbm": -75}
+        with patch("va_watchdog.mobile_router.read_router", return_value=sample), patch(
+            "va_watchdog.mobile_router.read_radio_signal",
+            return_value={"rsrp_dbm": -95.0, "rsrq_db": -14.0, "sinr_db": 8.0},
+        ):
+            check = mobile_router.check_mobile_router(cfg)[0]
+
+        self.assertEqual(check.state, "warning")
+        self.assertFalse(check.critical)
+        self.assertIn("limited by RSRQ", check.message)
+
     def test_uptime_reset_reports_router_restart_for_one_sample(self):
         cfg = {"mobile_router": {"enabled": True, "address": "192.168.1.1"}}
         samples = [
@@ -201,6 +235,27 @@ class MobileRouterTests(unittest.TestCase):
         self.assertEqual(second.state, "warning")
         self.assertTrue(second.value["restart_detected"])
         self.assertIn("restart detected", second.message.lower())
+
+    def test_cell_change_and_mobile_reconnect_are_recorded(self):
+        cfg = {"mobile_router": {"enabled": True, "address": "192.168.1.1", "snmp_enabled": True, "snmp_community": "private-read"}}
+        router_samples = [
+            {"available": True, "uptime_seconds": 5000, "network_type": "5G", "signal_dbm": -75},
+            {"available": True, "uptime_seconds": 5060, "network_type": "5G", "signal_dbm": -75},
+        ]
+        radio_samples = [
+            {"cell_id": 101, "connection_uptime_seconds": 4000, "rsrp_dbm": -88, "rsrq_db": -9, "sinr_db": 18},
+            {"cell_id": 202, "connection_uptime_seconds": 10, "rsrp_dbm": -88, "rsrq_db": -9, "sinr_db": 18},
+        ]
+        with patch("va_watchdog.mobile_router.read_router", side_effect=router_samples), patch(
+            "va_watchdog.mobile_router.read_radio_signal", side_effect=radio_samples
+        ):
+            first = mobile_router.check_mobile_router(cfg)[0]
+            second = mobile_router.check_mobile_router(cfg)[0]
+
+        self.assertFalse(first.value["cell_changed"])
+        self.assertFalse(first.value["mobile_reconnected"])
+        self.assertTrue(second.value["cell_changed"])
+        self.assertTrue(second.value["mobile_reconnected"])
 
     def test_router_restart_is_logged_immediately_and_only_once(self):
         with tempfile.TemporaryDirectory() as temporary:

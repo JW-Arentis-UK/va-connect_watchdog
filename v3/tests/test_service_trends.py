@@ -42,7 +42,7 @@ class ServiceTrendTests(unittest.TestCase):
                 "time": "2026-09-17T12:00:00+00:00",
                 "checks": [
                     {"name": "network_module", "state": "warning", "value": {}},
-                    {"name": "mobile_router", "state": "healthy", "value": {"available": True, "signal_dbm": -67, "rsrp_dbm": -91, "rsrq_db": -11, "sinr_db": 18, "uptime_seconds": 3600, "started_at": "2026-09-17T11:00:00+00:00", "registration": "Registered, home"}},
+                    {"name": "mobile_router", "state": "healthy", "value": {"available": True, "signal_dbm": -67, "rsrp_dbm": -91, "rsrq_db": -11, "sinr_db": 18, "radio_score": 60, "radio_score_label": "Fair", "radio_score_limiting": "RSRQ", "temperature_c": 43.0, "network_type": "5G-NSA", "cell_id": 12345, "cell_changed": True, "connection_uptime_seconds": 1800, "mobile_reconnected": True, "uptime_seconds": 3600, "started_at": "2026-09-17T11:00:00+00:00", "registration": "Registered, home"}},
                 ],
             }
 
@@ -55,6 +55,15 @@ class ServiceTrendTests(unittest.TestCase):
             self.assertEqual(row["mobile_router_rsrp_dbm"], -91)
             self.assertEqual(row["mobile_router_rsrq_db"], -11)
             self.assertEqual(row["mobile_router_sinr_db"], 18)
+            self.assertEqual(row["mobile_router_radio_score"], 60)
+            self.assertEqual(row["mobile_router_radio_score_label"], "Fair")
+            self.assertEqual(row["mobile_router_radio_score_limiting"], "RSRQ")
+            self.assertEqual(row["mobile_router_temperature_c"], 43.0)
+            self.assertEqual(row["mobile_router_network_type"], "5G-NSA")
+            self.assertEqual(row["mobile_router_cell_id"], 12345)
+            self.assertTrue(row["mobile_router_cell_changed"])
+            self.assertEqual(row["mobile_router_connection_uptime_seconds"], 1800)
+            self.assertTrue(row["mobile_router_reconnected"])
             self.assertEqual(row["mobile_router_uptime_seconds"], 3600)
 
 

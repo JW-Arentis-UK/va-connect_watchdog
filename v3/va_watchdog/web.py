@@ -38,7 +38,7 @@ from .incident_archive import archive_config, list_archives
 from .baseline_capture import baseline_paths, baseline_status, completed_archive, start_baseline
 from .identity import configured_identity, hardware_identity, identity_slug, identity_summary
 from .manufacturer_report import collect_manufacturer_report, manufacturer_report_bundle, render_manufacturer_report
-from .mobile_router import radio_quality, signal_quality
+from .mobile_router import radio_metric_score, radio_quality, radio_score, signal_quality
 from .recording_activity import recording_activity
 from .reboot_evidence import recent_restarts
 
@@ -275,6 +275,11 @@ pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale))
 .chart text { fill:var(--muted); font-size:10px; }
 .chart polyline { fill:none; stroke:var(--green); stroke-width:2; }
 .chart .grid-line { stroke:var(--line); stroke-width:1; }
+.signal-chart-panel { margin-top:calc(12px * var(--scale)); padding:calc(12px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel-2); }
+.period-tabs { display:flex; gap:calc(5px * var(--scale)); }
+.period-tabs a { padding:calc(5px * var(--scale)) calc(8px * var(--scale)); border:1px solid var(--line); border-radius:6px; color:var(--muted); text-decoration:none; font-weight:700; }
+.period-tabs a.active { color:#fff; background:var(--blue); border-color:var(--blue); }
+.chart-legend { display:flex; gap:calc(12px * var(--scale)); flex-wrap:wrap; margin:calc(6px * var(--scale)) 0; color:var(--muted); font-size:calc(11px * var(--scale)); }
 .button-row { display:flex; gap:calc(8px * var(--scale)); flex-wrap:wrap; align-items:center; margin:calc(10px * var(--scale)) 0; }
 .quick-actions { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:calc(8px * var(--scale)); }
 .quick-actions a { min-height:calc(54px * var(--scale)); display:flex; flex-direction:column; justify-content:center; }
@@ -1688,10 +1693,15 @@ def start_web(cfg):
                 + "<h3>Routes and sockets</h3>" + route_detail
                 + all_checks_table("Health-engine network check", {"network_module"})
             )
-            router_history = mobile_router_history_summary(
-                read_history(cfg, limit=1600),
-                read_events(events_path, limit=5000),
-            )
+            period_query = getattr(request_context, "query", {}).get("router_period", ["24"])
+            period_value = str(period_query[0] if period_query else "24")
+            period_hours = {"1": 1, "24": 24, "168": 168}.get(period_value, 24)
+            period_label = "1 hour" if period_hours == 1 else ("24 hours" if period_hours == 24 else "7 days")
+            history_interval = max(10, int(cfg.get("retention", {}).get("history_sample_seconds", 60) or 60))
+            history_limit = min(50000, int(period_hours * 3600 / history_interval) + 20)
+            router_history_rows = read_history(cfg, limit=history_limit)
+            router_events = read_events(events_path, limit=5000)
+            router_history = mobile_router_history_summary(router_history_rows, router_events, period_hours)
             current_signal = router_value.get("signal_dbm")
             current_quality = signal_quality(current_signal)
             signal_display = f"{current_signal} dBm" if current_signal is not None else "-"
@@ -1702,10 +1712,7 @@ def start_web(cfg):
                 quality = radio_quality(key, value)
                 display = f"{value:g} {suffix}" if isinstance(value, (int, float)) else "-"
                 radio_items.append((key, label, suffix, display, quality))
-            available_radio = [item for item in radio_items if item[3] != "-"]
-            radio_rank = {"unknown": 0, "healthy": 1, "warning": 2, "critical": 3}
-            overall_radio = max((item[4] for item in available_radio), key=lambda item: radio_rank[item["state"]], default={"label": "Not configured", "state": "unknown"})
-            radio_detail = " / ".join(f"{item[1]} {item[3]}" for item in available_radio) or "Enable read-only SNMP in Setup"
+            current_score = radio_score(router_value)
             radio_history_rows = "".join(
                 f"<tr><th>{escape(label)}</th><td class=\"{escape(router_history['radio_ranges'][key]['state'])}\">{escape(router_history['radio_ranges'][key]['display'])}</td></tr>"
                 for key, label, _ in (("rsrp_dbm", "RSRP", "dBm"), ("rsrq_db", "RSRQ", "dB"), ("sinr_db", "SINR", "dB"))
@@ -1717,14 +1724,34 @@ def start_web(cfg):
                 f"<div class=\"pill warning\">Router restart</div></div>"
                 for index, item in enumerate(router_history["recent_restarts"], 1)
             ) or "<p class=\"muted\">No router restarts have been detected yet.</p>"
+            period_tabs = "".join(
+                f"<a class=\"{'active' if period_hours == hours else ''}\" href=\"/evidence?router_period={hours}#network\">{escape(label)}</a>"
+                for hours, label in ((1, "1 hour"), (24, "24 hours"), (168, "7 days"))
+            )
+            score_value = f"{current_score['score']}/100 {current_score['label']}" if current_score["score"] is not None else "Waiting for data"
+            quality_mix = f"{router_history['good_percent']}% good / {router_history['fair_percent']}% fair / {router_history['poor_percent']}% poor"
+            investigation_summary = (
+                f"Lowest score: {router_history['lowest_score_display']}; longest router outage: {_format_duration(router_history['longest_outage_seconds']) or '0m'}; "
+                f"mobile reconnects: {router_history['mobile_reconnects']}; cell changes: {router_history['cell_changes']}; "
+                f"last deterioration: {local_time(router_history['last_deterioration']) if router_history['last_deterioration'] else 'none'}; "
+                f"router temperature: {router_history['temperature_range']}."
+            )
+            signal_chart = (
+                "<div class=\"signal-chart-panel\"><div class=\"section-lead\"><div><h3>Mobile Signal Overview</h3>"
+                f"<p class=\"muted\">Normalized radio quality and network events over {escape(period_label)}.</p></div>"
+                f"<div class=\"period-tabs\">{period_tabs}</div></div>"
+                f"{mobile_router_signal_chart(router_history_rows, period_hours)}"
+                f"<p class=\"muted\">{escape(investigation_summary)}</p></div>"
+            )
             router_monitoring = (
                 summary_strip([
-                    ("Signal now", signal_display, current_quality["label"], current_quality["state"]),
-                    ("Radio quality", overall_radio["label"], radio_detail, overall_radio["state"]),
-                    ("Router outages", str(router_history["outage_count"]), f"{_format_duration(router_history['outage_seconds'])} total over 24h", "warning" if router_history["outage_count"] else "healthy"),
+                    ("Signal score", score_value, f"Limited by {current_score['limiting']}", current_score["state"]),
+                    (f"Quality over {period_label}", quality_mix, f"{router_history['score_samples']} scored readings", router_history["period_state"]),
+                    ("Router outages", str(router_history["outage_count"]), f"{_format_duration(router_history['outage_seconds'])} total over {period_label}", "warning" if router_history["outage_count"] else "healthy"),
                     ("Internet overlap", f"{router_history['correlated_outages']}/{router_history['internet_outages']}", "Internet outages also showing router loss/restart", "warning" if router_history["correlated_outages"] else "healthy"),
                 ])
-                + disclosure("24-hour radio quality", "<div class=\"table-scroll\"><table class=\"compact-table\"><tbody><tr><th>RSSI</th><td class=\"" + escape(router_history["signal_state"]) + "\">" + escape(signal_range) + "</td></tr>" + radio_history_rows + "</tbody></table></div><p class=\"muted\">Green thresholds: RSRP -90 dBm or better, RSRQ -10 dB or better, and SINR 10 dB or better. Red means RSRP below -105, RSRQ below -15, or SINR below 0.</p>")
+                + signal_chart
+                + disclosure(f"{period_label} radio detail", "<div class=\"table-scroll\"><table class=\"compact-table\"><tbody><tr><th>RSSI</th><td class=\"" + escape(router_history["signal_state"]) + "\">" + escape(signal_range) + "</td></tr>" + radio_history_rows + "</tbody></table></div><p class=\"muted\">Green thresholds: RSRP -90 dBm or better, RSRQ -10 dB or better, and SINR 10 dB or better. Red means RSRP below -105, RSRQ below -15, or SINR below 0.</p>")
                 + disclosure("Recent router restarts", recent_router_restarts)
                 + "<p class=\"muted\">An overlap means the gateway's internet check failed while the router was unreachable or restarting. It is evidence of timing, not proof that mobile signal caused the outage.</p>"
             )
@@ -1732,6 +1759,7 @@ def start_web(cfg):
                 f"<tr><th>Router</th><td>{escape(str(router_value.get('device_name') or router_value.get('hostname') or router_value.get('address') or '-'))}</td></tr>",
                 f"<tr><th>Address</th><td>{escape(str(router_value.get('address') or cfg.get('mobile_router', {}).get('address') or '-'))}</td></tr>",
                 f"<tr><th>Connection</th><td>{escape(str(router_value.get('network_type') or '-'))}; {escape(str(router_value.get('registration') or '-'))}</td></tr>",
+                f"<tr><th>Cell ID</th><td>{escape(str(router_value.get('cell_id') or '-'))}</td></tr>",
                 f"<tr><th>Signal</th><td class=\"{escape(current_quality['state'])}\"><strong>{escape(signal_display)}</strong> ({escape(current_quality['label'])})</td></tr>",
                 *[
                     f"<tr><th>{escape(label)}</th><td class=\"{escape(quality['state'])}\"><strong>{escape(display)}</strong> ({escape(quality['label'])})</td></tr>"
@@ -1740,6 +1768,7 @@ def start_web(cfg):
                 f"<tr><th>Operator / SIM</th><td>{escape(str(router_value.get('operator') or '-'))} / {escape(str(router_value.get('active_sim') or '-'))}</td></tr>",
                 f"<tr><th>Router temperature</th><td>{escape(str(router_value.get('temperature_c') if router_value.get('temperature_c') is not None else '-'))} C</td></tr>",
                 f"<tr><th>Router uptime</th><td>{escape((_format_duration(router_value.get('uptime_seconds')) + ' (' + local_time(router_value.get('started_at')) + ')') if router_value.get('uptime_seconds') is not None else '-')}</td></tr>",
+                f"<tr><th>Mobile connection uptime</th><td>{escape(_format_duration(router_value.get('connection_uptime_seconds')) or '-')}</td></tr>",
                 f"<tr><th>Last reading</th><td>{escape(local_time(router_value.get('collected_at')))}</td></tr>",
             ])
             router_card = (
@@ -2231,7 +2260,11 @@ def start_web(cfg):
                 + diagnostics_page()
                 + "<section id=\"history\">" + disclosure("History and trends", history_page()) + "</section>"
                 + "<section id=\"system\">" + disclosure("System hardware and storage", hardware_page()) + "</section>"
-                + "<section id=\"network\">" + disclosure("Network evidence", network_page()) + "</section>"
+                + "<section id=\"network\">" + disclosure(
+                    "Network evidence",
+                    network_page(),
+                    opened=bool(getattr(request_context, "query", {}).get("router_period")),
+                ) + "</section>"
             )
         if page == "Setup":
             return (
@@ -3737,7 +3770,15 @@ def start_web(cfg):
             "last_time": rows[-1].get("time") if rows else "-",
         }
 
-    def mobile_router_history_summary(rows, events):
+    def _router_row_radio_values(row):
+        return {
+            "signal_dbm": row.get("mobile_router_signal_dbm"),
+            "rsrp_dbm": row.get("mobile_router_rsrp_dbm"),
+            "rsrq_db": row.get("mobile_router_rsrq_db"),
+            "sinr_db": row.get("mobile_router_sinr_db"),
+        }
+
+    def mobile_router_history_summary(rows, events, period_hours=24):
         def timestamp(value):
             try:
                 return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
@@ -3751,7 +3792,8 @@ def start_web(cfg):
                 timed_rows.append((row_time, row))
         timed_rows.sort(key=lambda item: item[0])
         anchor = timed_rows[-1][0] if timed_rows else time.time()
-        recent_rows = [(row_time, row) for row_time, row in timed_rows if row_time >= anchor - 86400]
+        cutoff = anchor - max(1, period_hours) * 3600
+        recent_rows = [(row_time, row) for row_time, row in timed_rows if row_time >= cutoff]
 
         signals = []
         for _, row in recent_rows:
@@ -3792,6 +3834,7 @@ def start_web(cfg):
 
         outage_count = 0
         outage_seconds = 0.0
+        longest_outage_seconds = 0.0
         outage_started = None
         previous_available = None
         for row_time, row in recent_rows:
@@ -3803,11 +3846,54 @@ def start_web(cfg):
                 outage_count += 1
                 outage_started = row_time
             elif available and previous_available is False and outage_started is not None:
-                outage_seconds += max(0.0, row_time - outage_started)
+                duration = max(0.0, row_time - outage_started)
+                outage_seconds += duration
+                longest_outage_seconds = max(longest_outage_seconds, duration)
                 outage_started = None
             previous_available = available
         if previous_available is False and outage_started is not None:
-            outage_seconds += max(0.0, anchor - outage_started)
+            duration = max(0.0, anchor - outage_started)
+            outage_seconds += duration
+            longest_outage_seconds = max(longest_outage_seconds, duration)
+
+        scored = []
+        last_deterioration = None
+        previous_score_state = None
+        for row_time, row in recent_rows:
+            score_data = radio_score(_router_row_radio_values(row))
+            score = score_data.get("score")
+            if score is None:
+                continue
+            scored.append((row_time, float(score), score_data.get("label"), score_data.get("state")))
+            score_state = score_data.get("state")
+            if score_state in ("warning", "critical") and previous_score_state not in ("warning", "critical"):
+                last_deterioration = row.get("time")
+            previous_score_state = score_state
+        score_count = len(scored)
+        good_count = sum(1 for _, _, label, _ in scored if label == "Good")
+        fair_count = sum(1 for _, _, label, _ in scored if label == "Fair")
+        poor_count = sum(1 for _, _, label, _ in scored if label == "Poor")
+        percent = lambda count: round(count / score_count * 100) if score_count else 0
+        if scored:
+            lowest_time, lowest_score, _, _ = min(scored, key=lambda item: item[1])
+            lowest_score_display = f"{lowest_score:.0f}/100 at {time.strftime('%H:%M %Y-%m-%d', time.localtime(lowest_time))}"
+        else:
+            lowest_score_display = "No scored readings"
+        poor_percent = percent(poor_count)
+        fair_percent = percent(fair_count)
+        period_state = "critical" if poor_percent >= 10 else ("warning" if poor_count or fair_count else ("healthy" if score_count else "unknown"))
+
+        temperatures = []
+        for _, row in recent_rows:
+            try:
+                value = row.get("mobile_router_temperature_c")
+                if value is not None:
+                    temperatures.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        temperature_range = f"{min(temperatures):.1f}-{max(temperatures):.1f} C" if temperatures else "no readings"
+        cell_changes = sum(1 for _, row in recent_rows if row.get("mobile_router_cell_changed"))
+        mobile_reconnects = sum(1 for _, row in recent_rows if row.get("mobile_router_reconnected"))
 
         restart_events = []
         restart_times = []
@@ -3816,7 +3902,7 @@ def start_web(cfg):
                 continue
             event_time = timestamp(event.get("time"))
             restart_events.append(event)
-            if event_time is not None and event_time >= anchor - 86400:
+            if event_time is not None and event_time >= cutoff:
                 restart_times.append(event_time)
 
         internet_outages = 0
@@ -3852,10 +3938,136 @@ def start_web(cfg):
             "radio_ranges": radio_ranges,
             "outage_count": outage_count,
             "outage_seconds": round(outage_seconds),
+            "longest_outage_seconds": round(longest_outage_seconds),
             "internet_outages": internet_outages,
             "correlated_outages": correlated_outages,
             "recent_restarts": restart_events[:10],
+            "score_samples": score_count,
+            "good_percent": percent(good_count),
+            "fair_percent": fair_percent,
+            "poor_percent": poor_percent,
+            "period_state": period_state,
+            "lowest_score_display": lowest_score_display,
+            "last_deterioration": last_deterioration,
+            "temperature_range": temperature_range,
+            "cell_changes": cell_changes,
+            "mobile_reconnects": mobile_reconnects,
         }
+
+    def mobile_router_signal_chart(rows, period_hours=24):
+        def timestamp(value):
+            try:
+                return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+            except (TypeError, ValueError):
+                return None
+
+        timed_rows = [(timestamp(row.get("time")), row) for row in rows]
+        timed_rows = [(row_time, row) for row_time, row in timed_rows if row_time is not None]
+        if not timed_rows:
+            return '<div class="history-box">No router history captured yet</div>'
+        timed_rows.sort(key=lambda item: item[0])
+        end_time = timed_rows[-1][0]
+        start_time = end_time - max(1, period_hours) * 3600
+        timed_rows = [(row_time, row) for row_time, row in timed_rows if row_time >= start_time]
+        if not timed_rows:
+            return '<div class="history-box">No router history for this period</div>'
+
+        event_rows = timed_rows
+        if len(timed_rows) > 360:
+            stride = max(1, len(timed_rows) // 360)
+            timed_rows = timed_rows[::stride] + ([timed_rows[-1]] if timed_rows[-1] not in timed_rows[::stride] else [])
+
+        width, height = 760, 240
+        left, right, top, bottom = 44, 18, 24, 34
+        plot_w, plot_h = width - left - right, height - top - bottom
+        span = max(1.0, end_time - start_time)
+
+        def x_for(row_time):
+            return left + ((row_time - start_time) / span) * plot_w
+
+        def y_for(score):
+            return top + (1 - max(0.0, min(100.0, score)) / 100.0) * plot_h
+
+        series = (
+            ("rsrp_dbm", "RSRP", "mobile_router_rsrp_dbm", "var(--blue)"),
+            ("rsrq_db", "RSRQ", "mobile_router_rsrq_db", "var(--amber)"),
+            ("sinr_db", "SINR", "mobile_router_sinr_db", "var(--green)"),
+        )
+        paths = []
+        legend = []
+        for metric, label, history_key, color in series:
+            points = []
+            latest_raw = None
+            for row_time, row in timed_rows:
+                raw = row.get(history_key)
+                score = radio_metric_score(metric, raw)
+                if score is None:
+                    continue
+                latest_raw = raw
+                points.append(f"{x_for(row_time):.1f},{y_for(score):.1f}")
+            if points:
+                paths.append(f'<polyline points="{" ".join(points)}" style="stroke:{color};stroke-width:2"></polyline>')
+                legend.append(f'<span style="color:{color}">{label}: {escape(str(latest_raw))}</span>')
+
+        score_points = []
+        for row_time, row in timed_rows:
+            score = radio_score(_router_row_radio_values(row)).get("score")
+            if score is not None:
+                score_points.append(f"{x_for(row_time):.1f},{y_for(float(score)):.1f}")
+        if score_points:
+            paths.append(f'<polyline points="{" ".join(score_points)}" style="stroke:var(--text);stroke-width:2.5;stroke-dasharray:6 4"></polyline>')
+            legend.append('<span style="color:var(--text)">Overall score</span>')
+        if not paths:
+            return '<div class="history-box">Detailed radio readings have not been captured yet</div>'
+
+        overlays = []
+        previous_time = None
+        previous_network_failed = False
+        outage_start = None
+        for row_time, row in event_rows:
+            x = x_for(row_time)
+            if previous_time is not None and row_time - previous_time > 180:
+                gap_x = x_for(previous_time)
+                overlays.append(f'<rect x="{gap_x:.1f}" y="{top}" width="{max(1, x-gap_x):.1f}" height="{plot_h}" fill="var(--muted)" opacity=".12"><title>No samples received</title></rect>')
+            available = row.get("mobile_router_available")
+            if available is False and outage_start is None:
+                outage_start = row_time
+            if available is True and outage_start is not None:
+                outage_x = x_for(outage_start)
+                overlays.append(f'<rect x="{outage_x:.1f}" y="{top}" width="{max(1, x-outage_x):.1f}" height="{plot_h}" fill="var(--red)" opacity=".12"><title>Router unavailable</title></rect>')
+                outage_start = None
+            network_failed = row.get("network_module_state") not in (None, "healthy")
+            if network_failed and not previous_network_failed:
+                overlays.append(f'<line x1="{x:.1f}" y1="{top}" x2="{x:.1f}" y2="{top+plot_h}" stroke="var(--red)" stroke-width="1.5"><title>Internet check failed</title></line>')
+            if row.get("mobile_router_restart_detected"):
+                overlays.append(f'<line x1="{x:.1f}" y1="{top}" x2="{x:.1f}" y2="{top+plot_h}" stroke="var(--orange)" stroke-width="2"><title>Router restart</title></line>')
+            elif row.get("mobile_router_reconnected"):
+                overlays.append(f'<line x1="{x:.1f}" y1="{top}" x2="{x:.1f}" y2="{top+plot_h}" stroke="var(--blue)" stroke-width="1.5" stroke-dasharray="3 3"><title>Mobile reconnect</title></line>')
+            elif row.get("mobile_router_cell_changed"):
+                overlays.append(f'<line x1="{x:.1f}" y1="{top}" x2="{x:.1f}" y2="{top+plot_h}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="2 4"><title>Cell changed</title></line>')
+            previous_network_failed = network_failed
+            previous_time = row_time
+        if outage_start is not None:
+            outage_x = x_for(outage_start)
+            overlays.append(f'<rect x="{outage_x:.1f}" y="{top}" width="{max(1, left+plot_w-outage_x):.1f}" height="{plot_h}" fill="var(--red)" opacity=".12"><title>Router unavailable</title></rect>')
+
+        start_label = time.strftime("%H:%M %d/%m", time.localtime(start_time))
+        end_label = time.strftime("%H:%M %d/%m", time.localtime(end_time))
+        return (
+            '<div class="chart-legend">' + " ".join(legend)
+            + '<span style="color:var(--red)">Red marker: internet loss</span><span style="color:var(--orange)">Orange: router restart</span></div>'
+            f'<svg class="chart" viewBox="0 0 {width} {height}" preserveAspectRatio="none">'
+            f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h*.2:.1f}" fill="var(--green)" opacity=".08"></rect>'
+            f'<rect x="{left}" y="{top+plot_h*.2:.1f}" width="{plot_w}" height="{plot_h*.3:.1f}" fill="var(--amber)" opacity=".08"></rect>'
+            f'<rect x="{left}" y="{top+plot_h*.5:.1f}" width="{plot_w}" height="{plot_h*.5:.1f}" fill="var(--red)" opacity=".06"></rect>'
+            + "".join(overlays)
+            + f'<line class="grid-line" x1="{left}" y1="{top}" x2="{left+plot_w}" y2="{top}"></line>'
+            + f'<line class="grid-line" x1="{left}" y1="{y_for(50):.1f}" x2="{left+plot_w}" y2="{y_for(50):.1f}"></line>'
+            + f'<line class="grid-line" x1="{left}" y1="{top+plot_h}" x2="{left+plot_w}" y2="{top+plot_h}"></line>'
+            + f'<text x="5" y="{top+4}">100</text><text x="10" y="{y_for(50)+4:.1f}">50</text><text x="18" y="{top+plot_h+4}">0</text>'
+            + "".join(paths)
+            + f'<text x="{left}" y="{height-8}">{escape(start_label)}</text><text x="{width-105}" y="{height-8}">{escape(end_label)}</text></svg>'
+        )
 
     def history_chart(rows, key, min_value=0, max_value=100, suffix=""):
         return multi_history_chart(rows, [(key, key)], min_value, max_value, suffix)
@@ -5147,6 +5359,15 @@ def start_web(cfg):
             "mobile_router_rsrp_dbm",
             "mobile_router_rsrq_db",
             "mobile_router_sinr_db",
+            "mobile_router_radio_score",
+            "mobile_router_radio_score_label",
+            "mobile_router_radio_score_limiting",
+            "mobile_router_temperature_c",
+            "mobile_router_network_type",
+            "mobile_router_cell_id",
+            "mobile_router_cell_changed",
+            "mobile_router_connection_uptime_seconds",
+            "mobile_router_reconnected",
             "mobile_router_uptime_seconds",
             "mobile_router_started_at",
             "mobile_router_registration",
