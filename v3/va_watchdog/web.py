@@ -1217,10 +1217,10 @@ def start_web(cfg):
                 "</div>"
                 "<h3>Connection checklist</h3>"
                 f"<div class=\"operational-list\">{router_checklist}</div>"
-                "<div class=\"button-row\"><button class=\"ghost\" type=\"submit\" formaction=\"/mobile-router-test\" formmethod=\"post\">Test saved router settings</button>"
+                "<div class=\"button-row\"><button class=\"ghost\" type=\"submit\" name=\"settings_action\" value=\"test_mobile_router\">Save and test router settings</button>"
                 + (f"<a class=\"ghost\" href=\"https://{escape(str(router_cfg.get('address')))}\" target=\"_blank\" rel=\"noopener noreferrer\">Open RUT WebUI</a>" if router_cfg.get("address") else "")
                 + "</div>"
-                + "<p class=\"muted\">Save changes before testing. The test reads the saved configuration and does not alter the RUT.</p>"
+                + "<p class=\"muted\">This saves the Setup form, then reads the RUT. It does not alter the router.</p>"
                 + disclosure("RUTX50 setup help", router_setup_help)
             )
             recovery_settings = (
@@ -6231,21 +6231,6 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            if route_path == "/mobile-router-test":
-                length = int(self.headers.get("Content-Length", "0"))
-                if length:
-                    self.rfile.read(length)
-                result = test_mobile_router_settings()
-                body = mobile_router_test_result_html(result).encode("utf-8")
-                # VA-Connect replaces non-2xx HTML with a generic proxy error page.
-                # Keep diagnostic failures in the rendered result instead.
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html")
-                self.send_header("Content-Length", str(len(body)))
-                self._send_no_cache_headers()
-                self.end_headers()
-                self.wfile.write(body)
-                return
             if route_path == "/journal-enable":
                 length = int(self.headers.get("Content-Length", "0"))
                 form = parse_qs(self.rfile.read(length).decode("utf-8") if length else "", keep_blank_values=True)
@@ -6269,15 +6254,30 @@ def start_web(cfg):
                 self.wfile.write(body)
                 return
             if route_path == "/settings-save":
+                test_mobile_router = False
                 try:
                     length = int(self.headers.get("Content-Length", "0"))
                     raw_body = self.rfile.read(length).decode("utf-8") if length else ""
                     form = parse_qs(raw_body, keep_blank_values=True)
+                    test_mobile_router = form.get("settings_action", [""])[0] == "test_mobile_router"
                     result = apply_settings(settings_payload_from_form(form))
                 except Exception as exc:
                     result = {"ok": False, "error": str(exc)}
-                body = settings_saved_html(result).encode("utf-8")
-                self.send_response(200 if result.get("ok") else 400)
+                if test_mobile_router:
+                    if result.get("ok"):
+                        test_result = test_mobile_router_settings()
+                    else:
+                        test_result = {
+                            "ok": False,
+                            "message": "Router settings could not be saved.",
+                            "checks": [{"name": "Configuration", "ok": False, "detail": result.get("error", "Settings save failed")}],
+                        }
+                    body = mobile_router_test_result_html(test_result).encode("utf-8")
+                    response_status = 200
+                else:
+                    body = settings_saved_html(result).encode("utf-8")
+                    response_status = 200 if result.get("ok") else 400
+                self.send_response(response_status)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()
