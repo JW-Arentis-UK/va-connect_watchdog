@@ -55,6 +55,15 @@ class WebNavigationTests(unittest.TestCase):
         self.assertNotIn("Safe Watchdog Test", watchdog_renderer)
         self.assertNotIn("Existing watchdogs and cleanup", watchdog_renderer)
 
+    def test_watchdog_offers_a_guarded_controlled_gateway_restart(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+
+        self.assertIn("Gateway Restart", source)
+        self.assertIn('href=\\"/gateway-reboot-confirm\\"', source)
+        self.assertIn('action=\\"/gateway-reboot-now\\"', source)
+        self.assertIn('confirmation != "REBOOT"', source)
+        self.assertIn("Requested reboot", source)
+
     def test_watchdog_safety_countdown_reloads_once_at_zero(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 

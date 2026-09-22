@@ -41,6 +41,7 @@ from .manufacturer_report import collect_manufacturer_report, manufacturer_repor
 from .mobile_router import radio_metric_score, radio_quality, radio_score, signal_quality
 from .recording_activity import recording_activity
 from .reboot_evidence import recent_restarts
+from .gateway_reboot import request_gateway_reboot
 from .web_links import LINK_GROUPS, MAX_LINKS, configured_web_links, normalize_web_link
 
 VISIBLE_PAGE_GROUPS = (
@@ -1568,6 +1569,9 @@ def start_web(cfg):
                 f"<div class=\"status-word {'healthy' if trip_test.get('completed_previous_boot') else 'muted'}\">{escape(trip_state.upper())}</div>"
                 f"<p>{escape(trip_result)}</p>"
                 f"<p class=\"muted\">Last action: {escape(local_time(trip_test.get('last_result_time'))) if trip_test.get('last_result_time') else 'Not recorded'}</p></div>"
+                + "<div class=\"card\"><div class=\"section-lead\"><div><h2>Gateway Restart</h2>"
+                "<p class=\"muted\">Perform a normal controlled PC reboot. This is recorded separately from watchdog recovery and deliberate tests.</p></div>"
+                "<a class=\"danger\" href=\"/gateway-reboot-confirm\">Restart gateway</a></div></div>"
                 + disclosure(
                     "Protection details and setup",
                     "<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>" + detail_html + "</tbody></table></div>"
@@ -3172,6 +3176,36 @@ def start_web(cfg):
             "</div>"
         )
         return page_shell(body, "Services")
+
+    def gateway_reboot_confirm_html():
+        body = (
+            "<div class=\"card action-panel critical\"><h2>Confirm Gateway Restart</h2>"
+            "<p class=\"critical\">This will reboot the complete gateway PC and temporarily disconnect VA Connect, cameras, and remote access.</p>"
+            "<p class=\"muted\">This is a normal controlled reboot, not a watchdog test. Recent Restarts will label it as a Requested reboot.</p>"
+            "<form method=\"post\" action=\"/gateway-reboot-now\">"
+            "<label class=\"option-row\"><input type=\"checkbox\" name=\"ack\" value=\"1\"><span><strong>I understand remote access will be interrupted</strong></span></label>"
+            "<label class=\"label\" for=\"reboot-confirm-text\">Type REBOOT to confirm</label>"
+            "<input id=\"reboot-confirm-text\" name=\"confirm_text\" autocomplete=\"off\" required>"
+            "<div class=\"button-row\"><button class=\"danger\" type=\"submit\">Restart gateway PC</button>"
+            "<a class=\"ghost\" href=\"/watchdog\">Cancel</a></div></form></div>"
+        )
+        return page_shell(body, "Watchdog")
+
+    def gateway_reboot_result_html(result):
+        ok = bool(result.get("ok"))
+        body = (
+            "<div class=\"card action-panel\"><h2>Gateway Restart</h2>"
+            f"<p class=\"{'warning' if ok else 'critical'}\">{escape(str(result.get('message', 'Restart request processed.')))}</p>"
+            + (
+                "<p>The page will become unavailable shortly. Allow the gateway time to shut down cleanly and start VA Connect again.</p>"
+                "<p class=\"muted\">After reconnecting, Recent Restarts should show Requested reboot.</p>"
+                "<script>setTimeout(function(){window.location.href='/';},90000);</script>"
+                if ok
+                else f"<pre>{escape(str(result.get('output', 'No additional detail.')))}</pre>"
+            )
+            + "<div class=\"button-row\"><a class=\"ghost\" href=\"/watchdog\">Back to Watchdog</a></div></div>"
+        )
+        return page_shell(body, "Watchdog")
 
     def watchdog_test_armed_html(result):
         body = (
@@ -5923,6 +5957,15 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if route_path == "/gateway-reboot-confirm":
+                body = gateway_reboot_confirm_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path == "/watchdog-liveness-confirm":
                 body = watchdog_liveness_confirm_html().encode("utf-8")
                 self.send_response(200)
@@ -6530,6 +6573,33 @@ def start_web(cfg):
                     result = {"ok": False, "service": "", "message": str(exc), "returncode": None, "output": ""}
                 body = service_restart_result_html(result).encode("utf-8")
                 self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/gateway-reboot-now":
+                length = int(self.headers.get("Content-Length", "0"))
+                form = parse_qs(self.rfile.read(length).decode("utf-8") if length else "", keep_blank_values=True)
+                acknowledged = form.get("ack", [""])[0] == "1"
+                confirmation = form.get("confirm_text", [""])[0].strip()
+                if not acknowledged or confirmation != "REBOOT":
+                    result = {
+                        "ok": False,
+                        "message": "Restart not requested. Tick the acknowledgement and type REBOOT exactly.",
+                        "output": "The gateway is still running.",
+                    }
+                else:
+                    result = request_gateway_reboot(cfg)
+                    append_web_event(
+                        "warning" if result.get("ok") else "critical",
+                        "gateway_reboot",
+                        "Manual gateway reboot requested" if result.get("ok") else "Manual gateway reboot request failed",
+                        result,
+                    )
+                body = gateway_reboot_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 400)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()
