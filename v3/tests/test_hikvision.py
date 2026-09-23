@@ -2,7 +2,7 @@ import unittest
 from urllib.error import HTTPError, URLError
 
 from va_watchdog.hikvision import probe_people_counting
-from va_watchdog.hikvision_events import parse_notification
+from va_watchdog.hikvision_events import notification_diagnostic, parse_notification
 
 
 class FakeResponse:
@@ -158,6 +158,17 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertEqual(event["counts"], {"atob": "2", "btoa": "1"})
         self.assertNotIn("pictureURL", event)
         self.assertNotIn("pictureURL", event["fields_seen"])
+
+    def test_notification_diagnostic_does_not_keep_media_urls(self):
+        diagnostic = notification_diagnostic(
+            b"<EventNotificationAlert><eventType>VMD</eventType><eventState>active</eventState>"
+            b"<pictureURL>http://camera/private.jpg</pictureURL></EventNotificationAlert>"
+        )
+
+        self.assertEqual(diagnostic["last_notification_type"], "VMD")
+        self.assertEqual(diagnostic["last_notification_state"], "active")
+        self.assertNotIn("pictureURL", diagnostic["last_notification_fields"])
+        self.assertNotIn("private.jpg", str(diagnostic))
 
 
 if __name__ == "__main__":

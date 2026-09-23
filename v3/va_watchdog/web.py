@@ -755,6 +755,13 @@ def start_web(cfg):
                 f"<div class=\"section-body\">{body}</div></details>"
             )
 
+        def settings_disclosure(title, body, opened=False):
+            return disclosure(
+                title,
+                body + "<div class=\"button-row\"><button class=\"ghost\" type=\"submit\">Save changes</button></div>",
+                opened,
+            )
+
         def tool_grid(items):
             cards = []
             for title, detail, href, style in items:
@@ -1304,6 +1311,7 @@ def start_web(cfg):
                 f"<label class=\"option-row\"><input name=\"people_counting_event_collection_enabled\" type=\"checkbox\" {'checked' if people_cfg.get('event_collection_enabled') else ''}> <span><strong>Collect multi-target people events</strong><br><span class=\"muted\">Reads the camera's Notify Surveillance Center event stream. No camera settings, images or video are collected.</span></span></label>"
                 + (lambda summary: "<div class=\"operational-list\"><div class=\"operational-row\"><div class=\"operational-area\">Event collector</div><div class=\"operational-detail\">"
                    + escape(str(summary.get("status") or "Disabled"))
+                   + ("; last camera notification: " + escape(str(summary.get("last_notification_type"))) if summary.get("last_notification_type") else "")
                    + "</div><div class=\"operational-state " + ("healthy" if summary.get("status") in {"listening", "receiving"} else "warning") + "\">"
                    + ("Listening" if summary.get("status") in {"listening", "receiving"} else "Waiting")
                    + "</div></div><div class=\"operational-row\"><div class=\"operational-area\">Today's captured events</div><div class=\"operational-detail\">A to B: "
@@ -1356,20 +1364,21 @@ def start_web(cfg):
             )
             return (
                 settings_summary
-                + "<div class=\"card\"><h2>Configuration</h2>"
+                + "<div class=\"card\"><div class=\"section-lead\"><div><h2>Configuration</h2><p>Update the watchdog, then manage each setup section below.</p></div><a class=\"action\" href=\"/update-confirm\">Update watchdog</a></div>"
                 "<p class=\"section-lead\">Routine identity and monitoring settings are open below. Less common engineering controls remain collapsed. Saving creates a backup first.</p>"
                 "<form method=\"post\" action=\"/settings-save\">"
-                + disclosure("Gateway identity", identity_settings, opened=True)
-                + disclosure("Monitoring and data retention", general_settings, opened=True)
-                + disclosure("Watchdog startup safety", watchdog_settings)
-                + "<div id=\"persistent-journal\">" + disclosure("Persistent evidence logging", journal_settings) + "</div>"
-                + "<div id=\"storage\">" + disclosure("Recording storage setup", recording_setup, opened=recording_setup_state != "healthy") + "</div>"
-                + disclosure("System and storage alert levels", storage_settings, opened=check_state("temperature") != "healthy")
-                + disclosure("Network and remote access", network_settings)
-                + disclosure("Mobile router monitoring", router_settings)
-                + disclosure("Hikvision people counting test", people_counting_settings, opened=bool(people_cfg.get("address")))
-                + disclosure("Recovery and updates", recovery_settings)
-                + disclosure("Advanced configuration", advanced_settings)
+                "<div class=\"button-row\"><button class=\"ghost\" type=\"button\" onclick=\"document.querySelectorAll('.section-disclosure').forEach(function(item){item.open=true})\">Show all</button><button class=\"ghost\" type=\"button\" onclick=\"document.querySelectorAll('.section-disclosure').forEach(function(item){item.open=false})\">Hide all</button></div>"
+                + settings_disclosure("Gateway identity", identity_settings, opened=True)
+                + settings_disclosure("Monitoring and data retention", general_settings, opened=True)
+                + settings_disclosure("Watchdog startup safety", watchdog_settings)
+                + "<div id=\"persistent-journal\">" + settings_disclosure("Persistent evidence logging", journal_settings) + "</div>"
+                + "<div id=\"storage\">" + settings_disclosure("Recording storage setup", recording_setup, opened=recording_setup_state != "healthy") + "</div>"
+                + settings_disclosure("System and storage alert levels", storage_settings, opened=check_state("temperature") != "healthy")
+                + settings_disclosure("Network and remote access", network_settings)
+                + settings_disclosure("Mobile router monitoring", router_settings)
+                + settings_disclosure("Hikvision people counting test", people_counting_settings, opened=bool(people_cfg.get("address")))
+                + settings_disclosure("Recovery and updates", recovery_settings)
+                + settings_disclosure("Advanced configuration", advanced_settings)
                 + "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Save settings</button><a class=\"ghost\" href=\"/settings\">Cancel</a></div>"
                 "</form>"
                 "</div>"

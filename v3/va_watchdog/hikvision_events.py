@@ -51,7 +51,10 @@ def parse_notification(payload: bytes) -> dict[str, Any] | None:
     target_type = values.get("targettype", "")
     count_values = {key: value for key, value in values.items() if key in _COUNT_FIELDS}
     # Keep only people/count notifications; generic motion alarms are irrelevant.
-    relevant = bool(count_values) or any(word in f"{event_type} {target_type}".lower() for word in ("people", "human", "target", "count"))
+    relevant = bool(count_values) or any(
+        word in f"{event_type} {target_type} {values.get('eventdescription', '')}".lower()
+        for word in ("people", "human", "target", "count")
+    )
     if not relevant:
         return None
     return {
@@ -63,6 +66,30 @@ def parse_notification(payload: bytes) -> dict[str, Any] | None:
         "direction": values.get("direction", ""),
         "counts": count_values,
         "fields_seen": sorted(tags)[:40],
+    }
+
+
+def notification_diagnostic(payload: bytes) -> dict[str, Any] | None:
+    """Describe an unrecognised notification without retaining its payload."""
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError:
+        return None
+    values: dict[str, str] = {}
+    fields: list[str] = []
+    for node in root.iter():
+        key = _name(node.tag).lower()
+        text = (node.text or "").strip()
+        if key in _VALUE_FIELDS:
+            if key not in fields:
+                fields.append(key)
+            if text:
+                values[key] = text[:160]
+    return {
+        "last_notification_at": datetime.now(timezone.utc).isoformat(),
+        "last_notification_type": values.get("eventtype", "unknown"),
+        "last_notification_state": values.get("eventstate", ""),
+        "last_notification_fields": sorted(fields),
     }
 
 
@@ -177,6 +204,11 @@ class HikvisionEventCollector:
                     start = raw.rfind(b"<EventNotificationAlert")
                     if start < 0:
                         continue
-                    event = parse_notification(raw[start:] + b"</EventNotificationAlert>")
+                    notification = raw[start:] + b"</EventNotificationAlert>"
+                    event = parse_notification(notification)
                     if event:
                         self._record(event)
+                    else:
+                        diagnostic = notification_diagnostic(notification)
+                        if diagnostic:
+                            self._write_state(status="listening", **diagnostic)
