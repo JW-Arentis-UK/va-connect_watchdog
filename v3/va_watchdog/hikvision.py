@@ -235,6 +235,24 @@ def _onvif_event_properties_query(username: str, password: str, address: str) ->
     return ('<?xml version="1.0" encoding="UTF-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tev="http://www.onvif.org/ver10/events/wsdl" xmlns:wsa="http://www.w3.org/2005/08/addressing" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"><s:Header><wsa:MessageID>' + message_id + '</wsa:MessageID><wsa:To>' + xml_escape(address) + '</wsa:To><wsa:Action>' + action + '</wsa:Action><wsa:ReplyTo><wsa:Address>http://www.w3.org/2005/08/addressing/anonymous</wsa:Address></wsa:ReplyTo><wsse:Security s:mustUnderstand="1"><wsse:UsernameToken><wsse:Username>' + xml_escape(username) + '</wsse:Username><wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">' + digest + '</wsse:Password><wsse:Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">' + nonce_text + '</wsse:Nonce><wsu:Created>' + created + '</wsu:Created></wsse:UsernameToken></wsse:Security></s:Header><s:Body><tev:GetEventProperties/></s:Body></s:Envelope>').encode("utf-8")
 
 
+def _onvif_client_error_detail(stage: str, exc: Exception) -> str:
+    """Keep ONVIF errors useful for operators without exposing request contents or secrets."""
+    error = str(exc).lower()
+    status_match = re.search(r"\b(?:http(?: error)?|status)\D*(\d{3})\b|\b(\d{3})\s+(?:client|server) error", error)
+    status = next((group for group in status_match.groups() if group) if status_match else (), "")
+    if status:
+        return f"ONVIF {stage}: camera returned HTTP {status}"
+    if "timeout" in error or "timed out" in error:
+        return f"ONVIF {stage}: camera did not respond in time"
+    if "connection" in error or "refused" in error:
+        return f"ONVIF {stage}: connection failed"
+    if "auth" in error or "unauthor" in error:
+        return f"ONVIF {stage}: authentication failed"
+    if "fault" in error or "invalid" in error:
+        return f"ONVIF {stage}: camera rejected the request"
+    return f"ONVIF {stage} failed ({type(exc).__name__})"
+
+
 def _onvif_client_event_topics(settings: dict, events_address: str, camera_factory=None) -> dict:
     """Use the maintained ONVIF client for a read-only event capability query."""
     if camera_factory is None:
@@ -257,12 +275,27 @@ def _onvif_client_event_topics(settings: dict, events_address: str, camera_facto
             str(settings.get("password") or ""),
             adjust_time=True,
         )
-        camera.create_events_service().GetEventProperties()
     except Exception as exc:
         return {
             "available": False,
             "installed": True,
-            "detail": f"ONVIF client request failed ({type(exc).__name__})",
+            "detail": _onvif_client_error_detail("client setup", exc),
+        }
+    try:
+        events_service = camera.create_events_service()
+    except Exception as exc:
+        return {
+            "available": False,
+            "installed": True,
+            "detail": _onvif_client_error_detail("event service setup", exc),
+        }
+    try:
+        events_service.GetEventProperties()
+    except Exception as exc:
+        return {
+            "available": False,
+            "installed": True,
+            "detail": _onvif_client_error_detail("event topic read", exc),
         }
     return {"available": True, "installed": True, "detail": "Available through ONVIF client"}
 

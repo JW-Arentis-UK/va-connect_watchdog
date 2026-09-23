@@ -1,7 +1,7 @@
 import unittest
 from urllib.error import HTTPError, URLError
 
-from va_watchdog.hikvision import _onvif_client_event_topics, _onvif_event_properties_query, probe_people_counting
+from va_watchdog.hikvision import _onvif_client_error_detail, _onvif_client_event_topics, _onvif_event_properties_query, probe_people_counting
 from va_watchdog.hikvision_events import HikvisionEventCollector, notification_diagnostic, parse_notification
 
 
@@ -137,6 +137,15 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertEqual(calls[0][:3], ("192.168.1.72", 80, "operator"))
         self.assertTrue(calls[0][4]["adjust_time"])
         self.assertNotIn("not-returned", str(result))
+
+    def test_onvif_client_error_detail_reports_safe_http_status(self):
+        detail = _onvif_client_error_detail(
+            "event topic read",
+            RuntimeError("400 Client Error: malformed request; password=not-returned"),
+        )
+
+        self.assertEqual(detail, "ONVIF event topic read: camera returned HTTP 400")
+        self.assertNotIn("not-returned", detail)
 
     def test_probe_distinguishes_authentication_failure(self):
         settings = self.settings()
