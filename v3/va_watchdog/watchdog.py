@@ -23,6 +23,7 @@ from .web import start_web
 from .heartbeat import HeartbeatPublisher
 from .reboot_evidence import create as create_reboot_evidence, event_level as reboot_event_level
 from .kernel_faults import scan as scan_kernel_faults
+from .hikvision_events import HikvisionEventCollector
 
 def atomic_write_json(path: str, data):
     p = Path(path)
@@ -227,6 +228,8 @@ def main():
         )
 
     _blackbox_recorder = start_recorder(cfg)
+    _hikvision_events = HikvisionEventCollector(cfg, event_log)
+    _hikvision_events.start()
 
     event_log.add("info", "watchdog", "VA-Connect Watchdog starting")
     trip_active, trip_summary = trip_test_active(cfg)

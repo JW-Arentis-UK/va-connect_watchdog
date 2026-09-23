@@ -40,6 +40,8 @@ def data_files(cfg: dict[str, Any]) -> list[Path]:
         base / "hardware-watchdog-feed.json",
         base / "hardware-watchdog-feed-previous.json",
         base / "hardware-watchdog-lifecycle.jsonl",
+        base / "hikvision-people-events.jsonl",
+        base / "hikvision-people-events-state.json",
     ]
     custom_history = history_path(cfg)
     if custom_history not in files:

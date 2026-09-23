@@ -194,6 +194,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "snmp_community": ""
     },
     "people_counting": {
+        "event_collection_enabled": False,
         "address": "",
         "scheme": "http",
         "port": 80,

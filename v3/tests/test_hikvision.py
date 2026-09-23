@@ -2,6 +2,7 @@ import unittest
 from urllib.error import HTTPError, URLError
 
 from va_watchdog.hikvision import probe_people_counting
+from va_watchdog.hikvision_events import parse_notification
 
 
 class FakeResponse:
@@ -145,6 +146,18 @@ class HikvisionProbeTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertIn("multi-target-type detection", result["message"].lower())
+
+    def test_event_parser_keeps_only_counting_fields(self):
+        event = parse_notification(
+            b"<EventNotificationAlert><eventType>PeopleCounting</eventType><channelID>1</channelID>"
+            b"<AtoB>2</AtoB><BtoA>1</BtoA><pictureURL>http://camera/private.jpg</pictureURL>"
+            b"</EventNotificationAlert>"
+        )
+
+        self.assertEqual(event["event_type"], "PeopleCounting")
+        self.assertEqual(event["counts"], {"atob": "2", "btoa": "1"})
+        self.assertNotIn("pictureURL", event)
+        self.assertNotIn("pictureURL", event["fields_seen"])
 
 
 if __name__ == "__main__":

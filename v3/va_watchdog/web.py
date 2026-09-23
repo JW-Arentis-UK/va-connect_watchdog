@@ -43,6 +43,7 @@ from .recording_activity import recording_activity
 from .reboot_evidence import recent_restarts
 from .gateway_reboot import request_gateway_reboot
 from .hikvision import probe_people_counting
+from .hikvision_events import event_summary
 from .web_links import LINK_GROUPS, MAX_LINKS, configured_web_links, normalize_web_link
 
 VISIBLE_PAGE_GROUPS = (
@@ -1300,6 +1301,15 @@ def start_web(cfg):
                 f"<div><label class=\"label\">Username</label><input name=\"people_counting_username\" maxlength=\"64\" value=\"{escape(str(people_cfg.get('username', '')))}\"></div>"
                 f"<div><label class=\"label\">Password</label><input name=\"people_counting_password\" type=\"password\" maxlength=\"128\" value=\"\" placeholder=\"{'Configured - leave blank to keep' if people_cfg.get('password') else 'Enter the camera password'}\"><p class=\"muted\">Stored locally and never shown in evidence exports.</p></div>"
                 "</div>"
+                f"<label class=\"option-row\"><input name=\"people_counting_event_collection_enabled\" type=\"checkbox\" {'checked' if people_cfg.get('event_collection_enabled') else ''}> <span><strong>Collect multi-target people events</strong><br><span class=\"muted\">Reads the camera's Notify Surveillance Center event stream. No camera settings, images or video are collected.</span></span></label>"
+                + (lambda summary: "<div class=\"operational-list\"><div class=\"operational-row\"><div class=\"operational-area\">Event collector</div><div class=\"operational-detail\">"
+                   + escape(str(summary.get("status") or "Disabled"))
+                   + "</div><div class=\"operational-state " + ("healthy" if summary.get("status") in {"listening", "receiving"} else "warning") + "\">"
+                   + ("Listening" if summary.get("status") in {"listening", "receiving"} else "Waiting")
+                   + "</div></div><div class=\"operational-row\"><div class=\"operational-area\">Today's captured events</div><div class=\"operational-detail\">A to B: "
+                   + escape(str(summary.get("today", {}).get("a_to_b", 0))) + "; B to A: " + escape(str(summary.get("today", {}).get("b_to_a", 0)))
+                   + "</div><div class=\"operational-state healthy\">" + escape(str(summary.get("today", {}).get("events", 0))) + " events</div></div></div>"
+                )(event_summary(cfg))
                 + (
                     "<div class=\"button-row\"><a class=\"action\" href=\"/hikvision-test-confirm\">Test saved camera settings</a></div>"
                     if people_cfg.get("address") and people_cfg.get("username") and people_cfg.get("password")
@@ -3520,6 +3530,7 @@ def start_web(cfg):
                 "snmp_community": first("mobile_router_snmp_community", "") or str(cfg.get("mobile_router", {}).get("snmp_community", "")),
             },
             "people_counting": {
+                "event_collection_enabled": "people_counting_event_collection_enabled" in form,
                 "address": first("people_counting_address", ""),
                 "scheme": first("people_counting_scheme", "http"),
                 "port": first("people_counting_port", "80"),
@@ -5326,6 +5337,7 @@ def start_web(cfg):
         router_settings["snmp_community_configured"] = bool(router_settings.pop("snmp_community", ""))
         people_settings = dict(cfg.get("people_counting", {})) if isinstance(cfg.get("people_counting", {}), dict) else {}
         people_settings["password_configured"] = bool(people_settings.pop("password", ""))
+        people_settings["event_summary"] = event_summary(cfg)
         return {
             "config_path": str(active_config_path()),
             "identity": identity_summary(cfg),
@@ -5465,6 +5477,7 @@ def start_web(cfg):
                 ),
             },
             "people_counting": {
+                "event_collection_enabled": bool(people_counting.get("event_collection_enabled", False)),
                 "address": _router_address(people_counting.get("address", "")),
                 "scheme": str(people_counting.get("scheme", "http")).strip().lower(),
                 "port": _int_range({"port": people_counting.get("port", 80)}, "port", 1, 65535),

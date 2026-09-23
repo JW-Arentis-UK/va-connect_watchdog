@@ -1,0 +1,182 @@
+"""Read only Hikvision multi-target event collection.
+
+The camera owns analytics and video.  This listener records a compact, safe
+description of notification events so the watchdog can build its own totals.
+"""
+from __future__ import annotations
+
+import json
+import socket
+import threading
+import time
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request
+
+from .hikvision import _base_url, _digest_opener
+
+
+_VALUE_FIELDS = {
+    "eventtype", "eventstate", "channelid", "channel", "targettype", "direction",
+    "entercount", "leavecount", "incount", "outcount", "passcount", "passingcount",
+    "atob", "btoa", "eventdescription",
+}
+_COUNT_FIELDS = {"entercount", "leavecount", "incount", "outcount", "passcount", "passingcount", "atob", "btoa"}
+
+
+def _name(tag: str) -> str:
+    return str(tag).rsplit("}", 1)[-1]
+
+
+def parse_notification(payload: bytes) -> dict[str, Any] | None:
+    """Return whitelisted fields only; payloads can contain private media URLs."""
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError:
+        return None
+    values: dict[str, str] = {}
+    tags: list[str] = []
+    for node in root.iter():
+        key = _name(node.tag)
+        if key.lower() in _VALUE_FIELDS and key not in tags:
+            tags.append(key)
+        lowered = key.lower()
+        text = (node.text or "").strip()
+        if lowered in _VALUE_FIELDS and text:
+            values[lowered] = text[:160]
+    event_type = values.get("eventtype", "")
+    target_type = values.get("targettype", "")
+    count_values = {key: value for key, value in values.items() if key in _COUNT_FIELDS}
+    # Keep only people/count notifications; generic motion alarms are irrelevant.
+    relevant = bool(count_values) or any(word in f"{event_type} {target_type}".lower() for word in ("people", "human", "target", "count"))
+    if not relevant:
+        return None
+    return {
+        "time": datetime.now(timezone.utc).isoformat(),
+        "event_type": event_type or "camera event",
+        "event_state": values.get("eventstate", ""),
+        "channel": values.get("channelid") or values.get("channel", ""),
+        "target_type": target_type,
+        "direction": values.get("direction", ""),
+        "counts": count_values,
+        "fields_seen": sorted(tags)[:40],
+    }
+
+
+def event_paths(cfg: dict[str, Any]) -> tuple[Path, Path]:
+    base = Path(cfg["events_path"]).parent
+    people = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting"), dict) else {}
+    return (
+        Path(people.get("event_history_path") or base / "hikvision-people-events.jsonl"),
+        Path(people.get("event_state_path") or base / "hikvision-people-events-state.json"),
+    )
+
+
+def event_summary(cfg: dict[str, Any]) -> dict[str, Any]:
+    history, state_path = event_paths(cfg)
+    state: dict[str, Any] = {}
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        state = {}
+    today = datetime.now().astimezone().date().isoformat()
+    totals = {"a_to_b": 0, "b_to_a": 0, "events": 0}
+    if history.exists():
+        for line in history.read_text(encoding="utf-8", errors="ignore").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict) or not str(row.get("time", "")).startswith(today):
+                continue
+            totals["events"] += 1
+            counts = row.get("counts", {}) if isinstance(row.get("counts"), dict) else {}
+            for key, value in counts.items():
+                try:
+                    number = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if key in {"atob", "entercount", "incount"}:
+                    totals["a_to_b"] += number
+                elif key in {"btoa", "leavecount", "outcount"}:
+                    totals["b_to_a"] += number
+    return {"enabled": bool(cfg.get("people_counting", {}).get("event_collection_enabled")), "today": totals, **state}
+
+
+class HikvisionEventCollector:
+    def __init__(self, cfg: dict[str, Any], event_log) -> None:
+        self.cfg = cfg
+        self.event_log = event_log
+        self.thread = threading.Thread(target=self._run, name="hikvision-events", daemon=True)
+        self._last_state_signature: tuple[tuple[str, str], ...] | None = None
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def _write_state(self, **values: Any) -> None:
+        _, path = event_paths(self.cfg)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        signature = tuple(sorted((str(key), str(value)) for key, value in values.items()))
+        if signature == self._last_state_signature:
+            return
+        self._last_state_signature = signature
+        values["updated_at"] = datetime.now(timezone.utc).isoformat()
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(values, separators=(",", ":")), encoding="utf-8")
+        temporary.replace(path)
+
+    def _record(self, event: dict[str, Any]) -> None:
+        history, _ = event_paths(self.cfg)
+        history.parent.mkdir(parents=True, exist_ok=True)
+        with history.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, separators=(",", ":")) + "\n")
+        self.event_log.add("info", "people_counting", "Hikvision people-counting event received", event)
+        self._write_state(status="receiving", last_event_at=event["time"], last_event_type=event["event_type"])
+
+    def _run(self) -> None:
+        backoff = 5
+        while True:
+            camera = self.cfg.get("people_counting", {}) if isinstance(self.cfg.get("people_counting"), dict) else {}
+            enabled = bool(camera.get("event_collection_enabled"))
+            configured = all(camera.get(key) for key in ("address", "username", "password"))
+            if not enabled or not configured:
+                self._write_state(status="disabled" if not enabled else "needs camera details")
+                time.sleep(5)
+                continue
+            try:
+                self._stream(camera)
+                backoff = 5
+            except (HTTPError, URLError, socket.timeout, OSError) as exc:
+                self._write_state(status="reconnecting", last_error=str(getattr(exc, "reason", exc))[:160])
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 60)
+            except Exception as exc:
+                self._write_state(status="reconnecting", last_error=str(exc)[:160])
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 60)
+
+    def _stream(self, camera: dict[str, Any]) -> None:
+        base_url = _base_url(camera)
+        opener = _digest_opener(base_url, str(camera["username"]), str(camera["password"]))
+        request = Request(f"{base_url}/ISAPI/Event/notification/alertStream", headers={"Accept": "multipart/x-mixed-replace, application/xml"})
+        timeout = max(15, int(camera.get("timeout_seconds") or 5) * 6)
+        self._write_state(status="connecting")
+        with opener.open(request, timeout=timeout) as response:
+            self._write_state(status="listening", last_connected_at=datetime.now(timezone.utc).isoformat())
+            buffer = b""
+            while True:
+                chunk = response.read(4096)
+                if not chunk:
+                    raise OSError("camera closed the event stream")
+                buffer = (buffer + chunk)[-262144:]
+                while b"</EventNotificationAlert>" in buffer:
+                    raw, buffer = buffer.split(b"</EventNotificationAlert>", 1)
+                    start = raw.rfind(b"<EventNotificationAlert")
+                    if start < 0:
+                        continue
+                    event = parse_notification(raw[start:] + b"</EventNotificationAlert>")
+                    if event:
+                        self._record(event)
