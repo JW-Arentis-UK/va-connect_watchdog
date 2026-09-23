@@ -2627,7 +2627,7 @@ def start_web(cfg):
         data_source_rows = "".join(
             "<tr>"
             f"<th>{escape(str(item.get('name') or '-'))}</th>"
-            f"<td class=\"{'healthy' if item.get('available') else 'muted'}\">{'Available' if item.get('available') else escape(str(item.get('detail') or 'Not available'))}</td>"
+            f"<td class=\"{'healthy' if item.get('available') else 'muted'}\">{escape(str(item.get('detail') or ('Available' if item.get('available') else 'Not available')))}</td>"
             "</tr>"
             for item in result.get("data_sources", [])
             if isinstance(item, dict)
