@@ -297,11 +297,16 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
     })
     onvif_response = _request_xml(client, f"{base_url}/onvif/device_service", timeout, method="POST", body=_onvif_capabilities_query())
     onvif_names = sorted({_local_name(element.tag) for element in onvif_response.get("root", []).iter()})[:50] if onvif_response.get("ok") else []
+    onvif_addresses = []
+    if onvif_response.get("ok"):
+        for element in onvif_response["root"].iter():
+            if _local_name(element.tag) == "XAddr" and element.text and element.text.strip():
+                onvif_addresses.append(element.text.strip())
     data_sources.append({
         "name": "ONVIF analytics and event services",
         "available": bool(onvif_response.get("ok")),
         "status_code": onvif_response.get("status_code"),
-        "detail": "Available: " + ", ".join(onvif_names) if onvif_names else onvif_response.get("detail"),
+        "detail": "Available: " + ", ".join(onvif_addresses[:12] or onvif_names) if onvif_names else onvif_response.get("detail"),
     })
 
     report_start, report_end = _latest_completed_day()
