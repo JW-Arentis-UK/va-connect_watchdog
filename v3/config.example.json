@@ -113,6 +113,15 @@
     "snmp_port": 161,
     "snmp_community": ""
   },
+  "people_counting": {
+    "address": "",
+    "scheme": "http",
+    "port": 80,
+    "channel": 1,
+    "username": "",
+    "password": "",
+    "timeout_seconds": 5
+  },
   "storage": {
     "root_path": "/",
     "recordings_path": "/home/vsuser/recordings",

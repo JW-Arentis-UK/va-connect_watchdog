@@ -204,7 +204,7 @@ def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], prev
             gap = None
     evidence_used = []
     if requested:
-        evidence_used.append("A watchdog-requested reboot reason was preserved before shutdown.")
+        evidence_used.append("A requested reboot reason was preserved before shutdown.")
     if reset_reason:
         evidence_used.append(f"Platform reset reason: {reset_reason}")
     if deliberate_trip:
@@ -243,6 +243,31 @@ def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], prev
     }
 
 
+def event_level(evidence: dict[str, Any]) -> str:
+    """Map reboot evidence to an event severity without flagging planned restarts as failures."""
+    mechanism = str(evidence.get("reset_mechanism") or evidence.get("classification") or "").lower()
+    if mechanism in {"requested reboot", "clean reboot"}:
+        return "info"
+    if evidence.get("deliberate_trip_test") or evidence.get("liveness_path_test"):
+        return "info"
+    if mechanism in {"watchdog reset", "kernel fault"}:
+        return "critical"
+    return "warning"
+
+
+def _consume_reboot_reason(cfg: dict[str, Any], evidence: dict[str, Any], evidence_path: Path) -> None:
+    recorded = evidence.get("previous_reboot_reason")
+    if not isinstance(recorded, dict) or not recorded:
+        return
+    reason_path = Path(cfg.get("last_reboot_reason_path") or evidence_path.parent / "last-reboot-reason.json")
+    try:
+        current = json.loads(reason_path.read_text(encoding="utf-8")) if reason_path.exists() else {}
+        if isinstance(current, dict) and current == recorded:
+            reason_path.unlink(missing_ok=True)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
 def _previous_session_lines(last_x: str) -> list[str]:
     lines = [line for line in last_x.splitlines() if line.strip()]
     reboot_indexes = [index for index, line in enumerate(lines) if "reboot   system boot" in line.lower()]
@@ -268,6 +293,7 @@ def create(cfg: dict[str, Any], boot_change: dict[str, Any], feed_state: dict[st
                 archive_path = value.get("incident_archive", {}).get("path") if isinstance(value.get("incident_archive", {}), dict) else ""
                 if archive_path:
                     _write(Path(str(archive_path)) / "reboot-evidence.json", value)
+            _consume_reboot_reason(cfg, value, path)
             return value
         except Exception:
             return {}
@@ -293,4 +319,5 @@ def create(cfg: dict[str, Any], boot_change: dict[str, Any], feed_state: dict[st
         handle.flush()
     latest = path.with_name("last-reboot-evidence.json")
     _write(latest, evidence)
+    _consume_reboot_reason(cfg, evidence, path)
     return evidence

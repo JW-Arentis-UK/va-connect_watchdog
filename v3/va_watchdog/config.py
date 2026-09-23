@@ -193,6 +193,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "snmp_port": 161,
         "snmp_community": ""
     },
+    "people_counting": {
+        "address": "",
+        "scheme": "http",
+        "port": 80,
+        "channel": 1,
+        "username": "",
+        "password": "",
+        "timeout_seconds": 5
+    },
     "web_links": [],
     "retention": {
         "max_total_mb": 100,

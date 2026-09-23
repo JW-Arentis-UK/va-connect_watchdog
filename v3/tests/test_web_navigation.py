@@ -61,7 +61,8 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn("Gateway Restart", source)
         self.assertIn('href=\\"/gateway-reboot-confirm\\"', source)
         self.assertIn('action=\\"/gateway-reboot-now\\"', source)
-        self.assertIn('confirmation != "REBOOT"', source)
+        self.assertIn("if not acknowledged:", source)
+        self.assertNotIn("reboot-confirm-text", source)
         self.assertIn("Requested reboot", source)
 
     def test_watchdog_safety_countdown_reloads_once_at_zero(self):
@@ -212,6 +213,28 @@ class WebNavigationTests(unittest.TestCase):
         self.assertNotIn("Save and test router settings", source)
         self.assertNotIn('route_path == "/mobile-router-test"', source)
         self.assertIn("Open RUT WebUI", source)
+
+    def test_hikvision_people_counting_test_is_read_only_and_hides_password(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+
+        self.assertIn('disclosure("Hikvision people counting test"', source)
+        self.assertIn('href=\\\"/hikvision-test-confirm\\\"', source)
+        self.assertIn('action=\\\"/hikvision-test-now\\\"', source)
+        self.assertIn("probe_people_counting(camera)", source)
+        self.assertIn('people_settings.pop("password", "")', source)
+        self.assertIn("It will not change camera settings or retrieve images or video.", source)
+
+    def test_recording_storage_setup_is_visible_and_linked_from_status(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+
+        self.assertIn('operational_row(\n                    "Recording storage"', source)
+        self.assertIn('"/setup#storage"', source)
+        self.assertIn('id=\\"storage\\"', source)
+        self.assertIn('disclosure("Recording storage setup"', source)
+        self.assertIn("Review recording storage setup", source)
+        self.assertIn("choose Monitor only", source)
+        self.assertIn('name=\\"cpu_temp_warning_c\\"', source)
+        self.assertIn('name=\\"cpu_temp_critical_c\\"', source)
 
     def test_watchdog_process_warning_requires_sustained_usage(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "process_monitor.py").read_text(encoding="utf-8")

@@ -66,7 +66,7 @@ def check_unexpected_boot(cfg: dict[str, Any], event_log=None) -> dict[str, Any]
         next_state = {"schema_version": 2, "boot_id": current, "updated_at": result["detected_at"]}
     _atomic_write_json(state_path, next_state)
     if changed and event_log:
-        event_log.add("warning", "blackbox", "Unexpected reboot detected", result)
+        event_log.add("info", "blackbox", "New boot detected; preserving previous Black Box evidence", result)
     return result
 
 

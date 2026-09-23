@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from va_watchdog.blackbox import (
     BlackBoxRecorder,
@@ -41,7 +42,33 @@ class FakeSampler:
         self.closed = True
 
 
+class FakeEventLog:
+    def __init__(self):
+        self.events = []
+
+    def add(self, level, source, message, data):
+        self.events.append({"level": level, "source": source, "message": message, "data": data})
+
+
 class BlackBoxParserTests(unittest.TestCase):
+    def test_new_boot_is_reported_neutrally_until_reboot_evidence_classifies_it(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.object(blackbox_module, "boot_id", return_value="new-boot"):
+            root = Path(temporary)
+            cfg = {
+                "events_path": str(root / "events.jsonl"),
+                "blackbox": {"state_path": str(root / "blackbox-state.json")},
+            }
+            state_path = Path(cfg["blackbox"]["state_path"])
+            state_path.write_text(json.dumps({"boot_id": "old-boot"}), encoding="utf-8")
+            events = FakeEventLog()
+
+            result = blackbox_module.check_unexpected_boot(cfg, events)
+
+            self.assertTrue(result["changed"])
+            self.assertEqual(events.events[0]["level"], "info")
+            self.assertIn("New boot detected", events.events[0]["message"])
+            self.assertNotIn("Unexpected reboot", events.events[0]["message"])
+
     def test_steady_state_recorder_has_no_subprocess_collectors(self):
         source = inspect.getsource(blackbox_module)
 

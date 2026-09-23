@@ -42,6 +42,7 @@ from .mobile_router import radio_metric_score, radio_quality, radio_score, signa
 from .recording_activity import recording_activity
 from .reboot_evidence import recent_restarts
 from .gateway_reboot import request_gateway_reboot
+from .hikvision import probe_people_counting
 from .web_links import LINK_GROUPS, MAX_LINKS, configured_web_links, normalize_web_link
 
 VISIBLE_PAGE_GROUPS = (
@@ -1149,10 +1150,12 @@ def start_web(cfg):
             retention = cfg.get("retention", {})
             network = cfg.get("network", {})
             router_cfg = cfg.get("mobile_router", {}) if isinstance(cfg.get("mobile_router", {}), dict) else {}
+            people_cfg = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting", {}), dict) else {}
             update = cfg.get("update", {})
             recovery = cfg.get("recovery", {})
             rec_storage = cfg.get("recording_storage", {}) if isinstance(cfg.get("recording_storage", {}), dict) else {}
             hw_cfg = cfg.get("hardware_watchdog", {}) if isinstance(cfg.get("hardware_watchdog", {}), dict) else {}
+            live_recording_storage = recording_storage_status(cfg)
             settings_summary = summary_strip([
                 ("Gateway", gateway_identity.get("display_name") or gateway_identity.get("hostname") or "Not named", gateway_identity.get("asset_id") or "No asset ID", "healthy"),
                 ("Health checks", f"Every {cfg.get('poll_interval_seconds', 5)}s", "Lightweight live monitoring", "healthy"),
@@ -1182,6 +1185,8 @@ def start_web(cfg):
             )
             storage_settings = (
                 "<div class=\"settings-grid\">"
+                f"<div><label class=\"label\">CPU temperature warning C</label><input name=\"cpu_temp_warning_c\" type=\"number\" min=\"40\" max=\"100\" value=\"{escape(str(thresholds.get('cpu_temp_warning_c', 75)))}\"><p class=\"muted\">Advisory temperature; default 75 C.</p></div>"
+                f"<div><label class=\"label\">CPU temperature critical C</label><input name=\"cpu_temp_critical_c\" type=\"number\" min=\"50\" max=\"105\" value=\"{escape(str(thresholds.get('cpu_temp_critical_c', 90)))}\"><p class=\"muted\">Serious thermal warning; default 90 C.</p></div>"
                 f"<div><label class=\"label\">Root warning used %</label><input name=\"root_disk_warning_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('root_disk_warning_percent', 80)))}\"></div>"
                 f"<div><label class=\"label\">Root critical used %</label><input name=\"root_disk_critical_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('root_disk_critical_percent', 95)))}\"></div>"
                 f"<div><label class=\"label\">Legacy recordings warning used %</label><input name=\"recordings_disk_warning_percent\" type=\"number\" min=\"1\" max=\"100\" value=\"{escape(str(thresholds.get('recordings_disk_warning_percent', 85)))}\"></div>"
@@ -1192,6 +1197,21 @@ def start_web(cfg):
                 f"<div><label class=\"label\">Recording warning below free MB</label><input name=\"recording_storage_minimum_free_mb_warning\" type=\"number\" min=\"0\" max=\"1048576\" value=\"{escape(str(rec_storage.get('minimum_free_mb_warning', 5000)))}\" placeholder=\"0 = disabled\"></div>"
                 f"<div><label class=\"label\">Recording critical below free MB</label><input name=\"recording_storage_minimum_free_mb_critical\" type=\"number\" min=\"0\" max=\"1048576\" value=\"{escape(str(rec_storage.get('minimum_free_mb_critical', 2048)))}\" placeholder=\"0 = disabled\"></div>"
                 "</div>"
+            )
+            recording_setup_state = str(live_recording_storage.get("status") or "unknown")
+            recording_setup = (
+                f"<div class=\"notice {escape(recording_setup_state)}\"><strong>Current status:</strong> {escape(str(live_recording_storage.get('message') or 'Recording storage status unavailable'))}</div>"
+                "<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>"
+                f"<tr><th>Mode</th><td>{escape(str(live_recording_storage.get('mode') or '-'))}</td></tr>"
+                f"<tr><th>Device</th><td>{escape(str(live_recording_storage.get('device') or '-'))}</td></tr>"
+                f"<tr><th>Mountpoint</th><td>{escape(str(live_recording_storage.get('mountpoint') or '-'))}</td></tr>"
+                f"<tr><th>Disk label</th><td>{escape(str(live_recording_storage.get('label') or '-'))}</td></tr>"
+                f"<tr><th>Expected label</th><td>{escape(str(live_recording_storage.get('expected_label') or '-'))}</td></tr>"
+                f"<tr><th>Filesystem</th><td>{escape(str(live_recording_storage.get('filesystem') or '-'))}</td></tr>"
+                f"<tr><th>Writable</th><td>{'Yes' if live_recording_storage.get('writable') else 'No'}</td></tr>"
+                "</tbody></table></div>"
+                "<p class=\"muted\"><strong>Existing working recorder:</strong> choose Monitor only on the next page. It accepts the current mount and label without relabelling, formatting, remounting, changing ownership, or editing /etc/fstab.</p>"
+                "<div class=\"button-row\"><a class=\"action\" href=\"/recording-storage-configure\">Review recording storage setup</a></div>"
             )
             network_settings = (
                 "<div class=\"settings-grid\">"
@@ -1262,6 +1282,24 @@ def start_web(cfg):
                 + "<p class=\"muted\">The checklist uses the latest live reading. After changing router settings, save at the bottom and reload this page.</p>"
                 + disclosure("RUTX50 setup help", router_setup_help)
             )
+            people_counting_settings = (
+                "<p class=\"section-lead\">Configure one local Hikvision camera, then run a read-only capability test before enabling report collection.</p>"
+                "<div class=\"notice healthy\"><strong>Safe test:</strong> The watchdog only reads camera identity and people-counting capabilities. It does not change settings or download video.</div>"
+                "<div class=\"settings-grid\">"
+                f"<div><label class=\"label\">Camera IP address</label><input name=\"people_counting_address\" maxlength=\"253\" value=\"{escape(str(people_cfg.get('address', '')))}\" placeholder=\"e.g. 192.168.1.72\"></div>"
+                f"<div><label class=\"label\">Connection</label><select name=\"people_counting_scheme\"><option value=\"http\" {'selected' if people_cfg.get('scheme', 'http') == 'http' else ''}>HTTP</option><option value=\"https\" {'selected' if people_cfg.get('scheme') == 'https' else ''}>HTTPS</option></select></div>"
+                f"<div><label class=\"label\">Port</label><input name=\"people_counting_port\" type=\"number\" min=\"1\" max=\"65535\" value=\"{escape(str(people_cfg.get('port', 80)))}\"></div>"
+                f"<div><label class=\"label\">Camera channel</label><input name=\"people_counting_channel\" type=\"number\" min=\"1\" max=\"64\" value=\"{escape(str(people_cfg.get('channel', 1)))}\"><p class=\"muted\">Normally 1 for a standalone camera.</p></div>"
+                f"<div><label class=\"label\">Username</label><input name=\"people_counting_username\" maxlength=\"64\" value=\"{escape(str(people_cfg.get('username', '')))}\"></div>"
+                f"<div><label class=\"label\">Password</label><input name=\"people_counting_password\" type=\"password\" maxlength=\"128\" value=\"\" placeholder=\"{'Configured - leave blank to keep' if people_cfg.get('password') else 'Enter the camera password'}\"><p class=\"muted\">Stored locally and never shown in evidence exports.</p></div>"
+                "</div>"
+                + (
+                    "<div class=\"button-row\"><a class=\"action\" href=\"/hikvision-test-confirm\">Test saved camera settings</a></div>"
+                    if people_cfg.get("address") and people_cfg.get("username") and people_cfg.get("password")
+                    else "<p class=\"warning\">Enter the camera details and save settings before running the test.</p>"
+                )
+                + "<p class=\"muted\">For routine use, a dedicated read-only camera account is preferable to the administrator account.</p>"
+            )
             recovery_settings = (
                 "<div class=\"settings-grid\">"
                 f"<div><label class=\"label\">Update remote</label><input name=\"update_remote\" value=\"{escape(str(update.get('remote', 'origin')))}\"></div>"
@@ -1308,9 +1346,11 @@ def start_web(cfg):
                 + disclosure("Monitoring and data retention", general_settings, opened=True)
                 + disclosure("Watchdog startup safety", watchdog_settings)
                 + "<div id=\"persistent-journal\">" + disclosure("Persistent evidence logging", journal_settings) + "</div>"
-                + disclosure("Storage alerts", storage_settings)
+                + "<div id=\"storage\">" + disclosure("Recording storage setup", recording_setup, opened=recording_setup_state != "healthy") + "</div>"
+                + disclosure("System and storage alert levels", storage_settings, opened=check_state("temperature") != "healthy")
                 + disclosure("Network and remote access", network_settings)
                 + disclosure("Mobile router monitoring", router_settings)
+                + disclosure("Hikvision people counting test", people_counting_settings, opened=bool(people_cfg.get("address")))
                 + disclosure("Recovery and updates", recovery_settings)
                 + disclosure("Advanced configuration", advanced_settings)
                 + "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Save settings</button><a class=\"ghost\" href=\"/settings\">Cancel</a></div>"
@@ -2304,7 +2344,7 @@ def start_web(cfg):
                     "Recording storage",
                     recording.get("message") or recording_check.get("message") or "Recording storage has not been configured.",
                     str(recording.get("status") or recording_check.get("state") or "unknown"),
-                    "/evidence#system",
+                    "/setup#storage",
                     bool(recording.get("mode") or recording.get("mountpoint") or recording_check),
                 ),
                 operational_row(
@@ -2523,6 +2563,53 @@ def start_web(cfg):
             "</div>"
         )
         return page_shell(body, "Settings")
+
+    def hikvision_test_confirm_html():
+        camera = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting", {}), dict) else {}
+        address = str(camera.get("address") or "")
+        username = str(camera.get("username") or "")
+        configured = bool(address and username and camera.get("password"))
+        body = (
+            "<div class=\"card action-panel\"><h2>Test Hikvision People Counting</h2>"
+            "<p>This makes read-only requests to the saved camera. It will not change camera settings or retrieve images or video.</p>"
+            f"<div class=\"label\">Camera</div><div class=\"value\">{escape(address or 'Not configured')}</div>"
+            f"<div class=\"label\">Username</div><div class=\"value\">{escape(username or 'Not configured')}</div>"
+            f"<div class=\"label\">Channel</div><div class=\"value\">{escape(str(camera.get('channel', 1)))}</div>"
+            + (
+                "<form class=\"inline\" method=\"post\" action=\"/hikvision-test-now\"><button class=\"action\" type=\"submit\">Run read-only test</button></form>"
+                if configured
+                else "<p class=\"critical\">Save an address, username and password in Setup before testing.</p>"
+            )
+            + " <a class=\"ghost\" href=\"/setup\">Cancel</a></div>"
+        )
+        return page_shell(body, "Setup")
+
+    def hikvision_test_result_html(result):
+        device = result.get("device", {}) if isinstance(result.get("device"), dict) else {}
+        capability_rows = "".join(
+            "<tr>"
+            f"<th>{escape(str(item.get('family') or '-'))}</th>"
+            f"<td class=\"{'healthy' if item.get('supported') else 'muted'}\">{'Supported' if item.get('supported') else escape(str(item.get('detail') or 'Not available'))}</td>"
+            "</tr>"
+            for item in result.get("capabilities", [])
+            if isinstance(item, dict)
+        )
+        status_class = "healthy" if result.get("ok") else "warning"
+        body = (
+            "<div class=\"card\"><h2>Hikvision Capability Test</h2>"
+            f"<p class=\"{status_class}\"><strong>{escape(str(result.get('message') or 'Test completed'))}</strong></p>"
+            "<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>"
+            f"<tr><th>Camera reached</th><td>{'Yes' if result.get('connected') else 'No'}</td></tr>"
+            f"<tr><th>Login accepted</th><td>{'Yes' if result.get('authenticated') else 'No'}</td></tr>"
+            f"<tr><th>Model</th><td>{escape(str(device.get('model') or device.get('deviceType') or '-'))}</td></tr>"
+            f"<tr><th>Firmware</th><td>{escape(str(device.get('firmwareVersion') or '-'))}</td></tr>"
+            f"<tr><th>Firmware date</th><td>{escape(str(device.get('firmwareReleasedDate') or '-'))}</td></tr>"
+            + capability_rows
+            + "</tbody></table></div>"
+            "<p class=\"muted\">No password, serial number, image or video data is included in this result.</p>"
+            "<div class=\"button-row\"><a class=\"ghost\" href=\"/setup\">Back to Setup</a></div></div>"
+        )
+        return page_shell(body, "Setup")
 
     def web_link_action_result_html(result):
         body = (
@@ -3184,8 +3271,6 @@ def start_web(cfg):
             "<p class=\"muted\">This is a normal controlled reboot, not a watchdog test. Recent Restarts will label it as a Requested reboot.</p>"
             "<form method=\"post\" action=\"/gateway-reboot-now\">"
             "<label class=\"option-row\"><input type=\"checkbox\" name=\"ack\" value=\"1\"><span><strong>I understand remote access will be interrupted</strong></span></label>"
-            "<label class=\"label\" for=\"reboot-confirm-text\">Type REBOOT to confirm</label>"
-            "<input id=\"reboot-confirm-text\" name=\"confirm_text\" autocomplete=\"off\" required>"
             "<div class=\"button-row\"><button class=\"danger\" type=\"submit\">Restart gateway PC</button>"
             "<a class=\"ghost\" href=\"/watchdog\">Cancel</a></div></form></div>"
         )
@@ -3390,6 +3475,8 @@ def start_web(cfg):
             },
             "poll_interval_seconds": first("poll_interval_seconds", "5"),
             "thresholds": {
+                "cpu_temp_warning_c": first("cpu_temp_warning_c", "75"),
+                "cpu_temp_critical_c": first("cpu_temp_critical_c", "90"),
                 "root_disk_warning_percent": first("root_disk_warning_percent", "80"),
                 "root_disk_critical_percent": first("root_disk_critical_percent", "95"),
                 "recordings_disk_warning_percent": first("recordings_disk_warning_percent", "85"),
@@ -3415,6 +3502,15 @@ def start_web(cfg):
                 "snmp_enabled": "mobile_router_snmp_enabled" in form,
                 "snmp_port": first("mobile_router_snmp_port", "161"),
                 "snmp_community": first("mobile_router_snmp_community", "") or str(cfg.get("mobile_router", {}).get("snmp_community", "")),
+            },
+            "people_counting": {
+                "address": first("people_counting_address", ""),
+                "scheme": first("people_counting_scheme", "http"),
+                "port": first("people_counting_port", "80"),
+                "channel": first("people_counting_channel", "1"),
+                "username": first("people_counting_username", ""),
+                "password": first("people_counting_password", "") or str(cfg.get("people_counting", {}).get("password", "")),
+                "timeout_seconds": "5",
             },
             "update": {
                 "remote": first("update_remote", "origin"),
@@ -5212,6 +5308,8 @@ def start_web(cfg):
     def settings_summary():
         router_settings = dict(cfg.get("mobile_router", {})) if isinstance(cfg.get("mobile_router", {}), dict) else {}
         router_settings["snmp_community_configured"] = bool(router_settings.pop("snmp_community", ""))
+        people_settings = dict(cfg.get("people_counting", {})) if isinstance(cfg.get("people_counting", {}), dict) else {}
+        people_settings["password_configured"] = bool(people_settings.pop("password", ""))
         return {
             "config_path": str(active_config_path()),
             "identity": identity_summary(cfg),
@@ -5226,6 +5324,7 @@ def start_web(cfg):
             "services": cfg.get("services", []),
             "network": cfg.get("network", {}),
             "mobile_router": router_settings,
+            "people_counting": people_settings,
             "recovery": cfg.get("recovery", {}),
             "retention": cfg.get("retention", {}),
             "update": cfg.get("update", {}),
@@ -5285,6 +5384,7 @@ def start_web(cfg):
         retention = payload.get("retention", {})
         network = payload.get("network", {})
         mobile_router = payload.get("mobile_router", cfg.get("mobile_router", {}))
+        people_counting = payload.get("people_counting", cfg.get("people_counting", {}))
         update = payload.get("update", {})
         hardware = payload.get("hardware_watchdog", {})
         process_monitor = payload.get("process_monitor", {})
@@ -5301,6 +5401,18 @@ def start_web(cfg):
             },
             "poll_interval_seconds": _int_range(payload, "poll_interval_seconds", 2, 300),
             "thresholds": {
+                "cpu_temp_warning_c": _int_range(
+                    {"cpu_temp_warning_c": thresholds.get("cpu_temp_warning_c", cfg.get("thresholds", {}).get("cpu_temp_warning_c", 75))},
+                    "cpu_temp_warning_c",
+                    40,
+                    100,
+                ),
+                "cpu_temp_critical_c": _int_range(
+                    {"cpu_temp_critical_c": thresholds.get("cpu_temp_critical_c", cfg.get("thresholds", {}).get("cpu_temp_critical_c", 90))},
+                    "cpu_temp_critical_c",
+                    50,
+                    105,
+                ),
                 "root_disk_warning_percent": _int_range(thresholds, "root_disk_warning_percent", 1, 100),
                 "root_disk_critical_percent": _int_range(thresholds, "root_disk_critical_percent", 1, 100),
                 "recordings_disk_warning_percent": _int_range(thresholds, "recordings_disk_warning_percent", 1, 100),
@@ -5335,6 +5447,19 @@ def start_web(cfg):
                     "SNMP community",
                     64,
                 ),
+            },
+            "people_counting": {
+                "address": _router_address(people_counting.get("address", "")),
+                "scheme": str(people_counting.get("scheme", "http")).strip().lower(),
+                "port": _int_range({"port": people_counting.get("port", 80)}, "port", 1, 65535),
+                "channel": _int_range({"channel": people_counting.get("channel", 1)}, "channel", 1, 64),
+                "username": _identity_text(people_counting.get("username", ""), "camera username", 64),
+                "password": _identity_text(
+                    people_counting.get("password", cfg.get("people_counting", {}).get("password", "")),
+                    "camera password",
+                    128,
+                ),
+                "timeout_seconds": _int_range({"timeout_seconds": people_counting.get("timeout_seconds", 5)}, "timeout_seconds", 1, 15),
             },
             "update": {
                 "remote": str(update.get("remote", "origin")).strip() or "origin",
@@ -5377,6 +5502,8 @@ def start_web(cfg):
         }
         if updates["thresholds"]["root_disk_warning_percent"] >= updates["thresholds"]["root_disk_critical_percent"]:
             raise ValueError("root disk warning must be lower than critical")
+        if updates["thresholds"]["cpu_temp_warning_c"] >= updates["thresholds"]["cpu_temp_critical_c"]:
+            raise ValueError("CPU temperature warning must be lower than critical temperature")
         if updates["thresholds"]["recordings_disk_warning_percent"] >= updates["thresholds"]["recordings_disk_critical_percent"]:
             raise ValueError("recordings disk warning must be lower than critical")
         if updates["process_monitor"]["cpu_warning_percent"] >= updates["process_monitor"]["cpu_critical_percent"]:
@@ -5385,6 +5512,8 @@ def start_web(cfg):
             raise ValueError("watchdog memory warning must be lower than critical")
         if updates["mobile_router"]["enabled"] and not updates["mobile_router"]["address"]:
             raise ValueError("enter the local mobile router IP address before enabling monitoring")
+        if updates["people_counting"]["scheme"] not in {"http", "https"}:
+            raise ValueError("camera connection must be HTTP or HTTPS")
         if cfg.get("hardware_watchdog", {}).get("enabled") and not updates["hardware_watchdog"]["enabled"]:
             raise ValueError("hardware watchdog feed cannot be disabled from general Settings; use the guarded Watchdog startup safety control")
         rs_warning = updates["recording_storage"]["minimum_free_mb_warning"]
@@ -5875,6 +6004,15 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if route_path == "/hikvision-test-confirm":
+                body = hikvision_test_confirm_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path == "/storage-purge-confirm":
                 body = storage_purge_confirm_html().encode("utf-8")
                 self.send_response(200)
@@ -6271,6 +6409,41 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if route_path == "/hikvision-test-now":
+                camera = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting", {}), dict) else {}
+                if not camera.get("address") or not camera.get("username") or not camera.get("password"):
+                    result = {
+                        "ok": False,
+                        "message": "Save an address, username and password in Setup before testing.",
+                        "capabilities": [],
+                    }
+                else:
+                    try:
+                        result = probe_people_counting(camera)
+                    except Exception as exc:
+                        result = {"ok": False, "message": f"Camera test failed: {exc}", "capabilities": []}
+                    append_web_event(
+                        "info" if result.get("ok") else "warning",
+                        "people_counting",
+                        "Hikvision people-counting capability test completed",
+                        {
+                            "ok": bool(result.get("ok")),
+                            "connected": bool(result.get("connected")),
+                            "authenticated": bool(result.get("authenticated")),
+                            "address": result.get("address"),
+                            "channel": result.get("channel"),
+                            "device": result.get("device", {}),
+                            "capabilities": result.get("capabilities", []),
+                        },
+                    )
+                body = hikvision_test_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 400)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path == "/api/events/purge":
                 try:
                     length = int(self.headers.get("Content-Length", "0"))
@@ -6583,11 +6756,10 @@ def start_web(cfg):
                 length = int(self.headers.get("Content-Length", "0"))
                 form = parse_qs(self.rfile.read(length).decode("utf-8") if length else "", keep_blank_values=True)
                 acknowledged = form.get("ack", [""])[0] == "1"
-                confirmation = form.get("confirm_text", [""])[0].strip()
-                if not acknowledged or confirmation != "REBOOT":
+                if not acknowledged:
                     result = {
                         "ok": False,
-                        "message": "Restart not requested. Tick the acknowledgement and type REBOOT exactly.",
+                        "message": "Restart not requested. Tick the acknowledgement before continuing.",
                         "output": "The gateway is still running.",
                     }
                 else:

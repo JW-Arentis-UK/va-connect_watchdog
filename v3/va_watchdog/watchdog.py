@@ -21,7 +21,7 @@ from .watchdog_test import trip_test_active
 from .watchdog_liveness_test import reconcile_liveness_test
 from .web import start_web
 from .heartbeat import HeartbeatPublisher
-from .reboot_evidence import create as create_reboot_evidence
+from .reboot_evidence import create as create_reboot_evidence, event_level as reboot_event_level
 from .kernel_faults import scan as scan_kernel_faults
 
 def atomic_write_json(path: str, data):
@@ -220,7 +220,7 @@ def main():
     reboot_evidence = create_reboot_evidence(cfg, boot_change)
     if reboot_evidence and boot_change.get("changed"):
         event_log.add(
-            "warning" if reboot_evidence.get("confidence") != "High" else "critical",
+            reboot_event_level(reboot_evidence),
             "reboot_evidence",
             f"Previous reboot classified as {reboot_evidence.get('reset_mechanism', 'Unknown')}",
             reboot_evidence,

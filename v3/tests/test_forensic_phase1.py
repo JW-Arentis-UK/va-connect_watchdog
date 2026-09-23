@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from va_watchdog.heartbeat import HeartbeatPublisher, heartbeat_age_seconds, health_progress_age_seconds, read_state
 from va_watchdog.incident_archive import archive_previous_boot, list_archives
-from va_watchdog.reboot_evidence import classify, create
+from va_watchdog.reboot_evidence import classify, create, event_level
 from va_watchdog.watchdog_feed import FeedWorker
 from va_watchdog.watchdog_feed_evidence import (
     append_lifecycle,
@@ -261,6 +261,34 @@ class ForensicPhase1Tests(unittest.TestCase):
         self.assertEqual(evidence["reset_mechanism"], "Watchdog reset")
         self.assertEqual(evidence["probable_preceding_fault"], "storage I/O")
         self.assertIn(evidence["confidence"], {"Medium", "High"})
+
+    def test_planned_reboots_are_information_not_failures(self):
+        self.assertEqual(event_level({"reset_mechanism": "Requested reboot", "confidence": "High"}), "info")
+        self.assertEqual(event_level({"reset_mechanism": "Clean reboot", "confidence": "Medium"}), "info")
+        self.assertEqual(
+            event_level({"reset_mechanism": "Watchdog reset", "deliberate_trip_test": {"confirmed": True}}),
+            "info",
+        )
+        self.assertEqual(event_level({"reset_mechanism": "Watchdog reset", "confidence": "High"}), "critical")
+
+    def test_requested_reboot_reason_is_consumed_after_evidence_is_saved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reason = {"state": "requested", "request_id": "manual-1"}
+            reason_path = root / "last-reboot-reason.json"
+            reason_path.write_text(json.dumps(reason), encoding="utf-8")
+            latest_path = root / "last-reboot-evidence.json"
+            latest_path.write_text(json.dumps({"previous_reboot_reason": reason}), encoding="utf-8")
+            cfg = {
+                "events_path": str(root / "events.jsonl"),
+                "reboot_evidence_path": str(root / "reboot-evidence.jsonl"),
+                "last_reboot_reason_path": str(reason_path),
+            }
+
+            evidence = create(cfg, {"changed": False})
+
+            self.assertEqual(evidence["previous_reboot_reason"], reason)
+            self.assertFalse(reason_path.exists())
 
     def test_confirmed_trip_classifies_matching_previous_boot_as_watchdog_reset(self):
         change = {"changed": True, "previous_boot_id": "old", "current_boot_id": "new"}
