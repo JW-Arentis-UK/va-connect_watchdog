@@ -246,6 +246,7 @@ input[type="radio"] { width:18px; height:18px; }
 .top-watchdog { display:flex; align-items:center; gap:calc(8px * var(--scale)); border:1px solid var(--line); border-radius:8px; padding:calc(5px * var(--scale)) calc(8px * var(--scale)); background:var(--panel); white-space:nowrap; }
 .top-resource { color:var(--muted); padding-left:calc(8px * var(--scale)); border-left:1px solid var(--line); }
 .top-resource strong { color:var(--text); }
+.top-build-date { color:var(--green); font-weight:800; }
 pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale)); background:var(--input); border:1px solid var(--line); border-radius:6px; padding:calc(12px * var(--scale)); }
 .detail-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:calc(10px * var(--scale)); }
 .mini-card { border:1px solid var(--line); border-radius:6px; padding:calc(10px * var(--scale)); background:rgba(255,255,255,.03); min-width:0; }
@@ -382,7 +383,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
     <header class="topbar">
       <div id="page-title">__SITE_NAME__ / __PAGE_MODE__ / __PAGE_TITLE__</div>
       <div class="topbar-right">
-        <div class="top-watchdog"><span>Watchdog</span><strong id="side-state" class="value">Loading</strong><span class="top-resource">CPU <strong id="watchdog-cpu">-</strong></span><span class="top-resource">RAM <strong id="watchdog-memory">-</strong></span><span class="top-resource">Disk <strong id="watchdog-disk">-</strong></span><span class="label">Build</span><strong>__BUILD_ID__</strong></div>
+        <div class="top-watchdog"><span>Watchdog</span><strong id="side-state" class="value">Loading</strong><span class="top-resource">CPU <strong id="watchdog-cpu">-</strong></span><span class="top-resource">RAM <strong id="watchdog-memory">-</strong></span><span class="top-resource">Disk <strong id="watchdog-disk">-</strong></span><span class="label">Build</span><strong>__BUILD_ID__</strong><span class="top-build-date">Built __BUILD_DATE__</span></div>
         <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="light">Light</option><option value="dark">Dark</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
         <span class="advanced-only"><label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label></span>
         <button class="ghost advanced-only" onclick="load()">Refresh now</button>
@@ -600,7 +601,12 @@ def start_web(cfg):
     def page_shell(body, page):
         page = legacy_page_names.get(page, page)
         theme = current_theme_name()
-        build = version_info().get("commit") or "-"
+        version = version_info()
+        build = version.get("commit") or "-"
+        try:
+            build_date = datetime.fromisoformat(str(version.get("build_at") or "").replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
+        except (TypeError, ValueError):
+            build_date = "-"
         site_name = configured_identity(cfg)["display_name"]
         return (
             HTML.replace("__BASIC_DASHBOARD__", body)
@@ -608,6 +614,7 @@ def start_web(cfg):
             .replace("__PAGE_TITLE__", page)
             .replace("__PAGE_MODE__", mode_for_page(page))
             .replace("__BUILD_ID__", escape(str(build)))
+            .replace("__BUILD_DATE__", escape(build_date))
             .replace("__SITE_NAME__", escape(str(site_name)))
             .replace("__BODY_THEME__", theme)
         )
@@ -1284,7 +1291,7 @@ def start_web(cfg):
             )
             people_counting_settings = (
                 "<p class=\"section-lead\">Configure one local Hikvision camera, then run a read-only capability test before enabling report collection.</p>"
-                "<div class=\"notice healthy\"><strong>Safe test:</strong> The watchdog only reads camera identity and people-counting capabilities. It does not change settings or download video.</div>"
+                "<div class=\"notice healthy\"><strong>Safe test:</strong> The watchdog reads camera identity, people-counting capabilities, and the previous completed day's report. It does not change settings or download video.</div>"
                 "<div class=\"settings-grid\">"
                 f"<div><label class=\"label\">Camera IP address</label><input name=\"people_counting_address\" maxlength=\"253\" value=\"{escape(str(people_cfg.get('address', '')))}\" placeholder=\"e.g. 192.168.1.72\"></div>"
                 f"<div><label class=\"label\">Connection</label><select name=\"people_counting_scheme\"><option value=\"http\" {'selected' if people_cfg.get('scheme', 'http') == 'http' else ''}>HTTP</option><option value=\"https\" {'selected' if people_cfg.get('scheme') == 'https' else ''}>HTTPS</option></select></div>"
@@ -2586,6 +2593,7 @@ def start_web(cfg):
 
     def hikvision_test_result_html(result):
         device = result.get("device", {}) if isinstance(result.get("device"), dict) else {}
+        report = result.get("report", {}) if isinstance(result.get("report"), dict) else {}
         capability_rows = "".join(
             "<tr>"
             f"<th>{escape(str(item.get('family') or '-'))}</th>"
@@ -2595,6 +2603,12 @@ def start_web(cfg):
             if isinstance(item, dict)
         )
         status_class = "healthy" if result.get("ok") else "warning"
+        report_totals = report.get("totals", {}) if isinstance(report.get("totals"), dict) else {}
+        total_text = ", ".join(
+            f"{name}: {value}"
+            for name, value in report_totals.items()
+            if isinstance(value, int)
+        ) or "-"
         body = (
             "<div class=\"card\"><h2>Hikvision Capability Test</h2>"
             f"<p class=\"{status_class}\"><strong>{escape(str(result.get('message') or 'Test completed'))}</strong></p>"
@@ -2605,8 +2619,10 @@ def start_web(cfg):
             f"<tr><th>Firmware</th><td>{escape(str(device.get('firmwareVersion') or '-'))}</td></tr>"
             f"<tr><th>Firmware date</th><td>{escape(str(device.get('firmwareReleasedDate') or '-'))}</td></tr>"
             + capability_rows
+            + f"<tr><th>Latest daily report period</th><td>{escape(str(report.get('start_time') or '-'))} to {escape(str(report.get('end_time') or '-'))}</td></tr>"
+            + f"<tr><th>Daily report totals</th><td>{escape(total_text)}</td></tr>"
             + "</tbody></table></div>"
-            "<p class=\"muted\">No password, serial number, image or video data is included in this result.</p>"
+            "<p class=\"muted\">The report search is read-only. No password, serial number, image or video data is included in this result.</p>"
             "<div class=\"button-row\"><a class=\"ghost\" href=\"/setup\">Back to Setup</a></div></div>"
         )
         return page_shell(body, "Setup")
@@ -6434,6 +6450,7 @@ def start_web(cfg):
                             "channel": result.get("channel"),
                             "device": result.get("device", {}),
                             "capabilities": result.get("capabilities", []),
+                            "report": result.get("report", {}),
                         },
                     )
                 body = hikvision_test_result_html(result).encode("utf-8")

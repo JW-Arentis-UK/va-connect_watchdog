@@ -29,7 +29,7 @@ class FakeOpener:
 
     def open(self, request, timeout):
         self.urls.append((request.full_url, timeout, request.get_method()))
-        outcome = self.outcomes[request.full_url]
+        outcome = self.outcomes.get(request.full_url, HTTPError(request.full_url, 404, "Not Found", {}, None))
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
@@ -59,6 +59,10 @@ class HikvisionProbeTests(unittest.TestCase):
             f"{base}/ISAPI/Intelligent/channels/1/framesPeopleCounting/capabilities": HTTPError(
                 f"{base}/area", 404, "Not Found", {}, None
             ),
+            f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search": FakeResponse(
+                "<CountingStatisticsList><CountingStatistics><enterCount>12</enterCount>"
+                "<leaveCount>7</leaveCount></CountingStatistics></CountingStatisticsList>"
+            ),
         })
 
         result = probe_people_counting(self.settings(), opener=opener)
@@ -72,7 +76,10 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertNotIn("password", result)
         self.assertTrue(result["capabilities"][0]["supported"])
         self.assertFalse(result["capabilities"][1]["supported"])
-        self.assertTrue(all(method == "GET" for _, _, method in opener.urls))
+        self.assertEqual(result["report"]["rows"], 1)
+        self.assertEqual(result["report"]["totals"], {"enterCount": 12, "leaveCount": 7})
+        self.assertEqual([method for _, _, method in opener.urls].count("POST"), 1)
+        self.assertTrue(any(url.endswith("/counting/search") and method == "POST" for url, _, method in opener.urls))
 
     def test_probe_distinguishes_authentication_failure(self):
         settings = self.settings()
@@ -82,6 +89,7 @@ class HikvisionProbeTests(unittest.TestCase):
             f"{base}/ISAPI/System/deviceInfo": unauthorized,
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/capabilities": unauthorized,
             f"{base}/ISAPI/Intelligent/channels/1/framesPeopleCounting/capabilities": unauthorized,
+            f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search": unauthorized,
         })
 
         result = probe_people_counting(settings, opener=opener)
@@ -98,6 +106,7 @@ class HikvisionProbeTests(unittest.TestCase):
             f"{base}/ISAPI/System/deviceInfo": unreachable,
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/capabilities": unreachable,
             f"{base}/ISAPI/Intelligent/channels/1/framesPeopleCounting/capabilities": unreachable,
+            f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search": unreachable,
         })
 
         result = probe_people_counting(settings, opener=opener)

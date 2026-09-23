@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import socket
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPDigestAuthHandler, HTTPPasswordMgrWithDefaultRealm, Request, build_opener
 
@@ -17,6 +17,10 @@ _CAPABILITY_PROBES = (
         "/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/capabilities",
     ),
 )
+
+_REPORT_VALUE_NAMES = {
+    "enterCount", "leaveCount", "passingCount", "passCount", "peopleNumber", "inCount", "outCount",
+}
 
 
 def _local_name(tag: str) -> str:
@@ -48,11 +52,15 @@ def _digest_opener(base_url: str, username: str, password: str):
     return build_opener(HTTPDigestAuthHandler(password_manager))
 
 
-def _get_xml(opener, url: str, timeout: int) -> dict:
+def _request_xml(opener, url: str, timeout: int, method: str = "GET", body: bytes | None = None) -> dict:
     request = Request(
         url,
-        headers={"Accept": "application/xml, text/xml, application/json"},
-        method="GET",
+        headers={
+            "Accept": "application/xml, text/xml, application/json",
+            **({"Content-Type": "application/xml; charset=utf-8"} if body else {}),
+        },
+        data=body,
+        method=method,
     )
     try:
         with opener.open(request, timeout=timeout) as response:
@@ -80,6 +88,40 @@ def _get_xml(opener, url: str, timeout: int) -> dict:
         "detail": "Supported" if 200 <= status < 300 else f"Camera returned HTTP {status}",
         "root": root,
     }
+
+
+def _get_xml(opener, url: str, timeout: int) -> dict:
+    return _request_xml(opener, url, timeout)
+
+
+def _latest_completed_day() -> tuple[str, str]:
+    today = datetime.now().astimezone().date()
+    end = datetime.combine(today, datetime.min.time())
+    start = end - timedelta(days=1)
+    return start.strftime("%Y-%m-%dT00:00:00"), (end - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _daily_report_query(start_time: str, end_time: str) -> bytes:
+    return (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<CountingStatisticsDescription version=\"2.0\" xmlns=\"http://www.isapi.org/ver20/XMLSchema\">"
+        "<statisticType>peoplePassing</statisticType><reportType>daily</reportType><timeSpanList><timeSpan>"
+        f"<startTime>{start_time}</startTime><endTime>{end_time}</endTime>"
+        "</timeSpan></timeSpanList><MinTimeInterval>hour</MinTimeInterval>"
+        "</CountingStatisticsDescription>"
+    ).encode("utf-8")
+
+
+def _report_summary(root: ET.Element) -> dict:
+    rows = [element for element in root.iter() if _local_name(element.tag) in {"CountingStatistics", "countingStatistics"}]
+    totals: dict[str, int] = {}
+    for row in rows:
+        for name, value in _xml_values(row, _REPORT_VALUE_NAMES).items():
+            try:
+                totals[name] = totals.get(name, 0) + int(value)
+            except ValueError:
+                continue
+    return {"rows": len(rows), "totals": totals}
 
 
 def probe_people_counting(settings: dict, opener=None) -> dict:
@@ -111,6 +153,33 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
             "detail": response.get("detail"),
         })
 
+    report_start, report_end = _latest_completed_day()
+    report_response = _request_xml(
+        client,
+        f"{base_url}/ISAPI/System/Video/inputs/channels/{channel}/counting/search",
+        timeout,
+        method="POST",
+        body=_daily_report_query(report_start, report_end),
+    )
+    report = {
+        "supported": bool(report_response.get("ok")),
+        "status_code": report_response.get("status_code"),
+        "detail": report_response.get("detail"),
+        "start_time": report_start,
+        "end_time": report_end,
+        "rows": 0,
+        "totals": {},
+    }
+    if report_response.get("ok"):
+        report.update(_report_summary(report_response["root"]))
+        report["detail"] = f"{report['rows']} daily record{'s' if report['rows'] != 1 else ''} returned"
+    capabilities.append({
+        "family": "Daily people-flow report",
+        "supported": report["supported"],
+        "status_code": report["status_code"],
+        "detail": report["detail"],
+    })
+
     supported = [item["family"] for item in capabilities if item["supported"]]
     connected = bool(device_response.get("ok")) or any(
         item.get("status_code") not in {None, 401} for item in capabilities
@@ -134,5 +203,6 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
         "channel": channel,
         "device": device,
         "capabilities": capabilities,
+        "report": report,
         "message": message,
     }

@@ -223,6 +223,8 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn("probe_people_counting(camera)", source)
         self.assertIn('people_settings.pop("password", "")', source)
         self.assertIn("It will not change camera settings or retrieve images or video.", source)
+        self.assertIn("The report search is read-only.", source)
+        self.assertIn("previous completed day's report", source)
 
     def test_recording_storage_setup_is_visible_and_linked_from_status(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
@@ -258,6 +260,9 @@ class WebNavigationTests(unittest.TestCase):
 
         self.assertIn("running_version = {", source)
         self.assertIn('"commit": running_version["commit"]', source)
+        self.assertIn("Built __BUILD_DATE__", source)
+        self.assertIn('.replace("__BUILD_DATE__", escape(build_date))', source)
+        self.assertIn(".top-build-date { color:var(--green);", source)
 
     def test_obsolete_client_renderer_is_not_activated(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
