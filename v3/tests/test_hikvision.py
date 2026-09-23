@@ -108,6 +108,8 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertIn("PasswordDigest", query)
         self.assertIn("<wsse:Nonce", query)
         self.assertIn("<wsu:Created>", query)
+        self.assertIn("<wsa:MessageID>urn:uuid:", query)
+        self.assertIn("<wsa:ReplyTo>", query)
         self.assertNotIn("camera-secret", query)
 
     def test_probe_distinguishes_authentication_failure(self):

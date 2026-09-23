@@ -6,6 +6,7 @@ import json
 import os
 import re
 import socket
+import uuid
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timedelta, timezone
@@ -229,7 +230,8 @@ def _onvif_event_properties_query(username: str, password: str, address: str) ->
         hashlib.sha1(nonce + created.encode("utf-8") + password.encode("utf-8")).digest()
     ).decode("ascii")
     nonce_text = base64.b64encode(nonce).decode("ascii")
-    return ('<?xml version="1.0" encoding="UTF-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tev="http://www.onvif.org/ver10/events/wsdl" xmlns:wsa="http://www.w3.org/2005/08/addressing" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"><s:Header><wsa:To>' + xml_escape(address) + '</wsa:To><wsa:Action>' + action + '</wsa:Action><wsse:Security s:mustUnderstand="1"><wsse:UsernameToken><wsse:Username>' + xml_escape(username) + '</wsse:Username><wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">' + digest + '</wsse:Password><wsse:Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">' + nonce_text + '</wsse:Nonce><wsu:Created>' + created + '</wsu:Created></wsse:UsernameToken></wsse:Security></s:Header><s:Body><tev:GetEventProperties/></s:Body></s:Envelope>').encode("utf-8")
+    message_id = f"urn:uuid:{uuid.uuid4()}"
+    return ('<?xml version="1.0" encoding="UTF-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tev="http://www.onvif.org/ver10/events/wsdl" xmlns:wsa="http://www.w3.org/2005/08/addressing" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"><s:Header><wsa:MessageID>' + message_id + '</wsa:MessageID><wsa:To>' + xml_escape(address) + '</wsa:To><wsa:Action>' + action + '</wsa:Action><wsa:ReplyTo><wsa:Address>http://www.w3.org/2005/08/addressing/anonymous</wsa:Address></wsa:ReplyTo><wsse:Security s:mustUnderstand="1"><wsse:UsernameToken><wsse:Username>' + xml_escape(username) + '</wsse:Username><wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">' + digest + '</wsse:Password><wsse:Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">' + nonce_text + '</wsse:Nonce><wsu:Created>' + created + '</wsu:Created></wsse:UsernameToken></wsse:Security></s:Header><s:Body><tev:GetEventProperties/></s:Body></s:Envelope>').encode("utf-8")
 
 
 def _report_summary(root: ET.Element) -> dict:
