@@ -70,9 +70,11 @@ if [ -s "$ROOT_DIR/requirements.txt" ]; then
     exit 1
   fi
   if [ ! -x "$VENV_DIR/bin/python" ]; then
-    apt-get update
-    apt-get install -y python3-venv
-    python3 -m venv "$VENV_DIR"
+    if ! python3 -m venv "$VENV_DIR"; then
+      log "Python virtual-environment support is missing; installing python3-venv"
+      apt-get install -y python3-venv
+      python3 -m venv "$VENV_DIR"
+    fi
   fi
   "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check --upgrade -r "$ROOT_DIR/requirements.txt"
 fi

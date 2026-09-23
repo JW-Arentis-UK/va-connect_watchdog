@@ -40,9 +40,11 @@ command -v systemctl >/dev/null 2>&1 || fail "systemd is required"
 
 if [[ -s "$APP_DIR/requirements.txt" ]]; then
   log "Installing Watchdog Python dependencies in an isolated runtime"
-  apt-get "${APT_OPTIONS[@]}" update
-  apt-get "${APT_OPTIONS[@]}" install -y python3-venv
-  python3 -m venv "$VENV_DIR"
+  if ! python3 -m venv "$VENV_DIR"; then
+    log "Python virtual-environment support is missing; installing python3-venv"
+    apt-get "${APT_OPTIONS[@]}" install -y python3-venv
+    python3 -m venv "$VENV_DIR"
+  fi
   "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check --upgrade -r "$APP_DIR/requirements.txt"
 fi
 
