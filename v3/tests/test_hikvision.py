@@ -172,6 +172,28 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertTrue(calls[1]["no_cache"])
         self.assertIn("transport", calls[1])
 
+    def test_onvif_client_labels_http_digest_authentication_failure(self):
+        class FakeEvents:
+            def GetEventProperties(self):
+                raise RuntimeError("authentication failed")
+
+        class FakeCamera:
+            def __init__(self, *_args, **_options):
+                pass
+
+            def create_events_service(self):
+                return FakeEvents()
+
+        result = _onvif_client_event_topics(
+            self.settings(),
+            "http://192.168.1.72/onvif/Events",
+            camera_factory=FakeCamera,
+            transport_factory=lambda *_args: object(),
+        )
+
+        self.assertFalse(result["available"])
+        self.assertEqual(result["detail"], "ONVIF HTTP-Digest event topic read: authentication failed")
+
     def test_onvif_client_error_detail_reports_safe_http_status(self):
         detail = _onvif_client_error_detail(
             "event topic read",

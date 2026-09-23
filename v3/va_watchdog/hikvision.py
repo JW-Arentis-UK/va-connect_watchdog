@@ -284,7 +284,7 @@ def _onvif_client_event_topics(settings: dict, events_address: str, camera_facto
     username = str(settings.get("username") or "")
     password = str(settings.get("password") or "")
 
-    def read_topics(camera, success_detail: str) -> dict:
+    def read_topics(camera, success_detail: str, stage: str = "event topic read") -> dict:
         try:
             events_service = camera.create_events_service()
         except Exception as exc:
@@ -299,7 +299,7 @@ def _onvif_client_event_topics(settings: dict, events_address: str, camera_facto
             return {
                 "available": False,
                 "installed": True,
-                "detail": _onvif_client_error_detail("event topic read", exc),
+                "detail": _onvif_client_error_detail(stage, exc),
             }
         return {"available": True, "installed": True, "detail": success_detail}
 
@@ -337,7 +337,7 @@ def _onvif_client_event_topics(settings: dict, events_address: str, camera_facto
             "installed": True,
             "detail": _onvif_client_error_detail("HTTP-Digest client setup", exc),
         }
-    return read_topics(camera, "Available through ONVIF HTTP-Digest client")
+    return read_topics(camera, "Available through ONVIF HTTP-Digest client", "HTTP-Digest event topic read")
 
 
 def _report_summary(root: ET.Element) -> dict:
