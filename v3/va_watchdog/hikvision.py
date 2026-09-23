@@ -299,11 +299,6 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
         "status_code": 200 if web_routes else None,
         "detail": "; ".join(web_routes) if web_routes else "No readable statistics route found in the camera UI scripts",
     })
-    events_address = next((value for value in onvif_addresses if "/onvif/Events" in value), "")
-    if events_address:
-        events_response = _request_xml(client, events_address, timeout, method="POST", body=_onvif_event_properties_query())
-        topics = sorted({_local_name(element.tag) for element in events_response.get("root", []).iter()})[:60] if events_response.get("ok") else []
-        data_sources.append({"name": "ONVIF event topics", "available": bool(events_response.get("ok")), "status_code": events_response.get("status_code"), "detail": "Available: " + ", ".join(topics) if topics else events_response.get("detail")})
     onvif_response = _request_xml(client, f"{base_url}/onvif/device_service", timeout, method="POST", body=_onvif_capabilities_query())
     onvif_names = sorted({_local_name(element.tag) for element in onvif_response.get("root", []).iter()})[:50] if onvif_response.get("ok") else []
     onvif_addresses = []
@@ -317,6 +312,11 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
         "status_code": onvif_response.get("status_code"),
         "detail": "Available: " + ", ".join(onvif_addresses[:12] or onvif_names) if onvif_names else onvif_response.get("detail"),
     })
+    events_address = next((value for value in onvif_addresses if "/onvif/Events" in value), "")
+    if events_address:
+        events_response = _request_xml(client, events_address, timeout, method="POST", body=_onvif_event_properties_query())
+        topics = sorted({_local_name(element.tag) for element in events_response.get("root", []).iter()})[:60] if events_response.get("ok") else []
+        data_sources.append({"name": "ONVIF event topics", "available": bool(events_response.get("ok")), "status_code": events_response.get("status_code"), "detail": "Available: " + ", ".join(topics) if topics else events_response.get("detail")})
 
     report_start, report_end = _latest_completed_day()
     report_response = _request_xml(
