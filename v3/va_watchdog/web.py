@@ -1323,7 +1323,7 @@ def start_web(cfg):
                     if people_cfg.get("address") and people_cfg.get("username") and people_cfg.get("password")
                     else "<p class=\"warning\">Enter the camera details and save settings before running the test.</p>"
                 )
-                + ("<div class=\"button-row\"><form class=\"inline\" method=\"post\" action=\"/hikvision-route-capture-start\"><button class=\"ghost\" type=\"submit\">Capture camera statistics request</button></form></div>" if people_cfg.get("address") else "")
+                + ("<div class=\"button-row\"><button class=\"ghost\" type=\"submit\" formmethod=\"post\" formaction=\"/hikvision-route-capture-start\">Capture camera statistics request</button></div>" if people_cfg.get("address") else "")
                 + (lambda: (lambda capture: "<div class=\"notice " + ("healthy" if capture.get("status") == "complete" else "warning") + "\"><strong>Camera request capture:</strong> " + (escape(", ".join(capture.get("paths", []))) if capture.get("paths") else escape(str(capture.get("message") or "No HTTP request path was seen. Run capture, then press Search on the camera page within one minute."))) + "</div>")(json.loads((data_dir / "hikvision-route-capture.json").read_text(encoding="utf-8")) if (data_dir / "hikvision-route-capture.json").exists() else {}))()
                 + "<p class=\"muted\">For routine use, a dedicated read-only camera account is preferable to the administrator account.</p>"
             )
