@@ -102,6 +102,42 @@ def notification_diagnostic(payload: bytes) -> dict[str, Any] | None:
     }
 
 
+def parse_onvif_notification(value: Any) -> dict[str, Any] | None:
+    """Reduce ONVIF PullMessages data to safe count fields without retaining media metadata."""
+    try:
+        from zeep.helpers import serialize_object
+        value = serialize_object(value)
+    except Exception:
+        pass
+    fields: dict[str, str] = {}
+
+    def visit(item: Any, prefix: str = "") -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                visit(child, f"{prefix}_{key}" if prefix else str(key))
+        elif isinstance(item, list):
+            for child in item:
+                visit(child, prefix)
+        elif isinstance(item, (str, int, float, bool)):
+            key = re.sub(r"[^a-z0-9]", "", prefix.lower())
+            if key in _VALUE_FIELDS and str(item).strip():
+                fields[key] = str(item).strip()[:160]
+
+    visit(value)
+    event_type = fields.get("eventtype", "")
+    target_type = fields.get("targettype", "")
+    counts = {key: item for key, item in fields.items() if key in _COUNT_FIELDS}
+    relevant = bool(counts) or any(word in f"{event_type} {target_type}".lower() for word in ("people", "human", "count", "target"))
+    if not relevant:
+        return None
+    return {
+        "time": datetime.now(timezone.utc).isoformat(), "event_type": event_type or "ONVIF camera event",
+        "event_state": fields.get("eventstate", ""), "channel": fields.get("channelid") or fields.get("channel", ""),
+        "target_type": target_type, "direction": fields.get("direction", ""), "counts": counts,
+        "fields_seen": sorted(fields)[:40],
+    }
+
+
 def event_paths(cfg: dict[str, Any]) -> tuple[Path, Path]:
     base = Path(cfg["events_path"]).parent
     people = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting"), dict) else {}
@@ -300,7 +336,7 @@ class HikvisionEventCollector:
                 time.sleep(5)
                 continue
             try:
-                self._stream(camera)
+                self._onvif_stream(camera)
                 backoff = 5
             except (HTTPError, URLError, socket.timeout, OSError) as exc:
                 self._write_state(status="reconnecting", last_error=str(getattr(exc, "reason", exc))[:160])
@@ -310,6 +346,27 @@ class HikvisionEventCollector:
                 self._write_state(status="reconnecting", last_error=str(exc)[:160])
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 60)
+
+    def _onvif_stream(self, camera: dict[str, Any]) -> None:
+        """Read only ONVIF PullMessages collector, used when the camera advertises ONVIF Events."""
+        from onvif import ONVIFCamera
+        host = str(camera["address"])
+        port = int(camera.get("port") or 80)
+        timeout = max(5, int(camera.get("timeout_seconds") or 5))
+        client = ONVIFCamera(host, port, str(camera["username"]), str(camera["password"]), adjust_time=True)
+        events = client.create_events_service()
+        subscription = events.CreatePullPointSubscription({"InitialTerminationTime": "PT1H"})
+        pullpoint = client.create_pullpoint_service()
+        self._write_state(status="ONVIF listening", last_connected_at=datetime.now(timezone.utc).isoformat())
+        while True:
+            messages = pullpoint.PullMessages({"Timeout": "PT30S", "MessageLimit": 10})
+            for message in getattr(messages, "NotificationMessage", []) or []:
+                event = parse_onvif_notification(message)
+                if event:
+                    self._record(event)
+            # The camera controls subscription expiry; recreate it on a normal disconnect.
+            if not subscription:
+                raise OSError("camera did not create an ONVIF event subscription")
 
     def _stream(self, camera: dict[str, Any]) -> None:
         base_url = _base_url(camera)

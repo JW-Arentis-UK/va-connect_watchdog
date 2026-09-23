@@ -2,7 +2,7 @@ import unittest
 from urllib.error import HTTPError, URLError
 
 from va_watchdog.hikvision import _onvif_client_error_detail, _onvif_client_event_topics, _onvif_event_properties_query, probe_people_counting
-from va_watchdog.hikvision_events import HikvisionEventCollector, notification_diagnostic, parse_notification
+from va_watchdog.hikvision_events import HikvisionEventCollector, notification_diagnostic, parse_notification, parse_onvif_notification
 
 
 class FakeResponse:
@@ -290,6 +290,12 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertEqual(diagnostic["last_notification_state"], "active")
         self.assertNotIn("pictureURL", diagnostic["last_notification_fields"])
         self.assertNotIn("private.jpg", str(diagnostic))
+
+    def test_onvif_notification_keeps_only_counting_fields(self):
+        event = parse_onvif_notification({"eventType": "PeopleCounting", "AtoB": 3, "BtoA": 1, "PictureURL": "private.jpg"})
+
+        self.assertEqual(event["counts"], {"atob": "3", "btoa": "1"})
+        self.assertNotIn("PictureURL", str(event))
 
     def test_counter_value_parser_keeps_numeric_directional_totals(self):
         values = HikvisionEventCollector._counter_values({
