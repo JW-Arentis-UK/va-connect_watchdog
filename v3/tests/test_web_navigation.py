@@ -128,6 +128,16 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('disclosure("Software update", updates_card(), opened=True)', source)
         self.assertIn('disclosure("Recovery and repair tools", recovery_page())', source)
 
+    def test_update_launch_failure_renders_an_explanation_instead_of_http_error_page(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+        start = source.index('            if route_path == "/update-now":')
+        end = source.index('            if route_path == "/settings-save":', start)
+        handler = source[start:end]
+
+        self.assertIn("Update could not be started", handler)
+        self.assertIn("self.send_response(200)", handler)
+        self.assertNotIn("self.send_response(200 if result.get(\"ok\") else 500)", handler)
+
     def test_overview_hides_detailed_evidence_and_services_by_default(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 

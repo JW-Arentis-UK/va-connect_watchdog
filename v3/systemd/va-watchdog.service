@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=notify
-ExecStart=/opt/va-connect-watchdog-v3/.venv/bin/python -m va_watchdog.watchdog
+ExecStart=/bin/sh -c 'if [ -x /opt/va-connect-watchdog-v3/.venv/bin/python ]; then exec /opt/va-connect-watchdog-v3/.venv/bin/python -m va_watchdog.watchdog; else exec /usr/bin/python3 -m va_watchdog.watchdog; fi'
 WorkingDirectory=/opt/va-connect-watchdog-v3/v3
 Restart=always
 RestartSec=5

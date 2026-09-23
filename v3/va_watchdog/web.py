@@ -6467,9 +6467,17 @@ def start_web(cfg):
                 self.wfile.write(body)
                 return
             if route_path == "/update-now":
-                result = launch_update_job(cfg)
+                try:
+                    result = launch_update_job(cfg)
+                except Exception as exc:
+                    result = {
+                        "ok": False,
+                        "message": f"Update could not be started ({type(exc).__name__}). View the update log for details.",
+                    }
                 body = update_started_html(result).encode("utf-8")
-                self.send_response(200 if result.get("ok") else 500)
+                # Return the result page even when launching the updater fails so the browser
+                # shows the actionable message instead of replacing it with a generic HTTP 500.
+                self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()
