@@ -1290,8 +1290,8 @@ def start_web(cfg):
                 + disclosure("RUTX50 setup help", router_setup_help)
             )
             people_counting_settings = (
-                "<p class=\"section-lead\">Configure one local Hikvision camera, then run a read-only capability test before enabling report collection.</p>"
-                "<div class=\"notice healthy\"><strong>Safe test:</strong> The watchdog reads camera identity, people-counting capabilities, and the previous completed day's report. It does not change settings or download video.</div>"
+            "<p class=\"section-lead\">Configure one local Hikvision camera, then run a read-only capability test before enabling report collection.</p>"
+                "<div class=\"notice healthy\"><strong>Safe test:</strong> The watchdog reads camera identity, active analytics application, people-counting capabilities, and the previous completed day's report. It does not change settings or download video.</div>"
                 "<div class=\"settings-grid\">"
                 f"<div><label class=\"label\">Camera IP address</label><input name=\"people_counting_address\" maxlength=\"253\" value=\"{escape(str(people_cfg.get('address', '')))}\" placeholder=\"e.g. 192.168.1.72\"></div>"
                 f"<div><label class=\"label\">Connection</label><select name=\"people_counting_scheme\"><option value=\"http\" {'selected' if people_cfg.get('scheme', 'http') == 'http' else ''}>HTTP</option><option value=\"https\" {'selected' if people_cfg.get('scheme') == 'https' else ''}>HTTPS</option></select></div>"

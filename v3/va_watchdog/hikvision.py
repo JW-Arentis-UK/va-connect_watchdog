@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import socket
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
@@ -98,6 +99,35 @@ def _get_xml(opener, url: str, timeout: int) -> dict:
     return _request_xml(opener, url, timeout)
 
 
+def _get_json(opener, url: str, timeout: int) -> dict:
+    request = Request(url, headers={"Accept": "application/json"}, method="GET")
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            payload = response.read(512 * 1024)
+            status = int(getattr(response, "status", response.getcode()))
+    except HTTPError as exc:
+        if exc.code == 401:
+            detail = "Authentication failed"
+        elif exc.code in {404, 405}:
+            detail = "Not supported by this camera"
+        else:
+            detail = f"Camera returned HTTP {exc.code}"
+        return {"ok": False, "status_code": exc.code, "detail": detail}
+    except (URLError, TimeoutError, socket.timeout, OSError) as exc:
+        reason = getattr(exc, "reason", exc)
+        return {"ok": False, "status_code": None, "detail": f"Connection failed: {reason}"}
+    try:
+        value = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"ok": False, "status_code": status, "detail": "Camera returned an unreadable response"}
+    return {
+        "ok": 200 <= status < 300 and isinstance(value, dict),
+        "status_code": status,
+        "detail": "Supported" if 200 <= status < 300 else f"Camera returned HTTP {status}",
+        "value": value,
+    }
+
+
 def _latest_completed_day() -> tuple[str, str]:
     today = datetime.now().astimezone().date()
     end = datetime.combine(today, datetime.min.time())
@@ -157,6 +187,23 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
             "detail": response.get("detail"),
         })
 
+    multi_target_response = _get_json(
+        client,
+        f"{base_url}/ISAPI/Intelligent/channels/{channel}/mixedTargetDetection?format=json",
+        timeout,
+    )
+    multi_target = multi_target_response.get("value", {}).get("MixedTargetDetection", {}) if multi_target_response.get("ok") else {}
+    multi_target_enabled = bool(multi_target.get("enabled")) if isinstance(multi_target, dict) else False
+    multi_target_detail = multi_target_response.get("detail")
+    if multi_target_response.get("ok"):
+        multi_target_detail = "Active" if multi_target_enabled else "Configured, but currently disabled"
+    capabilities.append({
+        "family": "Multi-target-type detection",
+        "supported": bool(multi_target_response.get("ok")),
+        "status_code": multi_target_response.get("status_code"),
+        "detail": multi_target_detail,
+    })
+
     report_start, report_end = _latest_completed_day()
     report_response = _request_xml(
         client,
@@ -190,7 +237,9 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
     )
     authenticated = bool(device_response.get("ok")) or any(item["supported"] for item in capabilities)
     restricted = [item["family"] for item in capabilities if item.get("status_code") == 403]
-    if supported:
+    if multi_target_enabled:
+        message = "Camera connected; active application is multi-target-type detection. Its counters need event-based collection."
+    elif supported:
         message = f"Camera connected; supported method: {', '.join(supported)}"
     elif not connected:
         message = str(device_response.get("detail") or "Camera could not be reached")
@@ -210,6 +259,7 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
         "channel": channel,
         "device": device,
         "capabilities": capabilities,
+        "multi_target_detection": {"active": multi_target_enabled},
         "report": report,
         "message": message,
     }

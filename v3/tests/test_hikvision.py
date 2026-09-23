@@ -66,6 +66,9 @@ class HikvisionProbeTests(unittest.TestCase):
                 "<CountingStatisticsList><CountingStatistics><enterCount>12</enterCount>"
                 "<leaveCount>7</leaveCount></CountingStatistics></CountingStatisticsList>"
             ),
+            f"{base}/ISAPI/Intelligent/channels/1/mixedTargetDetection?format=json": FakeResponse(
+                '{"MixedTargetDetection":{"enabled":true}}'
+            ),
         })
 
         result = probe_people_counting(self.settings(), opener=opener)
@@ -82,6 +85,7 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertTrue(result["capabilities"][2]["supported"])
         self.assertEqual(result["report"]["rows"], 1)
         self.assertEqual(result["report"]["totals"], {"enterCount": 12, "leaveCount": 7})
+        self.assertTrue(result["multi_target_detection"]["active"])
         self.assertEqual([method for _, _, method in opener.urls].count("POST"), 1)
         self.assertTrue(any(url.endswith("/counting/search") and method == "POST" for url, _, method in opener.urls))
 
@@ -95,6 +99,7 @@ class HikvisionProbeTests(unittest.TestCase):
             f"{base}/ISAPI/Intelligent/channels/1/framesPeopleCounting/capabilities": unauthorized,
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search/capabilities": unauthorized,
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search": unauthorized,
+            f"{base}/ISAPI/Intelligent/channels/1/mixedTargetDetection?format=json": unauthorized,
         })
 
         result = probe_people_counting(settings, opener=opener)
@@ -113,6 +118,7 @@ class HikvisionProbeTests(unittest.TestCase):
             f"{base}/ISAPI/Intelligent/channels/1/framesPeopleCounting/capabilities": unreachable,
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search/capabilities": unreachable,
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search": unreachable,
+            f"{base}/ISAPI/Intelligent/channels/1/mixedTargetDetection?format=json": unreachable,
         })
 
         result = probe_people_counting(settings, opener=opener)
@@ -130,13 +136,15 @@ class HikvisionProbeTests(unittest.TestCase):
             f"{base}/ISAPI/Intelligent/channels/1/framesPeopleCounting/capabilities": denied,
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search/capabilities": denied,
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search": denied,
+            f"{base}/ISAPI/Intelligent/channels/1/mixedTargetDetection?format=json": FakeResponse(
+                '{"MixedTargetDetection":{"enabled":true}}'
+            ),
         })
 
         result = probe_people_counting(self.settings(), opener=opener)
 
-        self.assertFalse(result["ok"])
-        self.assertIn("restricted interface", result["message"].lower())
-        self.assertIn("People-flow report search", result["message"])
+        self.assertTrue(result["ok"])
+        self.assertIn("multi-target-type detection", result["message"].lower())
 
 
 if __name__ == "__main__":
