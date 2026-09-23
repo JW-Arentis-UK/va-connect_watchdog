@@ -6,6 +6,7 @@ description of notification events so the watchdog can build its own totals.
 from __future__ import annotations
 
 import json
+import re
 import socket
 import threading
 import time
@@ -25,6 +26,14 @@ _VALUE_FIELDS = {
     "atob", "btoa", "eventdescription",
 }
 _COUNT_FIELDS = {"entercount", "leavecount", "incount", "outcount", "passcount", "passingcount", "atob", "btoa"}
+_COUNTER_PATHS = (
+    "/ISAPI/Intelligent/channels/{channel}/mixedTargetDetection/statistics",
+    "/ISAPI/Intelligent/channels/{channel}/mixedTargetDetection/counting",
+    "/ISAPI/Intelligent/channels/{channel}/mixedTargetDetection/counts",
+    "/ISAPI/Intelligent/channels/{channel}/mixedTargetDetection/status",
+    "/ISAPI/Intelligent/channels/{channel}/mixedTargetDetection/peopleCounting",
+    "/ISAPI/Intelligent/channels/{channel}/mixedTargetDetection/lineCounting",
+)
 
 
 def _name(tag: str) -> str:
@@ -111,6 +120,7 @@ def event_summary(cfg: dict[str, Any]) -> dict[str, Any]:
         state = {}
     today = datetime.now().astimezone().date().isoformat()
     totals = {"a_to_b": 0, "b_to_a": 0, "events": 0}
+    previous_snapshot: dict[str, int] = {}
     if history.exists():
         for line in history.read_text(encoding="utf-8", errors="ignore").splitlines():
             try:
@@ -126,10 +136,15 @@ def event_summary(cfg: dict[str, Any]) -> dict[str, Any]:
                     number = int(value)
                 except (TypeError, ValueError):
                     continue
-                if key in {"atob", "entercount", "incount"}:
-                    totals["a_to_b"] += number
-                elif key in {"btoa", "leavecount", "outcount"}:
-                    totals["b_to_a"] += number
+                if row.get("kind") == "counter_snapshot":
+                    delta = max(0, number - previous_snapshot.get(key, number))
+                    previous_snapshot[key] = number
+                else:
+                    delta = number
+                if key in {"atob", "entercount", "incount", "human_atob", "human_enter"}:
+                    totals["a_to_b"] += delta
+                elif key in {"btoa", "leavecount", "outcount", "human_btoa", "human_leave"}:
+                    totals["b_to_a"] += delta
     return {"enabled": bool(cfg.get("people_counting", {}).get("event_collection_enabled")), "today": totals, **state}
 
 
@@ -138,10 +153,13 @@ class HikvisionEventCollector:
         self.cfg = cfg
         self.event_log = event_log
         self.thread = threading.Thread(target=self._run, name="hikvision-events", daemon=True)
+        self.counter_thread = threading.Thread(target=self._counter_loop, name="hikvision-counters", daemon=True)
         self._last_state_signature: tuple[tuple[str, str], ...] | None = None
+        self._last_counter_signature: tuple[tuple[str, str], ...] | None = None
 
     def start(self) -> None:
         self.thread.start()
+        self.counter_thread.start()
 
     def _write_state(self, **values: Any) -> None:
         _, path = event_paths(self.cfg)
@@ -162,6 +180,85 @@ class HikvisionEventCollector:
             handle.write(json.dumps(event, separators=(",", ":")) + "\n")
         self.event_log.add("info", "people_counting", "Hikvision people-counting event received", event)
         self._write_state(status="receiving", last_event_at=event["time"], last_event_type=event["event_type"])
+
+    def _counter_loop(self) -> None:
+        while True:
+            camera = self.cfg.get("people_counting", {}) if isinstance(self.cfg.get("people_counting"), dict) else {}
+            configured = all(camera.get(key) for key in ("address", "username", "password"))
+            if bool(camera.get("event_collection_enabled")) and configured:
+                try:
+                    counter = self._read_counter_snapshot(camera)
+                    if counter:
+                        self._record(counter)
+                except (HTTPError, URLError, socket.timeout, OSError):
+                    pass
+                except Exception:
+                    pass
+            time.sleep(max(30, int(camera.get("counter_poll_interval_seconds", 60) or 60)))
+
+    @staticmethod
+    def _counter_values(value: Any, prefix: str = "") -> dict[str, str]:
+        found: dict[str, str] = {}
+        if isinstance(value, dict):
+            for key, child in value.items():
+                found.update(HikvisionEventCollector._counter_values(child, f"{prefix}_{key}"))
+        elif isinstance(value, list):
+            for child in value:
+                found.update(HikvisionEventCollector._counter_values(child, prefix))
+        else:
+            normalized = re.sub(r"[^a-z0-9]", "", prefix.lower())
+            try:
+                number = int(str(value))
+            except (TypeError, ValueError):
+                return found
+            direction = "atob" if any(token in normalized for token in ("atob", "a2b", "enter", "incount")) else "btoa" if any(token in normalized for token in ("btoa", "b2a", "leave", "outcount")) else ""
+            if direction:
+                target = "human" if any(token in normalized for token in ("human", "people", "person")) else "vehicle" if any(token in normalized for token in ("vehicle", "motor")) else ""
+                found[f"{target + '_' if target else ''}{direction}"] = str(number)
+        return found
+
+    def _read_counter_snapshot(self, camera: dict[str, Any]) -> dict[str, Any] | None:
+        base_url = _base_url(camera)
+        opener = _digest_opener(base_url, str(camera["username"]), str(camera["password"]))
+        timeout = max(5, int(camera.get("timeout_seconds") or 5))
+        channel = int(camera.get("channel") or 1)
+        for template in _COUNTER_PATHS:
+            endpoint = template.format(channel=channel)
+            request = Request(f"{base_url}{endpoint}", headers={"Accept": "application/json, application/xml, text/xml"})
+            try:
+                with opener.open(request, timeout=timeout) as response:
+                    payload = response.read(128 * 1024)
+            except HTTPError as exc:
+                if exc.code in {401, 403, 404, 405}:
+                    continue
+                raise
+            try:
+                values: Any = json.loads(payload.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                try:
+                    root = ET.fromstring(payload)
+                    values = {_name(node.tag): (node.text or "").strip() for node in root.iter() if len(node) == 0}
+                except ET.ParseError:
+                    continue
+            counts = self._counter_values(values)
+            if counts:
+                signature = tuple(sorted(counts.items()))
+                if signature == self._last_counter_signature:
+                    return None
+                self._last_counter_signature = signature
+                self._write_state(status="receiving", counter_endpoint=endpoint, last_counter_at=datetime.now(timezone.utc).isoformat())
+                return {
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "kind": "counter_snapshot",
+                    "event_type": "multi-target counter snapshot",
+                    "event_state": "active",
+                    "channel": str(channel),
+                    "target_type": "human and vehicle",
+                    "direction": "",
+                    "counts": counts,
+                    "fields_seen": sorted(counts),
+                }
+        return None
 
     def _run(self) -> None:
         backoff = 5

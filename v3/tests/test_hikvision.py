@@ -2,7 +2,7 @@ import unittest
 from urllib.error import HTTPError, URLError
 
 from va_watchdog.hikvision import probe_people_counting
-from va_watchdog.hikvision_events import notification_diagnostic, parse_notification
+from va_watchdog.hikvision_events import HikvisionEventCollector, notification_diagnostic, parse_notification
 
 
 class FakeResponse:
@@ -169,6 +169,16 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertEqual(diagnostic["last_notification_state"], "active")
         self.assertNotIn("pictureURL", diagnostic["last_notification_fields"])
         self.assertNotIn("private.jpg", str(diagnostic))
+
+    def test_counter_value_parser_keeps_numeric_directional_totals(self):
+        values = HikvisionEventCollector._counter_values({
+            "humanAtoB": 12,
+            "humanBtoA": 7,
+            "vehicleAtoB": "4",
+            "enabled": True,
+        })
+
+        self.assertEqual(values, {"human_atob": "12", "human_btoa": "7", "vehicle_atob": "4"})
 
 
 if __name__ == "__main__":
