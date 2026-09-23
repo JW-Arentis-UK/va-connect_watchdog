@@ -16,6 +16,10 @@ _CAPABILITY_PROBES = (
         "Area occupancy counting",
         "/ISAPI/Intelligent/channels/{channel}/framesPeopleCounting/capabilities",
     ),
+    (
+        "People-flow report search",
+        "/ISAPI/System/Video/inputs/channels/{channel}/counting/search/capabilities",
+    ),
 )
 
 _REPORT_VALUE_NAMES = {
@@ -185,12 +189,15 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
         item.get("status_code") not in {None, 401} for item in capabilities
     )
     authenticated = bool(device_response.get("ok")) or any(item["supported"] for item in capabilities)
+    restricted = [item["family"] for item in capabilities if item.get("status_code") == 403]
     if supported:
         message = f"Camera connected; supported method: {', '.join(supported)}"
     elif not connected:
         message = str(device_response.get("detail") or "Camera could not be reached")
     elif not authenticated:
         message = "Camera reached, but authentication failed"
+    elif restricted:
+        message = f"Camera connected; restricted interface: {', '.join(restricted)}"
     else:
         message = "Camera connected, but the tested people-counting APIs are not available"
 

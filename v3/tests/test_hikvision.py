@@ -59,6 +59,9 @@ class HikvisionProbeTests(unittest.TestCase):
             f"{base}/ISAPI/Intelligent/channels/1/framesPeopleCounting/capabilities": HTTPError(
                 f"{base}/area", 404, "Not Found", {}, None
             ),
+            f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search/capabilities": FakeResponse(
+                "<CountingSearchCap/>"
+            ),
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search": FakeResponse(
                 "<CountingStatisticsList><CountingStatistics><enterCount>12</enterCount>"
                 "<leaveCount>7</leaveCount></CountingStatistics></CountingStatisticsList>"
@@ -76,6 +79,7 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertNotIn("password", result)
         self.assertTrue(result["capabilities"][0]["supported"])
         self.assertFalse(result["capabilities"][1]["supported"])
+        self.assertTrue(result["capabilities"][2]["supported"])
         self.assertEqual(result["report"]["rows"], 1)
         self.assertEqual(result["report"]["totals"], {"enterCount": 12, "leaveCount": 7})
         self.assertEqual([method for _, _, method in opener.urls].count("POST"), 1)
@@ -89,6 +93,7 @@ class HikvisionProbeTests(unittest.TestCase):
             f"{base}/ISAPI/System/deviceInfo": unauthorized,
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/capabilities": unauthorized,
             f"{base}/ISAPI/Intelligent/channels/1/framesPeopleCounting/capabilities": unauthorized,
+            f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search/capabilities": unauthorized,
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search": unauthorized,
         })
 
@@ -106,6 +111,7 @@ class HikvisionProbeTests(unittest.TestCase):
             f"{base}/ISAPI/System/deviceInfo": unreachable,
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/capabilities": unreachable,
             f"{base}/ISAPI/Intelligent/channels/1/framesPeopleCounting/capabilities": unreachable,
+            f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search/capabilities": unreachable,
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search": unreachable,
         })
 
@@ -114,6 +120,23 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertFalse(result["connected"])
         self.assertIn("connection failed", result["message"].lower())
+
+    def test_probe_identifies_restricted_report_interface(self):
+        base = "http://192.168.1.72"
+        denied = HTTPError(base, 403, "Forbidden", {}, None)
+        opener = FakeOpener({
+            f"{base}/ISAPI/System/deviceInfo": FakeResponse("<DeviceInfo><model>iDS-Test</model></DeviceInfo>"),
+            f"{base}/ISAPI/System/Video/inputs/channels/1/counting/capabilities": HTTPError(base, 404, "Not Found", {}, None),
+            f"{base}/ISAPI/Intelligent/channels/1/framesPeopleCounting/capabilities": denied,
+            f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search/capabilities": denied,
+            f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search": denied,
+        })
+
+        result = probe_people_counting(self.settings(), opener=opener)
+
+        self.assertFalse(result["ok"])
+        self.assertIn("restricted interface", result["message"].lower())
+        self.assertIn("People-flow report search", result["message"])
 
 
 if __name__ == "__main__":
