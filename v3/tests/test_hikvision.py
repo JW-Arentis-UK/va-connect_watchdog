@@ -1,7 +1,7 @@
 import unittest
 from urllib.error import HTTPError, URLError
 
-from va_watchdog.hikvision import probe_people_counting
+from va_watchdog.hikvision import _onvif_event_properties_query, probe_people_counting
 from va_watchdog.hikvision_events import HikvisionEventCollector, notification_diagnostic, parse_notification
 
 
@@ -97,6 +97,18 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertTrue(all(item["available"] for item in result["data_sources"][:3]))
         self.assertEqual([method for _, _, method in opener.urls].count("POST"), 2)
         self.assertTrue(any(url.endswith("/counting/search") and method == "POST" for url, _, method in opener.urls))
+
+    def test_onvif_event_query_uses_password_digest_without_password_text(self):
+        query = _onvif_event_properties_query(
+            "operator",
+            "camera-secret",
+            "http://192.168.1.72/onvif/Events",
+        ).decode("utf-8")
+
+        self.assertIn("PasswordDigest", query)
+        self.assertIn("<wsse:Nonce", query)
+        self.assertIn("<wsu:Created>", query)
+        self.assertNotIn("camera-secret", query)
 
     def test_probe_distinguishes_authentication_failure(self):
         settings = self.settings()
