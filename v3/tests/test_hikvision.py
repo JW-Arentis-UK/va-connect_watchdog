@@ -147,6 +147,11 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertEqual(detail, "ONVIF event topic read: camera returned HTTP 400")
         self.assertNotIn("not-returned", detail)
 
+    def test_onvif_client_error_detail_handles_an_error_without_http_status(self):
+        detail = _onvif_client_error_detail("event service setup", RuntimeError("unexpected response"))
+
+        self.assertEqual(detail, "ONVIF event service setup failed (RuntimeError)")
+
     def test_probe_distinguishes_authentication_failure(self):
         settings = self.settings()
         base = "http://192.168.1.72"

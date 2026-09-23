@@ -239,7 +239,8 @@ def _onvif_client_error_detail(stage: str, exc: Exception) -> str:
     """Keep ONVIF errors useful for operators without exposing request contents or secrets."""
     error = str(exc).lower()
     status_match = re.search(r"\b(?:http(?: error)?|status)\D*(\d{3})\b|\b(\d{3})\s+(?:client|server) error", error)
-    status = next((group for group in status_match.groups() if group) if status_match else (), "")
+    groups = status_match.groups() if status_match else ()
+    status = next((group for group in groups if group), "")
     if status:
         return f"ONVIF {stage}: camera returned HTTP {status}"
     if "timeout" in error or "timed out" in error:
