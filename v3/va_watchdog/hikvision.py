@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import socket
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
@@ -154,6 +155,27 @@ def _probe_stream(opener, url: str, timeout: int) -> dict:
     return {"ok": 200 <= status < 300, "status_code": status, "detail": "Available" if 200 <= status < 300 else f"Camera returned HTTP {status}"}
 
 
+def _discover_web_api_routes(opener, base_url: str, timeout: int) -> list[str]:
+    """Find ISAPI paths advertised by the camera UI; never retain UI content."""
+    try:
+        with opener.open(Request(f"{base_url}/", headers={"Accept": "text/html"}), timeout=timeout) as response:
+            html = response.read(512 * 1024).decode("utf-8", errors="ignore")
+    except (HTTPError, URLError, TimeoutError, socket.timeout, OSError):
+        return []
+    scripts = re.findall(r'<script[^>]+src=["\']([^"\']+\.js[^"\']*)', html, flags=re.I)
+    text = html
+    for source in scripts[:30]:
+        if not source.startswith("/"):
+            continue
+        try:
+            with opener.open(Request(f"{base_url}{source.split('?', 1)[0]}"), timeout=timeout) as response:
+                text += "\n" + response.read(1024 * 1024).decode("utf-8", errors="ignore")
+        except (HTTPError, URLError, TimeoutError, socket.timeout, OSError):
+            continue
+    routes = re.findall(r"/ISAPI/[A-Za-z0-9_./?={}-]+", text)
+    return sorted({route for route in routes if any(word in route.lower() for word in ("count", "target", "statistic"))})[:30]
+
+
 def _latest_completed_day() -> tuple[str, str]:
     today = datetime.now().astimezone().date()
     end = datetime.combine(today, datetime.min.time())
@@ -240,6 +262,13 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
             "status_code": response.get("status_code"),
             "detail": response.get("detail"),
         })
+    web_routes = _discover_web_api_routes(client, base_url, timeout)
+    data_sources.append({
+        "name": "Statistics API routes advertised by camera UI",
+        "available": bool(web_routes),
+        "status_code": 200 if web_routes else None,
+        "detail": "; ".join(web_routes) if web_routes else "No readable statistics route found in the camera UI scripts",
+    })
 
     report_start, report_end = _latest_completed_day()
     report_response = _request_xml(
