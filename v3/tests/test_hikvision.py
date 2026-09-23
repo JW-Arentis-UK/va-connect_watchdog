@@ -130,13 +130,47 @@ class HikvisionProbeTests(unittest.TestCase):
             self.settings(),
             "http://192.168.1.72/onvif/Events",
             camera_factory=FakeCamera,
+            transport_factory=lambda *_args: object(),
         )
 
         self.assertTrue(result["available"])
-        self.assertEqual(result["detail"], "Available through ONVIF client")
+        self.assertEqual(result["detail"], "Available through ONVIF WS-Security client")
         self.assertEqual(calls[0][:3], ("192.168.1.72", 80, "operator"))
         self.assertTrue(calls[0][4]["adjust_time"])
         self.assertNotIn("not-returned", str(result))
+
+    def test_onvif_client_retries_authentication_failure_with_http_digest(self):
+        calls = []
+
+        class FakeEvents:
+            def __init__(self, fails):
+                self.fails = fails
+
+            def GetEventProperties(self):
+                if self.fails:
+                    raise RuntimeError("authentication failed")
+
+        class FakeCamera:
+            def __init__(self, *_args, **options):
+                calls.append(options)
+                self.options = options
+
+            def create_events_service(self):
+                return FakeEvents(not self.options.get("encrypt") is False)
+
+        result = _onvif_client_event_topics(
+            self.settings(),
+            "http://192.168.1.72/onvif/Events",
+            camera_factory=FakeCamera,
+            transport_factory=lambda *_args: object(),
+        )
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["detail"], "Available through ONVIF HTTP-Digest client")
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(calls[1]["encrypt"])
+        self.assertTrue(calls[1]["no_cache"])
+        self.assertIn("transport", calls[1])
 
     def test_onvif_client_error_detail_reports_safe_http_status(self):
         detail = _onvif_client_error_detail(

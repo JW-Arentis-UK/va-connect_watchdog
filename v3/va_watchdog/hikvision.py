@@ -254,7 +254,18 @@ def _onvif_client_error_detail(stage: str, exc: Exception) -> str:
     return f"ONVIF {stage} failed ({type(exc).__name__})"
 
 
-def _onvif_client_event_topics(settings: dict, events_address: str, camera_factory=None) -> dict:
+def _onvif_http_digest_transport(username: str, password: str, timeout: int):
+    """Build a standard HTTP-Digest transport for cameras that reject WS-Security digest."""
+    from requests import Session
+    from requests.auth import HTTPDigestAuth
+    from zeep.transports import Transport
+
+    session = Session()
+    session.auth = HTTPDigestAuth(username, password)
+    return Transport(session=session, timeout=timeout, operation_timeout=timeout)
+
+
+def _onvif_client_event_topics(settings: dict, events_address: str, camera_factory=None, transport_factory=None) -> dict:
     """Use the maintained ONVIF client for a read-only event capability query."""
     if camera_factory is None:
         try:
@@ -262,18 +273,42 @@ def _onvif_client_event_topics(settings: dict, events_address: str, camera_facto
         except ImportError:
             return {"available": False, "installed": False, "detail": "ONVIF client is not installed"}
         camera_factory = ONVIFCamera
+    if transport_factory is None:
+        transport_factory = _onvif_http_digest_transport
 
     endpoint = urlsplit(events_address)
     host = endpoint.hostname
     if not host:
         return {"available": False, "installed": True, "detail": "Camera advertised an invalid ONVIF Events address"}
     port = endpoint.port or (443 if endpoint.scheme == "https" else 80)
+    username = str(settings.get("username") or "")
+    password = str(settings.get("password") or "")
+
+    def read_topics(camera, success_detail: str) -> dict:
+        try:
+            events_service = camera.create_events_service()
+        except Exception as exc:
+            return {
+                "available": False,
+                "installed": True,
+                "detail": _onvif_client_error_detail("event service setup", exc),
+            }
+        try:
+            events_service.GetEventProperties()
+        except Exception as exc:
+            return {
+                "available": False,
+                "installed": True,
+                "detail": _onvif_client_error_detail("event topic read", exc),
+            }
+        return {"available": True, "installed": True, "detail": success_detail}
+
     try:
         camera = camera_factory(
             host,
             port,
-            str(settings.get("username") or ""),
-            str(settings.get("password") or ""),
+            username,
+            password,
             adjust_time=True,
         )
     except Exception as exc:
@@ -282,23 +317,27 @@ def _onvif_client_event_topics(settings: dict, events_address: str, camera_facto
             "installed": True,
             "detail": _onvif_client_error_detail("client setup", exc),
         }
+    first_result = read_topics(camera, "Available through ONVIF WS-Security client")
+    if first_result["available"] or "authentication failed" not in first_result["detail"].lower():
+        return first_result
     try:
-        events_service = camera.create_events_service()
+        camera = camera_factory(
+            host,
+            port,
+            username,
+            password,
+            encrypt=False,
+            adjust_time=True,
+            no_cache=True,
+            transport=transport_factory(username, password, int(settings.get("timeout_seconds") or 5)),
+        )
     except Exception as exc:
         return {
             "available": False,
             "installed": True,
-            "detail": _onvif_client_error_detail("event service setup", exc),
+            "detail": _onvif_client_error_detail("HTTP-Digest client setup", exc),
         }
-    try:
-        events_service.GetEventProperties()
-    except Exception as exc:
-        return {
-            "available": False,
-            "installed": True,
-            "detail": _onvif_client_error_detail("event topic read", exc),
-        }
-    return {"available": True, "installed": True, "detail": "Available through ONVIF client"}
+    return read_topics(camera, "Available through ONVIF HTTP-Digest client")
 
 
 def _report_summary(root: ET.Element) -> dict:
