@@ -206,6 +206,16 @@ def _daily_report_query(start_time: str, end_time: str) -> bytes:
     ).encode("utf-8")
 
 
+def _onvif_capabilities_query() -> bytes:
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" '
+        'xmlns:tds="http://www.onvif.org/ver10/device/wsdl"><s:Body>'
+        '<tds:GetCapabilities><tds:Category>All</tds:Category></tds:GetCapabilities>'
+        '</s:Body></s:Envelope>'
+    ).encode("utf-8")
+
+
 def _report_summary(root: ET.Element) -> dict:
     rows = [element for element in root.iter() if _local_name(element.tag) in {"CountingStatistics", "countingStatistics"}]
     totals: dict[str, int] = {}
@@ -284,6 +294,14 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
         "available": bool(web_routes),
         "status_code": 200 if web_routes else None,
         "detail": "; ".join(web_routes) if web_routes else "No readable statistics route found in the camera UI scripts",
+    })
+    onvif_response = _request_xml(client, f"{base_url}/onvif/device_service", timeout, method="POST", body=_onvif_capabilities_query())
+    onvif_names = sorted({_local_name(element.tag) for element in onvif_response.get("root", []).iter()})[:50] if onvif_response.get("ok") else []
+    data_sources.append({
+        "name": "ONVIF analytics and event services",
+        "available": bool(onvif_response.get("ok")),
+        "status_code": onvif_response.get("status_code"),
+        "detail": "Available: " + ", ".join(onvif_names) if onvif_names else onvif_response.get("detail"),
     })
 
     report_start, report_end = _latest_completed_day()
