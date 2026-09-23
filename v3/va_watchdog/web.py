@@ -2621,6 +2621,14 @@ def start_web(cfg):
             for item in result.get("capabilities", [])
             if isinstance(item, dict)
         )
+        data_source_rows = "".join(
+            "<tr>"
+            f"<th>{escape(str(item.get('name') or '-'))}</th>"
+            f"<td class=\"{'healthy' if item.get('available') else 'muted'}\">{'Available' if item.get('available') else escape(str(item.get('detail') or 'Not available'))}</td>"
+            "</tr>"
+            for item in result.get("data_sources", [])
+            if isinstance(item, dict)
+        )
         status_class = "healthy" if result.get("ok") else "warning"
         report_totals = report.get("totals", {}) if isinstance(report.get("totals"), dict) else {}
         total_text = ", ".join(
@@ -2638,6 +2646,7 @@ def start_web(cfg):
             f"<tr><th>Firmware</th><td>{escape(str(device.get('firmwareVersion') or '-'))}</td></tr>"
             f"<tr><th>Firmware date</th><td>{escape(str(device.get('firmwareReleasedDate') or '-'))}</td></tr>"
             + capability_rows
+            + data_source_rows
             + f"<tr><th>Latest daily report period</th><td>{escape(str(report.get('start_time') or '-'))} to {escape(str(report.get('end_time') or '-'))}</td></tr>"
             + f"<tr><th>Daily report totals</th><td>{escape(total_text)}</td></tr>"
             + "</tbody></table></div>"
@@ -6473,6 +6482,7 @@ def start_web(cfg):
                             "device": result.get("device", {}),
                             "capabilities": result.get("capabilities", []),
                             "report": result.get("report", {}),
+                            "data_sources": result.get("data_sources", []),
                         },
                     )
                 body = hikvision_test_result_html(result).encode("utf-8")

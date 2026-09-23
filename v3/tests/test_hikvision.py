@@ -70,6 +70,9 @@ class HikvisionProbeTests(unittest.TestCase):
             f"{base}/ISAPI/Intelligent/channels/1/mixedTargetDetection?format=json": FakeResponse(
                 '{"MixedTargetDetection":{"enabled":true}}'
             ),
+            f"{base}/ISAPI/ContentMgmt/Storage": FakeResponse("<Storage><status>ok</status></Storage>"),
+            f"{base}/ISAPI/ContentMgmt/Storage/hdd": FakeResponse("<HDD><status>ok</status></HDD>"),
+            f"{base}/ISAPI/Streaming/channels/1/metadata": FakeResponse(""),
         })
 
         result = probe_people_counting(self.settings(), opener=opener)
@@ -87,6 +90,7 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertEqual(result["report"]["rows"], 1)
         self.assertEqual(result["report"]["totals"], {"enterCount": 12, "leaveCount": 7})
         self.assertTrue(result["multi_target_detection"]["active"])
+        self.assertTrue(all(item["available"] for item in result["data_sources"]))
         self.assertEqual([method for _, _, method in opener.urls].count("POST"), 1)
         self.assertTrue(any(url.endswith("/counting/search") and method == "POST" for url, _, method in opener.urls))
 

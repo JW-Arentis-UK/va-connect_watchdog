@@ -23,6 +23,12 @@ _CAPABILITY_PROBES = (
     ),
 )
 
+_DATA_SOURCE_PROBES = (
+    ("SD card storage status", "/ISAPI/ContentMgmt/Storage", "xml"),
+    ("SD card health", "/ISAPI/ContentMgmt/Storage/hdd", "xml"),
+    ("Live analytics metadata stream", "/ISAPI/Streaming/channels/{channel}/metadata", "stream"),
+)
+
 _REPORT_VALUE_NAMES = {
     "enterCount", "leaveCount", "passingCount", "passCount", "peopleNumber", "inCount", "outCount",
 }
@@ -128,6 +134,26 @@ def _get_json(opener, url: str, timeout: int) -> dict:
     }
 
 
+def _probe_stream(opener, url: str, timeout: int) -> dict:
+    """Check that a stream can be opened without retaining video or metadata."""
+    request = Request(url, headers={"Accept": "application/xml, multipart/x-mixed-replace"}, method="GET")
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            status = int(getattr(response, "status", response.getcode()))
+    except HTTPError as exc:
+        if exc.code == 401:
+            detail = "Authentication failed"
+        elif exc.code in {403, 404, 405}:
+            detail = "Not supported or not permitted by this camera"
+        else:
+            detail = f"Camera returned HTTP {exc.code}"
+        return {"ok": False, "status_code": exc.code, "detail": detail}
+    except (URLError, TimeoutError, socket.timeout, OSError) as exc:
+        reason = getattr(exc, "reason", exc)
+        return {"ok": False, "status_code": None, "detail": f"Connection failed: {reason}"}
+    return {"ok": 200 <= status < 300, "status_code": status, "detail": "Available" if 200 <= status < 300 else f"Camera returned HTTP {status}"}
+
+
 def _latest_completed_day() -> tuple[str, str]:
     today = datetime.now().astimezone().date()
     end = datetime.combine(today, datetime.min.time())
@@ -204,6 +230,17 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
         "detail": multi_target_detail,
     })
 
+    data_sources = []
+    for name, endpoint_template, source_type in _DATA_SOURCE_PROBES:
+        endpoint = endpoint_template.format(channel=channel)
+        response = _probe_stream(client, f"{base_url}{endpoint}", timeout) if source_type == "stream" else _get_xml(client, f"{base_url}{endpoint}", timeout)
+        data_sources.append({
+            "name": name,
+            "available": bool(response.get("ok")),
+            "status_code": response.get("status_code"),
+            "detail": response.get("detail"),
+        })
+
     report_start, report_end = _latest_completed_day()
     report_response = _request_xml(
         client,
@@ -261,5 +298,6 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
         "capabilities": capabilities,
         "multi_target_detection": {"active": multi_target_enabled},
         "report": report,
+        "data_sources": data_sources,
         "message": message,
     }
