@@ -77,12 +77,13 @@ def _digest_opener(base_url: str, username: str, password: str):
     return build_opener(HTTPDigestAuthHandler(password_manager))
 
 
-def _request_xml(opener, url: str, timeout: int, method: str = "GET", body: bytes | None = None) -> dict:
+def _request_xml(opener, url: str, timeout: int, method: str = "GET", body: bytes | None = None, extra_headers: dict[str, str] | None = None) -> dict:
     request = Request(
         url,
         headers={
             "Accept": "application/xml, text/xml, application/json",
             **({"Content-Type": "application/xml; charset=utf-8"} if body else {}),
+            **(extra_headers or {}),
         },
         data=body,
         method=method,
@@ -315,7 +316,7 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
     })
     events_address = next((value for value in onvif_addresses if "/onvif/Events" in value), "")
     if events_address:
-        events_response = _request_xml(client, events_address, timeout, method="POST", body=_onvif_event_properties_query(username, password))
+        events_response = _request_xml(client, events_address, timeout, method="POST", body=_onvif_event_properties_query(username, password), extra_headers={"Content-Type": "application/soap+xml; charset=utf-8; action=\"http://www.onvif.org/ver10/events/wsdl/EventPortType/GetEventPropertiesRequest\""})
         topics = sorted({_local_name(element.tag) for element in events_response.get("root", []).iter()})[:60] if events_response.get("ok") else []
         data_sources.append({"name": "ONVIF event topics", "available": bool(events_response.get("ok")), "status_code": events_response.get("status_code"), "detail": "Available: " + ", ".join(topics) if topics else events_response.get("detail")})
 
