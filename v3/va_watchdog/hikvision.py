@@ -218,8 +218,9 @@ def _onvif_capabilities_query() -> bytes:
     ).encode("utf-8")
 
 
-def _onvif_event_properties_query(username: str, password: str) -> bytes:
-    return ('<?xml version="1.0" encoding="UTF-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tev="http://www.onvif.org/ver10/events/wsdl" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"><s:Header><wsse:Security><wsse:UsernameToken><wsse:Username>' + xml_escape(username) + '</wsse:Username><wsse:Password>' + xml_escape(password) + '</wsse:Password></wsse:UsernameToken></wsse:Security></s:Header><s:Body><tev:GetEventProperties/></s:Body></s:Envelope>').encode("utf-8")
+def _onvif_event_properties_query(username: str, password: str, address: str) -> bytes:
+    action = "http://www.onvif.org/ver10/events/wsdl/EventPortType/GetEventPropertiesRequest"
+    return ('<?xml version="1.0" encoding="UTF-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tev="http://www.onvif.org/ver10/events/wsdl" xmlns:wsa="http://www.w3.org/2005/08/addressing" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"><s:Header><wsa:To>' + xml_escape(address) + '</wsa:To><wsa:Action>' + action + '</wsa:Action><wsse:Security><wsse:UsernameToken><wsse:Username>' + xml_escape(username) + '</wsse:Username><wsse:Password>' + xml_escape(password) + '</wsse:Password></wsse:UsernameToken></wsse:Security></s:Header><s:Body><tev:GetEventProperties/></s:Body></s:Envelope>').encode("utf-8")
 
 
 def _report_summary(root: ET.Element) -> dict:
@@ -316,7 +317,7 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
     })
     events_address = next((value for value in onvif_addresses if "/onvif/Events" in value), "")
     if events_address:
-        events_response = _request_xml(client, events_address, timeout, method="POST", body=_onvif_event_properties_query(username, password), extra_headers={"Content-Type": "application/soap+xml; charset=utf-8; action=\"http://www.onvif.org/ver10/events/wsdl/EventPortType/GetEventPropertiesRequest\""})
+        events_response = _request_xml(client, events_address, timeout, method="POST", body=_onvif_event_properties_query(username, password, events_address), extra_headers={"Content-Type": "application/soap+xml; charset=utf-8; action=\"http://www.onvif.org/ver10/events/wsdl/EventPortType/GetEventPropertiesRequest\""})
         topics = sorted({_local_name(element.tag) for element in events_response.get("root", []).iter()})[:60] if events_response.get("ok") else []
         data_sources.append({"name": "ONVIF event topics", "available": bool(events_response.get("ok")), "status_code": events_response.get("status_code"), "detail": "Available: " + ", ".join(topics) if topics else events_response.get("detail")})
 
