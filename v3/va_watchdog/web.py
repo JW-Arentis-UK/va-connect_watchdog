@@ -1312,6 +1312,7 @@ def start_web(cfg):
                 + (lambda summary: "<div class=\"operational-list\"><div class=\"operational-row\"><div class=\"operational-area\">Event collector</div><div class=\"operational-detail\">"
                    + escape(str(summary.get("status") or "Disabled"))
                    + ("; last camera notification: " + escape(str(summary.get("last_notification_type"))) if summary.get("last_notification_type") else "")
+                   + ("; metadata: " + escape(", ".join(summary.get("metadata_fields", []))) if summary.get("metadata_fields") else "")
                    + "</div><div class=\"operational-state " + ("healthy" if summary.get("status") in {"listening", "receiving"} else "warning") + "\">"
                    + ("Listening" if summary.get("status") in {"listening", "receiving"} else "Waiting")
                    + "</div></div><div class=\"operational-row\"><div class=\"operational-area\">Today's captured events</div><div class=\"operational-detail\">A to B: "

@@ -154,12 +154,41 @@ class HikvisionEventCollector:
         self.event_log = event_log
         self.thread = threading.Thread(target=self._run, name="hikvision-events", daemon=True)
         self.counter_thread = threading.Thread(target=self._counter_loop, name="hikvision-counters", daemon=True)
+        self.metadata_thread = threading.Thread(target=self._metadata_loop, name="hikvision-metadata", daemon=True)
         self._last_state_signature: tuple[tuple[str, str], ...] | None = None
         self._last_counter_signature: tuple[tuple[str, str], ...] | None = None
 
     def start(self) -> None:
         self.thread.start()
         self.counter_thread.start()
+        self.metadata_thread.start()
+
+    def _metadata_loop(self) -> None:
+        """Sample analytics metadata only; video and image payloads are never read or stored."""
+        while True:
+            camera = self.cfg.get("people_counting", {}) if isinstance(self.cfg.get("people_counting"), dict) else {}
+            if not bool(camera.get("event_collection_enabled")) or not all(camera.get(key) for key in ("address", "username", "password")):
+                time.sleep(10)
+                continue
+            try:
+                base_url = _base_url(camera)
+                opener = _digest_opener(base_url, str(camera["username"]), str(camera["password"]))
+                channel = int(camera.get("channel") or 1)
+                request = Request(f"{base_url}/ISAPI/Streaming/channels/{channel}/metadata", headers={"Accept": "application/xml"})
+                with opener.open(request, timeout=30) as response:
+                    while True:
+                        chunk = response.read(8192)
+                        if not chunk:
+                            break
+                        text = chunk.decode("utf-8", errors="ignore")
+                        tags = sorted(set(re.findall(r"<([A-Za-z][A-Za-z0-9_:.-]*)", text)))[:40]
+                        target_types = sorted(set(re.findall(r"<(?:targetType|type)>\s*([^<\s]{1,40})", text, flags=re.I)))[:12]
+                        if tags or target_types:
+                            self._write_state(status="metadata listening", last_metadata_at=datetime.now(timezone.utc).isoformat(), metadata_fields=tags, metadata_target_types=target_types)
+            except (HTTPError, URLError, socket.timeout, OSError):
+                time.sleep(10)
+            except Exception:
+                time.sleep(10)
 
     def _write_state(self, **values: Any) -> None:
         _, path = event_paths(self.cfg)
