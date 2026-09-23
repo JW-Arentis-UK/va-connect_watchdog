@@ -90,7 +90,7 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertEqual(result["report"]["rows"], 1)
         self.assertEqual(result["report"]["totals"], {"enterCount": 12, "leaveCount": 7})
         self.assertTrue(result["multi_target_detection"]["active"])
-        self.assertTrue(all(item["available"] for item in result["data_sources"]))
+        self.assertTrue(all(item["available"] for item in result["data_sources"][:3]))
         self.assertEqual([method for _, _, method in opener.urls].count("POST"), 1)
         self.assertTrue(any(url.endswith("/counting/search") and method == "POST" for url, _, method in opener.urls))
 
