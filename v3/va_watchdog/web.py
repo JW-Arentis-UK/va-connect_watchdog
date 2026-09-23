@@ -2618,7 +2618,7 @@ def start_web(cfg):
         capability_rows = "".join(
             "<tr>"
             f"<th>{escape(str(item.get('family') or '-'))}</th>"
-            f"<td class=\"{'healthy' if item.get('supported') else 'muted'}\">{'Supported' if item.get('supported') else escape(str(item.get('detail') or 'Not available'))}</td>"
+            f"<td class=\"{'healthy' if item.get('supported') else 'muted'}\">{escape(str(item.get('detail') or ('Supported' if item.get('supported') else 'Not available')))}</td>"
             "</tr>"
             for item in result.get("capabilities", [])
             if isinstance(item, dict)
