@@ -123,6 +123,9 @@ class HikvisionProbeTests(unittest.TestCase):
         unreachable = URLError("timed out")
         opener = FakeOpener({
             f"{base}/ISAPI/System/deviceInfo": unreachable,
+            f"{base}/ISAPI/Intelligent/capabilities": unreachable,
+            f"{base}/ISAPI/Intelligent/channels/1/capabilities": unreachable,
+            f"{base}/ISAPI/Intelligent/channels/1/mixedTargetDetection/capabilities": unreachable,
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/capabilities": unreachable,
             f"{base}/ISAPI/Intelligent/channels/1/framesPeopleCounting/capabilities": unreachable,
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search/capabilities": unreachable,
