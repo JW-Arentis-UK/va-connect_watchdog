@@ -56,6 +56,9 @@ class HikvisionProbeTests(unittest.TestCase):
                 "<serialNumber>secret-serial</serialNumber><firmwareVersion>V5.8.60</firmwareVersion>"
                 "<firmwareReleasedDate>240807</firmwareReleasedDate></DeviceInfo>"
             ),
+            f"{base}/ISAPI/Intelligent/capabilities": FakeResponse("<IntelligentCap/>") ,
+            f"{base}/ISAPI/Intelligent/channels/1/capabilities": FakeResponse("<ChannelIntelligentCap/>") ,
+            f"{base}/ISAPI/Intelligent/channels/1/mixedTargetDetection/capabilities": FakeResponse("<MixedTargetCap/>") ,
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/capabilities": FakeResponse("<CountingCap/>"),
             f"{base}/ISAPI/Intelligent/channels/1/framesPeopleCounting/capabilities": HTTPError(
                 f"{base}/area", 404, "Not Found", {}, None
@@ -85,8 +88,9 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertNotIn("serialNumber", result["device"])
         self.assertNotIn("password", result)
         self.assertTrue(result["capabilities"][0]["supported"])
-        self.assertFalse(result["capabilities"][1]["supported"])
-        self.assertTrue(result["capabilities"][2]["supported"])
+        self.assertTrue(result["capabilities"][3]["supported"])
+        self.assertFalse(result["capabilities"][4]["supported"])
+        self.assertTrue(result["capabilities"][5]["supported"])
         self.assertEqual(result["report"]["rows"], 1)
         self.assertEqual(result["report"]["totals"], {"enterCount": 12, "leaveCount": 7})
         self.assertTrue(result["multi_target_detection"]["active"])

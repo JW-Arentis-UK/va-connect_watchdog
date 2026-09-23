@@ -11,6 +11,18 @@ from urllib.request import HTTPDigestAuthHandler, HTTPPasswordMgrWithDefaultReal
 
 _CAPABILITY_PROBES = (
     (
+        "Intelligent analytics capabilities",
+        "/ISAPI/Intelligent/capabilities",
+    ),
+    (
+        "Channel intelligent analytics capabilities",
+        "/ISAPI/Intelligent/channels/{channel}/capabilities",
+    ),
+    (
+        "Multi-target detection capabilities",
+        "/ISAPI/Intelligent/channels/{channel}/mixedTargetDetection/capabilities",
+    ),
+    (
         "Entrance / exit counting",
         "/ISAPI/System/Video/inputs/channels/{channel}/counting/capabilities",
     ),
