@@ -1323,6 +1323,7 @@ def start_web(cfg):
                     if people_cfg.get("address") and people_cfg.get("username") and people_cfg.get("password")
                     else "<p class=\"warning\">Enter the camera details and save settings before running the test.</p>"
                 )
+                + ("<div class=\"button-row\"><form class=\"inline\" method=\"post\" action=\"/hikvision-route-capture-start\"><button class=\"ghost\" type=\"submit\">Capture camera statistics request</button></form></div>" if people_cfg.get("address") else "")
                 + "<p class=\"muted\">For routine use, a dedicated read-only camera account is preferable to the administrator account.</p>"
             )
             recovery_settings = (
@@ -2654,6 +2655,39 @@ def start_web(cfg):
             "<div class=\"button-row\"><a class=\"ghost\" href=\"/setup\">Back to Setup</a></div></div>"
         )
         return page_shell(body, "Setup")
+
+    def hikvision_capture_started_html(result):
+        body = (
+            "<meta http-equiv=\"refresh\" content=\"70;url=/setup\">"
+            "<div class=\"card action-panel\"><h2>Capture Camera Statistics Request</h2>"
+            f"<p class=\"{'healthy' if result.get('ok') else 'critical'}\">{escape(str(result.get('message')))}</p>"
+            "<p>Now return to the camera statistics page and press <strong>Search</strong> once. This capture ends after one minute and returns to Setup automatically.</p>"
+            "<p class=\"muted\">Only HTTP request paths are retained. Headers, passwords, cookies and response data are discarded.</p></div>"
+        )
+        return page_shell(body, "Setup")
+
+    def start_hikvision_route_capture():
+        camera = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting", {}), dict) else {}
+        address = str(camera.get("address") or "").strip()
+        if not address:
+            return {"ok": False, "message": "Save a camera address first."}
+        state_path = data_dir / "hikvision-route-capture.json"
+        def collect():
+            try:
+                result = subprocess.run(["tcpdump", "-i", "any", "-l", "-A", "-s", "1024", "host", address, "and", "tcp", "port", str(camera.get("port") or 80)], capture_output=True, text=True, timeout=60, check=False)
+                paths = sorted(set(re.findall(r"(?m)^(?:GET|POST)\s+([^\s?]+(?:\?[^\s]*)?)\s+HTTP", result.stdout)))[:50]
+                payload = {"status": "complete", "paths": paths, "captured_at": datetime.now().astimezone().isoformat()}
+            except subprocess.TimeoutExpired as exc:
+                output = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
+                paths = sorted(set(re.findall(r"(?m)^(?:GET|POST)\s+([^\s?]+(?:\?[^\s]*)?)\s+HTTP", output)))[:50]
+                payload = {"status": "complete", "paths": paths, "captured_at": datetime.now().astimezone().isoformat()}
+            except Exception as exc:
+                payload = {"status": "failed", "message": str(exc)[:160], "captured_at": datetime.now().astimezone().isoformat()}
+            temporary = state_path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(payload), encoding="utf-8")
+            temporary.replace(state_path)
+        Thread(target=collect, name="hikvision-route-capture", daemon=True).start()
+        return {"ok": True, "message": "Capture started for 60 seconds."}
 
     def web_link_action_result_html(result):
         body = (
@@ -6486,6 +6520,16 @@ def start_web(cfg):
                         },
                     )
                 body = hikvision_test_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 400)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/hikvision-route-capture-start":
+                result = start_hikvision_route_capture()
+                body = hikvision_capture_started_html(result).encode("utf-8")
                 self.send_response(200 if result.get("ok") else 400)
                 self.send_header("Content-Type", "text/html")
                 self.send_header("Content-Length", str(len(body)))
