@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPO_DIR="$(cd "$ROOT_DIR/.." && pwd)"
+VENV_DIR="$REPO_DIR/.venv"
 STATE_DIR="${VA_WATCHDOG_STATE_DIR:-/var/lib/va-watchdog}"
 STATE_FILE="${VA_WATCHDOG_STATE_FILE:-$STATE_DIR/update-state.json}"
 LOG_FILE="${VA_WATCHDOG_LOG_FILE:-$STATE_DIR/update.log}"
@@ -61,6 +62,20 @@ log "update started branch=$BRANCH remote=$REMOTE commit=$commit_before"
 "${GIT[@]}" pull --ff-only "$REMOTE" "$BRANCH"
 commit_after="$("${GIT[@]}" rev-parse --short HEAD)"
 log "update pulled commit=$commit_after"
+
+if [ -s "$ROOT_DIR/requirements.txt" ]; then
+  log "installing Watchdog Python dependencies in isolated runtime"
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required" >&2
+    exit 1
+  fi
+  if [ ! -x "$VENV_DIR/bin/python" ]; then
+    apt-get update
+    apt-get install -y python3-venv
+    python3 -m venv "$VENV_DIR"
+  fi
+  "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check --upgrade -r "$ROOT_DIR/requirements.txt"
+fi
 
 if [ -f "$ROOT_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" ]; then
   if HARDWARE_PROFILE="$(PYTHONPATH="$ROOT_DIR" python3 -m va_watchdog.hardware_profile 2>&1)"; then

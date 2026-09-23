@@ -1,7 +1,7 @@
 import unittest
 from urllib.error import HTTPError, URLError
 
-from va_watchdog.hikvision import _onvif_event_properties_query, probe_people_counting
+from va_watchdog.hikvision import _onvif_client_event_topics, _onvif_event_properties_query, probe_people_counting
 from va_watchdog.hikvision_events import HikvisionEventCollector, notification_diagnostic, parse_notification
 
 
@@ -111,6 +111,32 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertIn("<wsa:MessageID>urn:uuid:", query)
         self.assertIn("<wsa:ReplyTo>", query)
         self.assertNotIn("camera-secret", query)
+
+    def test_onvif_client_uses_camera_events_service_without_exposing_credentials(self):
+        calls = []
+
+        class FakeEvents:
+            def GetEventProperties(self):
+                calls.append("properties")
+
+        class FakeCamera:
+            def __init__(self, host, port, username, password, **options):
+                calls.append((host, port, username, password, options))
+
+            def create_events_service(self):
+                return FakeEvents()
+
+        result = _onvif_client_event_topics(
+            self.settings(),
+            "http://192.168.1.72/onvif/Events",
+            camera_factory=FakeCamera,
+        )
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["detail"], "Available through ONVIF client")
+        self.assertEqual(calls[0][:3], ("192.168.1.72", 80, "operator"))
+        self.assertTrue(calls[0][4]["adjust_time"])
+        self.assertNotIn("not-returned", str(result))
 
     def test_probe_distinguishes_authentication_failure(self):
         settings = self.settings()

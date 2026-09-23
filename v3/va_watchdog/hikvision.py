@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import HTTPDigestAuthHandler, HTTPPasswordMgrWithDefaultRealm, Request, build_opener
 
 
@@ -234,6 +235,38 @@ def _onvif_event_properties_query(username: str, password: str, address: str) ->
     return ('<?xml version="1.0" encoding="UTF-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tev="http://www.onvif.org/ver10/events/wsdl" xmlns:wsa="http://www.w3.org/2005/08/addressing" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"><s:Header><wsa:MessageID>' + message_id + '</wsa:MessageID><wsa:To>' + xml_escape(address) + '</wsa:To><wsa:Action>' + action + '</wsa:Action><wsa:ReplyTo><wsa:Address>http://www.w3.org/2005/08/addressing/anonymous</wsa:Address></wsa:ReplyTo><wsse:Security s:mustUnderstand="1"><wsse:UsernameToken><wsse:Username>' + xml_escape(username) + '</wsse:Username><wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">' + digest + '</wsse:Password><wsse:Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">' + nonce_text + '</wsse:Nonce><wsu:Created>' + created + '</wsu:Created></wsse:UsernameToken></wsse:Security></s:Header><s:Body><tev:GetEventProperties/></s:Body></s:Envelope>').encode("utf-8")
 
 
+def _onvif_client_event_topics(settings: dict, events_address: str, camera_factory=None) -> dict:
+    """Use the maintained ONVIF client for a read-only event capability query."""
+    if camera_factory is None:
+        try:
+            from onvif import ONVIFCamera
+        except ImportError:
+            return {"available": False, "installed": False, "detail": "ONVIF client is not installed"}
+        camera_factory = ONVIFCamera
+
+    endpoint = urlsplit(events_address)
+    host = endpoint.hostname
+    if not host:
+        return {"available": False, "installed": True, "detail": "Camera advertised an invalid ONVIF Events address"}
+    port = endpoint.port or (443 if endpoint.scheme == "https" else 80)
+    try:
+        camera = camera_factory(
+            host,
+            port,
+            str(settings.get("username") or ""),
+            str(settings.get("password") or ""),
+            adjust_time=True,
+        )
+        camera.create_events_service().GetEventProperties()
+    except Exception as exc:
+        return {
+            "available": False,
+            "installed": True,
+            "detail": f"ONVIF client request failed ({type(exc).__name__})",
+        }
+    return {"available": True, "installed": True, "detail": "Available through ONVIF client"}
+
+
 def _report_summary(root: ET.Element) -> dict:
     rows = [element for element in root.iter() if _local_name(element.tag) in {"CountingStatistics", "countingStatistics"}]
     totals: dict[str, int] = {}
@@ -328,9 +361,13 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
     })
     events_address = next((value for value in onvif_addresses if "/onvif/Events" in value), "")
     if events_address:
-        events_response = _request_xml(client, events_address, timeout, method="POST", body=_onvif_event_properties_query(username, password, events_address), extra_headers={"Content-Type": "application/soap+xml; charset=utf-8; action=\"http://www.onvif.org/ver10/events/wsdl/EventPortType/GetEventPropertiesRequest\""})
-        topics = sorted({_local_name(element.tag) for element in events_response.get("root", []).iter()})[:60] if events_response.get("ok") else []
-        data_sources.append({"name": "ONVIF event topics", "available": bool(events_response.get("ok")), "status_code": events_response.get("status_code"), "detail": "Available: " + ", ".join(topics) if topics else events_response.get("detail")})
+        event_client = _onvif_client_event_topics(settings, events_address)
+        if event_client["installed"]:
+            data_sources.append({"name": "ONVIF event topics", "available": event_client["available"], "status_code": 200 if event_client["available"] else None, "detail": event_client["detail"]})
+        else:
+            events_response = _request_xml(client, events_address, timeout, method="POST", body=_onvif_event_properties_query(username, password, events_address), extra_headers={"Content-Type": "application/soap+xml; charset=utf-8; action=\"http://www.onvif.org/ver10/events/wsdl/EventPortType/GetEventPropertiesRequest\""})
+            topics = sorted({_local_name(element.tag) for element in events_response.get("root", []).iter()})[:60] if events_response.get("ok") else []
+            data_sources.append({"name": "ONVIF event topics", "available": bool(events_response.get("ok")), "status_code": events_response.get("status_code"), "detail": "Available: " + ", ".join(topics) if topics else events_response.get("detail")})
 
     report_start, report_end = _latest_completed_day()
     report_response = _request_xml(

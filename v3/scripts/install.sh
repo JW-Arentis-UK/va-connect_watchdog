@@ -5,13 +5,14 @@ INSTALL_DIR="${VA_WATCHDOG_INSTALL_DIR:-/opt/va-connect-watchdog-v3}"
 CONFIG_DIR="${VA_WATCHDOG_CONFIG_DIR:-/etc/va-watchdog}"
 DATA_DIR="${VA_WATCHDOG_DATA_DIR:-/var/lib/va-watchdog}"
 APP_DIR="$INSTALL_DIR/v3"
+VENV_DIR="$INSTALL_DIR/.venv"
 CONFIG_PATH="$CONFIG_DIR/config.json"
 SITE_NAME="${VA_WATCHDOG_SITE_NAME:-}"
 ASSET_ID="${VA_WATCHDOG_ASSET_ID:-}"
 ENABLE_PERSISTENT_JOURNAL="${VA_WATCHDOG_ENABLE_PERSISTENT_JOURNAL:-0}"
 
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-  exec sudo --preserve-env=VA_WATCHDOG_INSTALL_DIR,VA_WATCHDOG_CONFIG_DIR,VA_WATCHDOG_DATA_DIR,VA_WATCHDOG_SITE_NAME,VA_WATCHDOG_ASSET_ID,VA_WATCHDOG_ENABLE_PERSISTENT_JOURNAL "$0" "$@"
+  exec sudo --preserve-env=VA_WATCHDOG_APT_SOURCES,VA_WATCHDOG_INSTALL_DIR,VA_WATCHDOG_CONFIG_DIR,VA_WATCHDOG_DATA_DIR,VA_WATCHDOG_SITE_NAME,VA_WATCHDOG_ASSET_ID,VA_WATCHDOG_ENABLE_PERSISTENT_JOURNAL "$0" "$@"
 fi
 
 log() {
@@ -23,6 +24,13 @@ fail() {
   exit 1
 }
 
+APT_OPTIONS=()
+if [[ -n "${VA_WATCHDOG_APT_SOURCES:-}" ]]; then
+  [[ "$VA_WATCHDOG_APT_SOURCES" == /* && -s "$VA_WATCHDOG_APT_SOURCES" ]] || fail "APT sources must be an absolute path to a non-empty file"
+  APT_OPTIONS=(-o "Dir::Etc::sourcelist=$VA_WATCHDOG_APT_SOURCES" -o "Dir::Etc::sourceparts=-")
+  log "Using only APT sources from $VA_WATCHDOG_APT_SOURCES (signature checks remain enabled)"
+fi
+
 [[ -d "$APP_DIR/va_watchdog" ]] || fail "Application package was not found at $APP_DIR/va_watchdog"
 [[ -f "$APP_DIR/config.example.json" ]] || fail "Example configuration is missing"
 [[ -f "$APP_DIR/systemd/va-watchdog.service" ]] || fail "Main systemd unit is missing"
@@ -30,11 +38,19 @@ fail() {
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
 command -v systemctl >/dev/null 2>&1 || fail "systemd is required"
 
+if [[ -s "$APP_DIR/requirements.txt" ]]; then
+  log "Installing Watchdog Python dependencies in an isolated runtime"
+  apt-get "${APT_OPTIONS[@]}" update
+  apt-get "${APT_OPTIONS[@]}" install -y python3-venv
+  python3 -m venv "$VENV_DIR"
+  "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check --upgrade -r "$APP_DIR/requirements.txt"
+fi
+
 if [[ -f "$APP_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" ]]; then
   if HARDWARE_PROFILE="$(PYTHONPATH="$APP_DIR" python3 -m va_watchdog.hardware_profile 2>&1)"; then
     log "Installing bundled Neousys WDT_DIO driver on $HARDWARE_PROFILE without activating hardware feeding"
-    apt-get update
-    apt-get install -y build-essential dkms gcc-12 "linux-headers-$(uname -r)" unzip
+    apt-get "${APT_OPTIONS[@]}" update
+    apt-get "${APT_OPTIONS[@]}" install -y build-essential dkms gcc-12 "linux-headers-$(uname -r)" unzip
     /bin/bash "$APP_DIR/scripts/install_neousys_wdt.sh"
   else
     log "Skipping POC-451VTC watchdog driver: $HARDWARE_PROFILE"
