@@ -240,11 +240,15 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
     for family, endpoint_template in _CAPABILITY_PROBES:
         endpoint = endpoint_template.format(channel=channel)
         response = _get_xml(client, f"{base_url}{endpoint}", timeout)
+        detail = response.get("detail")
+        if response.get("ok") and response.get("root") is not None:
+            names = sorted({_local_name(element.tag) for element in response["root"].iter()})[:80]
+            detail = "Supported: " + ", ".join(names)
         capabilities.append({
             "family": family,
             "supported": bool(response.get("ok")),
             "status_code": response.get("status_code"),
-            "detail": response.get("detail"),
+            "detail": detail,
         })
 
     multi_target_response = _get_json(
