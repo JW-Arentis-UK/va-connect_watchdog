@@ -6697,7 +6697,10 @@ def start_web(cfg):
                             "backup_path": result.get("backup_path"),
                         })
                     except Exception as exc:
-                        result = {"ok": False, "message": f"Camera delivery configuration failed ({type(exc).__name__}): {str(exc)[:160]}"}
+                        detail = str(exc)[:300]
+                        if "badXmlContent" in detail:
+                            detail += ". Do not retry yet; run the native API diagnostic and review the three HTTP rows."
+                        result = {"ok": False, "message": f"Camera delivery configuration failed ({type(exc).__name__}): {detail}"}
                 body = hikvision_push_result_html(result).encode("utf-8")
                 self.send_response(200 if result.get("ok") else 400)
                 self.send_header("Content-Type", "text/html; charset=utf-8")

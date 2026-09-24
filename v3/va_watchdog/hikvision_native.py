@@ -118,6 +118,7 @@ def native_diagnostics(settings, opener=None, budget_seconds=25):
     base = _base_url(settings)
     client = opener or _digest_opener(base, str(settings["username"]), str(settings["password"]))
     channel = int(settings.get("channel") or 1)
+    push_slot = max(1, min(12, int(settings.get("push_slot") or 1)))
     paths = [
         ("Camera identity", "/ISAPI/System/deviceInfo"),
         ("Full system capabilities", "/ISAPI/System/capabilities?type=all"),
@@ -125,6 +126,7 @@ def native_diagnostics(settings, opener=None, budget_seconds=25):
         ("Region target counting capabilities", f"/ISAPI/Event/channels/{channel}/RegionTargetNumberCounting/Capabilities?format=json"),
         ("HTTP upload capabilities", "/ISAPI/Event/notification/httpHosts/capabilities"),
         ("Existing HTTP upload destinations", "/ISAPI/Event/notification/httpHosts"),
+        ("Selected HTTP upload slot schema", f"/ISAPI/Event/notification/httpHosts/{push_slot}"),
         ("HTTP event subscription capabilities", "/ISAPI/Event/notification/subscribeEventCap"),
         ("Active multi-target configuration", f"/ISAPI/Intelligent/channels/{channel}/mixedTargetDetection?format=json"),
     ]
@@ -148,12 +150,26 @@ def native_diagnostics(settings, opener=None, budget_seconds=25):
             row["ok"] = 200 <= row["status_code"] < 300 and not error
             details = []
             if isinstance(document, ET.Element):
+                if name in {"HTTP upload capabilities", "Selected HTTP upload slot schema",
+                            "HTTP event subscription capabilities"}:
+                    namespace = document.tag[1:].split("}", 1)[0] if document.tag.startswith("{") else "none"
+                    fields = ",".join(child.tag.rsplit("}", 1)[-1] for child in document)
+                    details.extend((f"root={document.tag.rsplit('}', 1)[-1]}",
+                                    f"namespace={namespace[:120]}", f"fields={fields[:1000]}"))
                 for node in document.iter():
                     name_key = node.tag.rsplit("}", 1)[-1]
                     options = node.get("opt", "")
                     if (any(word in name_key.lower() for word in ("eventtype", "count", "target", "statistic", "direction"))
                             or "regionTargetNumberCounting" in options) and re.fullmatch(r"[A-Za-z0-9_, .:-]{1,1500}", options):
                         details.append(f"{name_key}.options={options}")
+                    if name in {"HTTP upload capabilities", "HTTP event subscription capabilities"}:
+                        safe_attributes = []
+                        for attribute in ("opt", "min", "max", "def", "req"):
+                            value = node.get(attribute, "")
+                            if value and re.fullmatch(r"[A-Za-z0-9_, .:/-]{1,1500}", value):
+                                safe_attributes.append(f"{attribute}={value}")
+                        if safe_attributes:
+                            details.append(f"{name_key}[{','.join(safe_attributes)}]")
             for key, value in scalar_fields(document):
                 lowered = key.lower()
                 if any(word in lowered for word in ("password", "secret", "token", "username", "serial", "cookie", "authorization")):
@@ -164,6 +180,11 @@ def native_diagnostics(settings, opener=None, budget_seconds=25):
                     details.append(f"{key}={value.lower()}")
                 elif name == "Existing HTTP upload destinations" and lowered in {"id", "ipaddress", "portno", "protocoltype"}:
                     details.append(f"{key}={value[:100]}")
+                elif name == "Selected HTTP upload slot schema" and lowered in {
+                        "id", "protocoltype", "parameterformattype", "addressingformattype", "portno",
+                        "httpauthenticationmethod", "uploadimagesdatatype", "httpbroken", "eventmode"}:
+                    if re.fullmatch(r"[A-Za-z0-9_, .:/-]{0,120}", value):
+                        details.append(f"{key}={value}")
                 elif any(word in lowered for word in ("eventtype", "statistic", "count", "direction", "alarmhost",
                                                        "parameterformat", "authentication", "uploadimages")) and re.fullmatch(r"[A-Za-z0-9_, .:/-]{1,120}", value):
                     details.append(f"{key}={value}")

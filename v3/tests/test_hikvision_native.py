@@ -107,16 +107,22 @@ class NativeTests(unittest.TestCase):
         self.assertIn("invalidOperation", response["detail"])
 
     def test_native_diagnostic_only_gets_and_hides_credentials(self):
-        client = FakeOpener({"http://192.168.1.72/ISAPI/Event/notification/httpHosts":
-            FakeResponse('<HttpHosts><HttpHost><id>1</id><ipAddress>192.168.1.100</ipAddress><portNo>9110</portNo><password>test-secret</password><url>/secret-token</url></HttpHost></HttpHosts>')})
+        base = "http://192.168.1.72/ISAPI/Event/notification/httpHosts"
+        client = FakeOpener({
+            base: FakeResponse('<HttpHosts><HttpHost><id>1</id><ipAddress>192.168.1.100</ipAddress><portNo>9110</portNo><password>test-secret</password><url>/secret-token</url></HttpHost></HttpHosts>'),
+            base + '/capabilities': FakeResponse('<HttpHostNotificationCap xmlns="urn:test"><portNo min="1" max="65535"/><parameterFormatType opt="XML,JSON"/></HttpHostNotificationCap>'),
+            base + '/1': FakeResponse('<HttpHostNotification xmlns="urn:test"><id>1</id><protocolType>HTTP</protocolType><parameterFormatType>XML</parameterFormatType><userName>admin</userName><password>test-secret</password><url>/secret-token</url></HttpHostNotification>'),
+        })
         result = native_diagnostics(CAMERA, client)
-        self.assertEqual(len(result["requests"]), 8)
+        self.assertEqual(len(result["requests"]), 9)
         self.assertTrue(all(method == "GET" for _, _, method in client.urls))
         self.assertIn("192.168.1.100", str(result))
         self.assertNotIn("test-secret", str(result))
         self.assertNotIn("secret-token", str(result))
         self.assertTrue(any("RegionTargetNumberCounting/Capabilities?format=json" in url for url, _, _ in client.urls))
         self.assertTrue(any("subscribeEventCap" in url for url, _, _ in client.urls))
+        self.assertIn("parameterFormatType[opt=XML,JSON]", str(result))
+        self.assertIn("fields=id,protocolType,parameterFormatType,userName,password,url", str(result))
 
     def test_http_push_configuration_uses_documented_event_and_preserves_backup(self):
         class SequenceOpener:
@@ -186,7 +192,7 @@ class NativeTests(unittest.TestCase):
 
     def test_deadline_and_size_are_bounded(self):
         client = FakeOpener({})
-        with patch("va_watchdog.hikvision_native.time.monotonic", side_effect=[0] + [40] * 8):
+        with patch("va_watchdog.hikvision_native.time.monotonic", side_effect=[0] + [40] * 9):
             result = native_diagnostics(CAMERA, client)
         self.assertEqual(client.urls, [])
         self.assertIn("budget", result["requests"][0]["detail"])
