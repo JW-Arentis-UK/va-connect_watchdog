@@ -2692,7 +2692,7 @@ def start_web(cfg):
             f"<div class=\"label\">Camera</div><div class=\"value\">{escape(str(camera.get('address') or '-'))}</div>"
             f"<div class=\"label\">Slot</div><div class=\"value\">{slot}</div>"
             f"<div class=\"label\">Destination</div><div class=\"value\">{escape(destination)}</div>"
-            "<div class=\"label\">Subscribed event</div><div class=\"value\">regionTargetNumberCounting, saved without images or video</div>"
+            "<div class=\"label\">Subscription</div><div class=\"value\">Channel event metadata; only counting events are retained, without images or video</div>"
             "<form method=\"post\" action=\"/hikvision-push-configure\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> I understand this changes the selected camera upload slot.</label>"
             "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Configure camera delivery</button><a class=\"ghost\" href=\"/setup\">Cancel</a></div></form></div>"
         )
@@ -6521,20 +6521,26 @@ def start_web(cfg):
                     return
                 payload = self.rfile.read(length)
                 accepted = 0
+                ignored = 0
                 for document in metadata_documents(self.headers.get("Content-Type", ""), payload):
                     event = parse_notification(document)
-                    if event:
+                    event_type = re.sub(r"[^a-z0-9]", "", str((event or {}).get("event_type") or "").lower())
+                    is_counting = bool((event or {}).get("counts")) or "count" in event_type
+                    if event and is_counting:
                         record_push_event(cfg, event)
                         append_web_event("info", "people_counting", "Hikvision HTTP event metadata received", {
                             "event_type": event.get("event_type"), "channel": event.get("channel"),
                             "counts": event.get("counts", {}), "schema_recognised": event.get("schema_recognised", False),
                         })
                         accepted += 1
+                    elif event:
+                        ignored += 1
                     else:
                         diagnostic = notification_diagnostic(document)
                         if diagnostic:
                             append_web_event("info", "people_counting", "Unrecognised Hikvision HTTP event metadata received", diagnostic)
-                self._send_json({"statusCode": 1, "statusString": "OK", "subStatusCode": "ok", "accepted": accepted})
+                self._send_json({"statusCode": 1, "statusString": "OK", "subStatusCode": "ok",
+                                 "accepted": accepted, "ignored": ignored})
                 return
             if route_path in {"/web-link-add", "/web-link-update", "/web-link-delete"}:
                 try:

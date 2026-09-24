@@ -134,15 +134,26 @@ class NativeTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertIn(b"0.0.0.0", backup.read_bytes())
         body = opener.requests[1].data
-        self.assertIn(b"regionTargetNumberCounting", body)
+        self.assertIn(b"<eventMode>all</eventMode>", body)
+        self.assertIn(b"<parameterFormatType>XML</parameterFormatType>", body)
         self.assertIn(b"192.168.1.100", body)
+        self.assertNotIn(b"regionTargetNumberCounting", body)
         self.assertNotIn(CAMERA["password"].encode(), body)
         self.assertEqual(opener.requests[1].get_method(), "PUT")
+
+        class RejectingOpener(SequenceOpener):
+            def open(self, request, timeout):
+                if request.get_method() == "GET":
+                    return super().open(request, timeout)
+                body = b'<ResponseStatus><statusCode>6</statusCode><subStatusCode>badXmlContent</subStatusCode></ResponseStatus>'
+                raise HTTPError(request.full_url, 400, "Bad Request", {}, io.BytesIO(body))
+        with self.assertRaisesRegex(RuntimeError, "badXmlContent"):
+            configure_http_push(CAMERA, "192.168.1.100", 9110, opener=RejectingOpener())
 
     def test_push_multipart_discards_media(self):
         payload = part(b"private-image", b"image/jpeg") + part(counting()) + b"--test--\r\n"
         self.assertEqual(metadata_documents("multipart/mixed; boundary=test", payload), [counting()])
-        self.assertIn(b"regionTargetNumberCounting", http_host_payload(1, "192.168.1.100", 9110, 1))
+        self.assertIn(b"<eventMode>all</eventMode>", http_host_payload(1, "192.168.1.100", 9110, 1))
 
     def test_authentication_failure_stops_further_diagnostic_requests(self):
         url = "http://192.168.1.72/ISAPI/System/deviceInfo"
@@ -312,7 +323,7 @@ class SetupSmokeTests(unittest.TestCase):
                         self.assertIn(b'Native check finished', response.read())
                     diagnostic.assert_called_once()
                 with urlopen(base + '/hikvision-push-confirm', timeout=10) as response:
-                    self.assertIn(b'regionTargetNumberCounting', response.read())
+                    self.assertIn(b'only counting events are retained', response.read())
                 with patch('va_watchdog.web.configure_http_push', return_value={
                     'ok': True, 'message': 'Configured', 'url': base + '/hikvision/events',
                     'slot': 1, 'backup_path': str(Path(directory) / 'backup.xml'),

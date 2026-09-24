@@ -6,7 +6,9 @@ from the guarded Setup action and the previous slot response is returned for bac
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request
+import time
 import xml.etree.ElementTree as ET
 
 from .hikvision import _base_url, _digest_opener
@@ -38,30 +40,27 @@ def metadata_documents(content_type, payload):
 
 
 def http_host_payload(slot, receiver_address, receiver_port, channel):
-    """Build the documented HTTP-host subscription for counting metadata."""
+    """Build a broadly compatible, metadata-only HTTP-host subscription."""
     root = ET.Element("HttpHostNotification", xmlns="http://www.isapi.org/ver20/XMLSchema", version="2.0")
     values = {
         "id": str(slot),
         "url": f"http://{receiver_address}:{int(receiver_port)}/hikvision/events",
         "protocolType": "HTTP",
-        "parameterFormatType": "JSON",
+        "parameterFormatType": "XML",
         "addressingFormatType": "ipaddress",
         "ipAddress": str(receiver_address),
         "portNo": str(int(receiver_port)),
         "httpAuthenticationMethod": "none",
-        "uploadImagesDataType": "URL",
-        "httpBroken": "true",
     }
     for name, value in values.items():
         ET.SubElement(root, name).text = value
     subscribe = ET.SubElement(root, "SubscribeEvent")
     ET.SubElement(subscribe, "heartbeat").text = "30"
-    ET.SubElement(subscribe, "eventMode").text = "list"
-    event_list = ET.SubElement(subscribe, "EventList")
-    event = ET.SubElement(event_list, "Event")
-    ET.SubElement(event, "type").text = "regionTargetNumberCounting"
-    ET.SubElement(event, "channels").text = str(int(channel))
-    ET.SubElement(event, "pictureURLType").text = "localURL"
+    # Firmware families disagree on the counting event name. Subscribe to
+    # metadata for the channel and let the receiver retain counting events only.
+    ET.SubElement(subscribe, "eventMode").text = "all"
+    ET.SubElement(subscribe, "channels").text = str(int(channel))
+    ET.SubElement(subscribe, "pictureURLType").text = "localURL"
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
@@ -70,7 +69,7 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
     base = _base_url(settings)
     client = opener or _digest_opener(base, str(settings["username"]), str(settings["password"]))
     path = f"/ISAPI/Event/notification/httpHosts/{int(slot)}"
-    deadline = __import__("time").monotonic() + 12
+    deadline = time.monotonic() + 12
     with client.open(Request(base + path, headers={"Accept": "application/xml"}), timeout=5) as response:
         previous = read_bounded(response, deadline)
     if backup_path is not None:
@@ -85,9 +84,16 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
         temporary.replace(backup)
     body = http_host_payload(slot, receiver_address, receiver_port, settings.get("channel", 1))
     request = Request(base + path, data=body, method="PUT", headers={"Content-Type": "application/xml"})
-    with client.open(request, timeout=7) as response:
-        result_body = read_bounded(response, deadline)
-        status = response.getcode()
+    try:
+        with client.open(request, timeout=7) as response:
+            result_body = read_bounded(response, deadline)
+            status = response.getcode()
+    except HTTPError as exc:
+        try:
+            detail = response_error(exc.read(16 * 1024))
+        finally:
+            exc.close()
+        raise RuntimeError(detail or f"camera returned HTTP {exc.code}") from None
     error = response_error(result_body)
     if not 200 <= status < 300 or error:
         raise RuntimeError(error or f"camera returned HTTP {status}")
