@@ -125,7 +125,7 @@ class NativeTests(unittest.TestCase):
             def open(self, request, timeout):
                 self.requests.append(request)
                 if request.get_method() == "GET":
-                    return FakeResponse('<HttpHostNotification><id>1</id><ipAddress>0.0.0.0</ipAddress></HttpHostNotification>')
+                    return FakeResponse('<HttpHostNotification><id>1</id><url></url><protocolType>HTTP</protocolType><parameterFormatType>XML</parameterFormatType><addressingFormatType>ipaddress</addressingFormatType><ipAddress>0.0.0.0</ipAddress><portNo>80</portNo><userName>old</userName><password>old-secret</password><httpAuthenticationMethod>none</httpAuthenticationMethod><httpBroken>true</httpBroken></HttpHostNotification>')
                 return FakeResponse('<ResponseStatus><statusCode>1</statusCode><subStatusCode>ok</subStatusCode></ResponseStatus>')
         opener = SequenceOpener()
         with tempfile.TemporaryDirectory() as directory:
@@ -138,6 +138,8 @@ class NativeTests(unittest.TestCase):
         self.assertIn(b"<parameterFormatType>XML</parameterFormatType>", body)
         self.assertIn(b"192.168.1.100", body)
         self.assertNotIn(b"regionTargetNumberCounting", body)
+        self.assertIn(b"<httpBroken>true</httpBroken>", body)
+        self.assertNotIn(b"old-secret", body)
         self.assertNotIn(CAMERA["password"].encode(), body)
         self.assertEqual(opener.requests[1].get_method(), "PUT")
 

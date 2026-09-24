@@ -8,6 +8,7 @@ from email.parser import BytesParser
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request
+import copy
 import time
 import xml.etree.ElementTree as ET
 
@@ -84,6 +85,68 @@ def _camera_template(previous):
     return namespace, parameter_format
 
 
+def _roundtrip_payload(previous, slot, receiver_address, receiver_port, channel,
+                       include_subscription):
+    """Update the camera's own slot document without dropping required fields."""
+    try:
+        source = decode_document(previous)
+    except (ValueError, ET.ParseError):
+        source = None
+    if not isinstance(source, ET.Element) or source.tag.rsplit("}", 1)[-1] != "HttpHostNotification":
+        namespace, parameter_format = _camera_template(previous)
+        return http_host_payload(slot, receiver_address, receiver_port, channel,
+                                 namespace=namespace, parameter_format=parameter_format,
+                                 include_subscription=include_subscription)
+
+    root = copy.deepcopy(source)
+    namespace = root.tag[1:].split("}", 1)[0] if root.tag.startswith("{") else ""
+    if namespace:
+        ET.register_namespace("", namespace)
+    tag = lambda name: f"{{{namespace}}}{name}" if namespace else name
+
+    def direct_child(name):
+        return next((child for child in root if child.tag.rsplit("}", 1)[-1] == name), None)
+
+    def set_value(name, value):
+        child = direct_child(name)
+        if child is None:
+            child = ET.SubElement(root, tag(name))
+        child.text = str(value)
+
+    format_node = direct_child("parameterFormatType")
+    parameter_format = ((format_node.text or "").strip().upper()
+                        if format_node is not None else "XML")
+    if parameter_format not in {"XML", "JSON"}:
+        parameter_format = "XML"
+    values = {
+        "id": int(slot),
+        "url": f"http://{receiver_address}:{int(receiver_port)}/hikvision/events",
+        "protocolType": "HTTP",
+        "parameterFormatType": parameter_format,
+        "addressingFormatType": "ipaddress",
+        "ipAddress": receiver_address,
+        "portNo": int(receiver_port),
+        "userName": "",
+        "password": "",
+        "httpAuthenticationMethod": "none",
+    }
+    for name, value in values.items():
+        set_value(name, value)
+    for name in ("hostName", "ipv6Address"):
+        child = direct_child(name)
+        if child is not None:
+            child.text = ""
+
+    existing = direct_child("SubscribeEvent")
+    if existing is not None:
+        root.remove(existing)
+    if include_subscription:
+        subscribe = ET.SubElement(root, tag("SubscribeEvent"))
+        ET.SubElement(subscribe, tag("eventMode")).text = "all"
+        ET.SubElement(subscribe, tag("channels")).text = str(int(channel))
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
 def configure_http_push(settings, receiver_address, receiver_port, slot=1, opener=None, backup_path=None):
     """Back up, update and verify one camera HTTP host slot."""
     base = _base_url(settings)
@@ -102,14 +165,12 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
         except OSError:
             pass
         temporary.replace(backup)
-    namespace, parameter_format = _camera_template(previous)
     variants = (("channel subscription", True), ("destination only", False))
     failures = []
     applied_profile = ""
     for profile, include_subscription in variants:
-        body = http_host_payload(slot, receiver_address, receiver_port, settings.get("channel", 1),
-                                 namespace=namespace, parameter_format=parameter_format,
-                                 include_subscription=include_subscription)
+        body = _roundtrip_payload(previous, slot, receiver_address, receiver_port,
+                                  settings.get("channel", 1), include_subscription)
         request = Request(base + path, data=body, method="PUT", headers={"Content-Type": "application/xml"})
         try:
             with client.open(request, timeout=7) as response:
