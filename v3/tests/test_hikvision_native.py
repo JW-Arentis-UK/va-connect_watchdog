@@ -131,7 +131,7 @@ class NativeTests(unittest.TestCase):
             def open(self, request, timeout):
                 self.requests.append(request)
                 if request.get_method() == "GET":
-                    return FakeResponse('<HttpHostNotification><id>1</id><url></url><protocolType>HTTP</protocolType><parameterFormatType>XML</parameterFormatType><addressingFormatType>ipaddress</addressingFormatType><ipAddress>0.0.0.0</ipAddress><portNo>80</portNo><userName></userName><httpAuthenticationMethod>none</httpAuthenticationMethod><httpBroken>true</httpBroken></HttpHostNotification>')
+                    return FakeResponse('<HttpHostNotificationList><HttpHostNotification><id>1</id><url></url><protocolType>HTTP</protocolType><parameterFormatType>XML</parameterFormatType><addressingFormatType>ipaddress</addressingFormatType><ipAddress>0.0.0.0</ipAddress><portNo>80</portNo><userName></userName><httpAuthenticationMethod>none</httpAuthenticationMethod><httpBroken>true</httpBroken></HttpHostNotification><HttpHostNotification><id>2</id><url></url><protocolType>HTTP</protocolType><parameterFormatType>XML</parameterFormatType><addressingFormatType>ipaddress</addressingFormatType><ipAddress>0.0.0.0</ipAddress><portNo>80</portNo><userName></userName><httpAuthenticationMethod>none</httpAuthenticationMethod><httpBroken>true</httpBroken></HttpHostNotification></HttpHostNotificationList>')
                 return FakeResponse('<ResponseStatus><statusCode>1</statusCode><subStatusCode>ok</subStatusCode></ResponseStatus>')
         opener = SequenceOpener()
         with tempfile.TemporaryDirectory() as directory:
@@ -142,6 +142,8 @@ class NativeTests(unittest.TestCase):
         body = opener.requests[1].data
         self.assertIn(b"<parameterFormatType>XML</parameterFormatType>", body)
         self.assertIn(b"192.168.1.100", body)
+        self.assertIn(b"<url>/hikvision/events</url>", body)
+        self.assertNotIn(b"http://192.168.1.100", body)
         self.assertNotIn(b"regionTargetNumberCounting", body)
         self.assertNotIn(b"SubscribeEvent", body)
         self.assertNotIn(b"password", body)
@@ -150,6 +152,8 @@ class NativeTests(unittest.TestCase):
         self.assertIn(b"<httpBroken>true</httpBroken>", body)
         self.assertNotIn(CAMERA["password"].encode(), body)
         self.assertEqual(opener.requests[1].get_method(), "PUT")
+        self.assertTrue(opener.requests[1].full_url.endswith("/ISAPI/Event/notification/httpHosts"))
+        self.assertEqual(body.count(b"192.168.1.100"), 1)
 
         class RejectingOpener(SequenceOpener):
             def open(self, request, timeout):
@@ -160,7 +164,7 @@ class NativeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "badXmlContent"):
             configure_http_push(CAMERA, "192.168.1.100", 9110, opener=RejectingOpener())
 
-        self.assertEqual(result["profile"], "camera slot schema")
+        self.assertEqual(result["profile"], "camera host list")
 
     def test_push_multipart_discards_media(self):
         payload = part(b"private-image", b"image/jpeg") + part(counting()) + b"--test--\r\n"

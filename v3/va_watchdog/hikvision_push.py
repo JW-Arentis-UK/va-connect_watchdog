@@ -87,6 +87,60 @@ def _camera_template(previous):
     return namespace, parameter_format
 
 
+def _replace_xml_text(document, name, value):
+    tag_pattern = rf"(?:[A-Za-z_][A-Za-z0-9_.-]*:)?{re.escape(name)}"
+    paired = re.compile(
+        rf"(<(?P<tag>{tag_pattern})\b[^>]*>).*?(</(?P=tag)\s*>)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    replacement = xml_escape(str(value))
+    document, count = paired.subn(
+        lambda match: match.group(1) + replacement + match.group(3), document, count=1)
+    if count:
+        return document
+    empty = re.compile(rf"<(?P<tag>{tag_pattern})(?P<attrs>\s[^>]*)?/\s*>", re.IGNORECASE)
+    document, count = empty.subn(
+        lambda match: (f"<{match.group('tag')}{match.group('attrs') or ''}>"
+                       f"{replacement}</{match.group('tag')}>"),
+        document,
+        count=1,
+    )
+    if not count:
+        raise ValueError(f"camera configuration omitted {name}")
+    return document
+
+
+def _roundtrip_list_payload(previous, slot, receiver_address, receiver_port):
+    """Patch one host inside the camera's complete host list response."""
+    root = decode_document(previous)
+    if not isinstance(root, ET.Element) or root.tag.rsplit("}", 1)[-1] != "HttpHostNotificationList":
+        raise ValueError("camera did not return an HTTP host list")
+    had_bom = previous.startswith(b"\xef\xbb\xbf")
+    text = previous.decode("utf-8-sig")
+    host_pattern = re.compile(
+        r"<(?P<tag>(?:[A-Za-z_][A-Za-z0-9_.-]*:)?HttpHostNotification)\b[^>]*>.*?</(?P=tag)\s*>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    id_pattern = re.compile(
+        rf"<(?:[A-Za-z_][A-Za-z0-9_.-]*:)?id\b[^>]*>\s*{int(slot)}\s*</(?:[A-Za-z_][A-Za-z0-9_.-]*:)?id\s*>",
+        re.IGNORECASE,
+    )
+    selected = None
+    for match in host_pattern.finditer(text):
+        if id_pattern.search(match.group(0)):
+            selected = match
+            break
+    if selected is None:
+        raise ValueError(f"camera HTTP host slot {int(slot)} was not returned")
+    block = selected.group(0)
+    block = _replace_xml_text(block, "url", "/hikvision/events")
+    block = _replace_xml_text(block, "ipAddress", receiver_address)
+    block = _replace_xml_text(block, "portNo", int(receiver_port))
+    text = text[:selected.start()] + block + text[selected.end():]
+    encoded = text.encode("utf-8")
+    return (b"\xef\xbb\xbf" + encoded) if had_bom else encoded
+
+
 def _roundtrip_payload(previous, slot, receiver_address, receiver_port, channel,
                        include_subscription=False):
     """Update the camera's own slot document without dropping required fields."""
@@ -106,31 +160,9 @@ def _roundtrip_payload(previous, slot, receiver_address, receiver_port, channel,
         had_bom = previous.startswith(b"\xef\xbb\xbf")
         text = previous.decode("utf-8-sig")
 
-        def replace_text(document, name, value):
-            tag_pattern = rf"(?:[A-Za-z_][A-Za-z0-9_.-]*:)?{re.escape(name)}"
-            paired = re.compile(
-                rf"(<(?P<tag>{tag_pattern})\b[^>]*>).*?(</(?P=tag)\s*>)",
-                re.IGNORECASE | re.DOTALL,
-            )
-            replacement = xml_escape(str(value))
-            document, count = paired.subn(lambda match: match.group(1) + replacement + match.group(3),
-                                           document, count=1)
-            if count:
-                return document
-            empty = re.compile(rf"<(?P<tag>{tag_pattern})(?P<attrs>\s[^>]*)?/\s*>", re.IGNORECASE)
-            document, count = empty.subn(
-                lambda match: (f"<{match.group('tag')}{match.group('attrs') or ''}>"
-                               f"{replacement}</{match.group('tag')}>"),
-                document,
-                count=1,
-            )
-            if not count:
-                raise ValueError(f"camera slot omitted {name}")
-            return document
-
-        text = replace_text(text, "url", f"http://{receiver_address}:{int(receiver_port)}/hikvision/events")
-        text = replace_text(text, "ipAddress", receiver_address)
-        text = replace_text(text, "portNo", int(receiver_port))
+        text = _replace_xml_text(text, "url", f"http://{receiver_address}:{int(receiver_port)}/hikvision/events")
+        text = _replace_xml_text(text, "ipAddress", receiver_address)
+        text = _replace_xml_text(text, "portNo", int(receiver_port))
         encoded = text.encode("utf-8")
         return (b"\xef\xbb\xbf" + encoded) if had_bom else encoded
     except (UnicodeDecodeError, ValueError):
@@ -173,7 +205,7 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
     """Back up, update and verify one camera HTTP host slot."""
     base = _base_url(settings)
     client = opener or _digest_opener(base, str(settings["username"]), str(settings["password"]))
-    path = f"/ISAPI/Event/notification/httpHosts/{int(slot)}"
+    path = "/ISAPI/Event/notification/httpHosts"
     deadline = time.monotonic() + 12
     with client.open(Request(base + path, headers={"Accept": "application/xml"}), timeout=5) as response:
         previous = read_bounded(response, deadline)
@@ -187,35 +219,27 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
         except OSError:
             pass
         temporary.replace(backup)
-    # Slot capabilities on current firmware do not include SubscribeEvent. Event
-    # selection belongs to the separate subscription API, not this host record.
-    variants = (("camera slot schema", False),)
+    body = _roundtrip_list_payload(previous, slot, receiver_address, receiver_port)
+    request = Request(base + path, data=body, method="PUT",
+                      headers={"Content-Type": 'application/xml; charset="UTF-8"'})
     failures = []
-    applied_profile = ""
-    for profile, include_subscription in variants:
-        body = _roundtrip_payload(previous, slot, receiver_address, receiver_port,
-                                  settings.get("channel", 1), include_subscription)
-        request = Request(base + path, data=body, method="PUT", headers={"Content-Type": "application/xml"})
+    applied_profile = "camera host list"
+    try:
+        with client.open(request, timeout=7) as response:
+            result_body = read_bounded(response, deadline)
+            status = response.getcode()
+    except HTTPError as exc:
         try:
-            with client.open(request, timeout=7) as response:
-                result_body = read_bounded(response, deadline)
-                status = response.getcode()
-        except HTTPError as exc:
-            try:
-                detail = response_error(exc.read(16 * 1024))
-            finally:
-                status = exc.code
-                exc.close()
-            failures.append(detail or f"camera returned HTTP {status}")
-            raise RuntimeError(failures[-1]) from None
-        error = response_error(result_body)
-        if 200 <= status < 300 and not error:
-            applied_profile = profile
-            break
+            detail = response_error(exc.read(16 * 1024))
+        finally:
+            status = exc.code
+            exc.close()
+        failures.append(detail or f"camera returned HTTP {status}")
+        raise RuntimeError(failures[-1]) from None
+    error = response_error(result_body)
+    if not 200 <= status < 300 or error:
         failures.append(error or f"camera returned HTTP {status}")
         raise RuntimeError(failures[-1])
-    if not applied_profile:
-        raise RuntimeError(failures[-1] if failures else "camera rejected the configuration")
     return {
         "ok": True,
         "slot": int(slot),
