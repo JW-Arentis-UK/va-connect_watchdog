@@ -9,8 +9,10 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request
 import copy
+import re
 import time
 import xml.etree.ElementTree as ET
+from xml.sax.saxutils import escape as xml_escape
 
 from .hikvision import _base_url, _digest_opener
 from .hikvision_native import decode_document, read_bounded, response_error, scalar_fields
@@ -98,6 +100,42 @@ def _roundtrip_payload(previous, slot, receiver_address, receiver_port, channel,
                                  namespace=namespace, parameter_format=parameter_format,
                                  include_subscription=include_subscription)
 
+    # Preserve the camera's exact whitespace, namespace spelling and empty-tag
+    # style. Some firmware rejects an ElementTree-equivalent serialization.
+    try:
+        had_bom = previous.startswith(b"\xef\xbb\xbf")
+        text = previous.decode("utf-8-sig")
+
+        def replace_text(document, name, value):
+            tag_pattern = rf"(?:[A-Za-z_][A-Za-z0-9_.-]*:)?{re.escape(name)}"
+            paired = re.compile(
+                rf"(<(?P<tag>{tag_pattern})\b[^>]*>).*?(</(?P=tag)\s*>)",
+                re.IGNORECASE | re.DOTALL,
+            )
+            replacement = xml_escape(str(value))
+            document, count = paired.subn(lambda match: match.group(1) + replacement + match.group(3),
+                                           document, count=1)
+            if count:
+                return document
+            empty = re.compile(rf"<(?P<tag>{tag_pattern})(?P<attrs>\s[^>]*)?/\s*>", re.IGNORECASE)
+            document, count = empty.subn(
+                lambda match: (f"<{match.group('tag')}{match.group('attrs') or ''}>"
+                               f"{replacement}</{match.group('tag')}>"),
+                document,
+                count=1,
+            )
+            if not count:
+                raise ValueError(f"camera slot omitted {name}")
+            return document
+
+        text = replace_text(text, "url", f"http://{receiver_address}:{int(receiver_port)}/hikvision/events")
+        text = replace_text(text, "ipAddress", receiver_address)
+        text = replace_text(text, "portNo", int(receiver_port))
+        encoded = text.encode("utf-8")
+        return (b"\xef\xbb\xbf" + encoded) if had_bom else encoded
+    except (UnicodeDecodeError, ValueError):
+        pass
+
     root = copy.deepcopy(source)
     namespace = root.tag[1:].split("}", 1)[0] if root.tag.startswith("{") else ""
     if namespace:
@@ -114,7 +152,6 @@ def _roundtrip_payload(previous, slot, receiver_address, receiver_port, channel,
         child.text = str(value)
 
     values = {
-        "id": int(slot),
         "url": f"http://{receiver_address}:{int(receiver_port)}/hikvision/events",
         "ipAddress": receiver_address,
         "portNo": int(receiver_port),

@@ -131,7 +131,7 @@ class NativeTests(unittest.TestCase):
             def open(self, request, timeout):
                 self.requests.append(request)
                 if request.get_method() == "GET":
-                    return FakeResponse('<HttpHostNotification><id>1</id><url></url><protocolType>HTTP</protocolType><parameterFormatType>XML</parameterFormatType><addressingFormatType>ipaddress</addressingFormatType><ipAddress>0.0.0.0</ipAddress><portNo>80</portNo><userName>existing</userName><httpAuthenticationMethod>none</httpAuthenticationMethod><httpBroken>true</httpBroken></HttpHostNotification>')
+                    return FakeResponse('<HttpHostNotification><id>1</id><url></url><protocolType>HTTP</protocolType><parameterFormatType>XML</parameterFormatType><addressingFormatType>ipaddress</addressingFormatType><ipAddress>0.0.0.0</ipAddress><portNo>80</portNo><userName></userName><httpAuthenticationMethod>none</httpAuthenticationMethod><httpBroken>true</httpBroken></HttpHostNotification>')
                 return FakeResponse('<ResponseStatus><statusCode>1</statusCode><subStatusCode>ok</subStatusCode></ResponseStatus>')
         opener = SequenceOpener()
         with tempfile.TemporaryDirectory() as directory:
@@ -145,6 +145,8 @@ class NativeTests(unittest.TestCase):
         self.assertNotIn(b"regionTargetNumberCounting", body)
         self.assertNotIn(b"SubscribeEvent", body)
         self.assertNotIn(b"password", body)
+        self.assertIn(b"<userName></userName>", body)
+        self.assertNotIn(b"<userName />", body)
         self.assertIn(b"<httpBroken>true</httpBroken>", body)
         self.assertNotIn(CAMERA["password"].encode(), body)
         self.assertEqual(opener.requests[1].get_method(), "PUT")
