@@ -49,6 +49,7 @@ class PullWireTests(unittest.TestCase):
         root = etree.fromstring(message)
         operation = etree.QName(root.find("s:Body", NS)[0]).localname
         self.calls.append((operation, address, root))
+        status_code = 200
         if operation == "GetSystemDateAndTime":
             body = '''<tds:GetSystemDateAndTimeResponse><tds:SystemDateAndTime>
             <tt:DateTimeType>NTP</tt:DateTimeType><tt:DaylightSavings>false</tt:DaylightSavings>
@@ -66,6 +67,16 @@ class PullWireTests(unittest.TestCase):
             <wsa:ReferenceParameters><cam:SubscriptionId>7</cam:SubscriptionId></wsa:ReferenceParameters>
             </tev:SubscriptionReference><wsnt:CurrentTime>2026-09-24T08:00:00Z</wsnt:CurrentTime>
             <wsnt:TerminationTime>2026-09-24T08:01:00Z</wsnt:TerminationTime></tev:CreatePullPointSubscriptionResponse>'''
+            lease = root.find("s:Body/tev:CreatePullPointSubscription/tev:InitialTerminationTime", NS)
+            if lease is None:
+                status_code = 500
+                body = '''<s:Fault><s:Code><s:Value>s:Sender</s:Value><s:Subcode>
+                <s:Value>cam:InvalidArgVal</s:Value></s:Subcode></s:Code>
+                <s:Reason><s:Text xml:lang="en">the parameter value is illegal</s:Text></s:Reason></s:Fault>'''
+            else:
+                self.assertEqual(lease.text, "PT60S")
+                self.assertIsNone(root.find("s:Body/tev:CreatePullPointSubscription/tev:Filter", NS))
+                self.assertIsNone(root.find("s:Body/tev:CreatePullPointSubscription/tev:SubscriptionPolicy", NS))
         elif operation == "PullMessages":
             if self.fail_pull:
                 raise OSError("camera disconnected")
@@ -81,11 +92,25 @@ class PullWireTests(unittest.TestCase):
         else:
             self.fail(f"Unexpected operation: {operation}")
         response = Response()
-        response.status_code = 200
+        response.status_code = status_code
         response.headers["Content-Type"] = "application/soap+xml"
         declarations = " ".join(f'xmlns:{prefix}="{uri}"' for prefix, uri in NS.items())
         response._content = f"<s:Envelope {declarations}><s:Body>{body}</s:Body></s:Envelope>".encode()
         return response
+
+    def test_camera_fixture_rejects_previous_empty_subscription_request(self):
+        from zeep.exceptions import Fault
+        with patch("zeep.transports.Transport.post", side_effect=self.post):
+            subscription = PullSubscription(CAMERA)
+            try:
+                subscription.open()
+                events = subscription.client.create_service(
+                    "{http://www.onvif.org/ver10/events/wsdl}EventBinding", "http://192.168.1.72/onvif/Events")
+                with self.assertRaisesRegex(Fault, "the parameter value is illegal") as caught:
+                    events.CreatePullPointSubscription()
+                self.assertEqual(caught.exception.subcodes[0].localname, "InvalidArgVal")
+            finally:
+                subscription.close()
 
     def test_single_subscription_real_duration_parser_renewal_and_cleanup(self):
         with patch("zeep.transports.Transport.post", side_effect=self.post):
@@ -204,6 +229,19 @@ class CollectorLifecycleTests(unittest.TestCase):
             self.collector._onvif_stream(CAMERA, lambda _: sub)
         sub.close.assert_called_once()
         sub.pull.assert_not_called()
+
+    def test_soap_fault_subcode_survives_in_collector_error(self):
+        error = RuntimeError("the parameter value is illegal")
+        error.code = "s:Sender"
+        error.subcodes = ["{urn:camera}InvalidArgVal"]
+        sub = Mock(stage="subscription creation (60-second lease)")
+        sub.open.side_effect = error
+        with self.assertRaises(RuntimeError):
+            self.collector._onvif_stream(CAMERA, lambda _: sub)
+        message = event_summary(self.cfg)["last_error"]
+        self.assertIn("60-second lease", message)
+        self.assertIn("Sender / InvalidArgVal", message)
+        self.assertIn("the parameter value is illegal", message)
 
     def test_unverified_repeated_totals_are_not_added_as_crossings(self):
         event = parse_onvif_notification({"Topic": {"_value_1": "PeopleCounting"},

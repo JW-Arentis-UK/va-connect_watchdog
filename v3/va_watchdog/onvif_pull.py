@@ -67,9 +67,10 @@ class PullSubscription:
         self.client = Client(str(wsdl_dir / "events.wsdl"), transport=transport, wsse=token,
                              settings=options, plugins=[self.capture])
         events = self.client.create_service("{http://www.onvif.org/ver10/events/wsdl}EventBinding", endpoint)
-        self.stage = "subscription creation"
-        # Let the device choose its supported lease duration.
-        subscription = events.CreatePullPointSubscription()
+        self.stage = "subscription creation (60-second lease)"
+        # Although optional in ONVIF, an omitted lease is rejected by some devices.
+        # Keep a short explicit lease, renewed through the returned subscription.
+        subscription = events.CreatePullPointSubscription(InitialTerminationTime="PT60S")
         address = subscription.SubscriptionReference.Address
         address = self._address(getattr(address, "_value_1", address))
         self.manager = self.client.create_service("{http://www.onvif.org/ver10/events/wsdl}SubscriptionManagerBinding", address)

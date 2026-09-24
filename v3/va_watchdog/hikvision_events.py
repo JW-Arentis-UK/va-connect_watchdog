@@ -401,6 +401,13 @@ class HikvisionEventCollector:
                 self._write_state(status="ONVIF listening", **diagnostic)
         except Exception as exc:
             detail = str(exc)
+            # SOAP subcodes identify invalid leases, unsupported operations and
+            # resource limits without exposing the response body or credentials.
+            codes = [getattr(exc, "code", "")] + list(getattr(exc, "subcodes", None) or [])
+            fault_codes = [str(code).rsplit("}", 1)[-1].rsplit(":", 1)[-1] for code in codes if code]
+            fault_codes = [code for code in fault_codes if re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,79}", code)]
+            if fault_codes:
+                detail = f"[{' / '.join(fault_codes[:4])}] {detail}"
             password = str(camera.get("password") or "")
             if password:
                 detail = detail.replace(password, "[redacted]")
