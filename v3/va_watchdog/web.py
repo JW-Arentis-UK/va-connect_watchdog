@@ -2692,7 +2692,7 @@ def start_web(cfg):
             f"<div class=\"label\">Camera</div><div class=\"value\">{escape(str(camera.get('address') or '-'))}</div>"
             f"<div class=\"label\">Slot</div><div class=\"value\">{slot}</div>"
             f"<div class=\"label\">Destination</div><div class=\"value\">{escape(destination)}</div>"
-            "<div class=\"label\">Subscription</div><div class=\"value\">Channel event metadata; only counting events are retained, without images or video</div>"
+            "<div class=\"label\">Delivery</div><div class=\"value\">Camera HTTP event destination; only received counting metadata is retained, without images or video</div>"
             "<form method=\"post\" action=\"/hikvision-push-configure\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> I understand this changes the selected camera upload slot.</label>"
             "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Configure camera delivery</button><a class=\"ghost\" href=\"/setup\">Cancel</a></div></form></div>"
         )

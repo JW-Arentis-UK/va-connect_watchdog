@@ -131,7 +131,7 @@ class NativeTests(unittest.TestCase):
             def open(self, request, timeout):
                 self.requests.append(request)
                 if request.get_method() == "GET":
-                    return FakeResponse('<HttpHostNotification><id>1</id><url></url><protocolType>HTTP</protocolType><parameterFormatType>XML</parameterFormatType><addressingFormatType>ipaddress</addressingFormatType><ipAddress>0.0.0.0</ipAddress><portNo>80</portNo><userName>old</userName><password>old-secret</password><httpAuthenticationMethod>none</httpAuthenticationMethod><httpBroken>true</httpBroken></HttpHostNotification>')
+                    return FakeResponse('<HttpHostNotification><id>1</id><url></url><protocolType>HTTP</protocolType><parameterFormatType>XML</parameterFormatType><addressingFormatType>ipaddress</addressingFormatType><ipAddress>0.0.0.0</ipAddress><portNo>80</portNo><userName>existing</userName><httpAuthenticationMethod>none</httpAuthenticationMethod><httpBroken>true</httpBroken></HttpHostNotification>')
                 return FakeResponse('<ResponseStatus><statusCode>1</statusCode><subStatusCode>ok</subStatusCode></ResponseStatus>')
         opener = SequenceOpener()
         with tempfile.TemporaryDirectory() as directory:
@@ -140,12 +140,12 @@ class NativeTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertIn(b"0.0.0.0", backup.read_bytes())
         body = opener.requests[1].data
-        self.assertIn(b"<eventMode>all</eventMode>", body)
         self.assertIn(b"<parameterFormatType>XML</parameterFormatType>", body)
         self.assertIn(b"192.168.1.100", body)
         self.assertNotIn(b"regionTargetNumberCounting", body)
+        self.assertNotIn(b"SubscribeEvent", body)
+        self.assertNotIn(b"password", body)
         self.assertIn(b"<httpBroken>true</httpBroken>", body)
-        self.assertNotIn(b"old-secret", body)
         self.assertNotIn(CAMERA["password"].encode(), body)
         self.assertEqual(opener.requests[1].get_method(), "PUT")
 
@@ -158,25 +158,7 @@ class NativeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "badXmlContent"):
             configure_http_push(CAMERA, "192.168.1.100", 9110, opener=RejectingOpener())
 
-        class FallbackOpener(SequenceOpener):
-            def __init__(self):
-                super().__init__()
-                self.puts = 0
-            def open(self, request, timeout):
-                self.requests.append(request)
-                if request.get_method() == "GET":
-                    return FakeResponse('<HttpHostNotification xmlns="http://www.hikvision.com/ver20/XMLSchema"><id>1</id><parameterFormatType>JSON</parameterFormatType></HttpHostNotification>')
-                self.puts += 1
-                if self.puts == 1:
-                    body = b'<ResponseStatus><statusCode>6</statusCode><subStatusCode>badXmlContent</subStatusCode></ResponseStatus>'
-                    raise HTTPError(request.full_url, 400, "Bad Request", {}, io.BytesIO(body))
-                return FakeResponse('<ResponseStatus><statusCode>1</statusCode><subStatusCode>ok</subStatusCode></ResponseStatus>')
-        fallback = FallbackOpener()
-        result = configure_http_push(CAMERA, "192.168.1.100", 9110, opener=fallback)
-        self.assertEqual(result["profile"], "destination only")
-        self.assertIn(b"www.hikvision.com", fallback.requests[-1].data)
-        self.assertIn(b"<parameterFormatType>JSON</parameterFormatType>", fallback.requests[-1].data)
-        self.assertNotIn(b"SubscribeEvent", fallback.requests[-1].data)
+        self.assertEqual(result["profile"], "camera slot schema")
 
     def test_push_multipart_discards_media(self):
         payload = part(b"private-image", b"image/jpeg") + part(counting()) + b"--test--\r\n"
@@ -351,7 +333,7 @@ class SetupSmokeTests(unittest.TestCase):
                         self.assertIn(b'Native check finished', response.read())
                     diagnostic.assert_called_once()
                 with urlopen(base + '/hikvision-push-confirm', timeout=10) as response:
-                    self.assertIn(b'only counting events are retained', response.read())
+                    self.assertIn(b'only received counting metadata is retained', response.read())
                 with patch('va_watchdog.web.configure_http_push', return_value={
                     'ok': True, 'message': 'Configured', 'url': base + '/hikvision/events',
                     'slot': 1, 'backup_path': str(Path(directory) / 'backup.xml'),

@@ -86,7 +86,7 @@ def _camera_template(previous):
 
 
 def _roundtrip_payload(previous, slot, receiver_address, receiver_port, channel,
-                       include_subscription):
+                       include_subscription=False):
     """Update the camera's own slot document without dropping required fields."""
     try:
         source = decode_document(previous)
@@ -113,29 +113,14 @@ def _roundtrip_payload(previous, slot, receiver_address, receiver_port, channel,
             child = ET.SubElement(root, tag(name))
         child.text = str(value)
 
-    format_node = direct_child("parameterFormatType")
-    parameter_format = ((format_node.text or "").strip().upper()
-                        if format_node is not None else "XML")
-    if parameter_format not in {"XML", "JSON"}:
-        parameter_format = "XML"
     values = {
         "id": int(slot),
         "url": f"http://{receiver_address}:{int(receiver_port)}/hikvision/events",
-        "protocolType": "HTTP",
-        "parameterFormatType": parameter_format,
-        "addressingFormatType": "ipaddress",
         "ipAddress": receiver_address,
         "portNo": int(receiver_port),
-        "userName": "",
-        "password": "",
-        "httpAuthenticationMethod": "none",
     }
     for name, value in values.items():
         set_value(name, value)
-    for name in ("hostName", "ipv6Address"):
-        child = direct_child(name)
-        if child is not None:
-            child.text = ""
 
     existing = direct_child("SubscribeEvent")
     if existing is not None:
@@ -165,7 +150,9 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
         except OSError:
             pass
         temporary.replace(backup)
-    variants = (("channel subscription", True), ("destination only", False))
+    # Slot capabilities on current firmware do not include SubscribeEvent. Event
+    # selection belongs to the separate subscription API, not this host record.
+    variants = (("camera slot schema", False),)
     failures = []
     applied_profile = ""
     for profile, include_subscription in variants:
@@ -183,16 +170,13 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
                 status = exc.code
                 exc.close()
             failures.append(detail or f"camera returned HTTP {status}")
-            if status == 400 and include_subscription:
-                continue
             raise RuntimeError(failures[-1]) from None
         error = response_error(result_body)
         if 200 <= status < 300 and not error:
             applied_profile = profile
             break
         failures.append(error or f"camera returned HTTP {status}")
-        if not include_subscription:
-            raise RuntimeError(failures[-1])
+        raise RuntimeError(failures[-1])
     if not applied_profile:
         raise RuntimeError(failures[-1] if failures else "camera rejected the configuration")
     return {
