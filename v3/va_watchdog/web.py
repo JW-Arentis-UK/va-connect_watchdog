@@ -45,6 +45,8 @@ from .gateway_reboot import request_gateway_reboot
 from .hikvision import probe_people_counting
 from .hikvision_events import event_summary
 from .hikvision_native import bounded_native_diagnostic, capture_request_paths
+from .hikvision_events import parse_notification, notification_diagnostic, record_push_event
+from .hikvision_push import MAX_PUSH_BODY, configure_http_push, metadata_documents
 from .web_links import LINK_GROUPS, MAX_LINKS, configured_web_links, normalize_web_link
 
 
@@ -1376,13 +1378,16 @@ def start_web(cfg):
                 f"<div><label class=\"label\">Camera channel</label><input name=\"people_counting_channel\" type=\"number\" min=\"1\" max=\"64\" value=\"{escape(str(people_cfg.get('channel', 1)))}\"><p class=\"muted\">Normally 1 for a standalone camera.</p></div>"
                 f"<div><label class=\"label\">Username</label><input name=\"people_counting_username\" maxlength=\"64\" value=\"{escape(str(people_cfg.get('username', '')))}\"></div>"
                 f"<div><label class=\"label\">Password</label><input name=\"people_counting_password\" type=\"password\" maxlength=\"128\" value=\"\" placeholder=\"{'Configured - leave blank to keep' if people_cfg.get('password') else 'Enter the camera password'}\"><p class=\"muted\">Stored locally and never shown in evidence exports.</p></div>"
+                f"<div><label class=\"label\">Gateway receiver IP</label><input name=\"people_counting_push_receiver_address\" maxlength=\"45\" value=\"{escape(str(people_cfg.get('push_receiver_address', '')))}\" placeholder=\"e.g. 192.168.1.100\"><p class=\"muted\">The camera must be able to reach this address.</p></div>"
+                f"<div><label class=\"label\">Camera upload slot</label><input name=\"people_counting_push_slot\" type=\"number\" min=\"1\" max=\"12\" value=\"{escape(str(people_cfg.get('push_slot', 1)))}\"><p class=\"muted\">The diagnostic shows slots 1-3 are currently empty.</p></div>"
                 "</div>"
-                f"<label class=\"label\">Event interface</label><select name=\"people_counting_event_transport\"><option value=\"isapi\" {'selected' if people_cfg.get('event_transport', 'isapi') == 'isapi' else ''}>Native ISAPI alert stream</option><option value=\"onvif\" {'selected' if people_cfg.get('event_transport') == 'onvif' else ''}>ONVIF diagnostic subscription</option></select>"
+                f"<label class=\"label\">Event interface</label><select name=\"people_counting_event_transport\"><option value=\"http_push\" {'selected' if people_cfg.get('event_transport') == 'http_push' else ''}>Camera HTTP push (supported by this camera)</option><option value=\"isapi\" {'selected' if people_cfg.get('event_transport', 'isapi') == 'isapi' else ''}>Native ISAPI alert stream</option><option value=\"onvif\" {'selected' if people_cfg.get('event_transport') == 'onvif' else ''}>ONVIF diagnostic subscription</option></select>"
                 f"<label class=\"option-row\"><input name=\"people_counting_event_collection_enabled\" type=\"checkbox\" {'checked' if people_cfg.get('event_collection_enabled') else ''}> <span><strong>Collect camera event diagnostics</strong><br><span class=\"muted\">One interface at a time. Native ISAPI is the default. Media parts are discarded; camera settings are not changed.</span></span></label>"
                 + render_camera_collector(event_summary(cfg))
                 + (
                     "<div class=\"button-row\"><button class=\"action\" type=\"submit\" formmethod=\"post\" formaction=\"/hikvision-native-diagnostic\">Run native API diagnostic</button><a class=\"ghost\" href=\"/hikvision-test-confirm\">Legacy capability test</a></div>"
-                    "<p class=\"muted\">Uses saved camera settings. Save any changes before testing.</p>"
+                    + ("<div class=\"button-row\"><a class=\"action\" href=\"/hikvision-push-confirm\">Configure camera HTTP delivery</a></div>" if people_cfg.get("push_receiver_address") else "")
+                    + "<p class=\"muted\">Uses saved camera settings. Save any changes before testing.</p>"
                     if people_cfg.get("address") and people_cfg.get("username") and people_cfg.get("password")
                     else "<p class=\"warning\">Enter the camera details and save settings before running the test.</p>"
                 )
@@ -2675,6 +2680,34 @@ def start_web(cfg):
         )
         return page_shell(body, "Setup")
 
+    def hikvision_push_confirm_html():
+        camera = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting"), dict) else {}
+        receiver = str(camera.get("push_receiver_address") or "")
+        port = int(cfg.get("web", {}).get("port", 9110))
+        slot = int(camera.get("push_slot", 1))
+        destination = f"http://{receiver}:{port}/hikvision/events" if receiver else "Not configured"
+        body = (
+            "<div class=\"card action-panel\"><h2>Configure Camera HTTP Event Delivery</h2>"
+            "<p>This changes one camera HTTP upload slot so counting metadata is sent to this watchdog. The current slot response is backed up locally first.</p>"
+            f"<div class=\"label\">Camera</div><div class=\"value\">{escape(str(camera.get('address') or '-'))}</div>"
+            f"<div class=\"label\">Slot</div><div class=\"value\">{slot}</div>"
+            f"<div class=\"label\">Destination</div><div class=\"value\">{escape(destination)}</div>"
+            "<div class=\"label\">Subscribed event</div><div class=\"value\">regionTargetNumberCounting, saved without images or video</div>"
+            "<form method=\"post\" action=\"/hikvision-push-configure\"><label><input type=\"checkbox\" name=\"ack\" value=\"1\"> I understand this changes the selected camera upload slot.</label>"
+            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Configure camera delivery</button><a class=\"ghost\" href=\"/setup\">Cancel</a></div></form></div>"
+        )
+        return page_shell(body, "Setup")
+
+    def hikvision_push_result_html(result):
+        body = (
+            "<div class=\"card\"><h2>Camera HTTP Event Delivery</h2>"
+            f"<p class=\"{'healthy' if result.get('ok') else 'critical'}\">{escape(str(result.get('message') or 'Configuration processed'))}</p>"
+            f"<div class=\"label\">Destination</div><div class=\"value\">{escape(str(result.get('url') or '-'))}</div>"
+            "<p>Set Event interface to <strong>Camera HTTP push</strong>, enable event diagnostics, and save Settings. The status will change when the first camera message arrives.</p>"
+            "<a class=\"ghost\" href=\"/setup\">Back to Setup</a></div>"
+        )
+        return page_shell(body, "Setup")
+
     def hikvision_test_result_html(result):
         device = result.get("device", {}) if isinstance(result.get("device"), dict) else {}
         report = result.get("report", {}) if isinstance(result.get("report"), dict) else {}
@@ -3654,6 +3687,8 @@ def start_web(cfg):
             "people_counting": {
                 "event_collection_enabled": "people_counting_event_collection_enabled" in form,
                 "event_transport": first("people_counting_event_transport", "isapi"),
+                "push_receiver_address": first("people_counting_push_receiver_address", ""),
+                "push_slot": first("people_counting_push_slot", "1"),
                 "address": first("people_counting_address", ""),
                 "scheme": first("people_counting_scheme", "http"),
                 "port": first("people_counting_port", "80"),
@@ -5602,6 +5637,8 @@ def start_web(cfg):
             "people_counting": {
                 "event_collection_enabled": bool(people_counting.get("event_collection_enabled", False)),
                 "event_transport": str(people_counting.get("event_transport", "isapi")),
+                "push_receiver_address": _router_address(people_counting.get("push_receiver_address", "")),
+                "push_slot": _int_range({"push_slot": people_counting.get("push_slot", 1)}, "push_slot", 1, 12),
                 "address": _router_address(people_counting.get("address", "")),
                 "scheme": str(people_counting.get("scheme", "http")).strip().lower(),
                 "port": _int_range({"port": people_counting.get("port", 80)}, "port", 1, 65535),
@@ -5667,8 +5704,12 @@ def start_web(cfg):
             raise ValueError("enter the local mobile router IP address before enabling monitoring")
         if updates["people_counting"]["scheme"] not in {"http", "https"}:
             raise ValueError("camera connection must be HTTP or HTTPS")
-        if updates["people_counting"]["event_transport"] not in {"isapi", "onvif"}:
-            raise ValueError("camera event interface must be native ISAPI or ONVIF")
+        if updates["people_counting"]["event_transport"] not in {"http_push", "isapi", "onvif"}:
+            raise ValueError("camera event interface must be HTTP push, native ISAPI or ONVIF")
+        if (updates["people_counting"]["event_collection_enabled"]
+                and updates["people_counting"]["event_transport"] == "http_push"
+                and not updates["people_counting"]["push_receiver_address"]):
+            raise ValueError("enter the gateway receiver IP before enabling camera HTTP push")
         if cfg.get("hardware_watchdog", {}).get("enabled") and not updates["hardware_watchdog"]["enabled"]:
             raise ValueError("hardware watchdog feed cannot be disabled from general Settings; use the guarded Watchdog startup safety control")
         rs_warning = updates["recording_storage"]["minimum_free_mb_warning"]
@@ -6168,6 +6209,15 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if route_path == "/hikvision-push-confirm":
+                body = hikvision_push_confirm_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route_path == "/storage-purge-confirm":
                 body = storage_purge_confirm_html().encode("utf-8")
                 self.send_response(200)
@@ -6454,6 +6504,38 @@ def start_web(cfg):
         def do_POST(self):
             request_context.theme = self._request_theme()
             route_path = self.path.split("?", 1)[0]
+            if route_path == "/hikvision/events":
+                camera = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting"), dict) else {}
+                source = str(self.client_address[0]).removeprefix("::ffff:")
+                if (not camera.get("event_collection_enabled")
+                        or camera.get("event_transport") != "http_push"
+                        or source != str(camera.get("address") or "")):
+                    self._send_json({"statusCode": 4, "statusString": "Forbidden"}, status=403)
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    length = -1
+                if length < 1 or length > MAX_PUSH_BODY:
+                    self._send_json({"statusCode": 4, "statusString": "Invalid body size"}, status=413)
+                    return
+                payload = self.rfile.read(length)
+                accepted = 0
+                for document in metadata_documents(self.headers.get("Content-Type", ""), payload):
+                    event = parse_notification(document)
+                    if event:
+                        record_push_event(cfg, event)
+                        append_web_event("info", "people_counting", "Hikvision HTTP event metadata received", {
+                            "event_type": event.get("event_type"), "channel": event.get("channel"),
+                            "counts": event.get("counts", {}), "schema_recognised": event.get("schema_recognised", False),
+                        })
+                        accepted += 1
+                    else:
+                        diagnostic = notification_diagnostic(document)
+                        if diagnostic:
+                            append_web_event("info", "people_counting", "Unrecognised Hikvision HTTP event metadata received", diagnostic)
+                self._send_json({"statusCode": 1, "statusString": "OK", "subStatusCode": "ok", "accepted": accepted})
+                return
             if route_path in {"/web-link-add", "/web-link-update", "/web-link-delete"}:
                 try:
                     length = int(self.headers.get("Content-Length", "0"))
@@ -6583,6 +6665,35 @@ def start_web(cfg):
                         result = {"message": f"Diagnostic failed ({type(exc).__name__}). No camera settings were changed.", "requests": []}
                 body = page_shell(render_native_diagnostic(result), "Setup").encode("utf-8")
                 self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/hikvision-push-configure":
+                length = int(self.headers.get("Content-Length", "0"))
+                form = parse_qs(self.rfile.read(length).decode("utf-8") if length else "", keep_blank_values=True)
+                camera = dict(cfg.get("people_counting", {}))
+                receiver = str(camera.get("push_receiver_address") or "")
+                if form.get("ack", [""])[0] != "1":
+                    result = {"ok": False, "message": "Confirmation was not selected."}
+                elif not receiver:
+                    result = {"ok": False, "message": "Save the gateway receiver IP first."}
+                else:
+                    try:
+                        backup = data_dir / (f"hikvision-http-host-{int(camera.get('push_slot', 1))}-"
+                                             f"{time.strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(3)}.xml")
+                        result = configure_http_push(camera, receiver, int(cfg.get("web", {}).get("port", 9110)),
+                                                     int(camera.get("push_slot", 1)), backup_path=backup)
+                        append_web_event("warning", "people_counting", "Hikvision HTTP event destination configured", {
+                            "camera": camera.get("address"), "slot": result.get("slot"), "url": result.get("url"),
+                            "backup_path": result.get("backup_path"),
+                        })
+                    except Exception as exc:
+                        result = {"ok": False, "message": f"Camera delivery configuration failed ({type(exc).__name__}): {str(exc)[:160]}"}
+                body = hikvision_push_result_html(result).encode("utf-8")
+                self.send_response(200 if result.get("ok") else 400)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()

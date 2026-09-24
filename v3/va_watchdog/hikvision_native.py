@@ -54,7 +54,10 @@ def response_error(payload):
         return ""
     values = {key.lower(): value for key, value in scalar_fields(document)
               if key.lower() in {"statuscode", "statusstring", "substatuscode", "errorcode"}}
-    if not values or (values.get("statuscode") == "1" and values.get("substatuscode", "ok").lower() == "ok"):
+    status_code = values.get("statuscode")
+    status_string = values.get("statusstring", "ok").lower()
+    substatus_code = values.get("substatuscode", "ok").lower()
+    if not values or (status_code in {"0", "1"} and status_string == "ok" and substatus_code == "ok"):
         return ""
     if set(values) == {"errorcode"} and values["errorcode"].lower() in {"0", "0x0", "0x00000000"}:
         return ""
@@ -122,6 +125,7 @@ def native_diagnostics(settings, opener=None, budget_seconds=25):
         ("Region target counting capabilities", f"/ISAPI/Event/channels/{channel}/RegionTargetNumberCounting/Capabilities?format=json"),
         ("HTTP upload capabilities", "/ISAPI/Event/notification/httpHosts/capabilities"),
         ("Existing HTTP upload destinations", "/ISAPI/Event/notification/httpHosts"),
+        ("HTTP event subscription capabilities", "/ISAPI/Event/notification/subscribeEventCap"),
         ("Active multi-target configuration", f"/ISAPI/Intelligent/channels/{channel}/mixedTargetDetection?format=json"),
     ]
     deadline = time.monotonic() + max(1, min(30, budget_seconds))
@@ -147,7 +151,8 @@ def native_diagnostics(settings, opener=None, budget_seconds=25):
                 for node in document.iter():
                     name_key = node.tag.rsplit("}", 1)[-1]
                     options = node.get("opt", "")
-                    if any(word in name_key.lower() for word in ("eventtype", "count", "target", "statistic", "direction")) and re.fullmatch(r"[A-Za-z0-9_, .:-]{1,1500}", options):
+                    if (any(word in name_key.lower() for word in ("eventtype", "count", "target", "statistic", "direction"))
+                            or "regionTargetNumberCounting" in options) and re.fullmatch(r"[A-Za-z0-9_, .:-]{1,1500}", options):
                         details.append(f"{name_key}.options={options}")
             for key, value in scalar_fields(document):
                 lowered = key.lower()
@@ -159,7 +164,8 @@ def native_diagnostics(settings, opener=None, budget_seconds=25):
                     details.append(f"{key}={value.lower()}")
                 elif name == "Existing HTTP upload destinations" and lowered in {"id", "ipaddress", "portno", "protocoltype"}:
                     details.append(f"{key}={value[:100]}")
-                elif any(word in lowered for word in ("eventtype", "statistic", "count", "direction")) and re.fullmatch(r"[A-Za-z0-9_, .:-]{1,120}", value):
+                elif any(word in lowered for word in ("eventtype", "statistic", "count", "direction", "alarmhost",
+                                                       "parameterformat", "authentication", "uploadimages")) and re.fullmatch(r"[A-Za-z0-9_, .:/-]{1,120}", value):
                     details.append(f"{key}={value}")
             details.sort(key=lambda value: not any(word in value.split("=", 1)[0].lower()
                          for word in ("count", "target", "statistic", "eventtype", "http", "upload", "model", "firmware")))

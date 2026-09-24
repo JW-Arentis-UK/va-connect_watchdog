@@ -23,6 +23,9 @@ from .hikvision_native import decode_document, scalar_fields
 from .hikvision_stream import AlertParts
 
 
+_history_lock = threading.Lock()
+
+
 _VALUE_FIELDS = {
     "eventtype", "eventstate", "channelid", "channel", "targettype", "direction",
     "entercount", "leavecount", "incount", "outcount", "passcount", "passingcount",
@@ -281,6 +284,31 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
             "interval_reports": len(intervals)}
 
 
+def record_push_event(cfg, event):
+    """Persist one reduced HTTP-push event and update receiver state."""
+    history, state_path = event_paths(cfg)
+    event = dict(event)
+    event["camera"] = str(cfg.get("people_counting", {}).get("address") or "")
+    event["transport"] = "HTTP push"
+    with _history_lock:
+        history.parent.mkdir(parents=True, exist_ok=True)
+        with history.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, separators=(",", ":")) + "\n")
+        state = {
+            "status": "receiving",
+            "transport": "HTTP push",
+            "counts_verified": False,
+            "last_event_at": event.get("time"),
+            "last_notification_type": event.get("event_type"),
+            "last_reported_counts": event.get("counts", {}),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        temporary = state_path.with_suffix(".push.tmp")
+        temporary.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
+        temporary.replace(state_path)
+    return event
+
+
 class HikvisionEventCollector:
     def __init__(self, cfg: dict[str, Any], event_log) -> None:
         self.cfg = cfg
@@ -336,7 +364,7 @@ class HikvisionEventCollector:
     def _record(self, event: dict[str, Any]) -> None:
         history, _ = event_paths(self.cfg)
         history.parent.mkdir(parents=True, exist_ok=True)
-        with history.open("a", encoding="utf-8") as handle:
+        with _history_lock, history.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, separators=(",", ":")) + "\n")
         message = "Camera counter notification received (unverified totals)"
         self.event_log.add("info", "people_counting", message, event)
@@ -431,7 +459,10 @@ class HikvisionEventCollector:
                 time.sleep(5)
                 continue
             try:
-                if camera.get("event_transport", "isapi") == "onvif":
+                if camera.get("event_transport", "isapi") == "http_push":
+                    self._write_state(status="waiting", transport="HTTP push", counts_verified=False)
+                    time.sleep(5)
+                elif camera.get("event_transport", "isapi") == "onvif":
                     self._onvif_stream(camera)
                 else:
                     self._stream(camera)

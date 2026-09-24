@@ -140,3 +140,7 @@ The subsequent, user-authorised implementation adds:
 - Web import and actual Setup HTTP checks during updates, plus HTTP rendering regression tests.
 
 Still dependent on real device evidence: current-firmware historical search, selection/configuration of camera HTTP push or SDK transport, and live direction/count validation. No HTTP upload destination is changed automatically, no vendor SDK binary is introduced, and no unsupported historical request body is guessed. Use **Run native API diagnostic** after updating to collect the next evidence from the gateway.
+
+## Device Evidence Follow-Up
+
+The gateway diagnostic from build `a17c721` established that this camera advertises `regionTargetNumberCounting`, `supportSearchReport=true`, HTTP event-host configuration, and three currently empty HTTP host slots. The implementation therefore adds a bounded `/hikvision/events` receiver and a guarded camera-slot configuration action for the documented `regionTargetNumberCounting` subscription. The receiver accepts only the configured camera address, limits request size, retains XML/JSON metadata only, and never stores image parts. The selected slot is backed up before a PUT is attempted. This still does not label counts as verified until an actual camera message and controlled crossing test have been observed.

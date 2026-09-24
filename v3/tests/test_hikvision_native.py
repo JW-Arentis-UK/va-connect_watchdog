@@ -14,6 +14,7 @@ from urllib.request import urlopen, Request
 from va_watchdog.config import DEFAULT_CONFIG
 from va_watchdog.hikvision import _request_xml, _get_json, probe_people_counting
 from va_watchdog.hikvision_events import parse_notification, event_summary, HikvisionEventCollector
+from va_watchdog.hikvision_push import configure_http_push, http_host_payload, metadata_documents
 from va_watchdog.hikvision_native import (native_diagnostics, bounded_native_diagnostic, response_error,
                                         capture_request_paths, read_bounded, MAX_RESPONSE)
 from va_watchdog.hikvision_stream import AlertParts
@@ -96,6 +97,8 @@ class NativeTests(unittest.TestCase):
         self.assertIn("notSupport", response["detail"])
         response = _get_json(FakeOpener({root: FakeResponse('{"statusCode":4,"subStatusCode":"badJsonContent"}')}), root, 1)
         self.assertFalse(response["ok"])
+        success = b'<ResponseStatus><statusCode>0</statusCode><statusString>OK</statusString><subStatusCode>ok</subStatusCode></ResponseStatus>'
+        self.assertEqual(response_error(success), "")
 
     def test_http_error_keeps_protocol_status(self):
         url = "http://camera.invalid"
@@ -107,12 +110,39 @@ class NativeTests(unittest.TestCase):
         client = FakeOpener({"http://192.168.1.72/ISAPI/Event/notification/httpHosts":
             FakeResponse('<HttpHosts><HttpHost><id>1</id><ipAddress>192.168.1.100</ipAddress><portNo>9110</portNo><password>test-secret</password><url>/secret-token</url></HttpHost></HttpHosts>')})
         result = native_diagnostics(CAMERA, client)
-        self.assertEqual(len(result["requests"]), 7)
+        self.assertEqual(len(result["requests"]), 8)
         self.assertTrue(all(method == "GET" for _, _, method in client.urls))
         self.assertIn("192.168.1.100", str(result))
         self.assertNotIn("test-secret", str(result))
         self.assertNotIn("secret-token", str(result))
         self.assertTrue(any("RegionTargetNumberCounting/Capabilities?format=json" in url for url, _, _ in client.urls))
+        self.assertTrue(any("subscribeEventCap" in url for url, _, _ in client.urls))
+
+    def test_http_push_configuration_uses_documented_event_and_preserves_backup(self):
+        class SequenceOpener:
+            def __init__(self):
+                self.requests = []
+            def open(self, request, timeout):
+                self.requests.append(request)
+                if request.get_method() == "GET":
+                    return FakeResponse('<HttpHostNotification><id>1</id><ipAddress>0.0.0.0</ipAddress></HttpHostNotification>')
+                return FakeResponse('<ResponseStatus><statusCode>1</statusCode><subStatusCode>ok</subStatusCode></ResponseStatus>')
+        opener = SequenceOpener()
+        with tempfile.TemporaryDirectory() as directory:
+            backup = Path(directory) / 'host.xml'
+            result = configure_http_push(CAMERA, "192.168.1.100", 9110, opener=opener, backup_path=backup)
+            self.assertTrue(result["ok"])
+            self.assertIn(b"0.0.0.0", backup.read_bytes())
+        body = opener.requests[1].data
+        self.assertIn(b"regionTargetNumberCounting", body)
+        self.assertIn(b"192.168.1.100", body)
+        self.assertNotIn(CAMERA["password"].encode(), body)
+        self.assertEqual(opener.requests[1].get_method(), "PUT")
+
+    def test_push_multipart_discards_media(self):
+        payload = part(b"private-image", b"image/jpeg") + part(counting()) + b"--test--\r\n"
+        self.assertEqual(metadata_documents("multipart/mixed; boundary=test", payload), [counting()])
+        self.assertIn(b"regionTargetNumberCounting", http_host_payload(1, "192.168.1.100", 9110, 1))
 
     def test_authentication_failure_stops_further_diagnostic_requests(self):
         url = "http://192.168.1.72/ISAPI/System/deviceInfo"
@@ -123,7 +153,7 @@ class NativeTests(unittest.TestCase):
 
     def test_deadline_and_size_are_bounded(self):
         client = FakeOpener({})
-        with patch("va_watchdog.hikvision_native.time.monotonic", side_effect=[0] + [40] * 7):
+        with patch("va_watchdog.hikvision_native.time.monotonic", side_effect=[0] + [40] * 8):
             result = native_diagnostics(CAMERA, client)
         self.assertEqual(client.urls, [])
         self.assertIn("budget", result["requests"][0]["detail"])
@@ -264,6 +294,8 @@ class SetupSmokeTests(unittest.TestCase):
                     cfg[key] = str(Path(directory)/Path(cfg[key]).name)
             cfg['web'] = {'enabled':True,'host':'127.0.0.1','port':0}
             cfg['people_counting'] = dict(CAMERA)
+            cfg['people_counting']['push_receiver_address'] = '127.0.0.1'
+            cfg['people_counting']['push_slot'] = 1
             server = start_web(cfg)
             try:
                 base = f'http://127.0.0.1:{server.server_port}'
@@ -271,14 +303,51 @@ class SetupSmokeTests(unittest.TestCase):
                     body = response.read().decode()
                     self.assertIn('Run native API diagnostic', body)
                     self.assertIn('Native ISAPI alert stream', body)
+                    self.assertIn('Camera HTTP push', body)
+                    self.assertIn('Configure camera HTTP delivery', body)
                     self.assertNotIn('test-secret', body)
                 with patch('va_watchdog.web.bounded_native_diagnostic', return_value={'requests':[], 'message':'Native check finished'}) as diagnostic:
                     with urlopen(Request(base+'/hikvision-native-diagnostic', data=b''), timeout=10) as response:
                         self.assertEqual(response.status, 200)
                         self.assertIn(b'Native check finished', response.read())
                     diagnostic.assert_called_once()
+                with urlopen(base + '/hikvision-push-confirm', timeout=10) as response:
+                    self.assertIn(b'regionTargetNumberCounting', response.read())
+                with patch('va_watchdog.web.configure_http_push', return_value={
+                    'ok': True, 'message': 'Configured', 'url': base + '/hikvision/events',
+                    'slot': 1, 'backup_path': str(Path(directory) / 'backup.xml'),
+                }) as configure:
+                    request = Request(base + '/hikvision-push-configure', data=b'ack=1',
+                                      headers={'Content-Type': 'application/x-www-form-urlencoded'})
+                    with urlopen(request, timeout=10) as response:
+                        self.assertIn(b'Configured', response.read())
+                    configure.assert_called_once()
                 cfg['web']['port'] = server.server_port
                 check_setup(cfg, attempts=1)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_http_push_receiver_accepts_only_configured_camera_and_reduces_event(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = copy.deepcopy(DEFAULT_CONFIG)
+            for key in cfg:
+                if key.endswith('_path'):
+                    cfg[key] = str(Path(directory) / Path(cfg[key]).name)
+            cfg['web'] = {'enabled': True, 'host': '127.0.0.1', 'port': 0}
+            cfg['people_counting'] = {**CAMERA, 'address': '127.0.0.1', 'event_transport': 'http_push',
+                                      'push_receiver_address': '127.0.0.1', 'push_slot': 1}
+            server = start_web(cfg)
+            try:
+                request = Request(f'http://127.0.0.1:{server.server_port}/hikvision/events', data=counting(),
+                                  headers={'Content-Type': 'application/xml'})
+                with urlopen(request, timeout=10) as response:
+                    self.assertEqual(json.loads(response.read())['accepted'], 1)
+                summary = event_summary(cfg)
+                self.assertEqual(summary['transport'], 'HTTP push')
+                self.assertEqual(summary['last_reported_counts']['enter'], '22')
+                history = Path(directory) / 'hikvision-people-events.jsonl'
+                self.assertNotIn('private-image', history.read_text(encoding='utf-8'))
             finally:
                 server.shutdown()
                 server.server_close()
