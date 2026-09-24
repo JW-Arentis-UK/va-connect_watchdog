@@ -150,6 +150,26 @@ class NativeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "badXmlContent"):
             configure_http_push(CAMERA, "192.168.1.100", 9110, opener=RejectingOpener())
 
+        class FallbackOpener(SequenceOpener):
+            def __init__(self):
+                super().__init__()
+                self.puts = 0
+            def open(self, request, timeout):
+                self.requests.append(request)
+                if request.get_method() == "GET":
+                    return FakeResponse('<HttpHostNotification xmlns="http://www.hikvision.com/ver20/XMLSchema"><id>1</id><parameterFormatType>JSON</parameterFormatType></HttpHostNotification>')
+                self.puts += 1
+                if self.puts == 1:
+                    body = b'<ResponseStatus><statusCode>6</statusCode><subStatusCode>badXmlContent</subStatusCode></ResponseStatus>'
+                    raise HTTPError(request.full_url, 400, "Bad Request", {}, io.BytesIO(body))
+                return FakeResponse('<ResponseStatus><statusCode>1</statusCode><subStatusCode>ok</subStatusCode></ResponseStatus>')
+        fallback = FallbackOpener()
+        result = configure_http_push(CAMERA, "192.168.1.100", 9110, opener=fallback)
+        self.assertEqual(result["profile"], "destination only")
+        self.assertIn(b"www.hikvision.com", fallback.requests[-1].data)
+        self.assertIn(b"<parameterFormatType>JSON</parameterFormatType>", fallback.requests[-1].data)
+        self.assertNotIn(b"SubscribeEvent", fallback.requests[-1].data)
+
     def test_push_multipart_discards_media(self):
         payload = part(b"private-image", b"image/jpeg") + part(counting()) + b"--test--\r\n"
         self.assertEqual(metadata_documents("multipart/mixed; boundary=test", payload), [counting()])

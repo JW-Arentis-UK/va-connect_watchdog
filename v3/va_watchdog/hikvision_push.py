@@ -12,7 +12,7 @@ import time
 import xml.etree.ElementTree as ET
 
 from .hikvision import _base_url, _digest_opener
-from .hikvision_native import read_bounded, response_error
+from .hikvision_native import decode_document, read_bounded, response_error, scalar_fields
 
 
 MAX_PUSH_BODY = 512 * 1024
@@ -39,29 +39,49 @@ def metadata_documents(content_type, payload):
     return documents
 
 
-def http_host_payload(slot, receiver_address, receiver_port, channel):
+def http_host_payload(slot, receiver_address, receiver_port, channel, *, namespace=None,
+                      parameter_format="XML", include_subscription=True):
     """Build a broadly compatible, metadata-only HTTP-host subscription."""
-    root = ET.Element("HttpHostNotification", xmlns="http://www.isapi.org/ver20/XMLSchema", version="2.0")
+    namespace = namespace or "http://www.isapi.org/ver20/XMLSchema"
+    ET.register_namespace("", namespace)
+    tag = lambda name: f"{{{namespace}}}{name}"
+    root = ET.Element(tag("HttpHostNotification"), version="2.0")
     values = {
         "id": str(slot),
         "url": f"http://{receiver_address}:{int(receiver_port)}/hikvision/events",
         "protocolType": "HTTP",
-        "parameterFormatType": "XML",
+        "parameterFormatType": parameter_format,
         "addressingFormatType": "ipaddress",
         "ipAddress": str(receiver_address),
         "portNo": str(int(receiver_port)),
         "httpAuthenticationMethod": "none",
     }
     for name, value in values.items():
-        ET.SubElement(root, name).text = value
-    subscribe = ET.SubElement(root, "SubscribeEvent")
-    ET.SubElement(subscribe, "heartbeat").text = "30"
-    # Firmware families disagree on the counting event name. Subscribe to
-    # metadata for the channel and let the receiver retain counting events only.
-    ET.SubElement(subscribe, "eventMode").text = "all"
-    ET.SubElement(subscribe, "channels").text = str(int(channel))
-    ET.SubElement(subscribe, "pictureURLType").text = "localURL"
+        ET.SubElement(root, tag(name)).text = value
+    if include_subscription:
+        subscribe = ET.SubElement(root, tag("SubscribeEvent"))
+        # Firmware families disagree on the counting event name. Subscribe to
+        # metadata for the channel and let the receiver retain counting events only.
+        ET.SubElement(subscribe, tag("eventMode")).text = "all"
+        ET.SubElement(subscribe, tag("channels")).text = str(int(channel))
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _camera_template(previous):
+    """Retain the camera's namespace and preferred metadata format."""
+    namespace = "http://www.isapi.org/ver20/XMLSchema"
+    parameter_format = "XML"
+    try:
+        root = decode_document(previous)
+        if isinstance(root, ET.Element) and root.tag.startswith("{"):
+            namespace = root.tag[1:].split("}", 1)[0]
+        values = {name.lower(): value for name, value in scalar_fields(root)}
+        candidate = values.get("parameterformattype", "").upper()
+        if candidate in {"XML", "JSON"}:
+            parameter_format = candidate
+    except (ValueError, ET.ParseError):
+        pass
+    return namespace, parameter_format
 
 
 def configure_http_push(settings, receiver_address, receiver_port, slot=1, opener=None, backup_path=None):
@@ -82,25 +102,44 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
         except OSError:
             pass
         temporary.replace(backup)
-    body = http_host_payload(slot, receiver_address, receiver_port, settings.get("channel", 1))
-    request = Request(base + path, data=body, method="PUT", headers={"Content-Type": "application/xml"})
-    try:
-        with client.open(request, timeout=7) as response:
-            result_body = read_bounded(response, deadline)
-            status = response.getcode()
-    except HTTPError as exc:
+    namespace, parameter_format = _camera_template(previous)
+    variants = (("channel subscription", True), ("destination only", False))
+    failures = []
+    applied_profile = ""
+    for profile, include_subscription in variants:
+        body = http_host_payload(slot, receiver_address, receiver_port, settings.get("channel", 1),
+                                 namespace=namespace, parameter_format=parameter_format,
+                                 include_subscription=include_subscription)
+        request = Request(base + path, data=body, method="PUT", headers={"Content-Type": "application/xml"})
         try:
-            detail = response_error(exc.read(16 * 1024))
-        finally:
-            exc.close()
-        raise RuntimeError(detail or f"camera returned HTTP {exc.code}") from None
-    error = response_error(result_body)
-    if not 200 <= status < 300 or error:
-        raise RuntimeError(error or f"camera returned HTTP {status}")
+            with client.open(request, timeout=7) as response:
+                result_body = read_bounded(response, deadline)
+                status = response.getcode()
+        except HTTPError as exc:
+            try:
+                detail = response_error(exc.read(16 * 1024))
+            finally:
+                status = exc.code
+                exc.close()
+            failures.append(detail or f"camera returned HTTP {status}")
+            if status == 400 and include_subscription:
+                continue
+            raise RuntimeError(failures[-1]) from None
+        error = response_error(result_body)
+        if 200 <= status < 300 and not error:
+            applied_profile = profile
+            break
+        failures.append(error or f"camera returned HTTP {status}")
+        if not include_subscription:
+            raise RuntimeError(failures[-1])
+    if not applied_profile:
+        raise RuntimeError(failures[-1] if failures else "camera rejected the configuration")
     return {
         "ok": True,
         "slot": int(slot),
         "url": f"http://{receiver_address}:{int(receiver_port)}/hikvision/events",
         "backup_path": str(backup_path) if backup_path is not None else "",
-        "message": "Camera HTTP event destination configured. Waiting for the first counting message.",
+        "profile": applied_profile,
+        "message": ("Camera HTTP event destination configured using " + applied_profile
+                    + ". Waiting for the first counting message."),
     }
