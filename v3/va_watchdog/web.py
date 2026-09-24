@@ -46,6 +46,38 @@ from .hikvision import probe_people_counting
 from .hikvision_events import event_summary
 from .web_links import LINK_GROUPS, MAX_LINKS, configured_web_links, normalize_web_link
 
+
+def render_camera_collector(summary):
+    status = str(summary.get("status") or "Disabled")
+    listening = status in {"listening", "receiving", "ONVIF listening"}
+    details = [status]
+    for key, label in (("last_error", "error"), ("last_poll_at", "last successful poll"),
+                       ("notifications_received", "notifications this connection"),
+                       ("last_notification_type", "last camera notification"),
+                       ("last_counter_topic", "last counter topic"),
+                       ("last_reported_counts", "reported counters (unverified)")):
+        if summary.get(key) is not None and summary.get(key) != "":
+            details.append(f"{label}: {summary[key]}")
+    if summary.get("last_notification_fields"):
+        details.append("fields: " + ", ".join(summary["last_notification_fields"]))
+    if summary.get("topics_seen"):
+        details.append("topics seen: " + ", ".join(summary["topics_seen"]))
+    today = summary.get("today", {})
+    unverified = summary.get("counts_verified") is False
+    totals = "Directional totals not verified" if unverified else f"A to B: {today.get('a_to_b', 0)}; B to A: {today.get('b_to_a', 0)}"
+    html = (
+        '<div class="operational-list"><div class="operational-row"><div class="operational-area">Event collector</div>'
+        f'<div class="operational-detail">{escape("; ".join(details))}</div>'
+        f'<div class="operational-state {"healthy" if listening else "warning"}">{"Listening" if listening else "Waiting"}</div></div>'
+        '<div class="operational-row"><div class="operational-area">Today\'s captured events</div>'
+        f'<div class="operational-detail">{escape(totals)}</div>'
+        f'<div class="operational-state">{escape(str(today.get("events", 0)))} events</div></div></div>'
+    )
+    if unverified:
+        html += '<p class="warning">People totals are not yet verified. ONVIF notifications and reported counters are diagnostic data, not confirmed crossings.</p>'
+    return html
+
+
 VISIBLE_PAGE_GROUPS = (
     ("Gateway", (("Status", "/"), ("Web Links", "/links"), ("Events", "/events"), ("Watchdog", "/watchdog"), ("Evidence", "/evidence"))),
     ("Administration", (("Setup", "/setup"),)),
@@ -1309,16 +1341,7 @@ def start_web(cfg):
                 f"<div><label class=\"label\">Password</label><input name=\"people_counting_password\" type=\"password\" maxlength=\"128\" value=\"\" placeholder=\"{'Configured - leave blank to keep' if people_cfg.get('password') else 'Enter the camera password'}\"><p class=\"muted\">Stored locally and never shown in evidence exports.</p></div>"
                 "</div>"
                 f"<label class=\"option-row\"><input name=\"people_counting_event_collection_enabled\" type=\"checkbox\" {'checked' if people_cfg.get('event_collection_enabled') else ''}> <span><strong>Collect multi-target people events</strong><br><span class=\"muted\">Reads the camera's ONVIF event subscription. No camera settings, images or video are collected.</span></span></label>"
-                + (lambda summary: "<div class=\"operational-list\"><div class=\"operational-row\"><div class=\"operational-area\">Event collector</div><div class=\"operational-detail\">"
-                   + escape(str(summary.get("status") or "Disabled"))
-                   + ("; last camera notification: " + escape(str(summary.get("last_notification_type"))) if summary.get("last_notification_type") else "")
-                   + ("; metadata: " + escape(", ".join(summary.get("metadata_fields", []))) if summary.get("metadata_fields") else "")
-                   + "</div><div class=\"operational-state " + ("healthy" if summary.get("status") in {"listening", "receiving"} else "warning") + "\">"
-                   + ("Listening" if summary.get("status") in {"listening", "receiving"} else "Waiting")
-                   + "</div></div><div class=\"operational-row\"><div class=\"operational-area\">Today's captured events</div><div class=\"operational-detail\">A to B: "
-                   + escape(str(summary.get("today", {}).get("a_to_b", 0))) + "; B to A: " + escape(str(summary.get("today", {}).get("b_to_a", 0)))
-                   + "</div><div class=\"operational-state healthy\">" + escape(str(summary.get("today", {}).get("events", 0))) + " events</div></div></div>"
-                )(event_summary(cfg))
+                + render_camera_collector(event_summary(cfg))
                 + (
                     "<div class=\"button-row\"><a class=\"action\" href=\"/hikvision-test-confirm\">Test saved camera settings</a></div>"
                     if people_cfg.get("address") and people_cfg.get("username") and people_cfg.get("password")

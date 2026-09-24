@@ -476,7 +476,7 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
     authenticated = bool(device_response.get("ok")) or any(item["supported"] for item in capabilities)
     restricted = [item["family"] for item in capabilities if item.get("status_code") == 403]
     if multi_target_enabled:
-        message = "Camera connected; active application is multi-target-type detection. Its counters need event-based collection."
+        message = "Camera connected; active application is multi-target-type detection. Access to its counting data is not yet verified."
     elif supported:
         message = f"Camera connected; supported method: {', '.join(supported)}"
     elif not connected:

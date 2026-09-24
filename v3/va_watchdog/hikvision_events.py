@@ -18,6 +18,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
 from .hikvision import _base_url, _digest_opener
+from .onvif_pull import PullSubscription
 
 
 _VALUE_FIELDS = {
@@ -110,31 +111,56 @@ def parse_onvif_notification(value: Any) -> dict[str, Any] | None:
     except Exception:
         pass
     fields: dict[str, str] = {}
+    names: set[str] = set()
+    topic = ""
+
+    def keep(key: str, item: Any) -> None:
+        key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+        if key:
+            names.add(key[:80])
+        if key in _VALUE_FIELDS and isinstance(item, (str, int, float, bool)):
+            fields[key] = str(item).strip()[:160]
 
     def visit(item: Any, prefix: str = "") -> None:
+        nonlocal topic
+        if hasattr(item, "tag") and hasattr(item, "iter"):
+            for node in item.iter():
+                if _name(node.tag) == "SimpleItem":
+                    keep(node.get("Name", ""), node.get("Value", ""))
+                elif _name(node.tag) == "Topic":
+                    topic = (node.text or "").strip()[:200]
+                elif _name(node.tag) == "Message":
+                    fields["propertyoperation"] = node.get("PropertyOperation", "")[:40]
+                else:
+                    keep(_name(node.tag), node.text or "")
+            return
         if isinstance(item, dict):
+            if "Name" in item and "Value" in item:
+                keep(item["Name"], item["Value"])
             for key, child in item.items():
-                visit(child, f"{prefix}_{key}" if prefix else str(key))
-        elif isinstance(item, list):
+                visit(child, prefix if key == "_value_1" else str(key))
+        elif isinstance(item, (list, tuple)):
             for child in item:
                 visit(child, prefix)
         elif isinstance(item, (str, int, float, bool)):
-            key = re.sub(r"[^a-z0-9]", "", prefix.lower())
-            if key in _VALUE_FIELDS and str(item).strip():
-                fields[key] = str(item).strip()[:160]
+            if prefix.lower() == "topic":
+                topic = str(item).strip()[:200]
+            else:
+                keep(prefix, item)
 
     visit(value)
     event_type = fields.get("eventtype", "")
     target_type = fields.get("targettype", "")
     counts = {key: item for key, item in fields.items() if key in _COUNT_FIELDS}
-    relevant = bool(counts) or any(word in f"{event_type} {target_type}".lower() for word in ("people", "human", "count", "target"))
-    if not relevant:
-        return None
     return {
-        "time": datetime.now(timezone.utc).isoformat(), "event_type": event_type or "ONVIF camera event",
+        "time": datetime.now(timezone.utc).isoformat(), "event_type": topic or event_type or "ONVIF camera event",
+        # A SimpleItem count may be a cumulative total, not a per-person event.
+        # Retain it for diagnosis, but do not add it to directional totals yet.
+        "kind": "onvif_notification", "counts_verified": False,
+        "property_operation": fields.get("propertyoperation", ""),
         "event_state": fields.get("eventstate", ""), "channel": fields.get("channelid") or fields.get("channel", ""),
         "target_type": target_type, "direction": fields.get("direction", ""), "counts": counts,
-        "fields_seen": sorted(fields)[:40],
+        "fields_seen": sorted(names)[:40],
     }
 
 
@@ -166,6 +192,8 @@ def event_summary(cfg: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(row, dict) or not str(row.get("time", "")).startswith(today):
                 continue
             totals["events"] += 1
+            if row.get("kind") == "onvif_notification":
+                continue
             counts = row.get("counts", {}) if isinstance(row.get("counts"), dict) else {}
             for key, value in counts.items():
                 try:
@@ -196,7 +224,6 @@ class HikvisionEventCollector:
 
     def start(self) -> None:
         self.thread.start()
-        self.counter_thread.start()
 
     def _metadata_loop(self) -> None:
         """Sample analytics metadata only; video and image payloads are never read or stored."""
@@ -242,8 +269,11 @@ class HikvisionEventCollector:
         history.parent.mkdir(parents=True, exist_ok=True)
         with history.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, separators=(",", ":")) + "\n")
-        self.event_log.add("info", "people_counting", "Hikvision people-counting event received", event)
-        self._write_state(status="receiving", last_event_at=event["time"], last_event_type=event["event_type"])
+        unverified = event.get("kind") == "onvif_notification"
+        message = "ONVIF counter notification received (unverified totals)" if unverified else "Hikvision people-counting event received"
+        self.event_log.add("info", "people_counting", message, event)
+        if not unverified:
+            self._write_state(status="receiving", last_event_at=event["time"], last_event_type=event["event_type"])
 
     def _counter_loop(self) -> None:
         while True:
@@ -337,36 +367,50 @@ class HikvisionEventCollector:
             try:
                 self._onvif_stream(camera)
                 backoff = 5
-            except (HTTPError, URLError, socket.timeout, OSError) as exc:
-                self._write_state(status="reconnecting", last_error=str(getattr(exc, "reason", exc))[:160])
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 60)
-            except Exception as exc:
-                self._write_state(status="reconnecting", last_error=str(exc)[:160])
+            except Exception:
+                # _onvif_stream preserves the failing stage and a redacted error.
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 60)
 
-    def _onvif_stream(self, camera: dict[str, Any]) -> None:
+    def _onvif_stream(self, camera: dict[str, Any], subscription_factory=PullSubscription) -> None:
         """Read only ONVIF PullMessages collector, used when the camera advertises ONVIF Events."""
-        from onvif import ONVIFCamera
-        host = str(camera["address"])
-        port = int(camera.get("port") or 80)
-        timeout = max(5, int(camera.get("timeout_seconds") or 5))
-        self._write_state(status="ONVIF connecting")
-        client = ONVIFCamera(host, port, str(camera["username"]), str(camera["password"]), adjust_time=True)
-        events = client.create_events_service()
-        subscription = events.CreatePullPointSubscription({"InitialTerminationTime": "PT1H"})
-        pullpoint = client.create_pullpoint_service()
-        self._write_state(status="ONVIF listening", last_connected_at=datetime.now(timezone.utc).isoformat())
-        while True:
-            messages = pullpoint.PullMessages({"Timeout": "PT30S", "MessageLimit": 10})
-            for message in getattr(messages, "NotificationMessage", []) or []:
-                event = parse_onvif_notification(message)
-                if event:
-                    self._record(event)
-            # The camera controls subscription expiry; recreate it on a normal disconnect.
-            if not subscription:
-                raise OSError("camera did not create an ONVIF event subscription")
+        camera = dict(camera)
+        subscription = subscription_factory(camera)
+        diagnostic: dict[str, Any] = {"notifications_received": 0, "counts_verified": False, "topics_seen": []}
+        self._write_state(status="ONVIF connecting", **diagnostic)
+        try:
+            subscription.open()
+            while self.cfg.get("people_counting") == camera:
+                messages = subscription.pull()
+                if self.cfg.get("people_counting") != camera:
+                    break
+                for message in messages:
+                    event = parse_onvif_notification(message)
+                    if event:
+                        diagnostic.update(last_notification_type=event["event_type"],
+                                          last_notification_fields=event["fields_seen"],
+                                          last_notification_at=event["time"])
+                        if event["event_type"] not in diagnostic["topics_seen"]:
+                            diagnostic["topics_seen"] = (diagnostic["topics_seen"] + [event["event_type"]])[-16:]
+                        diagnostic["notifications_received"] += 1
+                        # Store potentially useful count notifications, not every motion heartbeat.
+                        if event["counts"]:
+                            diagnostic.update(last_reported_counts=event["counts"], last_counter_topic=event["event_type"])
+                            self._record(event)
+                diagnostic["last_poll_at"] = datetime.now(timezone.utc).isoformat()
+                self._write_state(status="ONVIF listening", **diagnostic)
+        except Exception as exc:
+            detail = str(exc)
+            password = str(camera.get("password") or "")
+            if password:
+                detail = detail.replace(password, "[redacted]")
+            # Never print SOAP bodies or authentication headers from transport errors.
+            detail = re.sub(r"<.*", "[response body omitted]", detail, flags=re.S)
+            detail = re.sub(r"(?i)(authorization|password|nonce|usernametoken).*", "[authentication detail omitted]", detail)
+            self._write_state(status="reconnecting", last_error=f"{subscription.stage}: {type(exc).__name__}: {detail[:240]}", **diagnostic)
+            raise
+        finally:
+            subscription.close()
 
     def _stream(self, camera: dict[str, Any]) -> None:
         base_url = _base_url(camera)
