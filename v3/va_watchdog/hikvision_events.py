@@ -197,7 +197,6 @@ class HikvisionEventCollector:
     def start(self) -> None:
         self.thread.start()
         self.counter_thread.start()
-        self.metadata_thread.start()
 
     def _metadata_loop(self) -> None:
         """Sample analytics metadata only; video and image payloads are never read or stored."""
@@ -353,6 +352,7 @@ class HikvisionEventCollector:
         host = str(camera["address"])
         port = int(camera.get("port") or 80)
         timeout = max(5, int(camera.get("timeout_seconds") or 5))
+        self._write_state(status="ONVIF connecting")
         client = ONVIFCamera(host, port, str(camera["username"]), str(camera["password"]), adjust_time=True)
         events = client.create_events_service()
         subscription = events.CreatePullPointSubscription({"InitialTerminationTime": "PT1H"})
