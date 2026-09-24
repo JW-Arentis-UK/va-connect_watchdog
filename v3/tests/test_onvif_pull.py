@@ -77,6 +77,11 @@ class PullWireTests(unittest.TestCase):
                 self.assertEqual(lease.text, "PT60S")
                 self.assertIsNone(root.find("s:Body/tev:CreatePullPointSubscription/tev:Filter", NS))
                 self.assertIsNone(root.find("s:Body/tev:CreatePullPointSubscription/tev:SubscriptionPolicy", NS))
+        elif operation == "GetEventProperties":
+            body = '''<tev:GetEventPropertiesResponse><tev:TopicNamespaceLocation>urn:test</tev:TopicNamespaceLocation>
+            <tev:FixedTopicSet>true</tev:FixedTopicSet><tev:TopicSet xmlns:wstop="http://docs.oasis-open.org/wsn/t-1">
+            <cam:RuleEngine><cam:PeopleCounting wstop:topic="true"/></cam:RuleEngine>
+            </tev:TopicSet></tev:GetEventPropertiesResponse>'''
         elif operation == "PullMessages":
             if self.fail_pull:
                 raise OSError("camera disconnected")
@@ -98,7 +103,7 @@ class PullWireTests(unittest.TestCase):
         response._content = f"<s:Envelope {declarations}><s:Body>{body}</s:Body></s:Envelope>".encode()
         return response
 
-    def test_camera_fixture_rejects_previous_empty_subscription_request(self):
+    def test_simulated_fault_decoding_not_device_compatibility(self):
         from zeep.exceptions import Fault
         with patch("zeep.transports.Transport.post", side_effect=self.post):
             subscription = PullSubscription(CAMERA)
@@ -111,6 +116,32 @@ class PullWireTests(unittest.TestCase):
                 self.assertEqual(caught.exception.subcodes[0].localname, "InvalidArgVal")
             finally:
                 subscription.close()
+
+    def test_topic_probe_does_not_create_an_implicit_subscription(self):
+        with patch("zeep.transports.Transport.post", side_effect=self.post):
+            probe = PullSubscription(CAMERA)
+            try:
+                result = probe.describe()
+            finally:
+                probe.close()
+        self.assertEqual([call[0] for call in self.calls],
+                         ["GetSystemDateAndTime", "GetCapabilities", "GetEventProperties"])
+        self.assertTrue(result["pull_supported"])
+        self.assertEqual(result["topics"], ["RuleEngine/PeopleCounting"])
+
+    def test_unsupported_pullpoint_is_not_attempted(self):
+        def post(*args):
+            response = self.post(*args)
+            response._content = response.content.replace(b'<tt:WSPullPointSupport>true', b'<tt:WSPullPointSupport>false')
+            return response
+        with patch("zeep.transports.Transport.post", side_effect=post):
+            subscription = PullSubscription(CAMERA)
+            try:
+                with self.assertRaisesRegex(ValueError, "does not advertise"):
+                    subscription.open()
+            finally:
+                subscription.close()
+        self.assertNotIn("CreatePullPointSubscription", [call[0] for call in self.calls])
 
     def test_single_subscription_real_duration_parser_renewal_and_cleanup(self):
         with patch("zeep.transports.Transport.post", side_effect=self.post):

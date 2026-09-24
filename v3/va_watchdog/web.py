@@ -15,7 +15,7 @@ from datetime import datetime
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Thread, local
+from threading import Thread, local, Lock
 from urllib.parse import parse_qs, quote, unquote, urlencode
 
 from .blackbox import blackbox_summary, read_blackbox
@@ -44,13 +44,19 @@ from .reboot_evidence import recent_restarts
 from .gateway_reboot import request_gateway_reboot
 from .hikvision import probe_people_counting
 from .hikvision_events import event_summary
+from .hikvision_native import bounded_native_diagnostic, capture_request_paths
 from .web_links import LINK_GROUPS, MAX_LINKS, configured_web_links, normalize_web_link
+
+
+_camera_capture_lock = Lock()
 
 
 def render_camera_collector(summary):
     status = str(summary.get("status") or "Disabled")
     listening = status in {"listening", "receiving", "ONVIF listening"}
     details = [status]
+    if summary.get("transport"):
+        details.append(str(summary["transport"]))
     for key, label in (("last_error", "error"), ("last_poll_at", "last successful poll"),
                        ("notifications_received", "notifications this connection"),
                        ("last_notification_type", "last camera notification"),
@@ -63,7 +69,7 @@ def render_camera_collector(summary):
     if summary.get("topics_seen"):
         details.append("topics seen: " + ", ".join(summary["topics_seen"]))
     today = summary.get("today", {})
-    unverified = summary.get("counts_verified") is False
+    unverified = summary.get("counts_verified") is not True
     totals = "Directional totals not verified" if unverified else f"A to B: {today.get('a_to_b', 0)}; B to A: {today.get('b_to_a', 0)}"
     html = (
         '<div class="operational-list"><div class="operational-row"><div class="operational-area">Event collector</div>'
@@ -74,8 +80,39 @@ def render_camera_collector(summary):
         f'<div class="operational-state">{escape(str(today.get("events", 0)))} events</div></div></div>'
     )
     if unverified:
-        html += '<p class="warning">People totals are not yet verified. ONVIF notifications and reported counters are diagnostic data, not confirmed crossings.</p>'
+        html += ('<p class="warning">People totals are not yet verified. Notifications are not confirmed crossings.</p>'
+                 f'<p class="muted">Observed human counter increases since baseline today: enter {int(today.get("observed_enter", 0))}; '
+                 f'exit {int(today.get("observed_exit", 0))}. Partial coverage, not a full-day total or verified A/B direction.</p>'
+                 f'<p class="muted">Separate interval reports: {int(summary.get("interval_reports", 0))}; '
+                 f'counter resets detected: {int(summary.get("counter_resets", 0))}.</p>')
     return html
+
+
+def render_native_diagnostic(result):
+    rows = "".join(
+        f'<tr><th>{escape(str(row.get("name", "")))}</th><td><code>{escape(str(row.get("method", "GET")))} '
+        f'{escape(str(row.get("path", "")))}</code><br>HTTP {escape(str(row.get("status_code", "-")))}: '
+        f'{escape(str(row.get("detail", "")))}</td></tr>' for row in result.get("requests", []))
+    return ('<div class="card"><h2>Hikvision Native API Diagnostic</h2>'
+            f'<p>{escape(str(result.get("message", "Diagnostic complete")))}</p>'
+            '<p>These are direct API requests, not web-page searches. Readable configuration is not proof of event delivery.</p>'
+            f'<div class="table-scroll"><table class="compact-table"><tbody>{rows}</tbody></table></div>'
+            '<p>Next: use the counting and HTTP upload capability results to select a supported interface. '
+            'Do not change firmware or repeat walking tests until a count message is received.</p>'
+            '<a class="ghost" href="/setup">Back to Setup</a></div>')
+
+
+def render_capture_state(path):
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            raise ValueError("Invalid capture state")
+    except FileNotFoundError:
+        return ""
+    except (OSError, ValueError):
+        state = {"message": "Capture status could not be read. Run the native API diagnostic."}
+    detail = ", ".join(str(value) for value in state.get("paths", [])) or str(state.get("message") or "No visible HTTP paths. Use the native API diagnostic.")
+    return f'<div class="notice muted"><strong>Camera request capture:</strong> {escape(detail)}</div>'
 
 
 VISIBLE_PAGE_GROUPS = (
@@ -1330,8 +1367,8 @@ def start_web(cfg):
                 + disclosure("RUTX50 setup help", router_setup_help)
             )
             people_counting_settings = (
-            "<p class=\"section-lead\">Configure one local Hikvision camera, then run a read-only capability test before enabling report collection.</p>"
-                "<div class=\"notice healthy\"><strong>Safe test:</strong> The watchdog reads camera identity, active analytics application, people-counting capabilities, and the previous completed day's report. It does not change settings or download video.</div>"
+            "<p class=\"section-lead\">Configure one local Hikvision camera, then run the native API diagnostic.</p>"
+                "<div class=\"notice muted\"><strong>Read-only:</strong> Native diagnostics inspect capabilities and upload configuration without changing the camera. Receiving notifications does not yet verify people totals.</div>"
                 "<div class=\"settings-grid\">"
                 f"<div><label class=\"label\">Camera IP address</label><input name=\"people_counting_address\" maxlength=\"253\" value=\"{escape(str(people_cfg.get('address', '')))}\" placeholder=\"e.g. 192.168.1.72\"></div>"
                 f"<div><label class=\"label\">Connection</label><select name=\"people_counting_scheme\"><option value=\"http\" {'selected' if people_cfg.get('scheme', 'http') == 'http' else ''}>HTTP</option><option value=\"https\" {'selected' if people_cfg.get('scheme') == 'https' else ''}>HTTPS</option></select></div>"
@@ -1340,15 +1377,17 @@ def start_web(cfg):
                 f"<div><label class=\"label\">Username</label><input name=\"people_counting_username\" maxlength=\"64\" value=\"{escape(str(people_cfg.get('username', '')))}\"></div>"
                 f"<div><label class=\"label\">Password</label><input name=\"people_counting_password\" type=\"password\" maxlength=\"128\" value=\"\" placeholder=\"{'Configured - leave blank to keep' if people_cfg.get('password') else 'Enter the camera password'}\"><p class=\"muted\">Stored locally and never shown in evidence exports.</p></div>"
                 "</div>"
-                f"<label class=\"option-row\"><input name=\"people_counting_event_collection_enabled\" type=\"checkbox\" {'checked' if people_cfg.get('event_collection_enabled') else ''}> <span><strong>Collect multi-target people events</strong><br><span class=\"muted\">Reads the camera's ONVIF event subscription. No camera settings, images or video are collected.</span></span></label>"
+                f"<label class=\"label\">Event interface</label><select name=\"people_counting_event_transport\"><option value=\"isapi\" {'selected' if people_cfg.get('event_transport', 'isapi') == 'isapi' else ''}>Native ISAPI alert stream</option><option value=\"onvif\" {'selected' if people_cfg.get('event_transport') == 'onvif' else ''}>ONVIF diagnostic subscription</option></select>"
+                f"<label class=\"option-row\"><input name=\"people_counting_event_collection_enabled\" type=\"checkbox\" {'checked' if people_cfg.get('event_collection_enabled') else ''}> <span><strong>Collect camera event diagnostics</strong><br><span class=\"muted\">One interface at a time. Native ISAPI is the default. Media parts are discarded; camera settings are not changed.</span></span></label>"
                 + render_camera_collector(event_summary(cfg))
                 + (
-                    "<div class=\"button-row\"><a class=\"action\" href=\"/hikvision-test-confirm\">Test saved camera settings</a></div>"
+                    "<div class=\"button-row\"><button class=\"action\" type=\"submit\" formmethod=\"post\" formaction=\"/hikvision-native-diagnostic\">Run native API diagnostic</button><a class=\"ghost\" href=\"/hikvision-test-confirm\">Legacy capability test</a></div>"
+                    "<p class=\"muted\">Uses saved camera settings. Save any changes before testing.</p>"
                     if people_cfg.get("address") and people_cfg.get("username") and people_cfg.get("password")
                     else "<p class=\"warning\">Enter the camera details and save settings before running the test.</p>"
                 )
                 + ("<div class=\"button-row\"><button class=\"ghost\" type=\"submit\" formmethod=\"post\" formaction=\"/hikvision-route-capture-start\">Capture camera statistics request</button></div>" if people_cfg.get("address") else "")
-                + (lambda: (lambda capture: "<div class=\"notice " + ("healthy" if capture.get("status") == "complete" else "warning") + "\"><strong>Camera request capture:</strong> " + (escape(", ".join(capture.get("paths", []))) if capture.get("paths") else escape(str(capture.get("message") or "No HTTP request path was seen. Run capture, then press Search on the camera page within one minute."))) + "</div>")(json.loads((data_dir / "hikvision-route-capture.json").read_text(encoding="utf-8")) if (data_dir / "hikvision-route-capture.json").exists() else {}))()
+                + render_capture_state(data_dir / "hikvision-route-capture.json")
                 + "<p class=\"muted\">For routine use, a dedicated read-only camera account is preferable to the administrator account.</p>"
             )
             recovery_settings = (
@@ -2687,6 +2726,7 @@ def start_web(cfg):
             "<div class=\"card action-panel\"><h2>Capture Camera Statistics Request</h2>"
             f"<p class=\"{'healthy' if result.get('ok') else 'critical'}\">{escape(str(result.get('message')))}</p>"
             "<p>Now return to the camera statistics page and press <strong>Search</strong> once. This capture ends after one minute and returns to Setup automatically.</p>"
+            "<p>Advanced diagnostic only: browser traffic must pass through this gateway. Other LAN traffic is normally invisible and HTTPS paths cannot be read. Prefer the native API diagnostic.</p>"
             "<p class=\"muted\">Only HTTP request paths are retained. Headers, passwords, cookies and response data are discarded.</p></div>"
         )
         return page_shell(body, "Setup")
@@ -2696,22 +2736,27 @@ def start_web(cfg):
         address = str(camera.get("address") or "").strip()
         if not address:
             return {"ok": False, "message": "Save a camera address first."}
+        if camera.get("scheme") == "https":
+            return {"ok": False, "message": "HTTPS paths are encrypted. Run the native API diagnostic instead."}
+        if not _camera_capture_lock.acquire(blocking=False):
+            return {"ok": False, "message": "A camera request capture is already running."}
         state_path = data_dir / "hikvision-route-capture.json"
         def collect():
             try:
-                result = subprocess.run(["tcpdump", "-i", "any", "-l", "-A", "-s", "1024", "host", address, "and", "tcp", "port", str(camera.get("port") or 80)], capture_output=True, text=True, timeout=60, check=False)
-                paths = sorted(set(re.findall(r"(?m)^(?:GET|POST)\s+([^\s?]+(?:\?[^\s]*)?)\s+HTTP", result.stdout)))[:50]
-                payload = {"status": "complete", "paths": paths, "captured_at": datetime.now().astimezone().isoformat()}
-            except subprocess.TimeoutExpired as exc:
-                output = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
-                paths = sorted(set(re.findall(r"(?m)^(?:GET|POST)\s+([^\s?]+(?:\?[^\s]*)?)\s+HTTP", output)))[:50]
-                payload = {"status": "complete", "paths": paths, "captured_at": datetime.now().astimezone().isoformat()}
+                payload = capture_request_paths(camera)
+                payload["captured_at"] = datetime.now().astimezone().isoformat()
             except Exception as exc:
                 payload = {"status": "failed", "message": str(exc)[:160], "captured_at": datetime.now().astimezone().isoformat()}
-            temporary = state_path.with_suffix(".tmp")
+            temporary = state_path.with_suffix(f".{secrets.token_hex(4)}.tmp")
+            temporary.parent.mkdir(parents=True, exist_ok=True)
             temporary.write_text(json.dumps(payload), encoding="utf-8")
             temporary.replace(state_path)
-        Thread(target=collect, name="hikvision-route-capture", daemon=True).start()
+        def run_capture():
+            try:
+                collect()
+            finally:
+                _camera_capture_lock.release()
+        Thread(target=run_capture, name="hikvision-route-capture", daemon=True).start()
         return {"ok": True, "message": "Capture started for 60 seconds."}
 
     def web_link_action_result_html(result):
@@ -3608,6 +3653,7 @@ def start_web(cfg):
             },
             "people_counting": {
                 "event_collection_enabled": "people_counting_event_collection_enabled" in form,
+                "event_transport": first("people_counting_event_transport", "isapi"),
                 "address": first("people_counting_address", ""),
                 "scheme": first("people_counting_scheme", "http"),
                 "port": first("people_counting_port", "80"),
@@ -5555,6 +5601,7 @@ def start_web(cfg):
             },
             "people_counting": {
                 "event_collection_enabled": bool(people_counting.get("event_collection_enabled", False)),
+                "event_transport": str(people_counting.get("event_transport", "isapi")),
                 "address": _router_address(people_counting.get("address", "")),
                 "scheme": str(people_counting.get("scheme", "http")).strip().lower(),
                 "port": _int_range({"port": people_counting.get("port", 80)}, "port", 1, 65535),
@@ -5620,6 +5667,8 @@ def start_web(cfg):
             raise ValueError("enter the local mobile router IP address before enabling monitoring")
         if updates["people_counting"]["scheme"] not in {"http", "https"}:
             raise ValueError("camera connection must be HTTP or HTTPS")
+        if updates["people_counting"]["event_transport"] not in {"isapi", "onvif"}:
+            raise ValueError("camera event interface must be native ISAPI or ONVIF")
         if cfg.get("hardware_watchdog", {}).get("enabled") and not updates["hardware_watchdog"]["enabled"]:
             raise ValueError("hardware watchdog feed cannot be disabled from general Settings; use the guarded Watchdog startup safety control")
         rs_warning = updates["recording_storage"]["minimum_free_mb_warning"]
@@ -6518,6 +6567,23 @@ def start_web(cfg):
                 body = settings_saved_html(result).encode("utf-8")
                 self.send_response(200 if result.get("ok") else 400)
                 self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/hikvision-native-diagnostic":
+                camera = dict(cfg.get("people_counting", {}))
+                if not all(camera.get(key) for key in ("address", "username", "password")):
+                    result = {"message": "Save the camera address and credentials before testing.", "requests": []}
+                else:
+                    try:
+                        result = bounded_native_diagnostic(camera)
+                    except Exception as exc:
+                        result = {"message": f"Diagnostic failed ({type(exc).__name__}). No camera settings were changed.", "requests": []}
+                body = page_shell(render_native_diagnostic(result), "Setup").encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
                 self._send_no_cache_headers()
                 self.end_headers()

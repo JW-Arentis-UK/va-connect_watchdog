@@ -56,15 +56,15 @@ class HikvisionProbeTests(unittest.TestCase):
                 "<serialNumber>secret-serial</serialNumber><firmwareVersion>V5.8.60</firmwareVersion>"
                 "<firmwareReleasedDate>240807</firmwareReleasedDate></DeviceInfo>"
             ),
-            f"{base}/ISAPI/Intelligent/capabilities": FakeResponse("<IntelligentCap/>") ,
-            f"{base}/ISAPI/Intelligent/channels/1/capabilities": FakeResponse("<ChannelIntelligentCap/>") ,
-            f"{base}/ISAPI/Intelligent/channels/1/mixedTargetDetection/capabilities": FakeResponse("<MixedTargetCap/>") ,
-            f"{base}/ISAPI/System/Video/inputs/channels/1/counting/capabilities": FakeResponse("<CountingCap/>"),
+            f"{base}/ISAPI/Intelligent/capabilities": FakeResponse("<IntelligentCap><isSupport>true</isSupport></IntelligentCap>") ,
+            f"{base}/ISAPI/Intelligent/channels/1/capabilities": FakeResponse("<ChannelIntelligentCap><isSupport>true</isSupport></ChannelIntelligentCap>") ,
+            f"{base}/ISAPI/Intelligent/channels/1/mixedTargetDetection/capabilities": FakeResponse("<MixedTargetCap><isSupport>true</isSupport></MixedTargetCap>") ,
+            f"{base}/ISAPI/System/Video/inputs/channels/1/counting/capabilities": FakeResponse("<CountingCap><isSupport>true</isSupport></CountingCap>"),
             f"{base}/ISAPI/Intelligent/channels/1/framesPeopleCounting/capabilities": HTTPError(
                 f"{base}/area", 404, "Not Found", {}, None
             ),
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search/capabilities": FakeResponse(
-                "<CountingSearchCap/>"
+                "<CountingSearchCap><isSupport>true</isSupport></CountingSearchCap>"
             ),
             f"{base}/ISAPI/System/Video/inputs/channels/1/counting/search": FakeResponse(
                 "<CountingStatisticsList><CountingStatistics><enterCount>12</enterCount>"
@@ -94,7 +94,8 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertEqual(result["report"]["rows"], 1)
         self.assertEqual(result["report"]["totals"], {"enterCount": 12, "leaveCount": 7})
         self.assertTrue(result["multi_target_detection"]["active"])
-        self.assertTrue(all(item["available"] for item in result["data_sources"][:3]))
+        self.assertTrue(all(item["available"] for item in result["data_sources"][:2]))
+        self.assertFalse(result["data_sources"][2]["available"])
         self.assertEqual([method for _, _, method in opener.urls].count("POST"), 2)
         self.assertTrue(any(url.endswith("/counting/search") and method == "POST" for url, _, method in opener.urls))
 
@@ -139,7 +140,7 @@ class HikvisionProbeTests(unittest.TestCase):
         self.assertTrue(calls[0][4]["adjust_time"])
         self.assertNotIn("not-returned", str(result))
 
-    def test_onvif_client_retries_authentication_failure_with_http_digest(self):
+    def test_onvif_client_does_not_downgrade_to_password_text(self):
         calls = []
 
         class FakeEvents:
@@ -165,12 +166,9 @@ class HikvisionProbeTests(unittest.TestCase):
             transport_factory=lambda *_args: object(),
         )
 
-        self.assertTrue(result["available"])
-        self.assertEqual(result["detail"], "Available through ONVIF HTTP-Digest client")
-        self.assertEqual(len(calls), 2)
-        self.assertFalse(calls[1]["encrypt"])
-        self.assertTrue(calls[1]["no_cache"])
-        self.assertIn("transport", calls[1])
+        self.assertFalse(result["available"])
+        self.assertEqual(len(calls), 1)
+        self.assertNotEqual(calls[0].get("encrypt"), False)
 
     def test_onvif_client_labels_http_digest_authentication_failure(self):
         class FakeEvents:
@@ -192,7 +190,7 @@ class HikvisionProbeTests(unittest.TestCase):
         )
 
         self.assertFalse(result["available"])
-        self.assertEqual(result["detail"], "ONVIF HTTP-Digest event topic read: authentication failed")
+        self.assertEqual(result["detail"], "ONVIF event topic read: authentication failed")
 
     def test_onvif_client_error_detail_reports_safe_http_status(self):
         detail = _onvif_client_error_detail(

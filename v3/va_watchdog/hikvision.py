@@ -14,6 +14,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPDigestAuthHandler, HTTPPasswordMgrWithDefaultRealm, Request, build_opener
 
+from .hikvision_native import capability_detail, capability_supported, response_error, decode_document
+
 
 _CAPABILITY_PROBES = (
     (
@@ -104,19 +106,29 @@ def _request_xml(opener, url: str, timeout: int, method: str = "GET", body: byte
             detail = "Not supported by this camera"
         else:
             detail = f"Camera returned HTTP {exc.code}"
+        try:
+            protocol_error = response_error(exc.read(16384))
+            if protocol_error:
+                detail += f": {protocol_error}"
+        except (OSError, ValueError):
+            pass
+        finally:
+            exc.close()
         return {"ok": False, "status_code": exc.code, "detail": detail}
     except (URLError, TimeoutError, socket.timeout, OSError) as exc:
         reason = getattr(exc, "reason", exc)
         return {"ok": False, "status_code": None, "detail": f"Connection failed: {reason}"}
 
     try:
-        root = ET.fromstring(payload)
-    except ET.ParseError:
+        root = decode_document(payload)
+        if not isinstance(root, ET.Element):
+            raise ValueError("Expected XML")
+    except (ValueError, ET.ParseError):
         return {"ok": False, "status_code": status, "detail": "Camera returned an unreadable response"}
     return {
-        "ok": 200 <= status < 300,
+        "ok": 200 <= status < 300 and not response_error(payload),
         "status_code": status,
-        "detail": "Supported" if 200 <= status < 300 else f"Camera returned HTTP {status}",
+        "detail": response_error(payload) or ("Endpoint responded" if 200 <= status < 300 else f"Camera returned HTTP {status}"),
         "root": root,
     }
 
@@ -138,6 +150,14 @@ def _get_json(opener, url: str, timeout: int) -> dict:
             detail = "Not supported by this camera"
         else:
             detail = f"Camera returned HTTP {exc.code}"
+        try:
+            protocol_error = response_error(exc.read(16384))
+            if protocol_error:
+                detail += f": {protocol_error}"
+        except (OSError, ValueError):
+            pass
+        finally:
+            exc.close()
         return {"ok": False, "status_code": exc.code, "detail": detail}
     except (URLError, TimeoutError, socket.timeout, OSError) as exc:
         reason = getattr(exc, "reason", exc)
@@ -147,9 +167,9 @@ def _get_json(opener, url: str, timeout: int) -> dict:
     except (UnicodeDecodeError, json.JSONDecodeError):
         return {"ok": False, "status_code": status, "detail": "Camera returned an unreadable response"}
     return {
-        "ok": 200 <= status < 300 and isinstance(value, dict),
+        "ok": 200 <= status < 300 and isinstance(value, dict) and not response_error(payload),
         "status_code": status,
-        "detail": "Supported" if 200 <= status < 300 else f"Camera returned HTTP {status}",
+        "detail": response_error(payload) or ("Endpoint responded" if 200 <= status < 300 else f"Camera returned HTTP {status}"),
         "value": value,
     }
 
@@ -171,7 +191,7 @@ def _probe_stream(opener, url: str, timeout: int) -> dict:
     except (URLError, TimeoutError, socket.timeout, OSError) as exc:
         reason = getattr(exc, "reason", exc)
         return {"ok": False, "status_code": None, "detail": f"Connection failed: {reason}"}
-    return {"ok": 200 <= status < 300, "status_code": status, "detail": "Available" if 200 <= status < 300 else f"Camera returned HTTP {status}"}
+    return {"ok": False, "status_code": status, "detail": "Endpoint responded; live event delivery not verified" if 200 <= status < 300 else f"Camera returned HTTP {status}"}
 
 
 def _discover_web_api_routes(opener, base_url: str, timeout: int) -> list[str]:
@@ -269,10 +289,16 @@ def _onvif_client_event_topics(settings: dict, events_address: str, camera_facto
     """Use the maintained ONVIF client for a read-only event capability query."""
     if camera_factory is None:
         try:
-            from onvif import ONVIFCamera
+            from .onvif_pull import PullSubscription
+            probe = PullSubscription(settings)
+            try:
+                return probe.describe()
+            finally:
+                probe.close()
         except ImportError:
             return {"available": False, "installed": False, "detail": "ONVIF client is not installed"}
-        camera_factory = ONVIFCamera
+        except Exception as exc:
+            return {"available": False, "installed": True, "detail": _onvif_client_error_detail("event topic read", exc)}
     if transport_factory is None:
         transport_factory = _onvif_http_digest_transport
 
@@ -317,27 +343,7 @@ def _onvif_client_event_topics(settings: dict, events_address: str, camera_facto
             "installed": True,
             "detail": _onvif_client_error_detail("client setup", exc),
         }
-    first_result = read_topics(camera, "Available through ONVIF WS-Security client")
-    if first_result["available"] or "authentication failed" not in first_result["detail"].lower():
-        return first_result
-    try:
-        camera = camera_factory(
-            host,
-            port,
-            username,
-            password,
-            encrypt=False,
-            adjust_time=True,
-            no_cache=True,
-            transport=transport_factory(username, password, int(settings.get("timeout_seconds") or 5)),
-        )
-    except Exception as exc:
-        return {
-            "available": False,
-            "installed": True,
-            "detail": _onvif_client_error_detail("HTTP-Digest client setup", exc),
-        }
-    return read_topics(camera, "Available through ONVIF HTTP-Digest client", "HTTP-Digest event topic read")
+    return read_topics(camera, "Available through ONVIF WS-Security client")
 
 
 def _report_summary(root: ET.Element) -> dict:
@@ -376,11 +382,10 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
         response = _get_xml(client, f"{base_url}{endpoint}", timeout)
         detail = response.get("detail")
         if response.get("ok") and response.get("root") is not None:
-            names = sorted({_local_name(element.tag) for element in response["root"].iter()})[:80]
-            detail = "Supported: " + ", ".join(names)
+            detail = capability_detail(response["root"])
         capabilities.append({
             "family": family,
-            "supported": bool(response.get("ok")),
+            "supported": bool(response.get("ok")) and capability_supported(response["root"]),
             "status_code": response.get("status_code"),
             "detail": detail,
         })
@@ -391,7 +396,7 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
         timeout,
     )
     multi_target = multi_target_response.get("value", {}).get("MixedTargetDetection", {}) if multi_target_response.get("ok") else {}
-    multi_target_enabled = bool(multi_target.get("enabled")) if isinstance(multi_target, dict) else False
+    multi_target_enabled = multi_target.get("enabled") is True if isinstance(multi_target, dict) else False
     multi_target_detail = multi_target_response.get("detail")
     if multi_target_response.get("ok"):
         multi_target_detail = "Active" if multi_target_enabled else "Configured, but currently disabled"
@@ -412,12 +417,12 @@ def probe_people_counting(settings: dict, opener=None) -> dict:
             "status_code": response.get("status_code"),
             "detail": response.get("detail"),
         })
-    web_routes = _discover_web_api_routes(client, base_url, timeout)
+    web_routes = []
     data_sources.append({
         "name": "Statistics API routes advertised by camera UI",
         "available": bool(web_routes),
         "status_code": 200 if web_routes else None,
-        "detail": "; ".join(web_routes) if web_routes else "No readable statistics route found in the camera UI scripts",
+        "detail": "Web-page scanning retired. Use Run native API diagnostic for device capabilities.",
     })
     onvif_response = _request_xml(client, f"{base_url}/onvif/device_service", timeout, method="POST", body=_onvif_capabilities_query())
     onvif_names = sorted({_local_name(element.tag) for element in onvif_response.get("root", []).iter()})[:50] if onvif_response.get("ok") else []

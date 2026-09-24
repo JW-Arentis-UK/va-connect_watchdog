@@ -103,6 +103,13 @@ if [ -f "$ROOT_DIR/systemd/va-watchdog-feed.service" ]; then
 fi
 systemctl daemon-reload
 
+RUNTIME=python3
+if [ -x "$VENV_DIR/bin/python" ]; then
+  RUNTIME="$VENV_DIR/bin/python"
+fi
+PYTHONPATH="$ROOT_DIR" "$RUNTIME" -c 'from va_watchdog.web import start_web'
+log "web runtime import check passed"
+
 systemctl unmask va-watchdog-feed va-watchdog 2>/dev/null || true
 systemctl enable va-watchdog-feed va-watchdog
 systemctl restart va-watchdog-feed
@@ -113,6 +120,8 @@ sleep 2
 systemctl is-active --quiet va-watchdog-feed
 systemctl is-active --quiet va-watchdog
 systemctl is-enabled --quiet va-watchdog-feed
+PYTHONPATH="$ROOT_DIR" "$RUNTIME" -m va_watchdog.web_smoke
+log "Setup HTTP smoke check passed"
 
 write_state "completed" "update completed" "$commit_after"
 log "update completed commit=$commit_after"

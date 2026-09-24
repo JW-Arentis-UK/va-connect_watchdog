@@ -19,14 +19,19 @@ from urllib.request import Request
 
 from .hikvision import _base_url, _digest_opener
 from .onvif_pull import PullSubscription
+from .hikvision_native import decode_document, scalar_fields
+from .hikvision_stream import AlertParts
 
 
 _VALUE_FIELDS = {
     "eventtype", "eventstate", "channelid", "channel", "targettype", "direction",
     "entercount", "leavecount", "incount", "outcount", "passcount", "passingcount",
     "atob", "btoa", "eventdescription",
+    "enter", "exit", "pass", "vehicleenter", "vehicleexit", "bicycleenter", "bicycleexit",
+    "statisticalmethods", "regionsid", "ruleid", "datetime", "starttime", "endtime",
 }
-_COUNT_FIELDS = {"entercount", "leavecount", "incount", "outcount", "passcount", "passingcount", "atob", "btoa"}
+_COUNT_FIELDS = {"entercount", "leavecount", "incount", "outcount", "passcount", "passingcount", "atob", "btoa",
+                 "enter", "exit", "pass", "vehicleenter", "vehicleexit", "bicycleenter", "bicycleexit"}
 _COUNTER_PATHS = (
     "/ISAPI/Intelligent/channels/{channel}/mixedTargetDetection/statistics",
     "/ISAPI/Intelligent/channels/{channel}/mixedTargetDetection/counting",
@@ -44,18 +49,19 @@ def _name(tag: str) -> str:
 def parse_notification(payload: bytes) -> dict[str, Any] | None:
     """Return whitelisted fields only; payloads can contain private media URLs."""
     try:
-        root = ET.fromstring(payload)
-    except ET.ParseError:
+        root = decode_document(payload)
+    except (ValueError, ET.ParseError):
         return None
     values: dict[str, str] = {}
     tags: list[str] = []
-    for node in root.iter():
-        key = _name(node.tag)
+    duplicates = set()
+    for key, text in scalar_fields(root):
         if key.lower() in _VALUE_FIELDS and key not in tags:
             tags.append(key)
         lowered = key.lower()
-        text = (node.text or "").strip()
         if lowered in _VALUE_FIELDS and text:
+            if lowered in values:
+                duplicates.add(lowered)
             values[lowered] = text[:160]
     event_type = values.get("eventtype", "")
     target_type = values.get("targettype", "")
@@ -75,6 +81,18 @@ def parse_notification(payload: bytes) -> dict[str, Any] | None:
         "target_type": target_type,
         "direction": values.get("direction", ""),
         "counts": count_values,
+        "kind": "native_notification", "counts_verified": False,
+        "source_time": values.get("datetime", ""),
+        "region": values.get("regionsid") or values.get("ruleid", ""),
+        "method": values.get("statisticalmethods", ""),
+        "start_time": values.get("starttime", ""), "end_time": values.get("endtime", ""),
+        "schema_recognised": (event_type.lower() == "peoplecounting"
+                              and values.get("statisticalmethods") in {"realTime", "timeRange"}
+                              and {"enter", "exit"} <= count_values.keys()
+                              and bool(values.get("regionsid") or values.get("ruleid"))
+                              and bool(values.get("channelid") or values.get("channel"))
+                              and not duplicates.intersection(_COUNT_FIELDS)
+                              and all(re.fullmatch(r"\d{1,12}", value) for value in count_values.values())),
         "fields_seen": sorted(tags)[:40],
     }
 
@@ -82,14 +100,13 @@ def parse_notification(payload: bytes) -> dict[str, Any] | None:
 def notification_diagnostic(payload: bytes) -> dict[str, Any] | None:
     """Describe an unrecognised notification without retaining its payload."""
     try:
-        root = ET.fromstring(payload)
-    except ET.ParseError:
+        root = decode_document(payload)
+    except (ValueError, ET.ParseError):
         return None
     values: dict[str, str] = {}
     fields: list[str] = []
-    for node in root.iter():
-        key = _name(node.tag).lower()
-        text = (node.text or "").strip()
+    for key, text in scalar_fields(root):
+        key = key.lower()
         if key in _VALUE_FIELDS:
             if key not in fields:
                 fields.append(key)
@@ -173,43 +190,95 @@ def event_paths(cfg: dict[str, Any]) -> tuple[Path, Path]:
     )
 
 
-def event_summary(cfg: dict[str, Any]) -> dict[str, Any]:
+def _source_datetime(value):
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else None
+    except ValueError:
+        return None
+
+
+def _history_lines(path):
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                yield line
+    except FileNotFoundError:
+        return
+
+
+def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
     history, state_path = event_paths(cfg)
     state: dict[str, Any] = {}
     try:
         state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
     except (OSError, json.JSONDecodeError):
         state = {}
-    today = datetime.now().astimezone().date().isoformat()
-    totals = {"a_to_b": 0, "b_to_a": 0, "events": 0}
-    previous_snapshot: dict[str, int] = {}
+    if not isinstance(state, dict):
+        state = {}
+    now = now or datetime.now().astimezone()
+    today = now.date()
+    totals = {"a_to_b": 0, "b_to_a": 0, "events": 0, "observed_enter": 0, "observed_exit": 0,
+              "interval_enter": 0, "interval_exit": 0}
+    previous = {}
+    intervals = set()
+    resets = 0
+    camera = cfg.get("people_counting", {})
     if history.exists():
-        for line in history.read_text(encoding="utf-8", errors="ignore").splitlines():
+        for line in _history_lines(history):
             try:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(row, dict) or not str(row.get("time", "")).startswith(today):
+            if not isinstance(row, dict):
                 continue
-            totals["events"] += 1
-            if row.get("kind") == "onvif_notification":
+            receipt = _source_datetime(row.get("time"))
+            if receipt and receipt.astimezone(now.tzinfo).date() == today:
+                totals["events"] += 1
+            if not row.get("schema_recognised") or row.get("camera") != camera.get("address"):
                 continue
-            counts = row.get("counts", {}) if isinstance(row.get("counts"), dict) else {}
-            for key, value in counts.items():
-                try:
-                    number = int(value)
-                except (TypeError, ValueError):
+            if str(row.get("channel")) != str(camera.get("channel", 1)):
+                continue
+            stamp = _source_datetime(row.get("source_time"))
+            if stamp is None:
+                continue
+            key = (row.get("camera"), row.get("channel"), row.get("region"))
+            try:
+                counts = tuple(int(row["counts"][name]) for name in ("enter", "exit"))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if min(counts) < 0:
+                continue
+            delta = (0, 0)
+            if row.get("method") == "realTime":
+                prior = previous.get(key)
+                if prior and stamp < prior[0]:
                     continue
-                if row.get("kind") == "counter_snapshot":
-                    delta = max(0, number - previous_snapshot.get(key, number))
-                    previous_snapshot[key] = number
-                else:
-                    delta = number
-                if key in {"atob", "entercount", "incount", "human_atob", "human_enter"}:
-                    totals["a_to_b"] += delta
-                elif key in {"btoa", "leavecount", "outcount", "human_btoa", "human_leave"}:
-                    totals["b_to_a"] += delta
-    return {"enabled": bool(cfg.get("people_counting", {}).get("event_collection_enabled")), "today": totals, **state}
+                if prior and stamp.date() == prior[0].astimezone(stamp.tzinfo).date():
+                    if any(value < old for value, old in zip(counts, prior[1])):
+                        resets += 1
+                    else:
+                        delta = tuple(value - old for value, old in zip(counts, prior[1]))
+                previous[key] = (stamp, counts)
+            elif row.get("method") == "timeRange":
+                start, end = _source_datetime(row.get("start_time")), _source_datetime(row.get("end_time"))
+                if not start or not end or end <= start:
+                    continue
+                identity = (key, start, end)
+                if identity in intervals:
+                    continue
+                intervals.add(identity)
+                if start.astimezone(now.tzinfo).date() == today and end.astimezone(now.tzinfo).date() == today:
+                    totals["interval_enter"] += counts[0]
+                    totals["interval_exit"] += counts[1]
+                # Keep interval reports separate from real-time deltas to avoid double counting.
+                continue
+            if stamp.astimezone(now.tzinfo).date() == today:
+                totals["observed_enter"] += delta[0]
+                totals["observed_exit"] += delta[1]
+    return {**state, "enabled": bool(camera.get("event_collection_enabled")), "today": totals,
+            "counts_verified": False, "counter_resets": resets,
+            "interval_reports": len(intervals)}
 
 
 class HikvisionEventCollector:
@@ -269,11 +338,8 @@ class HikvisionEventCollector:
         history.parent.mkdir(parents=True, exist_ok=True)
         with history.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, separators=(",", ":")) + "\n")
-        unverified = event.get("kind") == "onvif_notification"
-        message = "ONVIF counter notification received (unverified totals)" if unverified else "Hikvision people-counting event received"
+        message = "Camera counter notification received (unverified totals)"
         self.event_log.add("info", "people_counting", message, event)
-        if not unverified:
-            self._write_state(status="receiving", last_event_at=event["time"], last_event_type=event["event_type"])
 
     def _counter_loop(self) -> None:
         while True:
@@ -365,10 +431,16 @@ class HikvisionEventCollector:
                 time.sleep(5)
                 continue
             try:
-                self._onvif_stream(camera)
+                if camera.get("event_transport", "isapi") == "onvif":
+                    self._onvif_stream(camera)
+                else:
+                    self._stream(camera)
                 backoff = 5
-            except Exception:
+            except Exception as exc:
                 # _onvif_stream preserves the failing stage and a redacted error.
+                if camera.get("event_transport", "isapi") != "onvif":
+                    self._write_state(status="reconnecting", transport="ISAPI alertStream", counts_verified=False,
+                                      last_error=f"Native stream failed ({type(exc).__name__}). Run native API diagnostic.")
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 60)
 
@@ -420,29 +492,28 @@ class HikvisionEventCollector:
             subscription.close()
 
     def _stream(self, camera: dict[str, Any]) -> None:
+        camera = dict(camera)
         base_url = _base_url(camera)
         opener = _digest_opener(base_url, str(camera["username"]), str(camera["password"]))
         request = Request(f"{base_url}/ISAPI/Event/notification/alertStream", headers={"Accept": "multipart/x-mixed-replace, application/xml"})
         timeout = max(15, int(camera.get("timeout_seconds") or 5) * 6)
-        self._write_state(status="connecting")
+        diagnostic = {"transport": "ISAPI alertStream", "counts_verified": False, "notifications_received": 0}
+        self._write_state(status="connecting", **diagnostic)
         with opener.open(request, timeout=timeout) as response:
-            self._write_state(status="listening", last_connected_at=datetime.now(timezone.utc).isoformat())
-            buffer = b""
-            while True:
-                chunk = response.read(4096)
+            parser = AlertParts(response.headers.get("Content-Type", ""))
+            self._write_state(status="listening", **diagnostic)
+            while self.cfg.get("people_counting") == camera:
+                chunk = response.read1(8192)
                 if not chunk:
                     raise OSError("camera closed the event stream")
-                buffer = (buffer + chunk)[-262144:]
-                while b"</EventNotificationAlert>" in buffer:
-                    raw, buffer = buffer.split(b"</EventNotificationAlert>", 1)
-                    start = raw.rfind(b"<EventNotificationAlert")
-                    if start < 0:
-                        continue
-                    notification = raw[start:] + b"</EventNotificationAlert>"
+                if self.cfg.get("people_counting") != camera:
+                    break
+                for notification in parser.feed(chunk):
+                    diagnostic["notifications_received"] += 1
                     event = parse_notification(notification)
-                    if event:
+                    if event and event["counts"]:
+                        event["camera"] = camera["address"]
                         self._record(event)
-                    else:
-                        diagnostic = notification_diagnostic(notification)
-                        if diagnostic:
-                            self._write_state(status="listening", **diagnostic)
+                        diagnostic["last_reported_counts"] = event["counts"]
+                    diagnostic.update(notification_diagnostic(notification) or {})
+                    self._write_state(status="receiving" if event and event["counts"] else "listening", **diagnostic)

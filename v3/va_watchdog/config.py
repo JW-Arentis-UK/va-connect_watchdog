@@ -195,6 +195,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "people_counting": {
         "event_collection_enabled": False,
+        "event_transport": "isapi",
         "address": "",
         "scheme": "http",
         "port": 80,

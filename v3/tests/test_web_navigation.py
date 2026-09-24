@@ -234,7 +234,7 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('people_settings.pop("password", "")', source)
         self.assertIn("It will not change camera settings or retrieve images or video.", source)
         self.assertIn("The report search is read-only.", source)
-        self.assertIn("previous completed day's report", source)
+        self.assertIn("Run native API diagnostic", source)
 
     def test_recording_storage_setup_is_visible_and_linked_from_status(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
