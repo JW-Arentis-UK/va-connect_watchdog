@@ -31,7 +31,7 @@ _VALUE_FIELDS = {
     "entercount", "leavecount", "incount", "outcount", "passcount", "passingcount",
     "atob", "btoa", "eventdescription",
     "enter", "exit", "pass", "vehicleenter", "vehicleexit", "bicycleenter", "bicycleexit",
-    "statisticalmethods", "regionsid", "ruleid", "datetime", "starttime", "endtime",
+    "statisticalmethod", "statisticalmethods", "regionsid", "ruleid", "datetime", "starttime", "endtime",
 }
 _COUNT_FIELDS = {"entercount", "leavecount", "incount", "outcount", "passcount", "passingcount", "atob", "btoa",
                  "enter", "exit", "pass", "vehicleenter", "vehicleexit", "bicycleenter", "bicycleexit"}
@@ -141,6 +141,27 @@ def _safe_count_records(document: Any) -> list[dict[str, str]]:
     return records
 
 
+def _validated_region_counts(records: list[dict[str, str]]) -> dict[str, str]:
+    """Validate forward, back and both-way region totals before using human counts."""
+    by_direction: dict[str, dict[str, str]] = {}
+    for record in records:
+        direction = record.get("direction", "").lower()
+        if direction in by_direction or direction not in {"forward", "back", "bothway"}:
+            continue
+        by_direction[direction] = record
+    if set(by_direction) != {"forward", "back", "bothway"}:
+        return {}
+    for category in ("human", "non_motor", "vehicle"):
+        present = [category in by_direction[direction] for direction in ("forward", "back", "bothway")]
+        if any(present) and (not all(present) or
+                             int(by_direction["forward"][category]) + int(by_direction["back"][category])
+                             != int(by_direction["bothway"][category])):
+            return {}
+    if not all("human" in by_direction[direction] for direction in ("forward", "back", "bothway")):
+        return {}
+    return {direction: by_direction[direction]["human"] for direction in ("forward", "back", "bothway")}
+
+
 def parse_notification(payload: bytes) -> dict[str, Any] | None:
     """Return whitelisted fields only; payloads can contain private media URLs."""
     try:
@@ -160,6 +181,23 @@ def parse_notification(payload: bytes) -> dict[str, Any] | None:
     event_type = values.get("eventtype", "")
     target_type = values.get("targettype", "")
     count_values = {key: value for key, value in values.items() if key in _COUNT_FIELDS}
+    region_counts = _validated_region_counts(count_records)
+    if event_type.lower() == "regiontargetnumbercounting" and region_counts:
+        count_values = region_counts
+    method = values.get("statisticalmethod") or values.get("statisticalmethods", "")
+    traditional_schema = (event_type.lower() == "peoplecounting"
+                          and method.lower() in {"realtime", "timerange"}
+                          and {"enter", "exit"} <= count_values.keys()
+                          and bool(values.get("regionsid") or values.get("ruleid"))
+                          and bool(values.get("channelid") or values.get("channel"))
+                          and not duplicates.intersection(_COUNT_FIELDS)
+                          and all(re.fullmatch(r"\d{1,12}", value) for value in count_values.values()))
+    region_schema = (event_type.lower() == "regiontargetnumbercounting"
+                     and bool(region_counts)
+                     and method.lower() == "realtime"
+                     and bool(values.get("ruleid"))
+                     and bool(values.get("channelid") or values.get("channel"))
+                     and bool(values.get("datetime")))
     # Keep only people/count notifications; generic motion alarms are irrelevant.
     relevant = bool(count_values) or any(
         word in f"{event_type} {target_type} {values.get('eventdescription', '')}".lower()
@@ -178,15 +216,10 @@ def parse_notification(payload: bytes) -> dict[str, Any] | None:
         "kind": "native_notification", "counts_verified": False,
         "source_time": values.get("datetime", ""),
         "region": values.get("regionsid") or values.get("ruleid", ""),
-        "method": values.get("statisticalmethods", ""),
+        "method": method,
         "start_time": values.get("starttime", ""), "end_time": values.get("endtime", ""),
-        "schema_recognised": (event_type.lower() == "peoplecounting"
-                              and values.get("statisticalmethods") in {"realTime", "timeRange"}
-                              and {"enter", "exit"} <= count_values.keys()
-                              and bool(values.get("regionsid") or values.get("ruleid"))
-                              and bool(values.get("channelid") or values.get("channel"))
-                              and not duplicates.intersection(_COUNT_FIELDS)
-                              and all(re.fullmatch(r"\d{1,12}", value) for value in count_values.values())),
+        "schema_recognised": traditional_schema or region_schema,
+        "count_schema": "region_forward_back" if region_schema else "people_enter_exit" if traditional_schema else "",
         "fields_seen": diagnostic_fields,
         "candidate_counters": candidate_counters,
         "count_records": count_records,
@@ -315,6 +348,7 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
     now = now or datetime.now().astimezone()
     today = now.date()
     totals = {"a_to_b": 0, "b_to_a": 0, "events": 0, "observed_enter": 0, "observed_exit": 0,
+              "observed_forward": 0, "observed_back": 0,
               "interval_enter": 0, "interval_exit": 0}
     previous = {}
     intervals = set()
@@ -339,14 +373,17 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
             if stamp is None:
                 continue
             key = (row.get("camera"), row.get("channel"), row.get("region"))
+            count_names = (("forward", "back") if row.get("count_schema") == "region_forward_back"
+                           else ("enter", "exit"))
             try:
-                counts = tuple(int(row["counts"][name]) for name in ("enter", "exit"))
+                counts = tuple(int(row["counts"][name]) for name in count_names)
             except (KeyError, TypeError, ValueError):
                 continue
             if min(counts) < 0:
                 continue
             delta = (0, 0)
-            if row.get("method") == "realTime":
+            method = str(row.get("method") or "").lower()
+            if method == "realtime":
                 prior = previous.get(key)
                 if prior and stamp < prior[0]:
                     continue
@@ -356,7 +393,7 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
                     else:
                         delta = tuple(value - old for value, old in zip(counts, prior[1]))
                 previous[key] = (stamp, counts)
-            elif row.get("method") == "timeRange":
+            elif method == "timerange":
                 start, end = _source_datetime(row.get("start_time")), _source_datetime(row.get("end_time"))
                 if not start or not end or end <= start:
                     continue
@@ -370,8 +407,12 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
                 # Keep interval reports separate from real-time deltas to avoid double counting.
                 continue
             if stamp.astimezone(now.tzinfo).date() == today:
-                totals["observed_enter"] += delta[0]
-                totals["observed_exit"] += delta[1]
+                if row.get("count_schema") == "region_forward_back":
+                    totals["observed_forward"] += delta[0]
+                    totals["observed_back"] += delta[1]
+                else:
+                    totals["observed_enter"] += delta[0]
+                    totals["observed_exit"] += delta[1]
     return {**state, "enabled": bool(camera.get("event_collection_enabled")), "today": totals,
             "counts_verified": False, "counter_resets": resets,
             "interval_reports": len(intervals)}
@@ -385,15 +426,17 @@ def record_push_event(cfg, event):
     event["transport"] = "HTTP push"
     with _history_lock:
         history.parent.mkdir(parents=True, exist_ok=True)
-        if event.get("counts"):
-            with history.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(event, separators=(",", ":")) + "\n")
         try:
             prior = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
         except (OSError, json.JSONDecodeError):
             prior = {}
+        if not isinstance(prior, dict):
+            prior = {}
+        if event.get("counts") and event.get("counts") != prior.get("last_reported_counts"):
+            with history.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, separators=(",", ":")) + "\n")
         try:
-            received = int(prior.get("notifications_received", 0)) + 1 if isinstance(prior, dict) else 1
+            received = int(prior.get("notifications_received", 0)) + 1
         except (TypeError, ValueError):
             received = 1
         state = {

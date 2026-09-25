@@ -95,7 +95,8 @@ def render_camera_collector(summary):
     if unverified:
         html += ('<p class="warning">People totals are not yet verified. Notifications are not confirmed crossings.</p>'
                  f'<p class="muted">Observed human counter increases since baseline today: enter {int(today.get("observed_enter", 0))}; '
-                 f'exit {int(today.get("observed_exit", 0))}. Partial coverage, not a full-day total or verified A/B direction.</p>'
+                 f'exit {int(today.get("observed_exit", 0))}; camera forward {int(today.get("observed_forward", 0))}; '
+                 f'camera back {int(today.get("observed_back", 0))}. Partial coverage, not a full-day total or verified entrance/exit direction.</p>'
                  f'<p class="muted">Separate interval reports: {int(summary.get("interval_reports", 0))}; '
                  f'counter resets detected: {int(summary.get("counter_resets", 0))}.</p>')
     return html

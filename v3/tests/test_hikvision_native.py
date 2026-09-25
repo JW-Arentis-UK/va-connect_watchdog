@@ -40,6 +40,18 @@ def counting(enter=22, exit=9, stamp="2026-09-24T08:00:00+01:00", region="1", me
     </peopleCounting></EventNotificationAlert>'''.encode()
 
 
+def region_counting(forward=114, back=93, stamp="2026-09-24T08:00:00+01:00"):
+    return f'''<EventNotificationAlert><channelID>1</channelID><dateTime>{stamp}</dateTime>
+    <eventType>regionTargetNumberCounting</eventType><ruleID>1</ruleID><statisticalMethod>realTime</statisticalMethod>
+    <CountingList><DataList><statisticalDirection>forward</statisticalDirection><humanCount>{forward}</humanCount>
+    <nonMotorCount>18</nonMotorCount><vehicleCount>398</vehicleCount></DataList>
+    <DataList><statisticalDirection>back</statisticalDirection><humanCount>{back}</humanCount>
+    <nonMotorCount>12</nonMotorCount><vehicleCount>353</vehicleCount></DataList>
+    <DataList><statisticalDirection>bothway</statisticalDirection><humanCount>{forward + back}</humanCount>
+    <nonMotorCount>30</nonMotorCount><vehicleCount>751</vehicleCount></DataList></CountingList>
+    </EventNotificationAlert>'''.encode()
+
+
 def part(payload, kind=b"application/xml", length=True):
     headers = b"--test\r\nContent-Type: " + kind + b"\r\n"
     if length:
@@ -64,23 +76,19 @@ class NativeTests(unittest.TestCase):
         self.assertNotIn("secret-url", json.dumps(event))
 
     def test_unknown_region_count_schema_exposes_only_safe_numeric_candidates(self):
-        payload = b'''<EventNotificationAlert><eventType>regionTargetNumberCounting</eventType>
-        <RegionTargetNumberCounting><CountingList>
-        <DataList><statisticalDirection>enter</statisticalDirection><statisticalMethod>realTime</statisticalMethod>
-        <humanCount>2</humanCount><vehicleCount>1</vehicleCount><pictureURL>private-image</pictureURL></DataList>
-        <DataList><statisticalDirection>exit</statisticalDirection><statisticalMethod>realTime</statisticalMethod>
-        <humanCount>1</humanCount><vehicleCount>0</vehicleCount></DataList></CountingList>
-        <activePostCount>17</activePostCount>
-        <ipAddress>192.168.1.72</ipAddress></RegionTargetNumberCounting></EventNotificationAlert>'''
+        payload = region_counting().replace(b"</DataList>", b"<pictureURL>private-image</pictureURL></DataList>", 1)
         event = parse_notification(payload)
-        self.assertEqual(event["counts"], {})
+        self.assertEqual(event["counts"], {"forward": "114", "back": "93", "bothway": "207"})
+        self.assertEqual(event["count_schema"], "region_forward_back")
+        self.assertTrue(event["schema_recognised"])
         self.assertIn("humancount", event["fields_seen"])
         self.assertNotIn("pictureurl", event["fields_seen"])
-        self.assertTrue(any(key.endswith("humancount") and value == "2 | 1"
+        self.assertTrue(any(key.endswith("humancount") and value == "114 | 93 | 207"
                             for key, value in event["candidate_counters"].items()))
         self.assertEqual(event["count_records"], [
-            {"direction": "enter", "method": "realTime", "human": "2", "vehicle": "1"},
-            {"direction": "exit", "method": "realTime", "human": "1", "vehicle": "0"},
+            {"direction": "forward", "human": "114", "non_motor": "18", "vehicle": "398"},
+            {"direction": "back", "human": "93", "non_motor": "12", "vehicle": "353"},
+            {"direction": "bothway", "human": "207", "non_motor": "30", "vehicle": "751"},
         ])
         self.assertNotIn("private-image", json.dumps(event))
         self.assertNotIn("192.168.1.72", json.dumps(event))
@@ -97,6 +105,12 @@ class NativeTests(unittest.TestCase):
             self.assertIn("humannum", summary["last_notification_fields"])
             self.assertEqual(summary["today"]["events"], 0)
             self.assertFalse((Path(directory) / "hikvision-people-events.jsonl").exists())
+
+    def test_region_count_checksum_mismatch_is_not_accepted_as_counts(self):
+        event = parse_notification(region_counting().replace(b"<humanCount>207</humanCount>",
+                                                              b"<humanCount>208</humanCount>"))
+        self.assertEqual(event["counts"], {})
+        self.assertFalse(event["schema_recognised"])
 
     def test_dtd_and_ambiguous_count_arrays_not_recognised(self):
         self.assertIsNone(parse_notification(b'<!DOCTYPE x [<!ENTITY x "bad">]><x/>'))
@@ -341,6 +355,14 @@ class CounterTests(unittest.TestCase):
         self.record(22,9, stamp='2026-09-23T23:01:00Z')
         self.record(23,10, stamp='2026-09-23T23:02:00Z')
         self.assertEqual(event_summary(self.cfg, self.now)['today']['observed_enter'], 1)
+
+    def test_region_forward_back_repeats_produce_safe_cumulative_deltas(self):
+        record_push_event(self.cfg, parse_notification(region_counting()))
+        record_push_event(self.cfg, parse_notification(region_counting(115, 93, "2026-09-24T08:01:00+01:00")))
+        record_push_event(self.cfg, parse_notification(region_counting(115, 93, "2026-09-24T08:02:00+01:00")))
+        summary = event_summary(self.cfg, self.now)
+        self.assertEqual(summary["today"]["observed_forward"], 1)
+        self.assertEqual(summary["today"]["observed_back"], 0)
 
 
 class SetupSmokeTests(unittest.TestCase):
