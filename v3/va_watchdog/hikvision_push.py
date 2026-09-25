@@ -63,9 +63,11 @@ def http_host_payload(slot, receiver_address, receiver_port, channel, *, namespa
         ET.SubElement(root, tag(name)).text = value
     if include_subscription:
         subscribe = ET.SubElement(root, tag("SubscribeEvent"))
-        # Firmware families disagree on the counting event name. Subscribe to
-        # metadata for the channel and let the receiver retain counting events only.
-        ET.SubElement(subscribe, tag("eventMode")).text = "all"
+        ET.SubElement(subscribe, tag("heartbeat")).text = "30"
+        ET.SubElement(subscribe, tag("eventMode")).text = "list"
+        event_list = ET.SubElement(subscribe, tag("EventList"))
+        event = ET.SubElement(event_list, tag("Event"))
+        ET.SubElement(event, tag("type")).text = "regionTargetNumberCounting"
         ET.SubElement(subscribe, tag("channels")).text = str(int(channel))
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
@@ -110,7 +112,7 @@ def _replace_xml_text(document, name, value):
     return document
 
 
-def _ensure_subscription(document, channel):
+def _ensure_subscription(document, channel, event_type="regionTargetNumberCounting"):
     """Subscribe the selected host without reserializing camera-owned XML."""
     root_match = re.search(
         r"<(?P<prefix>[A-Za-z_][A-Za-z0-9_.-]*:)?HttpHostNotification\b",
@@ -123,24 +125,17 @@ def _ensure_subscription(document, channel):
         document,
         re.IGNORECASE | re.DOTALL,
     )
+    block = (
+        f"<{prefix}SubscribeEvent>"
+        f"<{prefix}heartbeat>30</{prefix}heartbeat>"
+        f"<{prefix}eventMode>list</{prefix}eventMode>"
+        f"<{prefix}EventList><{prefix}Event>"
+        f"<{prefix}type>{xml_escape(str(event_type))}</{prefix}type>"
+        f"</{prefix}Event></{prefix}EventList>"
+        f"<{prefix}channels>{int(channel)}</{prefix}channels>"
+        f"</{prefix}SubscribeEvent>"
+    )
     if subscription:
-        block = subscription.group(0)
-        try:
-            block = _replace_xml_text(block, "eventMode", "all")
-        except ValueError:
-            closing = re.search(r"</(?:[A-Za-z_][A-Za-z0-9_.-]*:)?SubscribeEvent\s*>", block, re.IGNORECASE)
-            if not closing:
-                raise ValueError("camera subscription block could not be updated")
-            block = block[:closing.start()] + f"<{prefix}eventMode>all</{prefix}eventMode>" + block[closing.start():]
-        try:
-            block = _replace_xml_text(block, "channels", int(channel))
-        except ValueError:
-            event_mode = re.search(
-                r"</(?:[A-Za-z_][A-Za-z0-9_.-]*:)?eventMode\s*>", block, re.IGNORECASE)
-            if not event_mode:
-                raise ValueError("camera subscription channel could not be added")
-            position = event_mode.end()
-            block = block[:position] + f"<{prefix}channels>{int(channel)}</{prefix}channels>" + block[position:]
         return document[:subscription.start()] + block + document[subscription.end():]
 
     closing = re.search(
@@ -150,12 +145,6 @@ def _ensure_subscription(document, channel):
     )
     if not closing:
         raise ValueError("camera HTTP host document has no closing element")
-    block = (
-        f"<{prefix}SubscribeEvent>"
-        f"<{prefix}eventMode>all</{prefix}eventMode>"
-        f"<{prefix}channels>{int(channel)}</{prefix}channels>"
-        f"</{prefix}SubscribeEvent>"
-    )
     return document[:closing.start()] + block + document[closing.start():]
 
 
@@ -249,7 +238,11 @@ def _roundtrip_payload(previous, slot, receiver_address, receiver_port, channel,
         root.remove(existing)
     if include_subscription:
         subscribe = ET.SubElement(root, tag("SubscribeEvent"))
-        ET.SubElement(subscribe, tag("eventMode")).text = "all"
+        ET.SubElement(subscribe, tag("heartbeat")).text = "30"
+        ET.SubElement(subscribe, tag("eventMode")).text = "list"
+        event_list = ET.SubElement(subscribe, tag("EventList"))
+        event = ET.SubElement(event_list, tag("Event"))
+        ET.SubElement(event, tag("type")).text = "regionTargetNumberCounting"
         ET.SubElement(subscribe, tag("channels")).text = str(int(channel))
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
@@ -320,7 +313,8 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
         fields = {name.lower(): value for name, value in scalar_fields(decode_document(verified))}
         if (fields.get("ipaddress") != str(receiver_address)
                 or fields.get("portno") != str(int(receiver_port))
-                or fields.get("eventmode", "").lower() != "all"):
+                or fields.get("eventmode", "").lower() != "list"
+                or fields.get("type", "").lower() != "regiontargetnumbercounting"):
             raise RuntimeError("camera read-back did not confirm destination and event subscription")
     except (HTTPError, OSError, ValueError, ET.ParseError) as exc:
         raise RuntimeError(f"camera configuration could not be verified: {exc}") from None
@@ -330,6 +324,6 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
         "url": f"http://{receiver_address}:{int(receiver_port)}/hikvision/events",
         "backup_path": str(backup_path) if backup_path is not None else "",
         "profile": applied_profile,
-        "message": ("Camera HTTP event destination and event subscription configured using "
+        "message": ("Camera HTTP event destination and region counting subscription configured using "
                     + applied_profile + ". Waiting for the first counting message."),
     }

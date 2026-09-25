@@ -6909,7 +6909,10 @@ def start_web(cfg):
                                 "message_type": diagnostic.get("last_notification_type", ""),
                                 "fields": diagnostic.get("last_notification_fields", []),
                             }
-                        unrecognised += 1
+                        if str((diagnostic or {}).get("last_notification_type") or "").lower() == "heartbeat":
+                            ignored += 1
+                        else:
+                            unrecognised += 1
                 record_http_delivery(
                     cfg, content_type=self.headers.get("Content-Type", ""), body_size=len(payload),
                     documents=len(documents), accepted=accepted, ignored=ignored, unrecognised=unrecognised,

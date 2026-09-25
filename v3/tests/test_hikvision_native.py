@@ -211,8 +211,8 @@ class NativeTests(unittest.TestCase):
         self.assertIn(b"192.168.1.100", body)
         self.assertIn(b"<url>/hikvision/events</url>", body)
         self.assertNotIn(b"http://192.168.1.100", body)
-        self.assertNotIn(b"regionTargetNumberCounting", body)
-        self.assertIn(b"<SubscribeEvent><eventMode>all</eventMode><channels>1</channels></SubscribeEvent>", body)
+        self.assertIn(b"<eventMode>list</eventMode>", body)
+        self.assertIn(b"<type>regionTargetNumberCounting</type>", body)
         self.assertNotIn(b"password", body)
         self.assertIn(b"<userName></userName>", body)
         self.assertNotIn(b"<userName />", body)
@@ -252,7 +252,7 @@ class NativeTests(unittest.TestCase):
                         return FakeResponse(host.replace('<url></url>', '<url>/hikvision/events</url>')
                                             .replace('<ipAddress>0.0.0.0</ipAddress>', '<ipAddress>192.168.1.100</ipAddress>')
                                             .replace('<portNo>80</portNo>', '<portNo>9110</portNo>')
-                                            .replace('</HttpHostNotification>', '<SubscribeEvent><eventMode>all</eventMode><channels>1</channels></SubscribeEvent></HttpHostNotification>'))
+                                            .replace('</HttpHostNotification>', '<SubscribeEvent><heartbeat>30</heartbeat><eventMode>list</eventMode><EventList><Event><type>regionTargetNumberCounting</type></Event></EventList><channels>1</channels></SubscribeEvent></HttpHostNotification>'))
                     return FakeResponse(host)
                 if method == "GET":
                     return FakeResponse(f'<HttpHostNotificationList>{host}</HttpHostNotificationList>')
@@ -267,13 +267,15 @@ class NativeTests(unittest.TestCase):
         result = configure_http_push(CAMERA, "192.168.1.100", 9110, opener=opener)
 
         self.assertEqual(result["profile"], "camera host list with event subscription")
-        self.assertIn(b"<eventMode>all</eventMode>", opener.assert_subscription)
+        self.assertIn(b"<eventMode>list</eventMode>", opener.assert_subscription)
+        self.assertIn(b"<type>regionTargetNumberCounting</type>", opener.assert_subscription)
         self.assertIn(b"<channels>1</channels>", opener.assert_subscription)
 
     def test_push_multipart_discards_media(self):
         payload = part(b"private-image", b"image/jpeg") + part(counting()) + b"--test--\r\n"
         self.assertEqual(metadata_documents("multipart/mixed; boundary=test", payload), [counting()])
-        self.assertIn(b"<eventMode>all</eventMode>", http_host_payload(1, "192.168.1.100", 9110, 1))
+        self.assertIn(b"<eventMode>list</eventMode>", http_host_payload(1, "192.168.1.100", 9110, 1))
+        self.assertIn(b"<type>regionTargetNumberCounting</type>", http_host_payload(1, "192.168.1.100", 9110, 1))
 
     def test_authentication_failure_stops_further_diagnostic_requests(self):
         url = "http://192.168.1.72/ISAPI/System/deviceInfo"
@@ -605,6 +607,16 @@ class SetupSmokeTests(unittest.TestCase):
                 self.assertEqual(summary['http_posts_received'], 1)
                 self.assertEqual(summary['last_http_message_type'], 'PeopleCounting')
                 self.assertIn('enter', summary['last_http_fields'])
+                heartbeat = b'<EventNotificationAlert><channelID>1</channelID><dateTime>2026-09-24T08:01:00+01:00</dateTime><eventType>heartBeat</eventType><eventState>inactive</eventState></EventNotificationAlert>'
+                request = Request(f'http://127.0.0.1:{server.server_port}/hikvision/events', data=heartbeat,
+                                  headers={'Content-Type': 'application/xml'})
+                with urlopen(request, timeout=10) as response:
+                    self.assertEqual(json.loads(response.read())['accepted'], 0)
+                summary = event_summary(cfg)
+                self.assertEqual(summary['last_http_message_type'], 'heartBeat')
+                self.assertEqual(summary['last_http_ignored'], 1)
+                self.assertEqual(summary['last_http_unrecognised'], 0)
+                self.assertEqual(summary['last_reported_counts']['enter'], '22')
                 history = Path(directory) / 'hikvision-people-events.jsonl'
                 self.assertNotIn('private-image', history.read_text(encoding='utf-8'))
             finally:
