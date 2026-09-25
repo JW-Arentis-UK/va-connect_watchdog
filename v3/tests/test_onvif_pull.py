@@ -289,7 +289,7 @@ class CollectorLifecycleTests(unittest.TestCase):
         self.collector.metadata_thread = Mock()
         self.collector.start()
         self.collector.thread.start.assert_called_once()
-        self.collector.counter_thread.start.assert_not_called()
+        self.collector.counter_thread.start.assert_called_once()
         self.collector.metadata_thread.start.assert_not_called()
 
     def test_status_renderer_exposes_error_safely_and_does_not_claim_zero_people(self):

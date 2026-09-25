@@ -294,6 +294,64 @@ class NativeTests(unittest.TestCase):
         self.assertIn(b"<eventMode>list</eventMode>", http_host_payload(1, "192.168.1.100", 9110, 1))
         self.assertIn(b"<type>mixedTargetDetection</type>", http_host_payload(1, "192.168.1.100", 9110, 1))
 
+    def test_counter_report_poll_reads_and_validates_all_directions(self):
+        totals = {
+            "forward": {"humanCount": 116, "nonMotorCount": 19, "vehicleCount": 402},
+            "back": {"humanCount": 95, "nonMotorCount": 12, "vehicleCount": 362},
+            "bothway": {"humanCount": 211, "nonMotorCount": 31, "vehicleCount": 764},
+        }
+
+        class ReportOpener:
+            def __init__(self):
+                self.requests = []
+
+            def open(self, request, timeout):
+                self.requests.append(request)
+                condition = json.loads(request.data)["ReportCond"]
+                return FakeResponse(json.dumps({"ReportResult": totals[condition["statisticalDirection"]]}))
+
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = {
+                "events_path": str(Path(directory) / "events.jsonl"),
+                "people_counting": {**CAMERA, "event_transport": "http_push"},
+            }
+            collector = HikvisionEventCollector(cfg, Mock())
+            opener = ReportOpener()
+            with patch("va_watchdog.hikvision_events._digest_opener", return_value=opener):
+                event = collector._read_counter_snapshot(cfg["people_counting"])
+                repeated = collector._read_counter_snapshot(cfg["people_counting"])
+
+            self.assertEqual(event["counts"], {"forward": "116", "back": "95", "bothway": "211"})
+            self.assertEqual(event["camera"], CAMERA["address"])
+            self.assertEqual(event["count_schema"], "region_forward_back")
+            self.assertEqual(event["count_records"][0]["vehicle"], "402")
+            self.assertIsNone(repeated)
+            self.assertEqual(len(opener.requests), 6)
+            self.assertTrue(all(request.get_method() == "POST" for request in opener.requests))
+            self.assertTrue(all("SearchRegionTargetNumberCounting" in request.full_url
+                                for request in opener.requests))
+            summary = event_summary(cfg)
+            self.assertEqual(summary["counter_poll_status"], "ok")
+            self.assertEqual(summary["last_reported_counts"]["bothway"], "211")
+
+    def test_counter_report_poll_rejects_bad_bothway_checksum(self):
+        class BadReportOpener:
+            def open(self, request, timeout):
+                direction = json.loads(request.data)["ReportCond"]["statisticalDirection"]
+                count = {"forward": 10, "back": 5, "bothway": 16}[direction]
+                return FakeResponse(json.dumps({"ReportResult": {"humanCount": count}}))
+
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = {
+                "events_path": str(Path(directory) / "events.jsonl"),
+                "people_counting": {**CAMERA, "event_transport": "http_push"},
+            }
+            collector = HikvisionEventCollector(cfg, Mock())
+            with patch("va_watchdog.hikvision_events._digest_opener", return_value=BadReportOpener()):
+                self.assertIsNone(collector._read_counter_snapshot(cfg["people_counting"]))
+            self.assertEqual(event_summary(cfg)["counter_poll_status"],
+                             "report checksum did not validate")
+
     def test_authentication_failure_stops_further_diagnostic_requests(self):
         url = "http://192.168.1.72/ISAPI/System/deviceInfo"
         client = FakeOpener({url: HTTPError(url,401,"Unauthorized",{},io.BytesIO(b""))})
