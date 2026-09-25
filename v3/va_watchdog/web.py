@@ -45,7 +45,7 @@ from .gateway_reboot import request_gateway_reboot
 from .hikvision import probe_people_counting
 from .hikvision_events import daily_count_history, event_summary
 from .hikvision_native import bounded_native_diagnostic, capture_request_paths
-from .hikvision_events import parse_notification, notification_diagnostic, record_push_event
+from .hikvision_events import parse_notification, notification_diagnostic, record_http_delivery, record_push_event
 from .hikvision_push import MAX_PUSH_BODY, configure_http_push, metadata_documents
 from .web_links import LINK_GROUPS, MAX_LINKS, configured_web_links, normalize_web_link
 
@@ -1458,7 +1458,8 @@ def start_web(cfg):
                     f"<div><label class=\"label\">Gateway receiver IP</label><input name=\"people_counting_push_receiver_address\" maxlength=\"45\" value=\"{escape(str(people_cfg.get('push_receiver_address', '')))}\" placeholder=\"e.g. 192.168.1.100\"><p class=\"muted\">The camera must be able to reach this address.</p></div>"
                     f"<div><label class=\"label\">Camera upload slot</label><input name=\"people_counting_push_slot\" type=\"number\" min=\"1\" max=\"12\" value=\"{escape(str(people_cfg.get('push_slot', 1)))}\"></div>"
                     "</div>"
-                    + ("<div class=\"button-row\"><a class=\"ghost\" href=\"/hikvision-push-confirm\">Repair camera delivery</a></div>"
+                    + ("<div class=\"button-row\"><a class=\"ghost\" href=\"/hikvision-push-confirm\">Repair camera delivery</a>"
+                       "<button class=\"ghost\" type=\"submit\" formmethod=\"post\" formaction=\"/hikvision-native-diagnostic\">Check camera compatibility</button></div>"
                        if people_cfg.get("push_receiver_address") else "<p class=\"warning\">Save a gateway receiver IP before configuring delivery.</p>")
                 )
             )
@@ -1558,8 +1559,11 @@ def start_web(cfg):
                 rows.append("<tr><td colspan=\"4\">Waiting for the first validated camera counter message.</td></tr>")
 
             transport = str(summary.get("transport") or camera.get("event_transport") or "-")
-            connection_state = "Listening" if listening else "No recent messages" if stale else "Waiting"
-            connection_css = "healthy" if listening else "critical" if stale else "warning"
+            http_seen = bool(summary.get("last_http_post_at"))
+            unrecognised_http = http_seen and not summary.get("last_event_at")
+            connection_state = ("Listening" if listening else "Message not recognised" if unrecognised_http
+                                else "No recent messages" if stale else "Waiting")
+            connection_css = "healthy" if listening else "critical" if stale and not unrecognised_http else "warning"
             unexpected_resets = int(today.get("unexpected_resets", 0) or 0)
             max_daily = max([int(row.get(name) or 0) for row in daily for name in ("forward", "back")] or [1])
             chart_days = []
@@ -1627,11 +1631,22 @@ def start_web(cfg):
                 )
             collection_notice = ""
             if stale:
-                age_minutes = int(summary.get("message_age_seconds") or 0) // 60
-                collection_notice = (
-                    "<div class=\"notice critical\"><strong>Camera messages are stale.</strong> "
-                    f"No validated count has arrived for {age_minutes} minutes; the configured limit is {escape(str(summary.get('stale_after_minutes')))} minutes.</div>"
-                )
+                if unrecognised_http:
+                    collection_notice = (
+                        "<div class=\"notice warning\"><strong>The camera can reach this watchdog, but its latest HTTP message was not a validated counter.</strong> "
+                        "Run the native API diagnostic from Camera setup and review the receiver details below.</div>"
+                    )
+                elif summary.get("last_event_at"):
+                    age_minutes = int(summary.get("message_age_seconds") or 0) // 60
+                    collection_notice = (
+                        "<div class=\"notice critical\"><strong>Camera messages are stale.</strong> "
+                        f"No validated count has arrived for {age_minutes} minutes; the configured limit is {escape(str(summary.get('stale_after_minutes')))} minutes.</div>"
+                    )
+                else:
+                    collection_notice = (
+                        "<div class=\"notice critical\"><strong>No counting message has been received yet.</strong> "
+                        "The camera counters are active, so repair the camera delivery subscription from Camera setup.</div>"
+                    )
             elif unexpected_resets:
                 collection_notice = (
                     "<div class=\"notice critical\"><strong>Unexpected daytime counter reset detected.</strong> "
@@ -1688,6 +1703,8 @@ def start_web(cfg):
                 f"<tr><th>Transport</th><td>{escape(transport)}</td></tr>"
                 f"<tr><th>Last camera message</th><td>{escape(str(summary.get('last_notification_type') or '-'))}</td></tr>"
                 f"<tr><th>Last accepted sample</th><td>{escape(local_time(summary.get('last_event_at')))}</td></tr>"
+                f"<tr><th>Last HTTP request</th><td>{escape(local_time(summary.get('last_http_post_at')))}</td></tr>"
+                f"<tr><th>Last HTTP result</th><td>{escape(str(summary.get('last_http_accepted', 0)))} accepted; {escape(str(summary.get('last_http_ignored', 0)))} ignored; {escape(str(summary.get('last_http_unrecognised', 0)))} unrecognised</td></tr>"
                 f"<tr><th>No-message alert</th><td>{escape(str(summary.get('stale_after_minutes')))} minutes</td></tr>"
                 f"<tr><th>Unexpected resets today</th><td class=\"{'critical' if unexpected_resets else 'healthy'}\">{unexpected_resets}</td></tr>"
                 "<tr><th>Barrier/train correlation</th><td>Not configured. No barrier or signalling data source is connected.</td></tr>"
@@ -2966,7 +2983,8 @@ def start_web(cfg):
             "<div class=\"card\"><h2>Camera HTTP Event Delivery</h2>"
             f"<p class=\"{'healthy' if result.get('ok') else 'critical'}\">{escape(str(result.get('message') or 'Configuration processed'))}</p>"
             f"<div class=\"label\">Destination</div><div class=\"value\">{escape(str(result.get('url') or '-'))}</div>"
-            "<p>Set Event interface to <strong>Camera HTTP push</strong>, enable event diagnostics, and save Settings. The status will change when the first camera message arrives.</p>"
+            "<p>Open Crossing Activity and allow up to one minute for the first camera message. Its receiver status will distinguish no delivery from an unrecognised camera message.</p>"
+            "<a class=\"ghost\" href=\"/crossing-activity\">Open Crossing Activity</a> "
             "<a class=\"ghost\" href=\"/setup\">Back to Setup</a></div>"
         )
         return page_shell(body, "Setup")
@@ -6841,7 +6859,9 @@ def start_web(cfg):
                 payload = self.rfile.read(length)
                 accepted = 0
                 ignored = 0
-                for document in metadata_documents(self.headers.get("Content-Type", ""), payload):
+                unrecognised = 0
+                documents = metadata_documents(self.headers.get("Content-Type", ""), payload)
+                for document in documents:
                     event = parse_notification(document)
                     event_type = re.sub(r"[^a-z0-9]", "", str((event or {}).get("event_type") or "").lower())
                     is_counting = bool((event or {}).get("counts")) or "count" in event_type
@@ -6859,6 +6879,11 @@ def start_web(cfg):
                         diagnostic = notification_diagnostic(document)
                         if diagnostic:
                             append_web_event("info", "people_counting", "Unrecognised Hikvision HTTP event metadata received", diagnostic)
+                        unrecognised += 1
+                record_http_delivery(
+                    cfg, content_type=self.headers.get("Content-Type", ""), body_size=len(payload),
+                    documents=len(documents), accepted=accepted, ignored=ignored, unrecognised=unrecognised,
+                )
                 self._send_json({"statusCode": 1, "statusString": "OK", "subStatusCode": "ok",
                                  "accepted": accepted, "ignored": ignored})
                 return

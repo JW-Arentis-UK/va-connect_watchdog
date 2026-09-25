@@ -678,10 +678,44 @@ def record_push_event(cfg, event):
             "notifications_received": received,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+        for key, value in prior.items():
+            if key.startswith("last_http_") or key == "http_posts_received":
+                state[key] = value
         temporary = state_path.with_suffix(".push.tmp")
         temporary.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
         temporary.replace(state_path)
     return event
+
+
+def record_http_delivery(cfg, *, content_type, body_size, documents, accepted, ignored, unrecognised):
+    """Record a payload-free delivery outcome so transport and parsing faults are distinguishable."""
+    _, state_path = event_paths(cfg)
+    with _history_lock:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+        except (OSError, json.JSONDecodeError):
+            state = {}
+        if not isinstance(state, dict):
+            state = {}
+        try:
+            received = int(state.get("http_posts_received", 0)) + 1
+        except (TypeError, ValueError):
+            received = 1
+        state.update({
+            "last_http_post_at": datetime.now(timezone.utc).isoformat(),
+            "last_http_content_type": str(content_type or "unknown").split(";", 1)[0][:80],
+            "last_http_body_size": max(0, int(body_size)),
+            "last_http_documents": max(0, int(documents)),
+            "last_http_accepted": max(0, int(accepted)),
+            "last_http_ignored": max(0, int(ignored)),
+            "last_http_unrecognised": max(0, int(unrecognised)),
+            "http_posts_received": received,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+        temporary = state_path.with_suffix(".http.tmp")
+        temporary.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
+        temporary.replace(state_path)
 
 
 class HikvisionEventCollector:

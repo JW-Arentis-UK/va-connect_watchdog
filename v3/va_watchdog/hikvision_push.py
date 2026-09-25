@@ -110,7 +110,56 @@ def _replace_xml_text(document, name, value):
     return document
 
 
-def _roundtrip_list_payload(previous, slot, receiver_address, receiver_port):
+def _ensure_subscription(document, channel):
+    """Subscribe the selected host without reserializing camera-owned XML."""
+    root_match = re.search(
+        r"<(?P<prefix>[A-Za-z_][A-Za-z0-9_.-]*:)?HttpHostNotification\b",
+        document,
+        re.IGNORECASE,
+    )
+    prefix = (root_match.group("prefix") or "") if root_match else ""
+    subscription = re.search(
+        r"<(?P<tag>(?:[A-Za-z_][A-Za-z0-9_.-]*:)?SubscribeEvent)\b[^>]*>.*?</(?P=tag)\s*>",
+        document,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if subscription:
+        block = subscription.group(0)
+        try:
+            block = _replace_xml_text(block, "eventMode", "all")
+        except ValueError:
+            closing = re.search(r"</(?:[A-Za-z_][A-Za-z0-9_.-]*:)?SubscribeEvent\s*>", block, re.IGNORECASE)
+            if not closing:
+                raise ValueError("camera subscription block could not be updated")
+            block = block[:closing.start()] + f"<{prefix}eventMode>all</{prefix}eventMode>" + block[closing.start():]
+        try:
+            block = _replace_xml_text(block, "channels", int(channel))
+        except ValueError:
+            event_mode = re.search(
+                r"</(?:[A-Za-z_][A-Za-z0-9_.-]*:)?eventMode\s*>", block, re.IGNORECASE)
+            if not event_mode:
+                raise ValueError("camera subscription channel could not be added")
+            position = event_mode.end()
+            block = block[:position] + f"<{prefix}channels>{int(channel)}</{prefix}channels>" + block[position:]
+        return document[:subscription.start()] + block + document[subscription.end():]
+
+    closing = re.search(
+        r"</(?:[A-Za-z_][A-Za-z0-9_.-]*:)?HttpHostNotification\s*>",
+        document,
+        re.IGNORECASE,
+    )
+    if not closing:
+        raise ValueError("camera HTTP host document has no closing element")
+    block = (
+        f"<{prefix}SubscribeEvent>"
+        f"<{prefix}eventMode>all</{prefix}eventMode>"
+        f"<{prefix}channels>{int(channel)}</{prefix}channels>"
+        f"</{prefix}SubscribeEvent>"
+    )
+    return document[:closing.start()] + block + document[closing.start():]
+
+
+def _roundtrip_list_payload(previous, slot, receiver_address, receiver_port, channel=None):
     """Patch one host inside the camera's complete host list response."""
     root = decode_document(previous)
     if not isinstance(root, ET.Element) or root.tag.rsplit("}", 1)[-1] != "HttpHostNotificationList":
@@ -136,6 +185,8 @@ def _roundtrip_list_payload(previous, slot, receiver_address, receiver_port):
     block = _replace_xml_text(block, "url", "/hikvision/events")
     block = _replace_xml_text(block, "ipAddress", receiver_address)
     block = _replace_xml_text(block, "portNo", int(receiver_port))
+    if channel is not None:
+        block = _ensure_subscription(block, channel)
     text = text[:selected.start()] + block + text[selected.end():]
     encoded = text.encode("utf-8")
     return (b"\xef\xbb\xbf" + encoded) if had_bom else encoded
@@ -160,9 +211,11 @@ def _roundtrip_payload(previous, slot, receiver_address, receiver_port, channel,
         had_bom = previous.startswith(b"\xef\xbb\xbf")
         text = previous.decode("utf-8-sig")
 
-        text = _replace_xml_text(text, "url", f"http://{receiver_address}:{int(receiver_port)}/hikvision/events")
+        text = _replace_xml_text(text, "url", "/hikvision/events")
         text = _replace_xml_text(text, "ipAddress", receiver_address)
         text = _replace_xml_text(text, "portNo", int(receiver_port))
+        if include_subscription:
+            text = _ensure_subscription(text, channel)
         encoded = text.encode("utf-8")
         return (b"\xef\xbb\xbf" + encoded) if had_bom else encoded
     except (UnicodeDecodeError, ValueError):
@@ -184,7 +237,7 @@ def _roundtrip_payload(previous, slot, receiver_address, receiver_port, channel,
         child.text = str(value)
 
     values = {
-        "url": f"http://{receiver_address}:{int(receiver_port)}/hikvision/events",
+        "url": "/hikvision/events",
         "ipAddress": receiver_address,
         "portNo": int(receiver_port),
     }
@@ -219,33 +272,64 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
         except OSError:
             pass
         temporary.replace(backup)
-    body = _roundtrip_list_payload(previous, slot, receiver_address, receiver_port)
-    request = Request(base + path, data=body, method="PUT",
-                      headers={"Content-Type": 'application/xml; charset="UTF-8"'})
-    failures = []
-    applied_profile = "camera host list"
-    try:
-        with client.open(request, timeout=7) as response:
-            result_body = read_bounded(response, deadline)
-            status = response.getcode()
-    except HTTPError as exc:
+    channel = max(1, int(settings.get("channel") or 1))
+    slot_path = f"{path}/{int(slot)}"
+
+    def get(path_to_read):
+        request = Request(base + path_to_read, headers={"Accept": "application/xml"})
+        with client.open(request, timeout=5) as response:
+            return read_bounded(response, deadline)
+
+    def put(path_to_write, body):
+        request = Request(base + path_to_write, data=body, method="PUT",
+                          headers={"Content-Type": 'application/xml; charset="UTF-8"'})
         try:
-            detail = response_error(exc.read(16 * 1024))
-        finally:
-            status = exc.code
-            exc.close()
-        failures.append(detail or f"camera returned HTTP {status}")
-        raise RuntimeError(failures[-1]) from None
-    error = response_error(result_body)
-    if not 200 <= status < 300 or error:
-        failures.append(error or f"camera returned HTTP {status}")
-        raise RuntimeError(failures[-1])
+            with client.open(request, timeout=7) as response:
+                result_body = read_bounded(response, deadline)
+                status = response.getcode()
+        except HTTPError as exc:
+            try:
+                detail = response_error(exc.read(16 * 1024))
+            finally:
+                status = exc.code
+                exc.close()
+            raise RuntimeError(detail or f"camera returned HTTP {status}") from None
+        error = response_error(result_body)
+        if not 200 <= status < 300 or error:
+            raise RuntimeError(error or f"camera returned HTTP {status}")
+
+    failures = []
+    applied_profile = "selected camera host with event subscription"
+    try:
+        selected = get(slot_path)
+        body = _roundtrip_payload(selected, slot, receiver_address, receiver_port, channel,
+                                  include_subscription=True)
+        put(slot_path, body)
+    except (HTTPError, OSError, ValueError, ET.ParseError, RuntimeError) as exc:
+        failures.append(f"selected host: {exc}")
+        try:
+            body = _roundtrip_list_payload(previous, slot, receiver_address, receiver_port, channel)
+            put(path, body)
+            applied_profile = "camera host list with event subscription"
+        except (HTTPError, OSError, ValueError, ET.ParseError, RuntimeError) as fallback_exc:
+            failures.append(f"host list: {fallback_exc}")
+            raise RuntimeError("; ".join(failures)) from None
+
+    try:
+        verified = get(slot_path)
+        fields = {name.lower(): value for name, value in scalar_fields(decode_document(verified))}
+        if (fields.get("ipaddress") != str(receiver_address)
+                or fields.get("portno") != str(int(receiver_port))
+                or fields.get("eventmode", "").lower() != "all"):
+            raise RuntimeError("camera read-back did not confirm destination and event subscription")
+    except (HTTPError, OSError, ValueError, ET.ParseError) as exc:
+        raise RuntimeError(f"camera configuration could not be verified: {exc}") from None
     return {
         "ok": True,
         "slot": int(slot),
         "url": f"http://{receiver_address}:{int(receiver_port)}/hikvision/events",
         "backup_path": str(backup_path) if backup_path is not None else "",
         "profile": applied_profile,
-        "message": ("Camera HTTP event destination configured using " + applied_profile
-                    + ". Waiting for the first counting message."),
+        "message": ("Camera HTTP event destination and event subscription configured using "
+                    + applied_profile + ". Waiting for the first counting message."),
     }

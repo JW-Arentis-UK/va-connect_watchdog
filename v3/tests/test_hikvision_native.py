@@ -180,10 +180,16 @@ class NativeTests(unittest.TestCase):
         class SequenceOpener:
             def __init__(self):
                 self.requests = []
+                self.configured_slot = None
             def open(self, request, timeout):
                 self.requests.append(request)
                 if request.get_method() == "GET":
+                    if request.full_url.endswith("/1"):
+                        value = self.configured_slot.decode() if self.configured_slot else '<HttpHostNotification><id>1</id><url></url><protocolType>HTTP</protocolType><parameterFormatType>XML</parameterFormatType><addressingFormatType>ipaddress</addressingFormatType><ipAddress>0.0.0.0</ipAddress><portNo>80</portNo><userName></userName><httpAuthenticationMethod>none</httpAuthenticationMethod><httpBroken>true</httpBroken></HttpHostNotification>'
+                        return FakeResponse(value)
                     return FakeResponse('<HttpHostNotificationList><HttpHostNotification><id>1</id><url></url><protocolType>HTTP</protocolType><parameterFormatType>XML</parameterFormatType><addressingFormatType>ipaddress</addressingFormatType><ipAddress>0.0.0.0</ipAddress><portNo>80</portNo><userName></userName><httpAuthenticationMethod>none</httpAuthenticationMethod><httpBroken>true</httpBroken></HttpHostNotification><HttpHostNotification><id>2</id><url></url><protocolType>HTTP</protocolType><parameterFormatType>XML</parameterFormatType><addressingFormatType>ipaddress</addressingFormatType><ipAddress>0.0.0.0</ipAddress><portNo>80</portNo><userName></userName><httpAuthenticationMethod>none</httpAuthenticationMethod><httpBroken>true</httpBroken></HttpHostNotification></HttpHostNotificationList>')
+                if request.full_url.endswith("/1"):
+                    self.configured_slot = request.data
                 return FakeResponse('<ResponseStatus><statusCode>1</statusCode><subStatusCode>ok</subStatusCode></ResponseStatus>')
         opener = SequenceOpener()
         with tempfile.TemporaryDirectory() as directory:
@@ -191,20 +197,20 @@ class NativeTests(unittest.TestCase):
             result = configure_http_push(CAMERA, "192.168.1.100", 9110, opener=opener, backup_path=backup)
             self.assertTrue(result["ok"])
             self.assertIn(b"0.0.0.0", backup.read_bytes())
-        body = opener.requests[1].data
+        body = opener.requests[2].data
         self.assertIn(b"<parameterFormatType>XML</parameterFormatType>", body)
         self.assertIn(b"192.168.1.100", body)
         self.assertIn(b"<url>/hikvision/events</url>", body)
         self.assertNotIn(b"http://192.168.1.100", body)
         self.assertNotIn(b"regionTargetNumberCounting", body)
-        self.assertNotIn(b"SubscribeEvent", body)
+        self.assertIn(b"<SubscribeEvent><eventMode>all</eventMode><channels>1</channels></SubscribeEvent>", body)
         self.assertNotIn(b"password", body)
         self.assertIn(b"<userName></userName>", body)
         self.assertNotIn(b"<userName />", body)
         self.assertIn(b"<httpBroken>true</httpBroken>", body)
         self.assertNotIn(CAMERA["password"].encode(), body)
-        self.assertEqual(opener.requests[1].get_method(), "PUT")
-        self.assertTrue(opener.requests[1].full_url.endswith("/ISAPI/Event/notification/httpHosts"))
+        self.assertEqual(opener.requests[2].get_method(), "PUT")
+        self.assertTrue(opener.requests[2].full_url.endswith("/ISAPI/Event/notification/httpHosts/1"))
         self.assertEqual(body.count(b"192.168.1.100"), 1)
 
         class RejectingOpener(SequenceOpener):
@@ -216,7 +222,44 @@ class NativeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "badXmlContent"):
             configure_http_push(CAMERA, "192.168.1.100", 9110, opener=RejectingOpener())
 
-        self.assertEqual(result["profile"], "camera host list")
+        self.assertEqual(result["profile"], "selected camera host with event subscription")
+
+    def test_http_push_configuration_falls_back_to_subscribed_host_list(self):
+        host = ('<HttpHostNotification><id>1</id><url></url><protocolType>HTTP</protocolType>'
+                '<parameterFormatType>XML</parameterFormatType><addressingFormatType>ipaddress</addressingFormatType>'
+                '<ipAddress>0.0.0.0</ipAddress><portNo>80</portNo><httpAuthenticationMethod>none</httpAuthenticationMethod>'
+                '<httpBroken>true</httpBroken></HttpHostNotification>')
+
+        class ListOnlyOpener:
+            def __init__(self):
+                self.requests = []
+                self.configured = False
+
+            def open(self, request, timeout):
+                self.requests.append(request)
+                method = request.get_method()
+                if method == "GET" and request.full_url.endswith("/1"):
+                    if self.configured:
+                        return FakeResponse(host.replace('<url></url>', '<url>/hikvision/events</url>')
+                                            .replace('<ipAddress>0.0.0.0</ipAddress>', '<ipAddress>192.168.1.100</ipAddress>')
+                                            .replace('<portNo>80</portNo>', '<portNo>9110</portNo>')
+                                            .replace('</HttpHostNotification>', '<SubscribeEvent><eventMode>all</eventMode><channels>1</channels></SubscribeEvent></HttpHostNotification>'))
+                    return FakeResponse(host)
+                if method == "GET":
+                    return FakeResponse(f'<HttpHostNotificationList>{host}</HttpHostNotificationList>')
+                if request.full_url.endswith("/1"):
+                    body = b'<ResponseStatus><statusCode>6</statusCode><subStatusCode>badXmlContent</subStatusCode></ResponseStatus>'
+                    raise HTTPError(request.full_url, 400, "Bad Request", {}, io.BytesIO(body))
+                self.configured = True
+                self.assert_subscription = request.data
+                return FakeResponse('<ResponseStatus><statusCode>1</statusCode><subStatusCode>ok</subStatusCode></ResponseStatus>')
+
+        opener = ListOnlyOpener()
+        result = configure_http_push(CAMERA, "192.168.1.100", 9110, opener=opener)
+
+        self.assertEqual(result["profile"], "camera host list with event subscription")
+        self.assertIn(b"<eventMode>all</eventMode>", opener.assert_subscription)
+        self.assertIn(b"<channels>1</channels>", opener.assert_subscription)
 
     def test_push_multipart_discards_media(self):
         payload = part(b"private-image", b"image/jpeg") + part(counting()) + b"--test--\r\n"
@@ -502,6 +545,7 @@ class SetupSmokeTests(unittest.TestCase):
                     self.assertIn('Camera delivery setup and repair', body)
                     self.assertIn('Repair camera delivery', body)
                     self.assertIn('/crossing-activity', body)
+                    self.assertIn('Check camera compatibility', body)
                     self.assertNotIn('Run native API diagnostic', body)
                     self.assertNotIn('Legacy capability test', body)
                     self.assertNotIn('Capture camera statistics request', body)
@@ -547,6 +591,9 @@ class SetupSmokeTests(unittest.TestCase):
                 summary = event_summary(cfg)
                 self.assertEqual(summary['transport'], 'HTTP push')
                 self.assertEqual(summary['last_reported_counts']['enter'], '22')
+                self.assertEqual(summary['last_http_accepted'], 1)
+                self.assertEqual(summary['last_http_documents'], 1)
+                self.assertEqual(summary['http_posts_received'], 1)
                 history = Path(directory) / 'hikvision-people-events.jsonl'
                 self.assertNotIn('private-image', history.read_text(encoding='utf-8'))
             finally:
