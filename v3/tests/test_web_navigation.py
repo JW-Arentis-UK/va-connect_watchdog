@@ -10,6 +10,7 @@ class WebNavigationTests(unittest.TestCase):
 
         self.assertEqual(pages, [
             ("Status", "/"),
+            ("People Counting", "/people-counting"),
             ("Web Links", "/links"),
             ("Events", "/events"),
             ("Watchdog", "/watchdog"),
@@ -37,6 +38,17 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('if page == "Status":', source)
         self.assertIn('if page == "Watchdog":\n            return page_help_html(page) + watchdog_page()', source)
         self.assertNotIn('/services#watchdog', source)
+
+    def test_people_counting_is_a_dedicated_operator_page(self):
+        source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+
+        self.assertIn('if page == "People Counting":', source)
+        self.assertIn("def people_counting_page():", source)
+        self.assertIn("Current Camera Counters", source)
+        self.assertIn("Observed Counter Changes", source)
+        self.assertIn("Direction is not physically calibrated", source)
+        self.assertIn('"/people-counting"', source)
+        self.assertIn('route_path == "/api/people-counting"', source)
 
     def test_watchdog_default_view_is_limited_to_neousys_operational_controls(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")

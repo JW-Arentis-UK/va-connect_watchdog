@@ -130,7 +130,8 @@ def render_capture_state(path):
 
 
 VISIBLE_PAGE_GROUPS = (
-    ("Gateway", (("Status", "/"), ("Web Links", "/links"), ("Events", "/events"), ("Watchdog", "/watchdog"), ("Evidence", "/evidence"))),
+    ("Gateway", (("Status", "/"), ("People Counting", "/people-counting"), ("Web Links", "/links"),
+                 ("Events", "/events"), ("Watchdog", "/watchdog"), ("Evidence", "/evidence"))),
     ("Administration", (("Setup", "/setup"),)),
 )
 
@@ -706,6 +707,7 @@ def start_web(cfg):
     def page_help_html(page):
         help_map = {
             "Status": ("Is this gateway ready to operate?", "Shows the small set of live facts an operator needs: gateway state, storage, recordings, services, and protection."),
+            "People Counting": ("What is the camera counting now?", "Shows the latest camera counters, changes observed by this watchdog, and event receiver health without exposing images or video."),
             "Web Links": ("Which local device page do you need?", "Open saved RUT, camera, and other local web pages, then manage their names and addresses below."),
             "Watchdog": ("Will the gateway recover itself?", "Shows Neousys hardware protection, the independent feeder, the latest feed, and the controls needed to set up or test it."),
             "Events": ("What changed recently?", "Review concise event records, filter the list, inspect evidence, or export it."),
@@ -1458,12 +1460,79 @@ def start_web(cfg):
                 + settings_disclosure("System and storage alert levels", storage_settings, opened=check_state("temperature") != "healthy")
                 + settings_disclosure("Network and remote access", network_settings)
                 + settings_disclosure("Mobile router monitoring", router_settings)
-                + settings_disclosure("Hikvision people counting test", people_counting_settings, opened=bool(people_cfg.get("address")))
+                + "<div id=\"people-counting\">" + settings_disclosure("Hikvision people counting test", people_counting_settings, opened=bool(people_cfg.get("address"))) + "</div>"
                 + settings_disclosure("Recovery and updates", recovery_settings)
                 + settings_disclosure("Advanced configuration", advanced_settings)
                 + "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Save settings</button><a class=\"ghost\" href=\"/settings\">Cancel</a></div>"
                 "</form>"
                 "</div>"
+            )
+
+        def people_counting_page():
+            summary = event_summary(cfg)
+            camera = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting"), dict) else {}
+            counts = summary.get("last_reported_counts", {}) if isinstance(summary.get("last_reported_counts"), dict) else {}
+            today = summary.get("today", {}) if isinstance(summary.get("today"), dict) else {}
+            records = summary.get("last_count_records", []) if isinstance(summary.get("last_count_records"), list) else []
+            status_text = str(summary.get("status") or "waiting")
+            listening = status_text in {"listening", "receiving", "ONVIF listening"}
+
+            rows = []
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                direction = str(record.get("direction") or "-")
+                direction_label = {
+                    "forward": "Camera forward",
+                    "back": "Camera back",
+                    "bothway": "Both directions",
+                }.get(direction.lower(), direction)
+                rows.append(
+                    "<tr>"
+                    f"<th>{escape(direction_label)}</th>"
+                    f"<td>{escape(str(record.get('human', '-')))}</td>"
+                    f"<td>{escape(str(record.get('non_motor', '-')))}</td>"
+                    f"<td>{escape(str(record.get('vehicle', '-')))}</td>"
+                    "</tr>"
+                )
+            if not rows:
+                rows.append("<tr><td colspan=\"4\">Waiting for the first validated camera counter message.</td></tr>")
+
+            observed_forward = int(today.get("observed_forward", 0) or 0)
+            observed_back = int(today.get("observed_back", 0) or 0)
+            transport = str(summary.get("transport") or camera.get("event_transport") or "-")
+            connection_state = "Listening" if listening else "Waiting"
+            connection_css = "healthy" if listening else "warning"
+            return (
+                summary_strip([
+                    ("Camera forward", counts.get("forward", "-"), "Current cumulative human counter", "healthy" if counts.get("forward") is not None else "warning"),
+                    ("Camera back", counts.get("back", "-"), "Current cumulative human counter", "healthy" if counts.get("back") is not None else "warning"),
+                    ("Both directions", counts.get("bothway", "-"), "Camera checksum total", "healthy" if counts.get("bothway") is not None else "warning"),
+                    ("Event receiver", connection_state, transport, connection_css),
+                ])
+                + "<div class=\"notice warning\"><strong>Direction is not physically calibrated.</strong> "
+                "This is a remote site, so the camera's neutral forward and back labels are retained. They are not presented as entrance and exit.</div>"
+                + "<div class=\"card\"><div class=\"section-lead\"><div><h2>Current Camera Counters</h2>"
+                "<p class=\"muted\">Latest validated cumulative values reported by the camera. Forward plus back must equal both directions before a sample is accepted.</p>"
+                "</div><a class=\"ghost\" href=\"/setup#people-counting\">Camera setup</a></div>"
+                "<div class=\"table-scroll\"><table><thead><tr><th>Camera direction</th><th>Human</th><th>Non-motor</th><th>Vehicle</th></tr></thead>"
+                f"<tbody>{''.join(rows)}</tbody></table></div></div>"
+                + "<div class=\"card\"><h2>Observed Counter Changes</h2>"
+                "<p class=\"muted\">Changes observed after this watchdog established its local baseline. These are partial operational figures, not a reconstructed full-day report.</p>"
+                "<div class=\"summary-strip\">"
+                f"<div class=\"summary-stat\"><div class=\"label\">Camera forward</div><div class=\"stat-value healthy\">{observed_forward}</div><div class=\"stat-detail\">Human counter increase</div></div>"
+                f"<div class=\"summary-stat\"><div class=\"label\">Camera back</div><div class=\"stat-value healthy\">{observed_back}</div><div class=\"stat-detail\">Human counter increase</div></div>"
+                f"<div class=\"summary-stat\"><div class=\"label\">Notifications</div><div class=\"stat-value\">{escape(str(summary.get('notifications_received', 0)))}</div><div class=\"stat-detail\">Received by this collector state</div></div>"
+                f"<div class=\"summary-stat\"><div class=\"label\">Last sample</div><div class=\"stat-value\">{escape(local_time(summary.get('last_event_at')))}</div><div class=\"stat-detail\">Camera {escape(str(camera.get('address') or '-'))}</div></div>"
+                "</div></div>"
+                + "<div class=\"card\"><h2>Collection Status</h2><div class=\"table-scroll\"><table class=\"compact-table\"><tbody>"
+                f"<tr><th>Receiver</th><td class=\"{connection_css}\">{escape(connection_state)}</td></tr>"
+                f"<tr><th>Transport</th><td>{escape(transport)}</td></tr>"
+                f"<tr><th>Last camera message</th><td>{escape(str(summary.get('last_notification_type') or '-'))}</td></tr>"
+                f"<tr><th>Last accepted sample</th><td>{escape(local_time(summary.get('last_event_at')))}</td></tr>"
+                "<tr><th>Privacy</th><td>Counts only. Images, video, media URLs, credentials and raw payloads are not retained.</td></tr>"
+                "</tbody></table></div></div>"
+                + "<script>setTimeout(function(){window.location.reload();},15000);</script>"
             )
 
         def hardware_page():
@@ -2419,6 +2488,16 @@ def start_web(cfg):
         network_check = check_map.get("network_module", {})
         router_check = check_map.get("mobile_router", {})
         router_configured = bool(cfg.get("mobile_router", {}).get("enabled", False))
+        people_cfg = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting"), dict) else {}
+        people_summary = event_summary(cfg)
+        people_counts = people_summary.get("last_reported_counts", {}) if isinstance(people_summary.get("last_reported_counts"), dict) else {}
+        people_configured = bool(people_cfg.get("event_collection_enabled") and people_cfg.get("address"))
+        people_listening = str(people_summary.get("status") or "") in {"listening", "receiving", "ONVIF listening"}
+        people_detail = (
+            f"Camera forward {people_counts.get('forward', '-')}; back {people_counts.get('back', '-')}; "
+            f"both directions {people_counts.get('bothway', '-')}"
+            if people_counts else "Waiting for validated camera counters."
+        )
         network_message = str(network_check.get("message") or "Network checks have not been configured.")
         network_configured = bool(network_check) and "not configured" not in network_message.lower()
         watchdog_present = bool(check_value("hardware_watchdog_present", False))
@@ -2447,6 +2526,13 @@ def start_web(cfg):
                     worst_check_state(service_checks),
                     "/#services",
                     bool(service_checks),
+                ),
+                operational_row(
+                    "People counting",
+                    people_detail,
+                    "healthy" if people_listening else "warning",
+                    "/people-counting",
+                    people_configured,
                 ),
                 operational_row(
                     "Recording storage",
@@ -2532,6 +2618,8 @@ def start_web(cfg):
 
         if page == "Status":
             return page_help_html(page) + "<div class=\"overview-page\">" + overview_html + "</div>"
+        if page == "People Counting":
+            return page_help_html(page) + people_counting_page()
         if page == "Web Links":
             return page_help_html(page) + web_links_page()
         if page == "Watchdog":
@@ -6397,6 +6485,9 @@ def start_web(cfg):
                     self.wfile.write(body.encode("utf-8"))
                 except Exception as e:
                     self._send_json({"error": str(e)}, status=503)
+                return
+            if route_path == "/api/people-counting":
+                self._send_json(event_summary(cfg))
                 return
             if route_path == "/api/update-status":
                 self._send_json(load_update_status(cfg))

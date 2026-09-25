@@ -383,6 +383,17 @@ class SetupSmokeTests(unittest.TestCase):
             server = start_web(cfg)
             try:
                 base = f'http://127.0.0.1:{server.server_port}'
+                record_push_event(cfg, parse_notification(region_counting()))
+                with urlopen(base + '/people-counting', timeout=10) as response:
+                    body = response.read().decode()
+                    self.assertIn('Current Camera Counters', body)
+                    self.assertIn('Camera forward', body)
+                    self.assertIn('114', body)
+                    self.assertIn('Direction is not physically calibrated', body)
+                    self.assertNotIn('test-secret', body)
+                with urlopen(base + '/api/people-counting', timeout=10) as response:
+                    payload = json.loads(response.read())
+                    self.assertEqual(payload['last_reported_counts']['bothway'], '207')
                 with urlopen(base+'/setup', timeout=10) as response:
                     body = response.read().decode()
                     self.assertIn('Run native API diagnostic', body)
