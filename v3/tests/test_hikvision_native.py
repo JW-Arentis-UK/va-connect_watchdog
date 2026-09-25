@@ -72,6 +72,15 @@ class NativeTests(unittest.TestCase):
         self.assertTrue(event["schema_recognised"])
         self.assertFalse(event["counts_verified"])
 
+    def test_new_firmware_mixed_target_event_accepts_validated_counter_rows(self):
+        event = parse_notification(region_counting().replace(
+            b"regionTargetNumberCounting", b"mixedTargetDetection"
+        ))
+
+        self.assertTrue(event["schema_recognised"])
+        self.assertEqual(event["count_schema"], "region_forward_back")
+        self.assertEqual(event["counts"], {"forward": "114", "back": "93", "bothway": "207"})
+
     def test_json_capture_is_not_treated_as_a_crossing(self):
         event = parse_notification(b'{"eventType":"mixedTargetDetection","captureResult":[{"human":{"direction":"right","pictureURL":"secret-url"}}]}')
         self.assertEqual(event["counts"], {})
@@ -594,6 +603,8 @@ class SetupSmokeTests(unittest.TestCase):
                 self.assertEqual(summary['last_http_accepted'], 1)
                 self.assertEqual(summary['last_http_documents'], 1)
                 self.assertEqual(summary['http_posts_received'], 1)
+                self.assertEqual(summary['last_http_message_type'], 'PeopleCounting')
+                self.assertIn('enter', summary['last_http_fields'])
                 history = Path(directory) / 'hikvision-people-events.jsonl'
                 self.assertNotIn('private-image', history.read_text(encoding='utf-8'))
             finally:

@@ -204,7 +204,8 @@ def parse_notification(payload: bytes) -> dict[str, Any] | None:
     target_type = values.get("targettype", "")
     count_values = {key: value for key, value in values.items() if key in _COUNT_FIELDS}
     region_counts = _validated_region_counts(count_records)
-    if event_type.lower() == "regiontargetnumbercounting" and region_counts:
+    region_event = event_type.lower() in {"regiontargetnumbercounting", "mixedtargetdetection"}
+    if region_event and region_counts:
         count_values = region_counts
     method = values.get("statisticalmethod") or values.get("statisticalmethods", "")
     traditional_schema = (event_type.lower() == "peoplecounting"
@@ -214,7 +215,7 @@ def parse_notification(payload: bytes) -> dict[str, Any] | None:
                           and bool(values.get("channelid") or values.get("channel"))
                           and not duplicates.intersection(_COUNT_FIELDS)
                           and all(re.fullmatch(r"\d{1,12}", value) for value in count_values.values()))
-    region_schema = (event_type.lower() == "regiontargetnumbercounting"
+    region_schema = (region_event
                      and bool(region_counts)
                      and method.lower() == "realtime"
                      and bool(values.get("ruleid"))
@@ -687,7 +688,8 @@ def record_push_event(cfg, event):
     return event
 
 
-def record_http_delivery(cfg, *, content_type, body_size, documents, accepted, ignored, unrecognised):
+def record_http_delivery(cfg, *, content_type, body_size, documents, accepted, ignored, unrecognised,
+                         message_type="", fields=None, candidate_counters=None):
     """Record a payload-free delivery outcome so transport and parsing faults are distinguishable."""
     _, state_path = event_paths(cfg)
     with _history_lock:
@@ -710,6 +712,9 @@ def record_http_delivery(cfg, *, content_type, body_size, documents, accepted, i
             "last_http_accepted": max(0, int(accepted)),
             "last_http_ignored": max(0, int(ignored)),
             "last_http_unrecognised": max(0, int(unrecognised)),
+            "last_http_message_type": str(message_type or "")[:160],
+            "last_http_fields": list(fields or [])[:80],
+            "last_http_candidate_counters": dict(list((candidate_counters or {}).items())[:30]),
             "http_posts_received": received,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         })

@@ -1561,7 +1561,12 @@ def start_web(cfg):
             transport = str(summary.get("transport") or camera.get("event_transport") or "-")
             http_seen = bool(summary.get("last_http_post_at"))
             unrecognised_http = http_seen and not summary.get("last_event_at")
-            connection_state = ("Listening" if listening else "Message not recognised" if unrecognised_http
+            latest_http_type = str(summary.get("last_http_message_type") or "")
+            non_counting_http = unrecognised_http and bool(latest_http_type) and "count" not in latest_http_type.lower()
+            unsupported_http = unrecognised_http and int(summary.get("last_http_documents", 0) or 0) == 0
+            connection_state = ("Listening" if listening else "Unsupported HTTP format" if unsupported_http
+                                else "Connected, waiting for counters" if non_counting_http
+                                else "Message not recognised" if unrecognised_http
                                 else "No recent messages" if stale else "Waiting")
             connection_css = "healthy" if listening else "critical" if stale and not unrecognised_http else "warning"
             unexpected_resets = int(today.get("unexpected_resets", 0) or 0)
@@ -1632,10 +1637,21 @@ def start_web(cfg):
             collection_notice = ""
             if stale:
                 if unrecognised_http:
-                    collection_notice = (
-                        "<div class=\"notice warning\"><strong>The camera can reach this watchdog, but its latest HTTP message was not a validated counter.</strong> "
-                        "Run the native API diagnostic from Camera setup and review the receiver details below.</div>"
-                    )
+                    if non_counting_http:
+                        collection_notice = (
+                            "<div class=\"notice warning\"><strong>The camera is connected and its latest message was not a counting event.</strong> "
+                            "The receiver will continue waiting for the next cumulative counter report.</div>"
+                        )
+                    elif unsupported_http:
+                        collection_notice = (
+                            "<div class=\"notice critical\"><strong>The camera reached the watchdog using an unsupported HTTP content type.</strong> "
+                            "Review the receiver details below before changing the camera again.</div>"
+                        )
+                    else:
+                        collection_notice = (
+                            "<div class=\"notice warning\"><strong>The camera can reach this watchdog, but its latest HTTP message was not a validated counter.</strong> "
+                            "Review the safe message type and fields below; no raw payload has been retained.</div>"
+                        )
                 elif summary.get("last_event_at"):
                     age_minutes = int(summary.get("message_age_seconds") or 0) // 60
                     collection_notice = (
@@ -1705,6 +1721,9 @@ def start_web(cfg):
                 f"<tr><th>Last accepted sample</th><td>{escape(local_time(summary.get('last_event_at')))}</td></tr>"
                 f"<tr><th>Last HTTP request</th><td>{escape(local_time(summary.get('last_http_post_at')))}</td></tr>"
                 f"<tr><th>Last HTTP result</th><td>{escape(str(summary.get('last_http_accepted', 0)))} accepted; {escape(str(summary.get('last_http_ignored', 0)))} ignored; {escape(str(summary.get('last_http_unrecognised', 0)))} unrecognised</td></tr>"
+                f"<tr><th>Last HTTP message type</th><td>{escape(latest_http_type or '-')}</td></tr>"
+                f"<tr><th>Safe fields seen</th><td>{escape(', '.join(str(value) for value in summary.get('last_http_fields', [])[:40]) or '-')}</td></tr>"
+                f"<tr><th>Numeric count candidates</th><td>{escape(', '.join(f'{key}={value}' for key, value in list((summary.get('last_http_candidate_counters') or {}).items())[:20]) or '-')}</td></tr>"
                 f"<tr><th>No-message alert</th><td>{escape(str(summary.get('stale_after_minutes')))} minutes</td></tr>"
                 f"<tr><th>Unexpected resets today</th><td class=\"{'critical' if unexpected_resets else 'healthy'}\">{unexpected_resets}</td></tr>"
                 "<tr><th>Barrier/train correlation</th><td>Not configured. No barrier or signalling data source is connected.</td></tr>"
@@ -6860,9 +6879,16 @@ def start_web(cfg):
                 accepted = 0
                 ignored = 0
                 unrecognised = 0
+                last_message = {}
                 documents = metadata_documents(self.headers.get("Content-Type", ""), payload)
                 for document in documents:
                     event = parse_notification(document)
+                    if event:
+                        last_message = {
+                            "message_type": event.get("event_type", ""),
+                            "fields": event.get("fields_seen", []),
+                            "candidate_counters": event.get("candidate_counters", {}),
+                        }
                     event_type = re.sub(r"[^a-z0-9]", "", str((event or {}).get("event_type") or "").lower())
                     is_counting = bool((event or {}).get("counts")) or "count" in event_type
                     if event and is_counting:
@@ -6879,10 +6905,15 @@ def start_web(cfg):
                         diagnostic = notification_diagnostic(document)
                         if diagnostic:
                             append_web_event("info", "people_counting", "Unrecognised Hikvision HTTP event metadata received", diagnostic)
+                            last_message = {
+                                "message_type": diagnostic.get("last_notification_type", ""),
+                                "fields": diagnostic.get("last_notification_fields", []),
+                            }
                         unrecognised += 1
                 record_http_delivery(
                     cfg, content_type=self.headers.get("Content-Type", ""), body_size=len(payload),
                     documents=len(documents), accepted=accepted, ignored=ignored, unrecognised=unrecognised,
+                    **last_message,
                 )
                 self._send_json({"statusCode": 1, "statusString": "OK", "subStatusCode": "ok",
                                  "accepted": accepted, "ignored": ignored})
