@@ -328,6 +328,8 @@ class NativeTests(unittest.TestCase):
             self.assertIsNone(repeated)
             self.assertEqual(len(opener.requests), 6)
             self.assertTrue(all(request.get_method() == "POST" for request in opener.requests))
+            self.assertTrue(all(json.loads(request.data)["ReportCond"]["reportType"] == "monthly"
+                                for request in opener.requests))
             self.assertTrue(all("SearchRegionTargetNumberCounting" in request.full_url
                                 for request in opener.requests))
             summary = event_summary(cfg)
@@ -351,6 +353,25 @@ class NativeTests(unittest.TestCase):
                 self.assertIsNone(collector._read_counter_snapshot(cfg["people_counting"]))
             self.assertEqual(event_summary(cfg)["counter_poll_status"],
                              "report checksum did not validate")
+
+    def test_counter_report_poll_preserves_safe_camera_rejection(self):
+        class RejectingReportOpener:
+            def open(self, request, timeout):
+                body = (b'<ResponseStatus><statusCode>6</statusCode>'
+                        b'<statusString>Invalid Content</statusString>'
+                        b'<subStatusCode>badJsonContent</subStatusCode></ResponseStatus>')
+                raise HTTPError(request.full_url, 400, "Bad Request", {}, io.BytesIO(body))
+
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = {
+                "events_path": str(Path(directory) / "events.jsonl"),
+                "people_counting": {**CAMERA, "event_transport": "http_push"},
+            }
+            collector = HikvisionEventCollector(cfg, Mock())
+            with patch("va_watchdog.hikvision_events._digest_opener",
+                       return_value=RejectingReportOpener()):
+                with self.assertRaisesRegex(RuntimeError, "substatuscode=badJsonContent"):
+                    collector._read_counter_snapshot(cfg["people_counting"])
 
     def test_authentication_failure_stops_further_diagnostic_requests(self):
         url = "http://192.168.1.72/ISAPI/System/deviceInfo"

@@ -19,7 +19,7 @@ from urllib.request import Request
 
 from .hikvision import _base_url, _digest_opener
 from .onvif_pull import PullSubscription
-from .hikvision_native import decode_document, scalar_fields
+from .hikvision_native import decode_document, response_error, scalar_fields
 from .hikvision_stream import AlertParts
 
 
@@ -866,6 +866,8 @@ class HikvisionEventCollector:
                         self._record(counter)
                 except HTTPError as exc:
                     self._write_state(counter_poll_status=f"camera returned HTTP {exc.code}")
+                except RuntimeError as exc:
+                    self._write_state(counter_poll_status=f"camera rejected report: {str(exc)[:180]}")
                 except (URLError, socket.timeout, OSError) as exc:
                     self._write_state(counter_poll_status=f"connection failed ({type(exc).__name__})")
                 except Exception as exc:
@@ -906,7 +908,7 @@ class HikvisionEventCollector:
         for direction in _COUNTER_DIRECTIONS:
             condition = {
                 "ReportCond": {
-                    "reportType": "daily",
+                    "reportType": "monthly",
                     "ruleID": rule_id,
                     "statisticalDirection": direction,
                     "statisticalObjectives": ["human", "nonMotor", "vehicle"],
@@ -919,8 +921,16 @@ class HikvisionEventCollector:
                 headers={"Accept": "application/json, application/xml, text/xml",
                          "Content-Type": "application/json; charset=UTF-8"},
             )
-            with opener.open(request, timeout=timeout) as response:
-                payload = response.read(128 * 1024)
+            try:
+                with opener.open(request, timeout=timeout) as response:
+                    payload = response.read(128 * 1024)
+            except HTTPError as exc:
+                try:
+                    detail = response_error(exc.read(16 * 1024))
+                    status = exc.code
+                finally:
+                    exc.close()
+                raise RuntimeError(detail or f"HTTP {status}") from None
             try:
                 values: Any = json.loads(payload.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
