@@ -1,5 +1,6 @@
 import copy
 import io
+import importlib.util
 import json
 import subprocess
 import tempfile
@@ -439,6 +440,10 @@ class SetupSmokeTests(unittest.TestCase):
                     exported = response.read().decode()
                     self.assertIn('scheduled_midnight_resets,unexpected_resets', exported)
                     self.assertIn('Car park side', exported)
+                if importlib.util.find_spec('reportlab'):
+                    with urlopen(base + '/api/people-counting/report.pdf', timeout=10) as response:
+                        self.assertEqual(response.headers.get_content_type(), 'application/pdf')
+                        self.assertTrue(response.read().startswith(b'%PDF-'))
                 with urlopen(base+'/setup', timeout=10) as response:
                     body = response.read().decode()
                     self.assertIn('Collect people counters', body)

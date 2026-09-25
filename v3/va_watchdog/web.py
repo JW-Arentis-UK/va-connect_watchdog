@@ -1604,7 +1604,8 @@ def start_web(cfg):
                 "</div></div>"
                 + "<div class=\"card\"><div class=\"section-lead\"><div><h2>Seven-Day History</h2>"
                 f"<p class=\"muted\"><span style=\"color:var(--green)\">{escape(forward_label)}</span> and <span style=\"color:var(--blue)\">{escape(back_label)}</span>. Numbers below each day are both directions.</p>"
-                "</div><a class=\"action\" href=\"/api/people-counting/export.csv\" download=\"people-counting.csv\">Export CSV</a></div>"
+                "</div><div class=\"button-row\"><a class=\"action\" href=\"/api/people-counting/report.pdf\" download=\"people-counting-report.pdf\">Download PDF</a>"
+                "<a class=\"ghost\" href=\"/api/people-counting/export.csv\" download=\"people-counting.csv\">Export CSV</a></div></div>"
                 f"<div class=\"count-chart\">{''.join(chart_days)}</div>"
                 "<div class=\"table-scroll\"><table><thead><tr><th>Date</th>"
                 f"<th>{escape(forward_label)}</th><th>{escape(back_label)}</th><th>Both directions</th><th>Reset status</th><th>Day</th></tr></thead>"
@@ -6606,6 +6607,21 @@ def start_web(cfg):
                     content_type="text/csv; charset=utf-8",
                     filename="people-counting.csv",
                 )
+                return
+            if route_path == "/api/people-counting/report.pdf":
+                try:
+                    from .people_counting_report import build_people_counting_pdf
+                    camera = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting"), dict) else {}
+                    report = build_people_counting_pdf(
+                        configured_identity(cfg), camera, event_summary(cfg), daily_count_history(cfg, days=30)
+                    )
+                    self._send_bytes(
+                        report,
+                        content_type="application/pdf",
+                        filename=f"{identity_slug(cfg)}-people-counting.pdf",
+                    )
+                except Exception as exc:
+                    self._send_json({"error": f"PDF report could not be created: {exc}"}, status=500)
                 return
             if route_path == "/api/update-status":
                 self._send_json(load_update_status(cfg))

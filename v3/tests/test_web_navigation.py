@@ -53,6 +53,8 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('"/people-counting"', source)
         self.assertIn('route_path == "/api/people-counting"', source)
         self.assertIn('route_path == "/api/people-counting/export.csv"', source)
+        self.assertIn('route_path == "/api/people-counting/report.pdf"', source)
+        self.assertIn("Download PDF", source)
 
     def test_watchdog_default_view_is_limited_to_neousys_operational_controls(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
