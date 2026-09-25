@@ -67,7 +67,7 @@ def http_host_payload(slot, receiver_address, receiver_port, channel, *, namespa
         ET.SubElement(subscribe, tag("eventMode")).text = "list"
         event_list = ET.SubElement(subscribe, tag("EventList"))
         event = ET.SubElement(event_list, tag("Event"))
-        ET.SubElement(event, tag("type")).text = "regionTargetNumberCounting"
+        ET.SubElement(event, tag("type")).text = "mixedTargetDetection"
         ET.SubElement(subscribe, tag("channels")).text = str(int(channel))
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
@@ -112,7 +112,7 @@ def _replace_xml_text(document, name, value):
     return document
 
 
-def _ensure_subscription(document, channel, event_type="regionTargetNumberCounting"):
+def _ensure_subscription(document, channel, event_type="mixedTargetDetection"):
     """Subscribe the selected host without reserializing camera-owned XML."""
     root_match = re.search(
         r"<(?P<prefix>[A-Za-z_][A-Za-z0-9_.-]*:)?HttpHostNotification\b",
@@ -242,7 +242,7 @@ def _roundtrip_payload(previous, slot, receiver_address, receiver_port, channel,
         ET.SubElement(subscribe, tag("eventMode")).text = "list"
         event_list = ET.SubElement(subscribe, tag("EventList"))
         event = ET.SubElement(event_list, tag("Event"))
-        ET.SubElement(event, tag("type")).text = "regionTargetNumberCounting"
+        ET.SubElement(event, tag("type")).text = "mixedTargetDetection"
         ET.SubElement(subscribe, tag("channels")).text = str(int(channel))
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
@@ -314,8 +314,17 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
         if (fields.get("ipaddress") != str(receiver_address)
                 or fields.get("portno") != str(int(receiver_port))
                 or fields.get("eventmode", "").lower() != "list"
-                or fields.get("type", "").lower() != "regiontargetnumbercounting"):
-            raise RuntimeError("camera read-back did not confirm destination and event subscription")
+                or fields.get("type", "").lower() != "mixedtargetdetection"):
+            retained = ", ".join(
+                f"{name}={fields.get(key) or '-'}"
+                for name, key in (
+                    ("ipAddress", "ipaddress"),
+                    ("portNo", "portno"),
+                    ("eventMode", "eventmode"),
+                    ("eventType", "type"),
+                )
+            )
+            raise RuntimeError(f"camera read-back retained {retained}")
     except (HTTPError, OSError, ValueError, ET.ParseError) as exc:
         raise RuntimeError(f"camera configuration could not be verified: {exc}") from None
     return {
@@ -324,6 +333,6 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
         "url": f"http://{receiver_address}:{int(receiver_port)}/hikvision/events",
         "backup_path": str(backup_path) if backup_path is not None else "",
         "profile": applied_profile,
-        "message": ("Camera HTTP event destination and region counting subscription configured using "
+        "message": ("Camera HTTP event destination and multi-target counting subscription configured using "
                     + applied_profile + ". Waiting for the first counting message."),
     }

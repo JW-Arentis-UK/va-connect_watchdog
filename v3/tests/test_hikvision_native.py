@@ -212,7 +212,7 @@ class NativeTests(unittest.TestCase):
         self.assertIn(b"<url>/hikvision/events</url>", body)
         self.assertNotIn(b"http://192.168.1.100", body)
         self.assertIn(b"<eventMode>list</eventMode>", body)
-        self.assertIn(b"<type>regionTargetNumberCounting</type>", body)
+        self.assertIn(b"<type>mixedTargetDetection</type>", body)
         self.assertNotIn(b"password", body)
         self.assertIn(b"<userName></userName>", body)
         self.assertNotIn(b"<userName />", body)
@@ -230,6 +230,20 @@ class NativeTests(unittest.TestCase):
                 raise HTTPError(request.full_url, 400, "Bad Request", {}, io.BytesIO(body))
         with self.assertRaisesRegex(RuntimeError, "badXmlContent"):
             configure_http_push(CAMERA, "192.168.1.100", 9110, opener=RejectingOpener())
+
+        class NormalisingOpener(SequenceOpener):
+            def open(self, request, timeout):
+                response = super().open(request, timeout)
+                if request.get_method() == "PUT" and self.configured_slot:
+                    self.configured_slot = self.configured_slot.replace(
+                        b"mixedTargetDetection", b"heartBeat")
+                return response
+
+        with self.assertRaisesRegex(
+                RuntimeError,
+                r"camera read-back retained ipAddress=192\.168\.1\.100, portNo=9110, "
+                r"eventMode=list, eventType=heartBeat"):
+            configure_http_push(CAMERA, "192.168.1.100", 9110, opener=NormalisingOpener())
 
         self.assertEqual(result["profile"], "selected camera host with event subscription")
 
@@ -252,7 +266,7 @@ class NativeTests(unittest.TestCase):
                         return FakeResponse(host.replace('<url></url>', '<url>/hikvision/events</url>')
                                             .replace('<ipAddress>0.0.0.0</ipAddress>', '<ipAddress>192.168.1.100</ipAddress>')
                                             .replace('<portNo>80</portNo>', '<portNo>9110</portNo>')
-                                            .replace('</HttpHostNotification>', '<SubscribeEvent><heartbeat>30</heartbeat><eventMode>list</eventMode><EventList><Event><type>regionTargetNumberCounting</type></Event></EventList><channels>1</channels></SubscribeEvent></HttpHostNotification>'))
+                                            .replace('</HttpHostNotification>', '<SubscribeEvent><heartbeat>30</heartbeat><eventMode>list</eventMode><EventList><Event><type>mixedTargetDetection</type></Event></EventList><channels>1</channels></SubscribeEvent></HttpHostNotification>'))
                     return FakeResponse(host)
                 if method == "GET":
                     return FakeResponse(f'<HttpHostNotificationList>{host}</HttpHostNotificationList>')
@@ -268,14 +282,14 @@ class NativeTests(unittest.TestCase):
 
         self.assertEqual(result["profile"], "camera host list with event subscription")
         self.assertIn(b"<eventMode>list</eventMode>", opener.assert_subscription)
-        self.assertIn(b"<type>regionTargetNumberCounting</type>", opener.assert_subscription)
+        self.assertIn(b"<type>mixedTargetDetection</type>", opener.assert_subscription)
         self.assertIn(b"<channels>1</channels>", opener.assert_subscription)
 
     def test_push_multipart_discards_media(self):
         payload = part(b"private-image", b"image/jpeg") + part(counting()) + b"--test--\r\n"
         self.assertEqual(metadata_documents("multipart/mixed; boundary=test", payload), [counting()])
         self.assertIn(b"<eventMode>list</eventMode>", http_host_payload(1, "192.168.1.100", 9110, 1))
-        self.assertIn(b"<type>regionTargetNumberCounting</type>", http_host_payload(1, "192.168.1.100", 9110, 1))
+        self.assertIn(b"<type>mixedTargetDetection</type>", http_host_payload(1, "192.168.1.100", 9110, 1))
 
     def test_authentication_failure_stops_further_diagnostic_requests(self):
         url = "http://192.168.1.72/ISAPI/System/deviceInfo"
