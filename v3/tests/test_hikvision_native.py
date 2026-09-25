@@ -415,6 +415,37 @@ class CounterTests(unittest.TestCase):
         self.assertTrue(summary["stale"])
         self.assertGreaterEqual(summary["message_age_seconds"], 660)
 
+    def test_event_summary_builds_hourly_and_period_category_totals(self):
+        record_push_event(self.cfg, parse_notification(region_counting(
+            100, 50, "2026-09-24T10:00:00+01:00", 10, 5, 200, 100
+        )))
+        record_push_event(self.cfg, parse_notification(region_counting(
+            103, 52, "2026-09-24T10:30:00+01:00", 12, 6, 204, 103
+        )))
+
+        summary = event_summary(self.cfg, self.now)
+        hour = next(row for row in summary["hourly_history"] if row["start"].startswith("2026-09-24T10:00"))
+
+        self.assertEqual((hour["human"], hour["non_motor"], hour["vehicle"]), (5, 3, 7))
+        self.assertEqual(summary["period_totals"]["today"]["human"], 155)
+        self.assertEqual(summary["period_totals"]["today"]["non_motor"], 18)
+        self.assertEqual(summary["period_totals"]["today"]["vehicle"], 307)
+
+    def test_event_summary_flags_unusual_completed_day(self):
+        for day in (21, 22, 23):
+            record_push_event(self.cfg, parse_notification(region_counting(
+                60, 40, f"2026-09-{day:02d}T12:00:00+01:00"
+            )))
+        record_push_event(self.cfg, parse_notification(region_counting(
+            120, 80, "2026-09-24T12:00:00+01:00"
+        )))
+
+        summary = event_summary(self.cfg, datetime(2026, 9, 25, 12, tzinfo=timezone(timedelta(hours=1))))
+
+        human = next(item for item in summary["activity_anomalies"] if item["category"] == "Human")
+        self.assertEqual(human["value"], 200)
+        self.assertEqual(human["change_percent"], 100)
+
 
 class SetupSmokeTests(unittest.TestCase):
     def test_http_smoke_rejects_500_and_accepts_real_setup(self):
@@ -437,28 +468,32 @@ class SetupSmokeTests(unittest.TestCase):
             try:
                 base = f'http://127.0.0.1:{server.server_port}'
                 record_push_event(cfg, parse_notification(region_counting()))
-                with urlopen(base + '/people-counting', timeout=10) as response:
+                with urlopen(base + '/crossing-activity', timeout=10) as response:
                     body = response.read().decode()
                     self.assertIn('Current Camera Counters', body)
                     self.assertIn('Car park side', body)
                     self.assertIn('Road side', body)
-                    self.assertIn('Seven-Day History', body)
+                    self.assertIn('Movement Totals', body)
+                    self.assertIn('Daily Activity', body)
+                    self.assertIn('Non-motor Vehicle', body)
                     self.assertIn('Export CSV', body)
                     self.assertIn('114', body)
-                    self.assertIn('Direction is not physically calibrated', body)
+                    self.assertIn('Operational analytics only', body)
+                    self.assertIn('Barrier/train correlation', body)
                     self.assertNotIn('test-secret', body)
-                with urlopen(base + '/api/people-counting', timeout=10) as response:
+                with urlopen(base + '/api/crossing-activity', timeout=10) as response:
                     payload = json.loads(response.read())
                     self.assertEqual(payload['last_reported_counts']['bothway'], '207')
                     self.assertEqual(len(payload['daily_history']), 7)
-                with urlopen(base + '/api/people-counting/export.csv', timeout=10) as response:
+                    self.assertEqual(len(payload['hourly_history']), 24)
+                with urlopen(base + '/api/crossing-activity/export.csv', timeout=10) as response:
                     exported = response.read().decode()
                     self.assertIn('scheduled_midnight_resets,unexpected_resets', exported)
-                    self.assertIn('non_motor_forward,non_motor_back,non_motor_both_directions', exported)
+                    self.assertIn('non_motor_vehicle_forward,non_motor_vehicle_back,non_motor_vehicle_both_directions', exported)
                     self.assertIn('vehicle_forward,vehicle_back,vehicle_both_directions', exported)
                     self.assertIn('Car park side', exported)
                 if importlib.util.find_spec('reportlab'):
-                    with urlopen(base + '/api/people-counting/report.pdf', timeout=10) as response:
+                    with urlopen(base + '/api/crossing-activity/report.pdf', timeout=10) as response:
                         self.assertEqual(response.headers.get_content_type(), 'application/pdf')
                         self.assertTrue(response.read().startswith(b'%PDF-'))
                 with urlopen(base+'/setup', timeout=10) as response:
@@ -466,7 +501,7 @@ class SetupSmokeTests(unittest.TestCase):
                     self.assertIn('Collect people counters', body)
                     self.assertIn('Camera delivery setup and repair', body)
                     self.assertIn('Repair camera delivery', body)
-                    self.assertIn('/people-counting', body)
+                    self.assertIn('/crossing-activity', body)
                     self.assertNotIn('Run native API diagnostic', body)
                     self.assertNotIn('Legacy capability test', body)
                     self.assertNotIn('Capture camera statistics request', body)

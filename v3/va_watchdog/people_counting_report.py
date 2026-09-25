@@ -40,7 +40,7 @@ def build_people_counting_pdf(
         leftMargin=16 * mm,
         topMargin=18 * mm,
         bottomMargin=16 * mm,
-        title="People Counting Report",
+        title="Crossing Activity Report",
         author="VA-Connect Watchdog",
     )
     styles = getSampleStyleSheet()
@@ -53,8 +53,10 @@ def build_people_counting_pdf(
                               fontSize=13, leading=16, textColor=INK, spaceBefore=10, spaceAfter=6))
     styles.add(ParagraphStyle(name="RightSmall", parent=styles["Small"], alignment=TA_RIGHT))
 
-    forward_label = str(camera.get("forward_label") or "Camera forward")
-    back_label = str(camera.get("back_label") or "Camera back")
+    forward_label = str(camera.get("forward_label") or "A to B")
+    back_label = str(camera.get("back_label") or "B to A")
+    forward_label = "A to B" if forward_label == "Camera forward" else forward_label
+    back_label = "B to A" if back_label == "Camera back" else back_label
     current = summary.get("last_reported_counts", {}) if isinstance(summary.get("last_reported_counts"), dict) else {}
     recent = daily_rows[-7:]
     today = daily_rows[-1] if daily_rows else {}
@@ -64,7 +66,7 @@ def build_people_counting_pdf(
 
     story = [
         Paragraph("GATEWAY REPORT", styles["Kicker"]),
-        Paragraph("People Counting", styles["ReportTitle"]),
+        Paragraph("Crossing Activity", styles["ReportTitle"]),
         Table([
             [Paragraph(f"<b>{_safe(identity.get('display_name') or identity.get('site_name') or 'Site not configured')}</b><br/>"
                        f"Asset: {_safe(identity.get('asset_id') or '-')}", styles["Normal"]),
@@ -78,6 +80,10 @@ def build_people_counting_pdf(
         _summary_table(forward_label, back_label, current, today, status, status_color, styles),
         Spacer(1, 3 * mm),
         _category_summary_table(today, styles),
+        Paragraph("Movement Totals", styles["Section"]),
+        Paragraph("Observed activity by period. Hourly figures may represent a partial hour; daily figures follow the camera's midnight reset.", styles["Small"]),
+        Spacer(1, 2 * mm),
+        _period_summary_table(summary, styles),
         Paragraph("Seven-Day Overview", styles["Section"]),
         Paragraph("Daily cumulative human totals by camera direction. The camera's midnight counter reset starts each new day.", styles["Small"]),
         Spacer(1, 2 * mm),
@@ -89,7 +95,10 @@ def build_people_counting_pdf(
             Paragraph(
                 "The camera resets cumulative counters at midnight; that date-boundary reset is expected. "
                 "A counter drop during the same day is marked as unexpected and the report adds the segments together. "
-                "Direction names are neutral until physically calibrated. Counts only are retained; images, video, media URLs, credentials and raw payloads are excluded.",
+                "A to B and B to A retain the camera's configured directions unless physically surveyed. "
+                "No barrier or signalling source is connected, so train or barrier correlation is not available. "
+                "These camera analytics are operational evidence only and are not safety-certified crossing detection. "
+                "Counts only are retained; images, video, media URLs, credentials and raw payloads are excluded.",
                 styles["Small"],
             ),
         ]),
@@ -101,7 +110,7 @@ def build_people_counting_pdf(
         canvas.line(16 * mm, 12 * mm, A4[0] - 16 * mm, 12 * mm)
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(MUTED)
-        canvas.drawString(16 * mm, 8 * mm, "VA-Connect Watchdog - People Counting")
+        canvas.drawString(16 * mm, 8 * mm, "VA-Connect Watchdog - Crossing Activity")
         canvas.drawRightString(A4[0] - 16 * mm, 8 * mm, f"Page {doc.page}")
         canvas.restoreState()
 
@@ -140,7 +149,7 @@ def _category_summary_table(today, styles):
     cells = []
     for label, key, color in (
         ("Human today", "bothway", GREEN),
-        ("Non-motor today", "non_motor_bothway", BLUE),
+        ("Non-motor Vehicle today", "non_motor_bothway", BLUE),
         ("Vehicle today", "vehicle_bothway", colors.HexColor("#A86700")),
     ):
         cells.append(Paragraph(
@@ -155,6 +164,34 @@ def _category_summary_table(today, styles):
         ("LEFTPADDING", (0, 0), (-1, -1), 8),
         ("TOPPADDING", (0, 0), (-1, -1), 6),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+
+
+def _period_summary_table(summary, styles):
+    periods = summary.get("period_totals", {}) if isinstance(summary.get("period_totals"), dict) else {}
+    hourly = summary.get("hourly_history", []) if isinstance(summary.get("hourly_history"), list) else []
+    current_hour = hourly[-1] if hourly else {}
+    data = [["Period", "Human", "Non-motor Vehicle", "Vehicle", "Coverage"]]
+    for label, values, hourly_row in (
+        ("This hour", current_hour, True),
+        ("Today", periods.get("today", {}), False),
+        ("Last 7 days", periods.get("last_7_days", {}), False),
+        ("This month", periods.get("this_month", {}), False),
+    ):
+        count = int(values.get("samples" if hourly_row else "days_with_data", 0) or 0)
+        unit = "sample" if hourly_row else "day"
+        coverage = f"{count} {unit}{'s' if count != 1 else ''}"
+        data.append([label, _display(values.get("human", 0)), _display(values.get("non_motor", 0)),
+                     _display(values.get("vehicle", 0)), coverage])
+    return Table(data, colWidths=[35 * mm, 28 * mm, 42 * mm, 28 * mm, 29 * mm], style=TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), INK),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.4, LINE),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, PALE]),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
     ]))
 
 
@@ -191,7 +228,7 @@ def _count_chart(rows, forward_label, back_label):
 
 
 def _daily_table(rows, forward_label, back_label, styles):
-    data = [["Date", "Human F", "Human B", "Human", "Non-motor", "Vehicle", "Reset", "Day"]]
+    data = [["Date", "Human A-B", "Human B-A", "Human", "Non-motor Vehicle", "Vehicle", "Reset", "Day"]]
     for row in reversed(rows):
         reset = (f"Unexpected ({row.get('unexpected_resets')})" if row.get("unexpected_resets")
                  else "Midnight observed" if row.get("scheduled_resets") else "Normal")
@@ -200,7 +237,7 @@ def _daily_table(rows, forward_label, back_label, styles):
             _display(row.get("bothway")), _display(row.get("non_motor_bothway")),
             _display(row.get("vehicle_bothway")), reset, "Complete" if row.get("complete") else "In progress",
         ])
-    table = Table(data, repeatRows=1, colWidths=[24 * mm, 19 * mm, 19 * mm, 18 * mm, 23 * mm, 21 * mm, 31 * mm, 23 * mm])
+    table = Table(data, repeatRows=1, colWidths=[22 * mm, 18 * mm, 18 * mm, 17 * mm, 29 * mm, 19 * mm, 30 * mm, 22 * mm])
     commands = [
         ("BACKGROUND", (0, 0), (-1, 0), INK),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),

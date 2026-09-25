@@ -10,7 +10,7 @@ class WebNavigationTests(unittest.TestCase):
 
         self.assertEqual(pages, [
             ("Status", "/"),
-            ("People Counting", "/people-counting"),
+            ("Crossing Activity", "/crossing-activity"),
             ("Web Links", "/links"),
             ("Events", "/events"),
             ("Watchdog", "/watchdog"),
@@ -30,6 +30,7 @@ class WebNavigationTests(unittest.TestCase):
             "/storage": "/setup#storage",
             "/recovery": "/setup#recovery",
             "/updates": "/setup#software-update",
+            "/people-counting": "/crossing-activity",
         })
 
     def test_status_and_watchdog_have_separate_server_renderers(self):
@@ -39,21 +40,22 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn('if page == "Watchdog":\n            return page_help_html(page) + watchdog_page()', source)
         self.assertNotIn('/services#watchdog', source)
 
-    def test_people_counting_is_a_dedicated_operator_page(self):
+    def test_crossing_activity_is_a_dedicated_operator_page(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 
-        self.assertIn('if page == "People Counting":', source)
+        self.assertIn('if page == "Crossing Activity":', source)
         self.assertIn("def people_counting_page():", source)
         self.assertIn("Current Camera Counters", source)
-        self.assertIn("Today's Rollup", source)
-        self.assertIn("Seven-Day History", source)
+        self.assertIn("Movement Totals", source)
+        self.assertIn("Last 24 hours", source)
+        self.assertIn("Daily Activity", source)
         self.assertIn("Daily reset expected", source)
         self.assertIn("Camera messages are stale", source)
-        self.assertIn("Direction is not physically calibrated", source)
-        self.assertIn('"/people-counting"', source)
-        self.assertIn('route_path == "/api/people-counting"', source)
-        self.assertIn('route_path == "/api/people-counting/export.csv"', source)
-        self.assertIn('route_path == "/api/people-counting/report.pdf"', source)
+        self.assertIn("Operational analytics only", source)
+        self.assertIn('"/crossing-activity"', source)
+        self.assertIn('"/api/crossing-activity", "/api/people-counting"', source)
+        self.assertIn('"/api/crossing-activity/export.csv", "/api/people-counting/export.csv"', source)
+        self.assertIn('"/api/crossing-activity/report.pdf", "/api/people-counting/report.pdf"', source)
         self.assertIn("Download PDF", source)
 
     def test_watchdog_default_view_is_limited_to_neousys_operational_controls(self):
@@ -248,7 +250,7 @@ class WebNavigationTests(unittest.TestCase):
         end = source.index("            recovery_settings = (", start)
         renderer = source[start:end]
 
-        self.assertIn('settings_disclosure("Hikvision people counting"', source)
+        self.assertIn('settings_disclosure("Hikvision crossing activity"', source)
         self.assertIn('people_settings.pop("password", "")', source)
         self.assertIn("Collect people counters", renderer)
         self.assertIn("Camera delivery setup and repair", renderer)
@@ -256,6 +258,7 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn("people_counting_forward_label", renderer)
         self.assertIn("people_counting_back_label", renderer)
         self.assertIn("people_counting_stale_after_minutes", renderer)
+        self.assertIn("people_counting_anomaly_threshold_percent", renderer)
         self.assertIn('value=\\\"http_push\\\"', renderer)
         self.assertNotIn("Run native API diagnostic", renderer)
         self.assertNotIn("Legacy capability test", renderer)

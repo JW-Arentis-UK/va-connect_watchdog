@@ -130,7 +130,7 @@ def render_capture_state(path):
 
 
 VISIBLE_PAGE_GROUPS = (
-    ("Gateway", (("Status", "/"), ("People Counting", "/people-counting"), ("Web Links", "/links"),
+    ("Gateway", (("Status", "/"), ("Crossing Activity", "/crossing-activity"), ("Web Links", "/links"),
                  ("Events", "/events"), ("Watchdog", "/watchdog"), ("Evidence", "/evidence"))),
     ("Administration", (("Setup", "/setup"),)),
 )
@@ -146,7 +146,19 @@ LEGACY_PAGE_REDIRECTS = {
     "/storage": "/setup#storage",
     "/recovery": "/setup#recovery",
     "/updates": "/setup#software-update",
+    "/people-counting": "/crossing-activity",
 }
+
+
+def crossing_direction_labels(camera):
+    """Return railway-facing labels while migrating old neutral defaults."""
+    forward = str(camera.get("forward_label") or "A to B")
+    back = str(camera.get("back_label") or "B to A")
+    if forward == "Camera forward":
+        forward = "A to B"
+    if back == "Camera back":
+        back = "B to A"
+    return forward, back
 
 HTML = """<!doctype html>
 <html>
@@ -714,7 +726,7 @@ def start_web(cfg):
     def page_help_html(page):
         help_map = {
             "Status": ("Is this gateway ready to operate?", "Shows the small set of live facts an operator needs: gateway state, storage, recordings, services, and protection."),
-            "People Counting": ("What is the camera counting now?", "Shows the latest camera counters, changes observed by this watchdog, and event receiver health without exposing images or video."),
+            "Crossing Activity": ("What activity is crossing the railway now?", "Shows camera-reported human, non-motor vehicle, and vehicle movements. These are operational analytics, not safety-certified crossing detection."),
             "Web Links": ("Which local device page do you need?", "Open saved RUT, camera, and other local web pages, then manage their names and addresses below."),
             "Watchdog": ("Will the gateway recover itself?", "Shows Neousys hardware protection, the independent feeder, the latest feed, and the controls needed to set up or test it."),
             "Events": ("What changed recently?", "Review concise event records, filter the list, inspect evidence, or export it."),
@@ -1164,16 +1176,28 @@ def start_web(cfg):
                 age_text = f"{int(age) // 60} minutes" if age is not None else "an unknown period"
                 rows.append(
                     "<div class=\"issue-row\"><span class=\"pill critical\">CRITICAL</span><div>"
-                    "<div class=\"value\">People counter messages stopped</div>"
-                    f"<div class=\"muted\">No validated camera count has arrived for {escape(age_text)}. <a href=\"/people-counting\">Open People Counting</a></div>"
+                    "<div class=\"value\">Crossing activity messages stopped</div>"
+                    f"<div class=\"muted\">No validated camera count has arrived for {escape(age_text)}. <a href=\"/crossing-activity\">Open Crossing Activity</a></div>"
                     "</div></div>"
                 )
             if int(people_summary.get("unexpected_resets_today", 0) or 0):
                 rows.append(
                     "<div class=\"issue-row\"><span class=\"pill warning\">WARNING</span><div>"
-                    "<div class=\"value\">Unexpected people counter reset</div>"
-                    "<div class=\"muted\">A counter dropped during the day. The midnight reset remains expected. <a href=\"/people-counting\">Review totals</a></div>"
+                    "<div class=\"value\">Unexpected crossing counter reset</div>"
+                    "<div class=\"muted\">A counter dropped during the day. The midnight reset remains expected. <a href=\"/crossing-activity\">Review totals</a></div>"
                     "</div></div>"
+                )
+            anomalies = people_summary.get("activity_anomalies", [])
+            if anomalies:
+                detail = "; ".join(
+                    f"{item.get('category')}: {int(item.get('change_percent', 0)):+d}%"
+                    for item in anomalies[:3]
+                )
+                rows.append(
+                    "<div class=\"issue-row\"><span class=\"pill warning\">WARNING</span><div>"
+                    "<div class=\"value\">Unusual crossing activity</div>"
+                    f"<div class=\"muted\">Latest complete day differs from the recent baseline: {escape(detail)}. "
+                    "<a href=\"/crossing-activity\">Review activity</a></div></div></div>"
                 )
             for check in issues:
                 if len(rows) >= 6:
@@ -1409,8 +1433,8 @@ def start_web(cfg):
                 + disclosure("RUTX50 setup help", router_setup_help)
             )
             people_counting_settings = (
-                "<p class=\"section-lead\">Configure the local Hikvision camera used by the People Counting page.</p>"
-                + ("<div class=\"notice healthy\"><strong>Collection active.</strong> The camera is delivering validated counters. <a href=\"/people-counting\">Open People Counting</a></div>"
+                "<p class=\"section-lead\">Configure the local Hikvision camera used by the Crossing Activity page.</p>"
+                + ("<div class=\"notice healthy\"><strong>Collection active.</strong> The camera is delivering validated counters. <a href=\"/crossing-activity\">Open Crossing Activity</a></div>"
                    if str(event_summary(cfg).get("status") or "") == "receiving"
                    else "<div class=\"notice warning\"><strong>Waiting for counters.</strong> Check the saved camera details and delivery configuration.</div>")
                 + "<div class=\"settings-grid\">"
@@ -1420,9 +1444,10 @@ def start_web(cfg):
                 f"<div><label class=\"label\">Camera channel</label><input name=\"people_counting_channel\" type=\"number\" min=\"1\" max=\"64\" value=\"{escape(str(people_cfg.get('channel', 1)))}\"><p class=\"muted\">Normally 1 for a standalone camera.</p></div>"
                 f"<div><label class=\"label\">Username</label><input name=\"people_counting_username\" maxlength=\"64\" value=\"{escape(str(people_cfg.get('username', '')))}\"></div>"
                 f"<div><label class=\"label\">Password</label><input name=\"people_counting_password\" type=\"password\" maxlength=\"128\" value=\"\" placeholder=\"{'Configured - leave blank to keep' if people_cfg.get('password') else 'Enter the camera password'}\"><p class=\"muted\">Stored locally and never shown in evidence exports.</p></div>"
-                f"<div><label class=\"label\">Forward direction name</label><input name=\"people_counting_forward_label\" maxlength=\"40\" value=\"{escape(str(people_cfg.get('forward_label', 'Camera forward')))}\" placeholder=\"Camera forward\"><p class=\"muted\">Optional neutral site label, for example Car park side.</p></div>"
-                f"<div><label class=\"label\">Back direction name</label><input name=\"people_counting_back_label\" maxlength=\"40\" value=\"{escape(str(people_cfg.get('back_label', 'Camera back')))}\" placeholder=\"Camera back\"><p class=\"muted\">Optional neutral site label, for example Road side.</p></div>"
+                f"<div><label class=\"label\">A to B direction name</label><input name=\"people_counting_forward_label\" maxlength=\"40\" value=\"{escape(crossing_direction_labels(people_cfg)[0])}\" placeholder=\"A to B\"><p class=\"muted\">Keep A to B unless the physical direction has been surveyed and named.</p></div>"
+                f"<div><label class=\"label\">B to A direction name</label><input name=\"people_counting_back_label\" maxlength=\"40\" value=\"{escape(crossing_direction_labels(people_cfg)[1])}\" placeholder=\"B to A\"><p class=\"muted\">Keep B to A unless the physical direction has been surveyed and named.</p></div>"
                 f"<div><label class=\"label\">No-message alert</label><input name=\"people_counting_stale_after_minutes\" type=\"number\" min=\"2\" max=\"1440\" value=\"{escape(str(people_cfg.get('stale_after_minutes', 10)))}\"><p class=\"muted\">Minutes without a valid counter message before showing an alert.</p></div>"
+                f"<div><label class=\"label\">Daily activity change alert</label><input name=\"people_counting_anomaly_threshold_percent\" type=\"number\" min=\"20\" max=\"500\" value=\"{escape(str(people_cfg.get('anomaly_threshold_percent', 50)))}\"><p class=\"muted\">Percentage change from the recent complete-day average before an operational warning appears.</p></div>"
                 "</div>"
                 "<input name=\"people_counting_event_transport\" type=\"hidden\" value=\"http_push\">"
                 f"<label class=\"option-row\"><input name=\"people_counting_event_collection_enabled\" type=\"checkbox\" {'checked' if people_cfg.get('event_collection_enabled') else ''}> <span><strong>Collect people counters</strong><br><span class=\"muted\">Counts only. Images, video, media URLs and raw camera messages are not retained.</span></span></label>"
@@ -1488,7 +1513,7 @@ def start_web(cfg):
                 + settings_disclosure("System and storage alert levels", storage_settings, opened=check_state("temperature") != "healthy")
                 + settings_disclosure("Network and remote access", network_settings)
                 + settings_disclosure("Mobile router monitoring", router_settings)
-                + "<div id=\"people-counting\">" + settings_disclosure("Hikvision people counting", people_counting_settings, opened=not bool(people_cfg.get("address"))) + "</div>"
+                + "<div id=\"people-counting\">" + settings_disclosure("Hikvision crossing activity", people_counting_settings, opened=not bool(people_cfg.get("address"))) + "</div>"
                 + settings_disclosure("Recovery and updates", recovery_settings)
                 + settings_disclosure("Advanced configuration", advanced_settings)
                 + "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Save settings</button><a class=\"ghost\" href=\"/settings\">Cancel</a></div>"
@@ -1502,12 +1527,14 @@ def start_web(cfg):
             counts = summary.get("last_reported_counts", {}) if isinstance(summary.get("last_reported_counts"), dict) else {}
             records = summary.get("last_count_records", []) if isinstance(summary.get("last_count_records"), list) else []
             daily = summary.get("daily_history", []) if isinstance(summary.get("daily_history"), list) else []
+            hourly = summary.get("hourly_history", []) if isinstance(summary.get("hourly_history"), list) else []
+            periods = summary.get("period_totals", {}) if isinstance(summary.get("period_totals"), dict) else {}
+            anomalies = summary.get("activity_anomalies", []) if isinstance(summary.get("activity_anomalies"), list) else []
             today = daily[-1] if daily else {}
             status_text = str(summary.get("status") or "waiting")
             stale = bool(summary.get("stale"))
             listening = status_text in {"listening", "receiving", "ONVIF listening"} and not stale
-            forward_label = str(camera.get("forward_label") or "Camera forward")
-            back_label = str(camera.get("back_label") or "Camera back")
+            forward_label, back_label = crossing_direction_labels(camera)
 
             rows = []
             for record in records:
@@ -1566,6 +1593,38 @@ def start_web(cfg):
                     f"<td class=\"{reset_class}\">{escape(reset_text)}</td>"
                     f"<td>{'Complete' if day.get('complete') else 'In progress'}</td></tr>"
                 )
+            period_rows = []
+            current_hour = hourly[-1] if hourly else {}
+            period_items = [
+                ("This hour", current_hour, "hour"),
+                ("Today", periods.get("today", {}), "days_with_data"),
+                ("Last 7 days", periods.get("last_7_days", {}), "days_with_data"),
+                ("This month", periods.get("this_month", {}), "days_with_data"),
+            ]
+            for label, values, coverage_key in period_items:
+                coverage = values.get("samples", 0) if coverage_key == "hour" else values.get(coverage_key, 0)
+                if coverage_key == "hour":
+                    coverage_text = f"{coverage} sample{'s' if coverage != 1 else ''}"
+                else:
+                    coverage_text = f"{coverage} day{'s' if coverage != 1 else ''} with data"
+                period_rows.append(
+                    "<tr>"
+                    f"<th>{escape(label)}</th><td>{escape(str(values.get('human', 0)))}</td>"
+                    f"<td>{escape(str(values.get('non_motor', 0)))}</td><td>{escape(str(values.get('vehicle', 0)))}</td>"
+                    f"<td>{escape(coverage_text)}</td></tr>"
+                )
+            hourly_rows = []
+            for hour in reversed(hourly):
+                stamp = str(hour.get("start") or "-")
+                try:
+                    stamp = datetime.fromisoformat(stamp).astimezone().strftime("%d %b %H:00")
+                except ValueError:
+                    pass
+                hourly_rows.append(
+                    f"<tr><th>{escape(stamp)}</th><td>{escape(str(hour.get('human', 0)))}</td>"
+                    f"<td>{escape(str(hour.get('non_motor', 0)))}</td><td>{escape(str(hour.get('vehicle', 0)))}</td>"
+                    f"<td>{escape(str(hour.get('samples', 0)))}</td></tr>"
+                )
             collection_notice = ""
             if stale:
                 age_minutes = int(summary.get("message_age_seconds") or 0) // 60
@@ -1578,6 +1637,17 @@ def start_web(cfg):
                     "<div class=\"notice critical\"><strong>Unexpected daytime counter reset detected.</strong> "
                     "Today's rollup includes the count before and after the reset.</div>"
                 )
+            anomaly_notice = ""
+            if anomalies:
+                details = "; ".join(
+                    f"{item.get('category')}: {int(item.get('change_percent', 0)):+d}% "
+                    f"({item.get('value')} vs {item.get('baseline_average')} average)"
+                    for item in anomalies
+                )
+                anomaly_notice = (
+                    "<div class=\"notice warning\"><strong>Unusual activity on the latest complete day.</strong> "
+                    f"{escape(details)}. This is an operational trend warning, not a safety alarm.</div>"
+                )
             return (
                 summary_strip([
                     (forward_label, counts.get("forward", "-"), "Current cumulative human counter", "healthy" if counts.get("forward") is not None else "warning"),
@@ -1586,31 +1656,32 @@ def start_web(cfg):
                     ("Event receiver", connection_state, transport, connection_css),
                 ])
                 + collection_notice
-                + "<div class=\"notice warning\"><strong>Direction is not physically calibrated.</strong> "
-                "Neutral direction names are used and are not presented as entrance and exit.</div>"
+                + anomaly_notice
+                + "<div class=\"notice warning\"><strong>Operational analytics only.</strong> Camera classifications and direction counts are not safety-certified crossing detection and must not be used to control railway equipment.</div>"
                 + "<div class=\"notice healthy\"><strong>Daily reset expected.</strong> The camera resets its cumulative counters at midnight. "
                 "That date-boundary reset starts the next daily rollup and is not treated as a fault.</div>"
                 + "<div class=\"card\"><div class=\"section-lead\"><div><h2>Current Camera Counters</h2>"
-                "<p class=\"muted\">Latest validated cumulative values reported by the camera. Forward plus back must equal both directions before a sample is accepted.</p>"
+                "<p class=\"muted\">Latest validated cumulative values reported by the camera. A to B plus B to A must equal both directions before a sample is accepted.</p>"
                 "</div><a class=\"ghost\" href=\"/setup#people-counting\">Camera setup</a></div>"
-                "<div class=\"table-scroll\"><table><thead><tr><th>Camera direction</th><th>Human</th><th>Non-motor</th><th>Vehicle</th></tr></thead>"
+                "<div class=\"table-scroll\"><table><thead><tr><th>Camera direction</th><th>Human</th><th>Non-motor Vehicle</th><th>Vehicle</th></tr></thead>"
                 f"<tbody>{''.join(rows)}</tbody></table></div></div>"
-                + "<div class=\"card\"><h2>Today's Rollup</h2>"
-                "<p class=\"muted\">Cumulative human counts since the camera's midnight reset. If an unexpected daytime reset occurs, both counter segments are included.</p>"
-                "<div class=\"summary-strip\">"
-                f"<div class=\"summary-stat\"><div class=\"label\">{escape(forward_label)}</div><div class=\"stat-value healthy\">{escape(str(today.get('forward') if today.get('forward') is not None else '-'))}</div><div class=\"stat-detail\">Today</div></div>"
-                f"<div class=\"summary-stat\"><div class=\"label\">{escape(back_label)}</div><div class=\"stat-value healthy\">{escape(str(today.get('back') if today.get('back') is not None else '-'))}</div><div class=\"stat-detail\">Today</div></div>"
-                f"<div class=\"summary-stat\"><div class=\"label\">Human</div><div class=\"stat-value healthy\">{escape(str(today.get('bothway') if today.get('bothway') is not None else '-'))}</div><div class=\"stat-detail\">Both directions today</div></div>"
-                f"<div class=\"summary-stat\"><div class=\"label\">Non-motor</div><div class=\"stat-value healthy\">{escape(str(today.get('non_motor_bothway') if today.get('non_motor_bothway') is not None else '-'))}</div><div class=\"stat-detail\">Both directions today</div></div>"
-                f"<div class=\"summary-stat\"><div class=\"label\">Vehicle</div><div class=\"stat-value healthy\">{escape(str(today.get('vehicle_bothway') if today.get('vehicle_bothway') is not None else '-'))}</div><div class=\"stat-detail\">Both directions today</div></div>"
-                "</div></div>"
-                + "<div class=\"card\"><div class=\"section-lead\"><div><h2>Seven-Day History</h2>"
+                + "<div class=\"card\"><h2>Movement Totals</h2>"
+                "<p class=\"muted\">Observed counter changes by period. Hourly figures begin from the first sample seen in each collector run; daily totals follow the camera's midnight reset.</p>"
+                "<div class=\"table-scroll\"><table><thead><tr><th>Period</th><th>Human</th><th>Non-motor Vehicle</th><th>Vehicle</th><th>Coverage</th></tr></thead>"
+                f"<tbody>{''.join(period_rows)}</tbody></table></div></div>"
+                + disclosure(
+                    "Last 24 hours",
+                    "<p class=\"muted\">Observed movement changes in each clock hour. A partially observed hour is not a complete traffic total.</p>"
+                    "<div class=\"table-scroll\"><table><thead><tr><th>Hour</th><th>Human</th><th>Non-motor Vehicle</th><th>Vehicle</th><th>Samples</th></tr></thead>"
+                    f"<tbody>{''.join(hourly_rows)}</tbody></table></div>",
+                )
+                + "<div class=\"card\"><div class=\"section-lead\"><div><h2>Daily Activity</h2>"
                 f"<p class=\"muted\"><span style=\"color:var(--green)\">{escape(forward_label)}</span> and <span style=\"color:var(--blue)\">{escape(back_label)}</span>. Numbers below each day are both directions.</p>"
-                "</div><div class=\"button-row\"><a class=\"action\" href=\"/api/people-counting/report.pdf\" download=\"people-counting-report.pdf\">Download PDF</a>"
-                "<a class=\"ghost\" href=\"/api/people-counting/export.csv\" download=\"people-counting.csv\">Export CSV</a></div></div>"
+                "</div><div class=\"button-row\"><a class=\"action\" href=\"/api/crossing-activity/report.pdf\" download=\"crossing-activity-report.pdf\">Download PDF</a>"
+                "<a class=\"ghost\" href=\"/api/crossing-activity/export.csv\" download=\"crossing-activity.csv\">Export CSV</a></div></div>"
                 f"<div class=\"count-chart\">{''.join(chart_days)}</div>"
                 "<div class=\"table-scroll\"><table><thead><tr><th>Date</th>"
-                "<th>Human</th><th>Non-motor</th><th>Vehicle</th><th>Reset status</th><th>Day</th></tr></thead>"
+                "<th>Human</th><th>Non-motor Vehicle</th><th>Vehicle</th><th>Reset status</th><th>Day</th></tr></thead>"
                 f"<tbody>{''.join(reversed(history_rows))}</tbody></table></div></div>"
                 + "<div class=\"card\"><h2>Collection Status</h2><div class=\"table-scroll\"><table class=\"compact-table\"><tbody>"
                 f"<tr><th>Receiver</th><td class=\"{connection_css}\">{escape(connection_state)}</td></tr>"
@@ -1619,6 +1690,8 @@ def start_web(cfg):
                 f"<tr><th>Last accepted sample</th><td>{escape(local_time(summary.get('last_event_at')))}</td></tr>"
                 f"<tr><th>No-message alert</th><td>{escape(str(summary.get('stale_after_minutes')))} minutes</td></tr>"
                 f"<tr><th>Unexpected resets today</th><td class=\"{'critical' if unexpected_resets else 'healthy'}\">{unexpected_resets}</td></tr>"
+                "<tr><th>Barrier/train correlation</th><td>Not configured. No barrier or signalling data source is connected.</td></tr>"
+                "<tr><th>Evidence use</th><td>Operational analytics only; not safety-certified crossing detection.</td></tr>"
                 "<tr><th>Privacy</th><td>Counts only. Images, video, media URLs, credentials and raw payloads are not retained.</td></tr>"
                 "</tbody></table></div></div>"
                 + "<script>setTimeout(function(){window.location.reload();},15000);</script>"
@@ -2582,8 +2655,9 @@ def start_web(cfg):
         people_counts = people_summary.get("last_reported_counts", {}) if isinstance(people_summary.get("last_reported_counts"), dict) else {}
         people_configured = bool(people_cfg.get("event_collection_enabled") and people_cfg.get("address"))
         people_listening = str(people_summary.get("status") or "") in {"listening", "receiving", "ONVIF listening"}
+        people_forward_label, people_back_label = crossing_direction_labels(people_cfg)
         people_detail = (
-            f"Camera forward {people_counts.get('forward', '-')}; back {people_counts.get('back', '-')}; "
+            f"{people_forward_label} {people_counts.get('forward', '-')}; {people_back_label} {people_counts.get('back', '-')}; "
             f"both directions {people_counts.get('bothway', '-')}"
             if people_counts else "Waiting for validated camera counters."
         )
@@ -2617,10 +2691,10 @@ def start_web(cfg):
                     bool(service_checks),
                 ),
                 operational_row(
-                    "People counting",
+                    "Crossing activity",
                     people_detail,
                     "healthy" if people_listening else "warning",
-                    "/people-counting",
+                    "/crossing-activity",
                     people_configured,
                 ),
                 operational_row(
@@ -2707,7 +2781,7 @@ def start_web(cfg):
 
         if page == "Status":
             return page_help_html(page) + "<div class=\"overview-page\">" + overview_html + "</div>"
-        if page == "People Counting":
+        if page == "Crossing Activity":
             return page_help_html(page) + people_counting_page()
         if page == "Web Links":
             return page_help_html(page) + web_links_page()
@@ -2855,7 +2929,7 @@ def start_web(cfg):
         username = str(camera.get("username") or "")
         configured = bool(address and username and camera.get("password"))
         body = (
-            "<div class=\"card action-panel\"><h2>Test Hikvision People Counting</h2>"
+            "<div class=\"card action-panel\"><h2>Test Hikvision Crossing Activity</h2>"
             "<p>This makes read-only requests to the saved camera. It will not change camera settings or retrieve images or video.</p>"
             f"<div class=\"label\">Camera</div><div class=\"value\">{escape(address or 'Not configured')}</div>"
             f"<div class=\"label\">Username</div><div class=\"value\">{escape(username or 'Not configured')}</div>"
@@ -3884,9 +3958,10 @@ def start_web(cfg):
                 "channel": first("people_counting_channel", "1"),
                 "username": first("people_counting_username", ""),
                 "password": first("people_counting_password", "") or str(cfg.get("people_counting", {}).get("password", "")),
-                "forward_label": first("people_counting_forward_label", str(cfg.get("people_counting", {}).get("forward_label", "Camera forward"))),
-                "back_label": first("people_counting_back_label", str(cfg.get("people_counting", {}).get("back_label", "Camera back"))),
+                "forward_label": first("people_counting_forward_label", crossing_direction_labels(cfg.get("people_counting", {}))[0]),
+                "back_label": first("people_counting_back_label", crossing_direction_labels(cfg.get("people_counting", {}))[1]),
                 "stale_after_minutes": first("people_counting_stale_after_minutes", str(cfg.get("people_counting", {}).get("stale_after_minutes", 10))),
+                "anomaly_threshold_percent": first("people_counting_anomaly_threshold_percent", str(cfg.get("people_counting", {}).get("anomaly_threshold_percent", 50))),
                 "timeout_seconds": "5",
             },
             "update": {
@@ -5841,9 +5916,10 @@ def start_web(cfg):
                     "camera password",
                     128,
                 ),
-                "forward_label": _identity_text(people_counting.get("forward_label", cfg.get("people_counting", {}).get("forward_label", "Camera forward")), "forward direction name", 40) or "Camera forward",
-                "back_label": _identity_text(people_counting.get("back_label", cfg.get("people_counting", {}).get("back_label", "Camera back")), "back direction name", 40) or "Camera back",
+                "forward_label": _identity_text(people_counting.get("forward_label", crossing_direction_labels(cfg.get("people_counting", {}))[0]), "A to B direction name", 40) or "A to B",
+                "back_label": _identity_text(people_counting.get("back_label", crossing_direction_labels(cfg.get("people_counting", {}))[1]), "B to A direction name", 40) or "B to A",
                 "stale_after_minutes": _int_range({"stale_after_minutes": people_counting.get("stale_after_minutes", cfg.get("people_counting", {}).get("stale_after_minutes", 10))}, "stale_after_minutes", 2, 1440),
+                "anomaly_threshold_percent": _int_range({"anomaly_threshold_percent": people_counting.get("anomaly_threshold_percent", cfg.get("people_counting", {}).get("anomaly_threshold_percent", 50))}, "anomaly_threshold_percent", 20, 500),
                 "timeout_seconds": _int_range({"timeout_seconds": people_counting.get("timeout_seconds", 5)}, "timeout_seconds", 1, 15),
             },
             "update": {
@@ -6084,7 +6160,7 @@ def start_web(cfg):
         identity = configured_identity(cfg)
         columns = [
             "site_name", "asset_id", "date", "forward_label", "forward", "back_label", "back",
-            "human_both_directions", "non_motor_forward", "non_motor_back", "non_motor_both_directions",
+            "human_both_directions", "non_motor_vehicle_forward", "non_motor_vehicle_back", "non_motor_vehicle_both_directions",
             "vehicle_forward", "vehicle_back", "vehicle_both_directions", "samples",
             "scheduled_midnight_resets", "unexpected_resets", "day_status",
         ]
@@ -6092,8 +6168,8 @@ def start_web(cfg):
         for row in daily_count_history(cfg, days=days):
             values = [
                 identity["site_name"], identity["asset_id"], row.get("date", ""),
-                camera.get("forward_label", "Camera forward"), row.get("forward", ""),
-                camera.get("back_label", "Camera back"), row.get("back", ""), row.get("bothway", ""),
+                crossing_direction_labels(camera)[0], row.get("forward", ""),
+                crossing_direction_labels(camera)[1], row.get("back", ""), row.get("bothway", ""),
                 row.get("non_motor_forward", ""), row.get("non_motor_back", ""), row.get("non_motor_bothway", ""),
                 row.get("vehicle_forward", ""), row.get("vehicle_back", ""), row.get("vehicle_bothway", ""),
                 row.get("samples", 0), row.get("scheduled_resets", 0), row.get("unexpected_resets", 0),
@@ -6604,17 +6680,17 @@ def start_web(cfg):
                 except Exception as e:
                     self._send_json({"error": str(e)}, status=503)
                 return
-            if route_path == "/api/people-counting":
+            if route_path in {"/api/crossing-activity", "/api/people-counting"}:
                 self._send_json(event_summary(cfg))
                 return
-            if route_path == "/api/people-counting/export.csv":
+            if route_path in {"/api/crossing-activity/export.csv", "/api/people-counting/export.csv"}:
                 self._send_bytes(
                     people_counting_csv(days=30).encode("utf-8"),
                     content_type="text/csv; charset=utf-8",
-                    filename="people-counting.csv",
+                    filename="crossing-activity.csv",
                 )
                 return
-            if route_path == "/api/people-counting/report.pdf":
+            if route_path in {"/api/crossing-activity/report.pdf", "/api/people-counting/report.pdf"}:
                 try:
                     from .people_counting_report import build_people_counting_pdf
                     camera = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting"), dict) else {}
@@ -6624,7 +6700,7 @@ def start_web(cfg):
                     self._send_bytes(
                         report,
                         content_type="application/pdf",
-                        filename=f"{identity_slug(cfg)}-people-counting.pdf",
+                        filename=f"{identity_slug(cfg)}-crossing-activity.pdf",
                     )
                 except Exception as exc:
                     self._send_json({"error": f"PDF report could not be created: {exc}"}, status=500)

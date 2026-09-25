@@ -21,6 +21,12 @@ class PeopleCountingReportTests(unittest.TestCase):
         summary = {
             "last_reported_counts": {"forward": "118", "back": "99", "bothway": "217"},
             "stale": False,
+            "hourly_history": [{"human": 6, "non_motor": 2, "vehicle": 12, "samples": 3}],
+            "period_totals": {
+                "today": {"human": 217, "non_motor": 33, "vehicle": 806, "days_with_data": 1},
+                "last_7_days": {"human": 428, "non_motor": 63, "vehicle": 1557, "days_with_data": 2},
+                "this_month": {"human": 428, "non_motor": 63, "vehicle": 1557, "days_with_data": 2},
+            },
         }
         rows = [
             {"date": "2026-09-24", "forward": 116, "back": 95, "bothway": 211, "samples": 20,

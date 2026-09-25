@@ -440,7 +440,8 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
                 else:
                     totals["observed_enter"] += delta[0]
                     totals["observed_exit"] += delta[1]
-    daily_history = _daily_count_history(observations, now, 7)
+    daily_rollups = _daily_count_history(observations, now, 40)
+    daily_history = daily_rollups[-7:]
     last_event = _source_datetime(state.get("last_event_at"))
     stale_after_minutes = max(1, int(camera.get("stale_after_minutes", 10) or 10))
     message_age_seconds = max(0, int((now - last_event.astimezone(now.tzinfo)).total_seconds())) if last_event else None
@@ -452,6 +453,12 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
             "unexpected_resets_today": daily_history[-1]["unexpected_resets"] if daily_history else 0,
             "scheduled_resets": sum(row["scheduled_resets"] for row in daily_history),
             "daily_history": daily_history, "stale": stale,
+            "hourly_history": _hourly_count_history(observations, now, 24),
+            "period_totals": _period_totals(daily_rollups, now),
+            "activity_anomalies": _activity_anomalies(
+                daily_rollups, int(camera.get("anomaly_threshold_percent", 50) or 50)
+            ),
+            "anomaly_threshold_percent": int(camera.get("anomaly_threshold_percent", 50) or 50),
             "stale_after_minutes": stale_after_minutes, "message_age_seconds": message_age_seconds,
             "interval_reports": len(intervals)}
 
@@ -514,8 +521,87 @@ def _daily_count_history(observations, now, days):
     return list(rows.values())
 
 
+def _hourly_count_history(observations, now, hours):
+    """Return observed counter changes by hour; the first-ever baseline is not counted."""
+    hours = max(1, int(hours))
+    end = now.replace(minute=0, second=0, microsecond=0)
+    first = end - timedelta(hours=hours - 1)
+    rows = {
+        first + timedelta(hours=offset): {
+            "start": (first + timedelta(hours=offset)).isoformat(),
+            "human": 0, "non_motor": 0, "vehicle": 0, "samples": 0,
+        }
+        for offset in range(hours)
+    }
+    per_key = {}
+    for stamp, key, schema, categories in sorted(observations, key=lambda item: item[0]):
+        if schema != "region_forward_back" or "human" not in categories:
+            continue
+        local_stamp = stamp.astimezone(now.tzinfo)
+        bucket = local_stamp.replace(minute=0, second=0, microsecond=0)
+        prior = per_key.get(key)
+        if prior and stamp < prior[0]:
+            continue
+        if bucket in rows and prior:
+            rows[bucket]["samples"] += 1
+            same_day = local_stamp.date() == prior[1]
+            for category, counts in categories.items():
+                prior_counts = prior[2].get(category)
+                if prior_counts is None:
+                    continue
+                change = 0
+                for old, value in zip(prior_counts, counts):
+                    change += value if (not same_day or value < old) else value - old
+                rows[bucket][category] += change
+        per_key[key] = (stamp, local_stamp.date(), categories)
+    return list(rows.values())
+
+
+def _period_totals(daily_rows, now):
+    dated = [(datetime.fromisoformat(row["date"]).date(), row) for row in daily_rows]
+    periods = {
+        "today": [row for day, row in dated if day == now.date()],
+        "last_7_days": [row for day, row in dated if now.date() - timedelta(days=6) <= day <= now.date()],
+        "this_month": [row for day, row in dated if day.year == now.year and day.month == now.month],
+    }
+    result = {}
+    for name, rows in periods.items():
+        result[name] = {
+            category: sum(int(row.get(key) or 0) for row in rows)
+            for category, key in (("human", "bothway"), ("non_motor", "non_motor_bothway"),
+                                  ("vehicle", "vehicle_bothway"))
+        }
+        result[name]["days_with_data"] = sum(1 for row in rows if row.get("bothway") is not None)
+    return result
+
+
+def _activity_anomalies(daily_rows, threshold_percent=50):
+    complete = [row for row in daily_rows if row.get("complete") and row.get("bothway") is not None]
+    if len(complete) < 4:
+        return []
+    latest = complete[-1]
+    baseline = complete[-8:-1]
+    anomalies = []
+    for label, key in (("Human", "bothway"), ("Non-motor Vehicle", "non_motor_bothway"),
+                       ("Vehicle", "vehicle_bothway")):
+        values = [int(row[key]) for row in baseline if row.get(key) is not None]
+        if len(values) < 3:
+            continue
+        average = sum(values) / len(values)
+        latest_value = int(latest.get(key) or 0)
+        if average <= 0:
+            continue
+        change_percent = round(((latest_value - average) / average) * 100)
+        if abs(change_percent) >= threshold_percent:
+            anomalies.append({
+                "category": label, "date": latest["date"], "value": latest_value,
+                "baseline_average": round(average, 1), "change_percent": change_percent,
+            })
+    return anomalies
+
+
 def daily_count_history(cfg: dict[str, Any], now=None, days=7) -> list[dict[str, Any]]:
-    """Return neutral forward/back daily totals for operator history and export."""
+    """Return A-to-B/B-to-A daily totals for operator history and export."""
     history, _ = event_paths(cfg)
     camera = cfg.get("people_counting", {})
     now = now or datetime.now().astimezone()
@@ -560,9 +646,16 @@ def record_push_event(cfg, event):
             prior = {}
         if not isinstance(prior, dict):
             prior = {}
+        current_source = _source_datetime(event.get("source_time"))
+        prior_source = _source_datetime(prior.get("last_source_time"))
+        source_day_changed = bool(
+            current_source and prior_source
+            and current_source.astimezone().date() != prior_source.astimezone().date()
+        )
         counter_changed = (
             event.get("counts") != prior.get("last_reported_counts")
             or event.get("count_records") != prior.get("last_count_records")
+            or source_day_changed
         )
         if event.get("counts") and counter_changed:
             with history.open("a", encoding="utf-8") as handle:
@@ -576,6 +669,7 @@ def record_push_event(cfg, event):
             "transport": "HTTP push",
             "counts_verified": False,
             "last_event_at": event.get("time"),
+            "last_source_time": event.get("source_time"),
             "last_notification_type": event.get("event_type"),
             "last_reported_counts": event.get("counts", {}),
             "last_notification_fields": event.get("fields_seen", []),
