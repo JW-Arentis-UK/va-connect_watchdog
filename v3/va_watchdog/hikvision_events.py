@@ -98,6 +98,49 @@ def _safe_event_shape(document: Any) -> tuple[list[str], dict[str, str]]:
     return sorted(fields)[:80], reduced
 
 
+def _safe_count_records(document: Any) -> list[dict[str, str]]:
+    """Keep count rows associated with their direction, never the surrounding payload."""
+    records: list[dict[str, str]] = []
+    count_names = {"humancount": "human", "nonmotorcount": "non_motor", "vehiclecount": "vehicle"}
+
+    def add(values: dict[str, str]) -> None:
+        direction = values.get("statisticaldirection", "")
+        if not direction or not any(name in values for name in count_names):
+            return
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,40}", direction):
+            return
+        record = {"direction": direction}
+        method = values.get("statisticalmethod", "")
+        if method and re.fullmatch(r"[A-Za-z0-9_.:-]{1,40}", method):
+            record["method"] = method
+        for source, target in count_names.items():
+            value = values.get(source, "")
+            if re.fullmatch(r"\d{1,12}", value):
+                record[target] = value
+        if len(record) > 1 and record not in records and len(records) < 12:
+            records.append(record)
+
+    def visit(value: Any) -> None:
+        if isinstance(value, ET.Element):
+            direct = {_name(child.tag).lower(): (child.text or "").strip()
+                      for child in value if not len(child)}
+            add(direct)
+            for child in value:
+                visit(child)
+        elif isinstance(value, dict):
+            direct = {str(key).lower(): str(item) for key, item in value.items()
+                      if not isinstance(item, (dict, list))}
+            add(direct)
+            for item in value.values():
+                visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(document)
+    return records
+
+
 def parse_notification(payload: bytes) -> dict[str, Any] | None:
     """Return whitelisted fields only; payloads can contain private media URLs."""
     try:
@@ -113,6 +156,7 @@ def parse_notification(payload: bytes) -> dict[str, Any] | None:
                 duplicates.add(lowered)
             values[lowered] = text[:160]
     diagnostic_fields, candidate_counters = _safe_event_shape(root)
+    count_records = _safe_count_records(root)
     event_type = values.get("eventtype", "")
     target_type = values.get("targettype", "")
     count_values = {key: value for key, value in values.items() if key in _COUNT_FIELDS}
@@ -145,6 +189,7 @@ def parse_notification(payload: bytes) -> dict[str, Any] | None:
                               and all(re.fullmatch(r"\d{1,12}", value) for value in count_values.values())),
         "fields_seen": diagnostic_fields,
         "candidate_counters": candidate_counters,
+        "count_records": count_records,
     }
 
 
@@ -360,6 +405,7 @@ def record_push_event(cfg, event):
             "last_reported_counts": event.get("counts", {}),
             "last_notification_fields": event.get("fields_seen", []),
             "last_candidate_counters": event.get("candidate_counters", {}),
+            "last_count_records": event.get("count_records", []),
             "notifications_received": received,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }

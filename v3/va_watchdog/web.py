@@ -73,6 +73,12 @@ def render_camera_collector(summary):
         if isinstance(candidates, dict):
             details.append("numeric candidates: " + ", ".join(
                 f"{key}={value}" for key, value in list(candidates.items())[:20]))
+    if summary.get("last_count_records"):
+        records = summary["last_count_records"]
+        if isinstance(records, list):
+            details.append("count rows: " + " | ".join(
+                ", ".join(f"{key}={value}" for key, value in record.items())
+                for record in records[:12] if isinstance(record, dict)))
     if summary.get("topics_seen"):
         details.append("topics seen: " + ", ".join(summary["topics_seen"]))
     today = summary.get("today", {})

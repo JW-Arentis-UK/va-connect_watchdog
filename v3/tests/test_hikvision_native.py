@@ -65,15 +65,23 @@ class NativeTests(unittest.TestCase):
 
     def test_unknown_region_count_schema_exposes_only_safe_numeric_candidates(self):
         payload = b'''<EventNotificationAlert><eventType>regionTargetNumberCounting</eventType>
-        <RegionTargetNumberCounting><humanNum>2</humanNum><vehicleNum>1</vehicleNum>
-        <activePostCount>17</activePostCount><pictureURL>private-image</pictureURL>
+        <RegionTargetNumberCounting><CountingList>
+        <DataList><statisticalDirection>enter</statisticalDirection><statisticalMethod>realTime</statisticalMethod>
+        <humanCount>2</humanCount><vehicleCount>1</vehicleCount><pictureURL>private-image</pictureURL></DataList>
+        <DataList><statisticalDirection>exit</statisticalDirection><statisticalMethod>realTime</statisticalMethod>
+        <humanCount>1</humanCount><vehicleCount>0</vehicleCount></DataList></CountingList>
+        <activePostCount>17</activePostCount>
         <ipAddress>192.168.1.72</ipAddress></RegionTargetNumberCounting></EventNotificationAlert>'''
         event = parse_notification(payload)
         self.assertEqual(event["counts"], {})
-        self.assertIn("humannum", event["fields_seen"])
+        self.assertIn("humancount", event["fields_seen"])
         self.assertNotIn("pictureurl", event["fields_seen"])
-        self.assertTrue(any(key.endswith("humannum") and value == "2"
+        self.assertTrue(any(key.endswith("humancount") and value == "2 | 1"
                             for key, value in event["candidate_counters"].items()))
+        self.assertEqual(event["count_records"], [
+            {"direction": "enter", "method": "realTime", "human": "2", "vehicle": "1"},
+            {"direction": "exit", "method": "realTime", "human": "1", "vehicle": "0"},
+        ])
         self.assertNotIn("private-image", json.dumps(event))
         self.assertNotIn("192.168.1.72", json.dumps(event))
 
