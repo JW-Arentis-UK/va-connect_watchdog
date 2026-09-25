@@ -204,6 +204,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "channel": 1,
         "username": "",
         "password": "",
+        "forward_label": "Camera forward",
+        "back_label": "Camera back",
+        "stale_after_minutes": 10,
         "timeout_seconds": 5
     },
     "web_links": [],

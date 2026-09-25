@@ -11,7 +11,7 @@ import socket
 import threading
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -353,6 +353,7 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
     previous = {}
     intervals = set()
     resets = 0
+    observations = []
     camera = cfg.get("people_counting", {})
     if history.exists():
         for line in _history_lines(history):
@@ -381,6 +382,7 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
                 continue
             if min(counts) < 0:
                 continue
+            observations.append((stamp, key, row.get("count_schema"), counts))
             delta = (0, 0)
             method = str(row.get("method") or "").lower()
             if method == "realtime":
@@ -413,9 +415,91 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
                 else:
                     totals["observed_enter"] += delta[0]
                     totals["observed_exit"] += delta[1]
+    daily_history = _daily_count_history(observations, now, 7)
+    last_event = _source_datetime(state.get("last_event_at"))
+    stale_after_minutes = max(1, int(camera.get("stale_after_minutes", 10) or 10))
+    message_age_seconds = max(0, int((now - last_event.astimezone(now.tzinfo)).total_seconds())) if last_event else None
+    stale = bool(camera.get("event_collection_enabled")) and (
+        message_age_seconds is None or message_age_seconds > stale_after_minutes * 60
+    )
     return {**state, "enabled": bool(camera.get("event_collection_enabled")), "today": totals,
             "counts_verified": False, "counter_resets": resets,
+            "unexpected_resets_today": daily_history[-1]["unexpected_resets"] if daily_history else 0,
+            "scheduled_resets": sum(row["scheduled_resets"] for row in daily_history),
+            "daily_history": daily_history, "stale": stale,
+            "stale_after_minutes": stale_after_minutes, "message_age_seconds": message_age_seconds,
             "interval_reports": len(intervals)}
+
+
+def _daily_count_history(observations, now, days):
+    """Build camera-day totals, treating a date-boundary drop as the expected midnight reset."""
+    days = max(1, int(days))
+    first_day = now.date() - timedelta(days=days - 1)
+    rows = {
+        first_day + timedelta(days=offset): {
+            "date": (first_day + timedelta(days=offset)).isoformat(),
+            "forward": None, "back": None, "bothway": None, "samples": 0,
+            "scheduled_resets": 0, "unexpected_resets": 0,
+            "complete": (first_day + timedelta(days=offset)) < now.date(),
+        }
+        for offset in range(days)
+    }
+    per_key = {}
+    for stamp, key, schema, counts in sorted(observations, key=lambda item: item[0]):
+        if schema != "region_forward_back":
+            continue
+        local_day = stamp.astimezone(now.tzinfo).date()
+        prior = per_key.get(key)
+        if prior and stamp < prior[0]:
+            continue
+        if local_day in rows:
+            row = rows[local_day]
+            row["samples"] += 1
+            if prior and local_day == prior[1]:
+                dropped = False
+                for index, name in enumerate(("forward", "back")):
+                    delta = counts[index] if counts[index] < prior[2][index] else counts[index] - prior[2][index]
+                    dropped = dropped or counts[index] < prior[2][index]
+                    row[name] = int(row[name] or 0) + delta
+                if dropped:
+                    row["unexpected_resets"] += 1
+            else:
+                row["forward"] = int(row["forward"] or 0) + counts[0]
+                row["back"] = int(row["back"] or 0) + counts[1]
+                if prior and local_day != prior[1] and any(value < old for value, old in zip(counts, prior[2])):
+                    row["scheduled_resets"] += 1
+            row["bothway"] = int(row["forward"] or 0) + int(row["back"] or 0)
+        per_key[key] = (stamp, local_day, counts)
+    return list(rows.values())
+
+
+def daily_count_history(cfg: dict[str, Any], now=None, days=7) -> list[dict[str, Any]]:
+    """Return neutral forward/back daily totals for operator history and export."""
+    history, _ = event_paths(cfg)
+    camera = cfg.get("people_counting", {})
+    now = now or datetime.now().astimezone()
+    observations = []
+    for line in _history_lines(history):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (not isinstance(row, dict) or not row.get("schema_recognised")
+                or row.get("camera") != camera.get("address")
+                or str(row.get("channel")) != str(camera.get("channel", 1))):
+            continue
+        stamp = _source_datetime(row.get("source_time"))
+        if stamp is None:
+            continue
+        key = (row.get("camera"), row.get("channel"), row.get("region"))
+        names = (("forward", "back") if row.get("count_schema") == "region_forward_back" else ("enter", "exit"))
+        try:
+            counts = tuple(int(row["counts"][name]) for name in names)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if min(counts) >= 0:
+            observations.append((stamp, key, row.get("count_schema"), counts))
+    return _daily_count_history(observations, now, days)
 
 
 def record_push_event(cfg, event):

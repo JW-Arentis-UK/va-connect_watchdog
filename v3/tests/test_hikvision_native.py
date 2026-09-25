@@ -13,7 +13,8 @@ from urllib.request import urlopen, Request
 
 from va_watchdog.config import DEFAULT_CONFIG
 from va_watchdog.hikvision import _request_xml, _get_json, probe_people_counting
-from va_watchdog.hikvision_events import parse_notification, event_summary, HikvisionEventCollector, record_push_event
+from va_watchdog.hikvision_events import (daily_count_history, parse_notification, event_summary,
+                                          HikvisionEventCollector, record_push_event)
 from va_watchdog.hikvision_push import configure_http_push, http_host_payload, metadata_documents
 from va_watchdog.hikvision_native import (native_diagnostics, bounded_native_diagnostic, response_error,
                                         capture_request_paths, read_bounded, MAX_RESPONSE)
@@ -364,6 +365,40 @@ class CounterTests(unittest.TestCase):
         self.assertEqual(summary["today"]["observed_forward"], 1)
         self.assertEqual(summary["today"]["observed_back"], 0)
 
+    def test_daily_rollups_treat_midnight_drop_as_expected_reset(self):
+        record_push_event(self.cfg, parse_notification(region_counting(100, 50, "2026-09-23T23:55:00+01:00")))
+        record_push_event(self.cfg, parse_notification(region_counting(3, 2, "2026-09-24T00:05:00+01:00")))
+        record_push_event(self.cfg, parse_notification(region_counting(5, 4, "2026-09-24T08:00:00+01:00")))
+
+        rows = daily_count_history(self.cfg, self.now, days=2)
+
+        self.assertEqual(rows[0]["bothway"], 150)
+        self.assertEqual(rows[1]["forward"], 5)
+        self.assertEqual(rows[1]["back"], 4)
+        self.assertEqual(rows[1]["scheduled_resets"], 1)
+        self.assertEqual(rows[1]["unexpected_resets"], 0)
+
+    def test_daily_rollup_continues_across_unexpected_daytime_reset(self):
+        record_push_event(self.cfg, parse_notification(region_counting(100, 50, "2026-09-24T08:00:00+01:00")))
+        record_push_event(self.cfg, parse_notification(region_counting(2, 1, "2026-09-24T12:00:00+01:00")))
+        record_push_event(self.cfg, parse_notification(region_counting(5, 3, "2026-09-24T13:00:00+01:00")))
+
+        row = daily_count_history(self.cfg, self.now, days=1)[0]
+
+        self.assertEqual(row["forward"], 105)
+        self.assertEqual(row["back"], 53)
+        self.assertEqual(row["unexpected_resets"], 1)
+
+    def test_event_summary_marks_stale_collection_after_configured_limit(self):
+        self.cfg["people_counting"] = {**CAMERA, "stale_after_minutes": 10}
+        record_push_event(self.cfg, parse_notification(region_counting()))
+        later = datetime.now().astimezone() + timedelta(minutes=11)
+
+        summary = event_summary(self.cfg, later)
+
+        self.assertTrue(summary["stale"])
+        self.assertGreaterEqual(summary["message_age_seconds"], 660)
+
 
 class SetupSmokeTests(unittest.TestCase):
     def test_http_smoke_rejects_500_and_accepts_real_setup(self):
@@ -380,6 +415,8 @@ class SetupSmokeTests(unittest.TestCase):
             cfg['people_counting'] = dict(CAMERA)
             cfg['people_counting']['push_receiver_address'] = '127.0.0.1'
             cfg['people_counting']['push_slot'] = 1
+            cfg['people_counting']['forward_label'] = 'Car park side'
+            cfg['people_counting']['back_label'] = 'Road side'
             server = start_web(cfg)
             try:
                 base = f'http://127.0.0.1:{server.server_port}'
@@ -387,13 +424,21 @@ class SetupSmokeTests(unittest.TestCase):
                 with urlopen(base + '/people-counting', timeout=10) as response:
                     body = response.read().decode()
                     self.assertIn('Current Camera Counters', body)
-                    self.assertIn('Camera forward', body)
+                    self.assertIn('Car park side', body)
+                    self.assertIn('Road side', body)
+                    self.assertIn('Seven-Day History', body)
+                    self.assertIn('Export CSV', body)
                     self.assertIn('114', body)
                     self.assertIn('Direction is not physically calibrated', body)
                     self.assertNotIn('test-secret', body)
                 with urlopen(base + '/api/people-counting', timeout=10) as response:
                     payload = json.loads(response.read())
                     self.assertEqual(payload['last_reported_counts']['bothway'], '207')
+                    self.assertEqual(len(payload['daily_history']), 7)
+                with urlopen(base + '/api/people-counting/export.csv', timeout=10) as response:
+                    exported = response.read().decode()
+                    self.assertIn('scheduled_midnight_resets,unexpected_resets', exported)
+                    self.assertIn('Car park side', exported)
                 with urlopen(base+'/setup', timeout=10) as response:
                     body = response.read().decode()
                     self.assertIn('Collect people counters', body)
