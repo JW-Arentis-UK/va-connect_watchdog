@@ -311,10 +311,15 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
     try:
         verified = get(slot_path)
         fields = {name.lower(): value for name, value in scalar_fields(decode_document(verified))}
+        event_mode = fields.get("eventmode", "").lower()
+        event_type = fields.get("type", "").lower()
+        subscription_confirmed = (
+            event_mode == "all"
+            or (event_mode == "list" and event_type == "mixedtargetdetection")
+        )
         if (fields.get("ipaddress") != str(receiver_address)
                 or fields.get("portno") != str(int(receiver_port))
-                or fields.get("eventmode", "").lower() != "list"
-                or fields.get("type", "").lower() != "mixedtargetdetection"):
+                or not subscription_confirmed):
             retained = ", ".join(
                 f"{name}={fields.get(key) or '-'}"
                 for name, key in (
@@ -327,12 +332,16 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
             raise RuntimeError(f"camera read-back retained {retained}")
     except (HTTPError, OSError, ValueError, ET.ParseError) as exc:
         raise RuntimeError(f"camera configuration could not be verified: {exc}") from None
+    subscription_profile = (
+        "camera all-events mode" if event_mode == "all" else "multi-target event filter"
+    )
     return {
         "ok": True,
         "slot": int(slot),
         "url": f"http://{receiver_address}:{int(receiver_port)}/hikvision/events",
         "backup_path": str(backup_path) if backup_path is not None else "",
         "profile": applied_profile,
-        "message": ("Camera HTTP event destination and multi-target counting subscription configured using "
-                    + applied_profile + ". Waiting for the first counting message."),
+        "subscription_mode": event_mode,
+        "message": ("Camera HTTP event destination configured using " + applied_profile
+                    + f" with {subscription_profile}. Waiting for the first counting message."),
     }

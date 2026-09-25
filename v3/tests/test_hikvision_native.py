@@ -2,6 +2,7 @@ import copy
 import io
 import importlib.util
 import json
+import re
 import subprocess
 import tempfile
 import threading
@@ -236,14 +237,16 @@ class NativeTests(unittest.TestCase):
                 response = super().open(request, timeout)
                 if request.get_method() == "PUT" and self.configured_slot:
                     self.configured_slot = self.configured_slot.replace(
-                        b"mixedTargetDetection", b"heartBeat")
+                        b"<eventMode>list</eventMode>", b"<eventMode>all</eventMode>")
+                    self.configured_slot = re.sub(
+                        br"<EventList>.*?</EventList>", b"", self.configured_slot)
                 return response
 
-        with self.assertRaisesRegex(
-                RuntimeError,
-                r"camera read-back retained ipAddress=192\.168\.1\.100, portNo=9110, "
-                r"eventMode=list, eventType=heartBeat"):
-            configure_http_push(CAMERA, "192.168.1.100", 9110, opener=NormalisingOpener())
+        normalised = configure_http_push(
+            CAMERA, "192.168.1.100", 9110, opener=NormalisingOpener())
+        self.assertTrue(normalised["ok"])
+        self.assertEqual(normalised["subscription_mode"], "all")
+        self.assertIn("camera all-events mode", normalised["message"])
 
         self.assertEqual(result["profile"], "selected camera host with event subscription")
 
