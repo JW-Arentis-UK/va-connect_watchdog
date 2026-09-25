@@ -208,8 +208,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "back_label": "B to A",
         "stale_after_minutes": 10,
         "anomaly_threshold_percent": 50,
-        "timeout_seconds": 5,
-        "counter_poll_interval_seconds": 30
+        "timeout_seconds": 5
     },
     "web_links": [],
     "retention": {

@@ -1436,7 +1436,13 @@ def start_web(cfg):
                 "<p class=\"section-lead\">Configure the local Hikvision camera used by the Crossing Activity page.</p>"
                 + ("<div class=\"notice healthy\"><strong>Collection active.</strong> The camera is delivering validated counters. <a href=\"/crossing-activity\">Open Crossing Activity</a></div>"
                    if str(event_summary(cfg).get("status") or "") == "receiving"
-                   else "<div class=\"notice warning\"><strong>Waiting for counters.</strong> Check the saved camera details and delivery configuration.</div>")
+                   else "<div class=\"notice warning\"><strong>Waiting for counting uploads.</strong> If heartbeats are reaching the gateway, enable the camera options shown below.</div>")
+                + "<div class=\"card\"><h3>Camera upload requirements</h3>"
+                "<p>The on-screen totals can change even when the camera is not sending them to the gateway. In the camera's active multi-target counting rule:</p>"
+                "<ol><li>Enable <strong>Notify Surveillance Center</strong> in the rule's linkage method.</li>"
+                "<li>Enable <strong>Real-Time upload Data</strong> in counting statistics.</li>"
+                "<li>Optionally enable <strong>Data Statistics Cycle</strong> for periodic summary uploads.</li></ol>"
+                "<p class=\"muted\">A heartbeat confirms the receiver address and network path only. Do not repeat vehicle tests until these upload options are enabled and saved.</p></div>"
                 + "<div class=\"settings-grid\">"
                 f"<div><label class=\"label\">Camera IP address</label><input name=\"people_counting_address\" maxlength=\"253\" value=\"{escape(str(people_cfg.get('address', '')))}\" placeholder=\"e.g. 192.168.1.72\"></div>"
                 f"<div><label class=\"label\">Connection</label><select name=\"people_counting_scheme\"><option value=\"http\" {'selected' if people_cfg.get('scheme', 'http') == 'http' else ''}>HTTP</option><option value=\"https\" {'selected' if people_cfg.get('scheme') == 'https' else ''}>HTTPS</option></select></div>"
@@ -1639,8 +1645,9 @@ def start_web(cfg):
                 if unrecognised_http:
                     if non_counting_http:
                         collection_notice = (
-                            "<div class=\"notice warning\"><strong>The camera is connected and its latest message was not a counting event.</strong> "
-                            "The receiver will continue waiting for the next cumulative counter report.</div>"
+                            "<div class=\"notice warning\"><strong>The receiver address works, but the camera is only sending status messages.</strong> "
+                            "On the camera, enable <strong>Notify Surveillance Center</strong> and <strong>Real-Time upload Data</strong> "
+                            "for the active multi-target counting rule, then save the camera settings.</div>"
                         )
                     elif unsupported_http:
                         collection_notice = (
@@ -1661,7 +1668,7 @@ def start_web(cfg):
                 else:
                     collection_notice = (
                         "<div class=\"notice critical\"><strong>No counting message has been received yet.</strong> "
-                        "The camera counters are active, so repair the camera delivery subscription from Camera setup.</div>"
+                        "Open Camera setup and complete the camera upload requirements before testing another vehicle.</div>"
                     )
             elif unexpected_resets:
                 collection_notice = (
@@ -1719,10 +1726,6 @@ def start_web(cfg):
                 f"<tr><th>Transport</th><td>{escape(transport)}</td></tr>"
                 f"<tr><th>Last camera message</th><td>{escape(str(summary.get('last_notification_type') or '-'))}</td></tr>"
                 f"<tr><th>Last accepted sample</th><td>{escape(local_time(summary.get('last_event_at')))}</td></tr>"
-                f"<tr><th>Counter report</th><td>{escape(str(summary.get('counter_poll_status') or 'waiting'))}</td></tr>"
-                f"<tr><th>Last counter report</th><td>{escape(local_time(summary.get('last_counter_at')))}</td></tr>"
-                f"<tr><th>Counter report fields</th><td>{escape(', '.join(str(value) for value in summary.get('counter_report_fields', [])[:40]) or '-')}</td></tr>"
-                f"<tr><th>Counter report candidates</th><td>{escape(', '.join(f'{key}={value}' for key, value in list((summary.get('counter_report_candidates') or {}).items())[:20]) or '-')}</td></tr>"
                 f"<tr><th>Last HTTP request</th><td>{escape(local_time(summary.get('last_http_post_at')))}</td></tr>"
                 f"<tr><th>Last HTTP result</th><td>{escape(str(summary.get('last_http_accepted', 0)))} accepted; {escape(str(summary.get('last_http_ignored', 0)))} ignored; {escape(str(summary.get('last_http_unrecognised', 0)))} unrecognised</td></tr>"
                 f"<tr><th>Last HTTP message type</th><td>{escape(latest_http_type or '-')}</td></tr>"

@@ -19,7 +19,7 @@ from urllib.request import Request
 
 from .hikvision import _base_url, _digest_opener
 from .onvif_pull import PullSubscription
-from .hikvision_native import decode_document, response_error, scalar_fields
+from .hikvision_native import decode_document, scalar_fields
 from .hikvision_stream import AlertParts
 
 
@@ -40,8 +40,6 @@ _DIAGNOSTIC_COUNT_HINTS = ("count", "number", "num", "enter", "exit", "human", "
 _SENSITIVE_DIAGNOSTIC_HINTS = ("password", "secret", "token", "cookie", "authorization", "username",
                                "serial", "macaddress", "ipaddress", "url", "picture", "image", "deviceid",
                                "uuid")
-_COUNTER_REPORT_PATH = "/ISAPI/Event/channels/{channel}/SearchRegionTargetNumberCounting?format=json"
-_COUNTER_DIRECTIONS = ("forward", "back", "bothway")
 
 
 def _name(tag: str) -> str:
@@ -154,74 +152,6 @@ def _validated_region_counts(records: list[dict[str, str]]) -> dict[str, str]:
     if not all("human" in by_direction[direction] for direction in ("forward", "back", "bothway")):
         return {}
     return {direction: by_direction[direction]["human"] for direction in ("forward", "back", "bothway")}
-
-
-def _report_category_counts(document: Any) -> dict[str, str]:
-    """Extract one unambiguous count per requested target category."""
-    found: dict[str, set[str]] = {"human": set(), "non_motor": set(), "vehicle": set()}
-    direct_names = {
-        "humancount": "human",
-        "humannum": "human",
-        "human": "human",
-        "peoplecount": "human",
-        "personcount": "human",
-        "nonmotorcount": "non_motor",
-        "nonmotornum": "non_motor",
-        "nonmotor": "non_motor",
-        "nonmotorvehiclecount": "non_motor",
-        "vehiclecount": "vehicle",
-        "vehiclenum": "vehicle",
-        "vehicle": "vehicle",
-    }
-    objective_names = {
-        "human": "human", "people": "human", "person": "human",
-        "nonmotor": "non_motor", "nonmotorvehicle": "non_motor",
-        "vehicle": "vehicle",
-    }
-
-    def normalized(name: Any) -> str:
-        return re.sub(r"[^a-z0-9]", "", str(name).lower())
-
-    def number(value: Any) -> str | None:
-        text = str(value).strip()
-        return text if re.fullmatch(r"\d{1,12}", text) else None
-
-    def visit(value: Any) -> None:
-        if isinstance(value, ET.Element):
-            direct = {_name(child.tag): (child.text or "").strip()
-                      for child in value if not len(child)}
-            inspect(direct)
-            for child in value:
-                visit(child)
-        elif isinstance(value, dict):
-            inspect({str(key): item for key, item in value.items()
-                     if not isinstance(item, (dict, list))})
-            for item in value.values():
-                visit(item)
-        elif isinstance(value, list):
-            for item in value:
-                visit(item)
-
-    def inspect(values: dict[str, Any]) -> None:
-        reduced = {normalized(key): item for key, item in values.items()}
-        for key, category in direct_names.items():
-            candidate = number(reduced.get(key, ""))
-            if candidate is not None:
-                found[category].add(candidate)
-        objective = next((reduced.get(key) for key in (
-            "statisticalobjective", "objective", "targettype", "targetclass"
-        ) if reduced.get(key) is not None), None)
-        category = objective_names.get(normalized(objective)) if objective is not None else None
-        if category:
-            candidate = next((number(reduced.get(key, "")) for key in (
-                "count", "targetcount", "targetnumber", "statisticalcount",
-                "number", "num", "value"
-            ) if number(reduced.get(key, "")) is not None), None)
-            if candidate is not None:
-                found[category].add(candidate)
-
-    visit(document)
-    return {category: next(iter(values)) for category, values in found.items() if len(values) == 1}
 
 
 def _region_category_counts(row: dict[str, Any]) -> dict[str, tuple[int, int]]:
@@ -790,14 +720,11 @@ class HikvisionEventCollector:
         self.cfg = cfg
         self.event_log = event_log
         self.thread = threading.Thread(target=self._run, name="hikvision-events", daemon=True)
-        self.counter_thread = threading.Thread(target=self._counter_loop, name="hikvision-counters", daemon=True)
         self.metadata_thread = threading.Thread(target=self._metadata_loop, name="hikvision-metadata", daemon=True)
         self._last_state_signature: tuple[tuple[str, str], ...] | None = None
-        self._last_counter_signature: tuple[tuple[str, str], ...] | None = None
 
     def start(self) -> None:
         self.thread.start()
-        self.counter_thread.start()
 
     def _metadata_loop(self) -> None:
         """Sample analytics metadata only; video and image payloads are never read or stored."""
@@ -854,28 +781,9 @@ class HikvisionEventCollector:
         message = "Camera counter notification received (unverified totals)"
         self.event_log.add("info", "people_counting", message, event)
 
-    def _counter_loop(self) -> None:
-        while True:
-            camera = self.cfg.get("people_counting", {}) if isinstance(self.cfg.get("people_counting"), dict) else {}
-            configured = all(camera.get(key) for key in ("address", "username", "password"))
-            report_polling = camera.get("event_transport", "isapi") == "http_push"
-            if bool(camera.get("event_collection_enabled")) and configured and report_polling:
-                try:
-                    counter = self._read_counter_snapshot(camera)
-                    if counter:
-                        self._record(counter)
-                except HTTPError as exc:
-                    self._write_state(counter_poll_status=f"camera returned HTTP {exc.code}")
-                except RuntimeError as exc:
-                    self._write_state(counter_poll_status=f"camera rejected report: {str(exc)[:180]}")
-                except (URLError, socket.timeout, OSError) as exc:
-                    self._write_state(counter_poll_status=f"connection failed ({type(exc).__name__})")
-                except Exception as exc:
-                    self._write_state(counter_poll_status=f"report failed ({type(exc).__name__})")
-            time.sleep(max(15, int(camera.get("counter_poll_interval_seconds", 30) or 30)))
-
     @staticmethod
     def _counter_values(value: Any, prefix: str = "") -> dict[str, str]:
+        """Extract directional totals from an already decoded camera document."""
         found: dict[str, str] = {}
         if isinstance(value, dict):
             for key, child in value.items():
@@ -889,109 +797,20 @@ class HikvisionEventCollector:
                 number = int(str(value))
             except (TypeError, ValueError):
                 return found
-            direction = "atob" if any(token in normalized for token in ("atob", "a2b", "enter", "incount")) else "btoa" if any(token in normalized for token in ("btoa", "b2a", "leave", "outcount")) else ""
-            if direction:
-                target = "human" if any(token in normalized for token in ("human", "people", "person")) else "vehicle" if any(token in normalized for token in ("vehicle", "motor")) else ""
-                found[f"{target + '_' if target else ''}{direction}"] = str(number)
+            if any(token in normalized for token in ("atob", "a2b", "enter", "incount")):
+                direction = "atob"
+            elif any(token in normalized for token in ("btoa", "b2a", "leave", "outcount")):
+                direction = "btoa"
+            else:
+                return found
+            if any(token in normalized for token in ("human", "people", "person")):
+                target = "human"
+            elif any(token in normalized for token in ("vehicle", "motor")):
+                target = "vehicle"
+            else:
+                target = ""
+            found[f"{target + '_' if target else ''}{direction}"] = str(number)
         return found
-
-    def _read_counter_snapshot(self, camera: dict[str, Any]) -> dict[str, Any] | None:
-        base_url = _base_url(camera)
-        opener = _digest_opener(base_url, str(camera["username"]), str(camera["password"]))
-        timeout = max(5, int(camera.get("timeout_seconds") or 5))
-        channel = int(camera.get("channel") or 1)
-        rule_id = max(1, int(camera.get("rule_id") or 1))
-        endpoint = _COUNTER_REPORT_PATH.format(channel=channel)
-        observed = datetime.now().astimezone()
-        source_time = observed.isoformat(timespec="seconds")
-        records = []
-        for direction in _COUNTER_DIRECTIONS:
-            condition = {
-                "ReportCond": {
-                    "reportType": "monthly",
-                    "ruleID": rule_id,
-                    "statisticalDirection": direction,
-                    "statisticalObjectives": ["human", "nonMotor", "vehicle"],
-                    "statisticalTime": observed.strftime("%Y-%m-%dT00:00:00"),
-                }
-            }
-            body = json.dumps(condition, separators=(",", ":")).encode("utf-8")
-            request = Request(
-                f"{base_url}{endpoint}", data=body, method="POST",
-                headers={"Accept": "application/json, application/xml, text/xml",
-                         "Content-Type": "application/json; charset=UTF-8"},
-            )
-            try:
-                with opener.open(request, timeout=timeout) as response:
-                    payload = response.read(128 * 1024)
-            except HTTPError as exc:
-                try:
-                    detail = response_error(exc.read(16 * 1024))
-                    status = exc.code
-                finally:
-                    exc.close()
-                raise RuntimeError(detail or f"HTTP {status}") from None
-            try:
-                values: Any = json.loads(payload.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                try:
-                    values = ET.fromstring(payload)
-                except ET.ParseError:
-                    self._write_state(counter_poll_status="camera returned an unreadable report")
-                    return None
-            counts = _report_category_counts(values)
-            if "human" not in counts:
-                fields, candidates = _safe_event_shape(values)
-                self._write_state(
-                    counter_poll_status=f"unrecognised {direction} report",
-                    counter_report_fields=fields,
-                    counter_report_candidates=candidates,
-                )
-                return None
-            records.append({"direction": direction, "method": "realTime", **counts})
-        human_counts = _validated_region_counts(records)
-        if not human_counts:
-            self._write_state(counter_poll_status="report checksum did not validate")
-            return None
-        received_at = datetime.now(timezone.utc).isoformat()
-        event = {
-            "time": received_at,
-            "kind": "counter_snapshot",
-            "event_type": "regionTargetNumberCounting",
-            "event_state": "active",
-            "channel": str(channel),
-            "target_type": "human, nonMotor and vehicle",
-            "direction": "",
-            "counts": human_counts,
-            "camera": str(camera["address"]),
-            "transport": "ISAPI report polling",
-            "counts_verified": False,
-            "source_time": source_time,
-            "region": str(rule_id),
-            "method": "realTime",
-            "schema_recognised": True,
-            "count_schema": "region_forward_back",
-            "fields_seen": sorted({name for record in records for name in record}),
-            "candidate_counters": {},
-            "count_records": records,
-        }
-        self._write_state(
-            status="receiving", transport="HTTP push + ISAPI report polling",
-            counter_endpoint=endpoint, counter_poll_status="ok", last_counter_at=received_at,
-            counter_report_fields=[], counter_report_candidates={},
-            last_event_at=received_at, last_source_time=source_time,
-            last_notification_type=event["event_type"], last_reported_counts=human_counts,
-            last_notification_fields=event["fields_seen"], last_count_records=records,
-        )
-        signature = tuple(
-            sorted((f"{record['direction']}_{category}", value)
-                   for record in records for category, value in record.items()
-                   if category in {"human", "non_motor", "vehicle"})
-        )
-        if signature == self._last_counter_signature:
-            return None
-        self._last_counter_signature = signature
-        return event
 
     def _run(self) -> None:
         backoff = 5
