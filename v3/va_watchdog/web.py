@@ -1559,9 +1559,10 @@ def start_web(cfg):
                 reset_class = "critical" if day.get("unexpected_resets") else "healthy"
                 history_rows.append(
                     "<tr>"
-                    f"<td>{escape(date_label)}</td><td>{escape(str(forward if forward is not None else '-'))}</td>"
-                    f"<td>{escape(str(back if back is not None else '-'))}</td>"
+                    f"<td>{escape(date_label)}</td>"
                     f"<td>{escape(str(day.get('bothway') if day.get('bothway') is not None else '-'))}</td>"
+                    f"<td>{escape(str(day.get('non_motor_bothway') if day.get('non_motor_bothway') is not None else '-'))}</td>"
+                    f"<td>{escape(str(day.get('vehicle_bothway') if day.get('vehicle_bothway') is not None else '-'))}</td>"
                     f"<td class=\"{reset_class}\">{escape(reset_text)}</td>"
                     f"<td>{'Complete' if day.get('complete') else 'In progress'}</td></tr>"
                 )
@@ -1599,8 +1600,9 @@ def start_web(cfg):
                 "<div class=\"summary-strip\">"
                 f"<div class=\"summary-stat\"><div class=\"label\">{escape(forward_label)}</div><div class=\"stat-value healthy\">{escape(str(today.get('forward') if today.get('forward') is not None else '-'))}</div><div class=\"stat-detail\">Today</div></div>"
                 f"<div class=\"summary-stat\"><div class=\"label\">{escape(back_label)}</div><div class=\"stat-value healthy\">{escape(str(today.get('back') if today.get('back') is not None else '-'))}</div><div class=\"stat-detail\">Today</div></div>"
-                f"<div class=\"summary-stat\"><div class=\"label\">Notifications</div><div class=\"stat-value\">{escape(str(summary.get('notifications_received', 0)))}</div><div class=\"stat-detail\">Received by this collector state</div></div>"
-                f"<div class=\"summary-stat\"><div class=\"label\">Last sample</div><div class=\"stat-value\">{escape(local_time(summary.get('last_event_at')))}</div><div class=\"stat-detail\">Camera {escape(str(camera.get('address') or '-'))}</div></div>"
+                f"<div class=\"summary-stat\"><div class=\"label\">Human</div><div class=\"stat-value healthy\">{escape(str(today.get('bothway') if today.get('bothway') is not None else '-'))}</div><div class=\"stat-detail\">Both directions today</div></div>"
+                f"<div class=\"summary-stat\"><div class=\"label\">Non-motor</div><div class=\"stat-value healthy\">{escape(str(today.get('non_motor_bothway') if today.get('non_motor_bothway') is not None else '-'))}</div><div class=\"stat-detail\">Both directions today</div></div>"
+                f"<div class=\"summary-stat\"><div class=\"label\">Vehicle</div><div class=\"stat-value healthy\">{escape(str(today.get('vehicle_bothway') if today.get('vehicle_bothway') is not None else '-'))}</div><div class=\"stat-detail\">Both directions today</div></div>"
                 "</div></div>"
                 + "<div class=\"card\"><div class=\"section-lead\"><div><h2>Seven-Day History</h2>"
                 f"<p class=\"muted\"><span style=\"color:var(--green)\">{escape(forward_label)}</span> and <span style=\"color:var(--blue)\">{escape(back_label)}</span>. Numbers below each day are both directions.</p>"
@@ -1608,7 +1610,7 @@ def start_web(cfg):
                 "<a class=\"ghost\" href=\"/api/people-counting/export.csv\" download=\"people-counting.csv\">Export CSV</a></div></div>"
                 f"<div class=\"count-chart\">{''.join(chart_days)}</div>"
                 "<div class=\"table-scroll\"><table><thead><tr><th>Date</th>"
-                f"<th>{escape(forward_label)}</th><th>{escape(back_label)}</th><th>Both directions</th><th>Reset status</th><th>Day</th></tr></thead>"
+                "<th>Human</th><th>Non-motor</th><th>Vehicle</th><th>Reset status</th><th>Day</th></tr></thead>"
                 f"<tbody>{''.join(reversed(history_rows))}</tbody></table></div></div>"
                 + "<div class=\"card\"><h2>Collection Status</h2><div class=\"table-scroll\"><table class=\"compact-table\"><tbody>"
                 f"<tr><th>Receiver</th><td class=\"{connection_css}\">{escape(connection_state)}</td></tr>"
@@ -6082,7 +6084,9 @@ def start_web(cfg):
         identity = configured_identity(cfg)
         columns = [
             "site_name", "asset_id", "date", "forward_label", "forward", "back_label", "back",
-            "both_directions", "samples", "scheduled_midnight_resets", "unexpected_resets", "day_status",
+            "human_both_directions", "non_motor_forward", "non_motor_back", "non_motor_both_directions",
+            "vehicle_forward", "vehicle_back", "vehicle_both_directions", "samples",
+            "scheduled_midnight_resets", "unexpected_resets", "day_status",
         ]
         lines = [",".join(columns)]
         for row in daily_count_history(cfg, days=days):
@@ -6090,6 +6094,8 @@ def start_web(cfg):
                 identity["site_name"], identity["asset_id"], row.get("date", ""),
                 camera.get("forward_label", "Camera forward"), row.get("forward", ""),
                 camera.get("back_label", "Camera back"), row.get("back", ""), row.get("bothway", ""),
+                row.get("non_motor_forward", ""), row.get("non_motor_back", ""), row.get("non_motor_bothway", ""),
+                row.get("vehicle_forward", ""), row.get("vehicle_back", ""), row.get("vehicle_bothway", ""),
                 row.get("samples", 0), row.get("scheduled_resets", 0), row.get("unexpected_resets", 0),
                 "complete" if row.get("complete") else "in_progress",
             ]

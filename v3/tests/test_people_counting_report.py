@@ -24,8 +24,12 @@ class PeopleCountingReportTests(unittest.TestCase):
         }
         rows = [
             {"date": "2026-09-24", "forward": 116, "back": 95, "bothway": 211, "samples": 20,
+             "non_motor_forward": 18, "non_motor_back": 12, "non_motor_bothway": 30,
+             "vehicle_forward": 398, "vehicle_back": 353, "vehicle_bothway": 751,
              "scheduled_resets": 1, "unexpected_resets": 0, "complete": True},
             {"date": "2026-09-25", "forward": 118, "back": 99, "bothway": 217, "samples": 18,
+             "non_motor_forward": 21, "non_motor_back": 12, "non_motor_bothway": 33,
+             "vehicle_forward": 420, "vehicle_back": 386, "vehicle_bothway": 806,
              "scheduled_resets": 1, "unexpected_resets": 0, "complete": False},
         ]
 

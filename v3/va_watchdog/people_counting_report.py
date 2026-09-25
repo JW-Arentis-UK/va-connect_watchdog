@@ -76,8 +76,10 @@ def build_people_counting_pdf(
         ])),
         Spacer(1, 6 * mm),
         _summary_table(forward_label, back_label, current, today, status, status_color, styles),
+        Spacer(1, 3 * mm),
+        _category_summary_table(today, styles),
         Paragraph("Seven-Day Overview", styles["Section"]),
-        Paragraph("Daily cumulative human totals. The camera's midnight counter reset starts each new day.", styles["Small"]),
+        Paragraph("Daily cumulative human totals by camera direction. The camera's midnight counter reset starts each new day.", styles["Small"]),
         Spacer(1, 2 * mm),
         _count_chart(recent, forward_label, back_label),
         Paragraph("Daily Totals", styles["Section"]),
@@ -134,6 +136,28 @@ def _summary_table(forward_label, back_label, current, today, status, status_col
     ]))
 
 
+def _category_summary_table(today, styles):
+    cells = []
+    for label, key, color in (
+        ("Human today", "bothway", GREEN),
+        ("Non-motor today", "non_motor_bothway", BLUE),
+        ("Vehicle today", "vehicle_bothway", colors.HexColor("#A86700")),
+    ):
+        cells.append(Paragraph(
+            f"<font color='{MUTED.hexval()}' size='8'>{label}</font><br/>"
+            f"<font color='{color.hexval()}' size='14'><b>{_safe(_display(today.get(key)))}</b></font><br/>"
+            "<font color='#526173' size='7'>Both directions</font>", styles["Normal"]
+        ))
+    return Table([cells], colWidths=[54 * mm] * 3, style=TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("BOX", (0, 0), (-1, -1), 0.7, LINE),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, LINE),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+
+
 def _count_chart(rows, forward_label, back_label):
     drawing = Drawing(465, 170)
     if not rows or not any(row.get("bothway") is not None for row in rows):
@@ -167,21 +191,22 @@ def _count_chart(rows, forward_label, back_label):
 
 
 def _daily_table(rows, forward_label, back_label, styles):
-    data = [["Date", forward_label, back_label, "Both", "Reset status", "Day"]]
+    data = [["Date", "Human F", "Human B", "Human", "Non-motor", "Vehicle", "Reset", "Day"]]
     for row in reversed(rows):
         reset = (f"Unexpected ({row.get('unexpected_resets')})" if row.get("unexpected_resets")
                  else "Midnight observed" if row.get("scheduled_resets") else "Normal")
         data.append([
             str(row.get("date") or "-"), _display(row.get("forward")), _display(row.get("back")),
-            _display(row.get("bothway")), reset, "Complete" if row.get("complete") else "In progress",
+            _display(row.get("bothway")), _display(row.get("non_motor_bothway")),
+            _display(row.get("vehicle_bothway")), reset, "Complete" if row.get("complete") else "In progress",
         ])
-    table = Table(data, repeatRows=1, colWidths=[27 * mm, 28 * mm, 28 * mm, 20 * mm, 38 * mm, 25 * mm])
+    table = Table(data, repeatRows=1, colWidths=[24 * mm, 19 * mm, 19 * mm, 18 * mm, 23 * mm, 21 * mm, 31 * mm, 23 * mm])
     commands = [
         ("BACKGROUND", (0, 0), (-1, 0), INK),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-        ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+        ("FONTSIZE", (0, 0), (-1, -1), 7),
         ("GRID", (0, 0), (-1, -1), 0.4, LINE),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, PALE]),
@@ -190,7 +215,7 @@ def _daily_table(rows, forward_label, back_label, styles):
     ]
     for index, row in enumerate(reversed(rows), 1):
         if row.get("unexpected_resets"):
-            commands.append(("TEXTCOLOR", (4, index), (4, index), RED))
+            commands.append(("TEXTCOLOR", (6, index), (6, index), RED))
     table.setStyle(TableStyle(commands))
     return table
 

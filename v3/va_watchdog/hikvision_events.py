@@ -162,6 +162,28 @@ def _validated_region_counts(records: list[dict[str, str]]) -> dict[str, str]:
     return {direction: by_direction[direction]["human"] for direction in ("forward", "back", "bothway")}
 
 
+def _region_category_counts(row: dict[str, Any]) -> dict[str, tuple[int, int]]:
+    """Return validated forward/back pairs for every category retained in a region event."""
+    records = row.get("count_records") if isinstance(row.get("count_records"), list) else []
+    by_direction = {
+        str(record.get("direction") or "").lower(): record
+        for record in records if isinstance(record, dict)
+    }
+    if not {"forward", "back", "bothway"} <= set(by_direction):
+        return {}
+    categories = {}
+    for category in ("human", "non_motor", "vehicle"):
+        try:
+            forward = int(by_direction["forward"][category])
+            back = int(by_direction["back"][category])
+            bothway = int(by_direction["bothway"][category])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if min(forward, back, bothway) >= 0 and forward + back == bothway:
+            categories[category] = (forward, back)
+    return categories
+
+
 def parse_notification(payload: bytes) -> dict[str, Any] | None:
     """Return whitelisted fields only; payloads can contain private media URLs."""
     try:
@@ -382,7 +404,10 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
                 continue
             if min(counts) < 0:
                 continue
-            observations.append((stamp, key, row.get("count_schema"), counts))
+            category_counts = _region_category_counts(row)
+            if not category_counts and row.get("count_schema") == "region_forward_back":
+                category_counts = {"human": counts}
+            observations.append((stamp, key, row.get("count_schema"), category_counts))
             delta = (0, 0)
             method = str(row.get("method") or "").lower()
             if method == "realtime":
@@ -439,14 +464,16 @@ def _daily_count_history(observations, now, days):
         first_day + timedelta(days=offset): {
             "date": (first_day + timedelta(days=offset)).isoformat(),
             "forward": None, "back": None, "bothway": None, "samples": 0,
+            "non_motor_forward": None, "non_motor_back": None, "non_motor_bothway": None,
+            "vehicle_forward": None, "vehicle_back": None, "vehicle_bothway": None,
             "scheduled_resets": 0, "unexpected_resets": 0,
             "complete": (first_day + timedelta(days=offset)) < now.date(),
         }
         for offset in range(days)
     }
     per_key = {}
-    for stamp, key, schema, counts in sorted(observations, key=lambda item: item[0]):
-        if schema != "region_forward_back":
+    for stamp, key, schema, categories in sorted(observations, key=lambda item: item[0]):
+        if schema != "region_forward_back" or "human" not in categories:
             continue
         local_day = stamp.astimezone(now.tzinfo).date()
         prior = per_key.get(key)
@@ -457,19 +484,33 @@ def _daily_count_history(observations, now, days):
             row["samples"] += 1
             if prior and local_day == prior[1]:
                 dropped = False
-                for index, name in enumerate(("forward", "back")):
-                    delta = counts[index] if counts[index] < prior[2][index] else counts[index] - prior[2][index]
-                    dropped = dropped or counts[index] < prior[2][index]
-                    row[name] = int(row[name] or 0) + delta
+                for category, counts in categories.items():
+                    prior_counts = prior[2].get(category)
+                    if prior_counts is None:
+                        continue
+                    prefix = "" if category == "human" else f"{category}_"
+                    for index, name in enumerate(("forward", "back")):
+                        delta = counts[index] if counts[index] < prior_counts[index] else counts[index] - prior_counts[index]
+                        dropped = dropped or counts[index] < prior_counts[index]
+                        field = f"{prefix}{name}"
+                        row[field] = int(row[field] or 0) + delta
                 if dropped:
                     row["unexpected_resets"] += 1
             else:
-                row["forward"] = int(row["forward"] or 0) + counts[0]
-                row["back"] = int(row["back"] or 0) + counts[1]
-                if prior and local_day != prior[1] and any(value < old for value, old in zip(counts, prior[2])):
+                for category, counts in categories.items():
+                    prefix = "" if category == "human" else f"{category}_"
+                    row[f"{prefix}forward"] = int(row[f"{prefix}forward"] or 0) + counts[0]
+                    row[f"{prefix}back"] = int(row[f"{prefix}back"] or 0) + counts[1]
+                prior_categories = prior[2] if prior else {}
+                if (prior and local_day != prior[1]
+                        and any(value < old for category, counts in categories.items()
+                                for old, value in zip(prior_categories.get(category, counts), counts))):
                     row["scheduled_resets"] += 1
-            row["bothway"] = int(row["forward"] or 0) + int(row["back"] or 0)
-        per_key[key] = (stamp, local_day, counts)
+            for category in ("human", "non_motor", "vehicle"):
+                prefix = "" if category == "human" else f"{category}_"
+                forward, back = row.get(f"{prefix}forward"), row.get(f"{prefix}back")
+                row[f"{prefix}bothway"] = (int(forward) + int(back)) if forward is not None and back is not None else None
+        per_key[key] = (stamp, local_day, categories)
     return list(rows.values())
 
 
@@ -498,7 +539,10 @@ def daily_count_history(cfg: dict[str, Any], now=None, days=7) -> list[dict[str,
         except (KeyError, TypeError, ValueError):
             continue
         if min(counts) >= 0:
-            observations.append((stamp, key, row.get("count_schema"), counts))
+            categories = _region_category_counts(row)
+            if not categories and row.get("count_schema") == "region_forward_back":
+                categories = {"human": counts}
+            observations.append((stamp, key, row.get("count_schema"), categories))
     return _daily_count_history(observations, now, days)
 
 
@@ -516,7 +560,11 @@ def record_push_event(cfg, event):
             prior = {}
         if not isinstance(prior, dict):
             prior = {}
-        if event.get("counts") and event.get("counts") != prior.get("last_reported_counts"):
+        counter_changed = (
+            event.get("counts") != prior.get("last_reported_counts")
+            or event.get("count_records") != prior.get("last_count_records")
+        )
+        if event.get("counts") and counter_changed:
             with history.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(event, separators=(",", ":")) + "\n")
         try:

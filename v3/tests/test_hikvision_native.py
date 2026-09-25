@@ -42,15 +42,16 @@ def counting(enter=22, exit=9, stamp="2026-09-24T08:00:00+01:00", region="1", me
     </peopleCounting></EventNotificationAlert>'''.encode()
 
 
-def region_counting(forward=114, back=93, stamp="2026-09-24T08:00:00+01:00"):
+def region_counting(forward=114, back=93, stamp="2026-09-24T08:00:00+01:00",
+                    non_motor_forward=18, non_motor_back=12, vehicle_forward=398, vehicle_back=353):
     return f'''<EventNotificationAlert><channelID>1</channelID><dateTime>{stamp}</dateTime>
     <eventType>regionTargetNumberCounting</eventType><ruleID>1</ruleID><statisticalMethod>realTime</statisticalMethod>
     <CountingList><DataList><statisticalDirection>forward</statisticalDirection><humanCount>{forward}</humanCount>
-    <nonMotorCount>18</nonMotorCount><vehicleCount>398</vehicleCount></DataList>
+    <nonMotorCount>{non_motor_forward}</nonMotorCount><vehicleCount>{vehicle_forward}</vehicleCount></DataList>
     <DataList><statisticalDirection>back</statisticalDirection><humanCount>{back}</humanCount>
-    <nonMotorCount>12</nonMotorCount><vehicleCount>353</vehicleCount></DataList>
+    <nonMotorCount>{non_motor_back}</nonMotorCount><vehicleCount>{vehicle_back}</vehicleCount></DataList>
     <DataList><statisticalDirection>bothway</statisticalDirection><humanCount>{forward + back}</humanCount>
-    <nonMotorCount>30</nonMotorCount><vehicleCount>751</vehicleCount></DataList></CountingList>
+    <nonMotorCount>{non_motor_forward + non_motor_back}</nonMotorCount><vehicleCount>{vehicle_forward + vehicle_back}</vehicleCount></DataList></CountingList>
     </EventNotificationAlert>'''.encode()
 
 
@@ -378,6 +379,8 @@ class CounterTests(unittest.TestCase):
         self.assertEqual(rows[1]["back"], 4)
         self.assertEqual(rows[1]["scheduled_resets"], 1)
         self.assertEqual(rows[1]["unexpected_resets"], 0)
+        self.assertEqual(rows[1]["non_motor_bothway"], 30)
+        self.assertEqual(rows[1]["vehicle_bothway"], 751)
 
     def test_daily_rollup_continues_across_unexpected_daytime_reset(self):
         record_push_event(self.cfg, parse_notification(region_counting(100, 50, "2026-09-24T08:00:00+01:00")))
@@ -389,6 +392,18 @@ class CounterTests(unittest.TestCase):
         self.assertEqual(row["forward"], 105)
         self.assertEqual(row["back"], 53)
         self.assertEqual(row["unexpected_resets"], 1)
+
+    def test_category_only_counter_change_is_retained(self):
+        record_push_event(self.cfg, parse_notification(region_counting()))
+        record_push_event(self.cfg, parse_notification(region_counting(
+            stamp="2026-09-24T08:01:00+01:00", vehicle_forward=399
+        )))
+
+        row = daily_count_history(self.cfg, self.now, days=1)[0]
+
+        self.assertEqual(row["bothway"], 207)
+        self.assertEqual(row["vehicle_forward"], 399)
+        self.assertEqual(row["vehicle_bothway"], 752)
 
     def test_event_summary_marks_stale_collection_after_configured_limit(self):
         self.cfg["people_counting"] = {**CAMERA, "stale_after_minutes": 10}
@@ -439,6 +454,8 @@ class SetupSmokeTests(unittest.TestCase):
                 with urlopen(base + '/api/people-counting/export.csv', timeout=10) as response:
                     exported = response.read().decode()
                     self.assertIn('scheduled_midnight_resets,unexpected_resets', exported)
+                    self.assertIn('non_motor_forward,non_motor_back,non_motor_both_directions', exported)
+                    self.assertIn('vehicle_forward,vehicle_back,vehicle_both_directions', exported)
                     self.assertIn('Car park side', exported)
                 if importlib.util.find_spec('reportlab'):
                     with urlopen(base + '/api/people-counting/report.pdf', timeout=10) as response:
