@@ -396,10 +396,14 @@ class SetupSmokeTests(unittest.TestCase):
                     self.assertEqual(payload['last_reported_counts']['bothway'], '207')
                 with urlopen(base+'/setup', timeout=10) as response:
                     body = response.read().decode()
-                    self.assertIn('Run native API diagnostic', body)
-                    self.assertIn('Native ISAPI alert stream', body)
-                    self.assertIn('Camera HTTP push', body)
-                    self.assertIn('Configure camera HTTP delivery', body)
+                    self.assertIn('Collect people counters', body)
+                    self.assertIn('Camera delivery setup and repair', body)
+                    self.assertIn('Repair camera delivery', body)
+                    self.assertIn('/people-counting', body)
+                    self.assertNotIn('Run native API diagnostic', body)
+                    self.assertNotIn('Legacy capability test', body)
+                    self.assertNotIn('Capture camera statistics request', body)
+                    self.assertNotIn('ONVIF diagnostic subscription', body)
                     self.assertNotIn('test-secret', body)
                 with patch('va_watchdog.web.bounded_native_diagnostic', return_value={'requests':[], 'message':'Native check finished'}) as diagnostic:
                     with urlopen(Request(base+'/hikvision-native-diagnostic', data=b''), timeout=10) as response:

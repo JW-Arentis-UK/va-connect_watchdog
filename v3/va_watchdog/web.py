@@ -1383,31 +1383,30 @@ def start_web(cfg):
                 + disclosure("RUTX50 setup help", router_setup_help)
             )
             people_counting_settings = (
-            "<p class=\"section-lead\">Configure one local Hikvision camera, then run the native API diagnostic.</p>"
-                "<div class=\"notice muted\"><strong>Read-only:</strong> Native diagnostics inspect capabilities and upload configuration without changing the camera. Receiving notifications does not yet verify people totals.</div>"
-                "<div class=\"settings-grid\">"
+                "<p class=\"section-lead\">Configure the local Hikvision camera used by the People Counting page.</p>"
+                + ("<div class=\"notice healthy\"><strong>Collection active.</strong> The camera is delivering validated counters. <a href=\"/people-counting\">Open People Counting</a></div>"
+                   if str(event_summary(cfg).get("status") or "") == "receiving"
+                   else "<div class=\"notice warning\"><strong>Waiting for counters.</strong> Check the saved camera details and delivery configuration.</div>")
+                + "<div class=\"settings-grid\">"
                 f"<div><label class=\"label\">Camera IP address</label><input name=\"people_counting_address\" maxlength=\"253\" value=\"{escape(str(people_cfg.get('address', '')))}\" placeholder=\"e.g. 192.168.1.72\"></div>"
                 f"<div><label class=\"label\">Connection</label><select name=\"people_counting_scheme\"><option value=\"http\" {'selected' if people_cfg.get('scheme', 'http') == 'http' else ''}>HTTP</option><option value=\"https\" {'selected' if people_cfg.get('scheme') == 'https' else ''}>HTTPS</option></select></div>"
                 f"<div><label class=\"label\">Port</label><input name=\"people_counting_port\" type=\"number\" min=\"1\" max=\"65535\" value=\"{escape(str(people_cfg.get('port', 80)))}\"></div>"
                 f"<div><label class=\"label\">Camera channel</label><input name=\"people_counting_channel\" type=\"number\" min=\"1\" max=\"64\" value=\"{escape(str(people_cfg.get('channel', 1)))}\"><p class=\"muted\">Normally 1 for a standalone camera.</p></div>"
                 f"<div><label class=\"label\">Username</label><input name=\"people_counting_username\" maxlength=\"64\" value=\"{escape(str(people_cfg.get('username', '')))}\"></div>"
                 f"<div><label class=\"label\">Password</label><input name=\"people_counting_password\" type=\"password\" maxlength=\"128\" value=\"\" placeholder=\"{'Configured - leave blank to keep' if people_cfg.get('password') else 'Enter the camera password'}\"><p class=\"muted\">Stored locally and never shown in evidence exports.</p></div>"
-                f"<div><label class=\"label\">Gateway receiver IP</label><input name=\"people_counting_push_receiver_address\" maxlength=\"45\" value=\"{escape(str(people_cfg.get('push_receiver_address', '')))}\" placeholder=\"e.g. 192.168.1.100\"><p class=\"muted\">The camera must be able to reach this address.</p></div>"
-                f"<div><label class=\"label\">Camera upload slot</label><input name=\"people_counting_push_slot\" type=\"number\" min=\"1\" max=\"12\" value=\"{escape(str(people_cfg.get('push_slot', 1)))}\"><p class=\"muted\">The diagnostic shows slots 1-3 are currently empty.</p></div>"
                 "</div>"
-                f"<label class=\"label\">Event interface</label><select name=\"people_counting_event_transport\"><option value=\"http_push\" {'selected' if people_cfg.get('event_transport') == 'http_push' else ''}>Camera HTTP push (supported by this camera)</option><option value=\"isapi\" {'selected' if people_cfg.get('event_transport', 'isapi') == 'isapi' else ''}>Native ISAPI alert stream</option><option value=\"onvif\" {'selected' if people_cfg.get('event_transport') == 'onvif' else ''}>ONVIF diagnostic subscription</option></select>"
-                f"<label class=\"option-row\"><input name=\"people_counting_event_collection_enabled\" type=\"checkbox\" {'checked' if people_cfg.get('event_collection_enabled') else ''}> <span><strong>Collect camera event diagnostics</strong><br><span class=\"muted\">One interface at a time. Native ISAPI is the default. Media parts are discarded; camera settings are not changed.</span></span></label>"
-                + render_camera_collector(event_summary(cfg))
-                + (
-                    "<div class=\"button-row\"><button class=\"action\" type=\"submit\" formmethod=\"post\" formaction=\"/hikvision-native-diagnostic\">Run native API diagnostic</button><a class=\"ghost\" href=\"/hikvision-test-confirm\">Legacy capability test</a></div>"
-                    + ("<div class=\"button-row\"><a class=\"action\" href=\"/hikvision-push-confirm\">Configure camera HTTP delivery</a></div>" if people_cfg.get("push_receiver_address") else "")
-                    + "<p class=\"muted\">Uses saved camera settings. Save any changes before testing.</p>"
-                    if people_cfg.get("address") and people_cfg.get("username") and people_cfg.get("password")
-                    else "<p class=\"warning\">Enter the camera details and save settings before running the test.</p>"
+                "<input name=\"people_counting_event_transport\" type=\"hidden\" value=\"http_push\">"
+                f"<label class=\"option-row\"><input name=\"people_counting_event_collection_enabled\" type=\"checkbox\" {'checked' if people_cfg.get('event_collection_enabled') else ''}> <span><strong>Collect people counters</strong><br><span class=\"muted\">Counts only. Images, video, media URLs and raw camera messages are not retained.</span></span></label>"
+                + disclosure(
+                    "Camera delivery setup and repair",
+                    "<p class=\"muted\">Only use this after replacing or resetting the camera, or if collection has stopped.</p>"
+                    "<div class=\"settings-grid\">"
+                    f"<div><label class=\"label\">Gateway receiver IP</label><input name=\"people_counting_push_receiver_address\" maxlength=\"45\" value=\"{escape(str(people_cfg.get('push_receiver_address', '')))}\" placeholder=\"e.g. 192.168.1.100\"><p class=\"muted\">The camera must be able to reach this address.</p></div>"
+                    f"<div><label class=\"label\">Camera upload slot</label><input name=\"people_counting_push_slot\" type=\"number\" min=\"1\" max=\"12\" value=\"{escape(str(people_cfg.get('push_slot', 1)))}\"></div>"
+                    "</div>"
+                    + ("<div class=\"button-row\"><a class=\"ghost\" href=\"/hikvision-push-confirm\">Repair camera delivery</a></div>"
+                       if people_cfg.get("push_receiver_address") else "<p class=\"warning\">Save a gateway receiver IP before configuring delivery.</p>")
                 )
-                + ("<div class=\"button-row\"><button class=\"ghost\" type=\"submit\" formmethod=\"post\" formaction=\"/hikvision-route-capture-start\">Capture camera statistics request</button></div>" if people_cfg.get("address") else "")
-                + render_capture_state(data_dir / "hikvision-route-capture.json")
-                + "<p class=\"muted\">For routine use, a dedicated read-only camera account is preferable to the administrator account.</p>"
             )
             recovery_settings = (
                 "<div class=\"settings-grid\">"
@@ -1460,7 +1459,7 @@ def start_web(cfg):
                 + settings_disclosure("System and storage alert levels", storage_settings, opened=check_state("temperature") != "healthy")
                 + settings_disclosure("Network and remote access", network_settings)
                 + settings_disclosure("Mobile router monitoring", router_settings)
-                + "<div id=\"people-counting\">" + settings_disclosure("Hikvision people counting test", people_counting_settings, opened=bool(people_cfg.get("address"))) + "</div>"
+                + "<div id=\"people-counting\">" + settings_disclosure("Hikvision people counting", people_counting_settings, opened=not bool(people_cfg.get("address"))) + "</div>"
                 + settings_disclosure("Recovery and updates", recovery_settings)
                 + settings_disclosure("Advanced configuration", advanced_settings)
                 + "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Save settings</button><a class=\"ghost\" href=\"/settings\">Cancel</a></div>"

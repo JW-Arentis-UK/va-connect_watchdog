@@ -236,17 +236,22 @@ class WebNavigationTests(unittest.TestCase):
         self.assertNotIn('route_path == "/mobile-router-test"', source)
         self.assertIn("Open RUT WebUI", source)
 
-    def test_hikvision_people_counting_test_is_read_only_and_hides_password(self):
+    def test_hikvision_people_counting_setup_is_production_focused(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+        start = source.index("            people_counting_settings = (")
+        end = source.index("            recovery_settings = (", start)
+        renderer = source[start:end]
 
-        self.assertIn('disclosure("Hikvision people counting test"', source)
-        self.assertIn('href=\\\"/hikvision-test-confirm\\\"', source)
-        self.assertIn('action=\\\"/hikvision-test-now\\\"', source)
-        self.assertIn("probe_people_counting(camera)", source)
+        self.assertIn('settings_disclosure("Hikvision people counting"', source)
         self.assertIn('people_settings.pop("password", "")', source)
-        self.assertIn("It will not change camera settings or retrieve images or video.", source)
-        self.assertIn("The report search is read-only.", source)
-        self.assertIn("Run native API diagnostic", source)
+        self.assertIn("Collect people counters", renderer)
+        self.assertIn("Camera delivery setup and repair", renderer)
+        self.assertIn("Repair camera delivery", renderer)
+        self.assertIn('value=\\\"http_push\\\"', renderer)
+        self.assertNotIn("Run native API diagnostic", renderer)
+        self.assertNotIn("Legacy capability test", renderer)
+        self.assertNotIn("Capture camera statistics request", renderer)
+        self.assertNotIn("ONVIF diagnostic subscription", renderer)
 
     def test_recording_storage_setup_is_visible_and_linked_from_status(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
