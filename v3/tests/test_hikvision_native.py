@@ -13,7 +13,7 @@ from urllib.request import urlopen, Request
 
 from va_watchdog.config import DEFAULT_CONFIG
 from va_watchdog.hikvision import _request_xml, _get_json, probe_people_counting
-from va_watchdog.hikvision_events import parse_notification, event_summary, HikvisionEventCollector
+from va_watchdog.hikvision_events import parse_notification, event_summary, HikvisionEventCollector, record_push_event
 from va_watchdog.hikvision_push import configure_http_push, http_host_payload, metadata_documents
 from va_watchdog.hikvision_native import (native_diagnostics, bounded_native_diagnostic, response_error,
                                         capture_request_paths, read_bounded, MAX_RESPONSE)
@@ -62,6 +62,33 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(event["counts"], {})
         self.assertFalse(event["schema_recognised"])
         self.assertNotIn("secret-url", json.dumps(event))
+
+    def test_unknown_region_count_schema_exposes_only_safe_numeric_candidates(self):
+        payload = b'''<EventNotificationAlert><eventType>regionTargetNumberCounting</eventType>
+        <RegionTargetNumberCounting><humanNum>2</humanNum><vehicleNum>1</vehicleNum>
+        <activePostCount>17</activePostCount><pictureURL>private-image</pictureURL>
+        <ipAddress>192.168.1.72</ipAddress></RegionTargetNumberCounting></EventNotificationAlert>'''
+        event = parse_notification(payload)
+        self.assertEqual(event["counts"], {})
+        self.assertIn("humannum", event["fields_seen"])
+        self.assertNotIn("pictureurl", event["fields_seen"])
+        self.assertTrue(any(key.endswith("humannum") and value == "2"
+                            for key, value in event["candidate_counters"].items()))
+        self.assertNotIn("private-image", json.dumps(event))
+        self.assertNotIn("192.168.1.72", json.dumps(event))
+
+    def test_diagnostic_only_push_updates_state_without_growing_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = {"events_path": str(Path(directory) / "events.jsonl"), "people_counting": CAMERA}
+            event = parse_notification(b'''<EventNotificationAlert><eventType>regionTargetNumberCounting</eventType>
+            <RegionTargetNumberCounting><humanNum>2</humanNum></RegionTargetNumberCounting></EventNotificationAlert>''')
+            record_push_event(cfg, event)
+            record_push_event(cfg, event)
+            summary = event_summary(cfg)
+            self.assertEqual(summary["notifications_received"], 2)
+            self.assertIn("humannum", summary["last_notification_fields"])
+            self.assertEqual(summary["today"]["events"], 0)
+            self.assertFalse((Path(directory) / "hikvision-people-events.jsonl").exists())
 
     def test_dtd_and_ambiguous_count_arrays_not_recognised(self):
         self.assertIsNone(parse_notification(b'<!DOCTYPE x [<!ENTITY x "bad">]><x/>'))

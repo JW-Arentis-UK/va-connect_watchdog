@@ -35,6 +35,11 @@ _VALUE_FIELDS = {
 }
 _COUNT_FIELDS = {"entercount", "leavecount", "incount", "outcount", "passcount", "passingcount", "atob", "btoa",
                  "enter", "exit", "pass", "vehicleenter", "vehicleexit", "bicycleenter", "bicycleexit"}
+_DIAGNOSTIC_COUNT_HINTS = ("count", "number", "num", "enter", "exit", "human", "people", "person",
+                           "pedestrian", "vehicle", "bicycle")
+_SENSITIVE_DIAGNOSTIC_HINTS = ("password", "secret", "token", "cookie", "authorization", "username",
+                               "serial", "macaddress", "ipaddress", "url", "picture", "image", "deviceid",
+                               "uuid")
 _COUNTER_PATHS = (
     "/ISAPI/Intelligent/channels/{channel}/mixedTargetDetection/statistics",
     "/ISAPI/Intelligent/channels/{channel}/mixedTargetDetection/counting",
@@ -49,6 +54,50 @@ def _name(tag: str) -> str:
     return str(tag).rsplit("}", 1)[-1]
 
 
+def _scalar_paths(value: Any, path: tuple[str, ...] = ()):
+    """Yield leaf paths for schema diagnosis without retaining a source document."""
+    if isinstance(value, ET.Element):
+        current = path + (_name(value.tag),)
+        children = list(value)
+        if children:
+            for child in children:
+                yield from _scalar_paths(child, current)
+        else:
+            yield current, (value.text or "").strip()
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            current = path + (str(key),)
+            if isinstance(item, (dict, list)):
+                yield from _scalar_paths(item, current)
+            else:
+                yield current, str(item).lower() if isinstance(item, bool) else str(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _scalar_paths(item, path)
+
+
+def _safe_event_shape(document: Any) -> tuple[list[str], dict[str, str]]:
+    """Return bounded field names and numeric candidates, excluding private metadata."""
+    fields: set[str] = set()
+    candidates: dict[str, list[str]] = {}
+    for path, value in _scalar_paths(document):
+        names = [re.sub(r"[^a-z0-9]", "", name.lower())[:80] for name in path]
+        names = [name for name in names if name]
+        if not names or any(hint in name for name in names for hint in _SENSITIVE_DIAGNOSTIC_HINTS):
+            continue
+        field = names[-1]
+        fields.add(field)
+        if (not re.fullmatch(r"-?\d{1,12}", value.strip())
+                or not any(hint in field for hint in _DIAGNOSTIC_COUNT_HINTS)):
+            continue
+        label = ".".join(names[-4:])[:240]
+        values = candidates.setdefault(label, [])
+        if value not in values and len(values) < 3:
+            values.append(value)
+    reduced = {key: " | ".join(values) for key, values in sorted(candidates.items())[:30]}
+    return sorted(fields)[:80], reduced
+
+
 def parse_notification(payload: bytes) -> dict[str, Any] | None:
     """Return whitelisted fields only; payloads can contain private media URLs."""
     try:
@@ -56,16 +105,14 @@ def parse_notification(payload: bytes) -> dict[str, Any] | None:
     except (ValueError, ET.ParseError):
         return None
     values: dict[str, str] = {}
-    tags: list[str] = []
     duplicates = set()
     for key, text in scalar_fields(root):
-        if key.lower() in _VALUE_FIELDS and key not in tags:
-            tags.append(key)
         lowered = key.lower()
         if lowered in _VALUE_FIELDS and text:
             if lowered in values:
                 duplicates.add(lowered)
             values[lowered] = text[:160]
+    diagnostic_fields, candidate_counters = _safe_event_shape(root)
     event_type = values.get("eventtype", "")
     target_type = values.get("targettype", "")
     count_values = {key: value for key, value in values.items() if key in _COUNT_FIELDS}
@@ -96,7 +143,8 @@ def parse_notification(payload: bytes) -> dict[str, Any] | None:
                               and bool(values.get("channelid") or values.get("channel"))
                               and not duplicates.intersection(_COUNT_FIELDS)
                               and all(re.fullmatch(r"\d{1,12}", value) for value in count_values.values())),
-        "fields_seen": sorted(tags)[:40],
+        "fields_seen": diagnostic_fields,
+        "candidate_counters": candidate_counters,
     }
 
 
@@ -285,15 +333,24 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
 
 
 def record_push_event(cfg, event):
-    """Persist one reduced HTTP-push event and update receiver state."""
+    """Persist usable counts and keep a compact state for diagnostic-only pushes."""
     history, state_path = event_paths(cfg)
     event = dict(event)
     event["camera"] = str(cfg.get("people_counting", {}).get("address") or "")
     event["transport"] = "HTTP push"
     with _history_lock:
         history.parent.mkdir(parents=True, exist_ok=True)
-        with history.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, separators=(",", ":")) + "\n")
+        if event.get("counts"):
+            with history.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, separators=(",", ":")) + "\n")
+        try:
+            prior = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+        except (OSError, json.JSONDecodeError):
+            prior = {}
+        try:
+            received = int(prior.get("notifications_received", 0)) + 1 if isinstance(prior, dict) else 1
+        except (TypeError, ValueError):
+            received = 1
         state = {
             "status": "receiving",
             "transport": "HTTP push",
@@ -301,6 +358,9 @@ def record_push_event(cfg, event):
             "last_event_at": event.get("time"),
             "last_notification_type": event.get("event_type"),
             "last_reported_counts": event.get("counts", {}),
+            "last_notification_fields": event.get("fields_seen", []),
+            "last_candidate_counters": event.get("candidate_counters", {}),
+            "notifications_received": received,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         temporary = state_path.with_suffix(".push.tmp")

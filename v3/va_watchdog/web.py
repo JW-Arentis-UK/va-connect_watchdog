@@ -67,7 +67,12 @@ def render_camera_collector(summary):
         if summary.get(key) is not None and summary.get(key) != "":
             details.append(f"{label}: {summary[key]}")
     if summary.get("last_notification_fields"):
-        details.append("fields: " + ", ".join(summary["last_notification_fields"]))
+        details.append("fields: " + ", ".join(summary["last_notification_fields"][:40]))
+    if summary.get("last_candidate_counters"):
+        candidates = summary["last_candidate_counters"]
+        if isinstance(candidates, dict):
+            details.append("numeric candidates: " + ", ".join(
+                f"{key}={value}" for key, value in list(candidates.items())[:20]))
     if summary.get("topics_seen"):
         details.append("topics seen: " + ", ".join(summary["topics_seen"]))
     today = summary.get("today", {})
@@ -6528,10 +6533,11 @@ def start_web(cfg):
                     is_counting = bool((event or {}).get("counts")) or "count" in event_type
                     if event and is_counting:
                         record_push_event(cfg, event)
-                        append_web_event("info", "people_counting", "Hikvision HTTP event metadata received", {
-                            "event_type": event.get("event_type"), "channel": event.get("channel"),
-                            "counts": event.get("counts", {}), "schema_recognised": event.get("schema_recognised", False),
-                        })
+                        if event.get("counts"):
+                            append_web_event("info", "people_counting", "Hikvision HTTP event metadata received", {
+                                "event_type": event.get("event_type"), "channel": event.get("channel"),
+                                "counts": event.get("counts", {}), "schema_recognised": event.get("schema_recognised", False),
+                            })
                         accepted += 1
                     elif event:
                         ignored += 1
