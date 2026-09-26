@@ -16,7 +16,7 @@ from urllib.request import urlopen, Request
 from va_watchdog.config import DEFAULT_CONFIG
 from va_watchdog.hikvision import _request_xml, _get_json, probe_people_counting
 from va_watchdog.hikvision_events import (daily_count_history, parse_notification, event_summary,
-                                          HikvisionEventCollector, record_push_event)
+                                          event_paths, HikvisionEventCollector, record_push_event)
 from va_watchdog.hikvision_push import configure_http_push, http_host_payload, metadata_documents
 from va_watchdog.hikvision_native import (native_diagnostics, bounded_native_diagnostic, response_error,
                                         capture_request_paths, read_bounded, MAX_RESPONSE)
@@ -485,6 +485,30 @@ class CounterTests(unittest.TestCase):
 
         self.assertTrue(summary["stale"])
         self.assertGreaterEqual(summary["message_age_seconds"], 660)
+
+    def test_fresh_http_heartbeat_keeps_quiet_crossing_healthy(self):
+        self.cfg["people_counting"] = {
+            **CAMERA, "event_transport": "http_push", "stale_after_minutes": 10,
+        }
+        record_push_event(self.cfg, parse_notification(region_counting()))
+        now = datetime.now().astimezone()
+        _, state_path = event_paths(self.cfg)
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state.update({
+            "last_event_at": (now - timedelta(minutes=11)).isoformat(),
+            "last_http_post_at": now.isoformat(),
+            "last_http_documents": 1,
+            "last_http_message_type": "heartBeat",
+        })
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        summary = event_summary(self.cfg, now)
+
+        self.assertFalse(summary["stale"])
+        self.assertTrue(summary["quiet"])
+        self.assertGreaterEqual(summary["counter_age_seconds"], 660)
+        self.assertEqual(summary["transport_age_seconds"], 0)
+        self.assertEqual(summary["message_age_seconds"], 0)
 
     def test_event_summary_builds_hourly_and_period_category_totals(self):
         record_push_event(self.cfg, parse_notification(region_counting(

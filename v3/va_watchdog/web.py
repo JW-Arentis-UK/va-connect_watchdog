@@ -1176,8 +1176,8 @@ def start_web(cfg):
                 age_text = f"{int(age) // 60} minutes" if age is not None else "an unknown period"
                 rows.append(
                     "<div class=\"issue-row\"><span class=\"pill critical\">CRITICAL</span><div>"
-                    "<div class=\"value\">Crossing activity messages stopped</div>"
-                    f"<div class=\"muted\">No validated camera count has arrived for {escape(age_text)}. <a href=\"/crossing-activity\">Open Crossing Activity</a></div>"
+                    "<div class=\"value\">Crossing camera connection lost</div>"
+                    f"<div class=\"muted\">No camera heartbeat or count message has arrived for {escape(age_text)}. <a href=\"/crossing-activity\">Open Crossing Activity</a></div>"
                     "</div></div>"
                 )
             if int(people_summary.get("unexpected_resets_today", 0) or 0):
@@ -1452,7 +1452,7 @@ def start_web(cfg):
                 f"<div><label class=\"label\">Password</label><input name=\"people_counting_password\" type=\"password\" maxlength=\"128\" value=\"\" placeholder=\"{'Configured - leave blank to keep' if people_cfg.get('password') else 'Enter the camera password'}\"><p class=\"muted\">Stored locally and never shown in evidence exports.</p></div>"
                 f"<div><label class=\"label\">A to B direction name</label><input name=\"people_counting_forward_label\" maxlength=\"40\" value=\"{escape(crossing_direction_labels(people_cfg)[0])}\" placeholder=\"A to B\"><p class=\"muted\">Keep A to B unless the physical direction has been surveyed and named.</p></div>"
                 f"<div><label class=\"label\">B to A direction name</label><input name=\"people_counting_back_label\" maxlength=\"40\" value=\"{escape(crossing_direction_labels(people_cfg)[1])}\" placeholder=\"B to A\"><p class=\"muted\">Keep B to A unless the physical direction has been surveyed and named.</p></div>"
-                f"<div><label class=\"label\">No-message alert</label><input name=\"people_counting_stale_after_minutes\" type=\"number\" min=\"2\" max=\"1440\" value=\"{escape(str(people_cfg.get('stale_after_minutes', 10)))}\"><p class=\"muted\">Minutes without a valid counter message before showing an alert.</p></div>"
+                f"<div><label class=\"label\">Camera connection alert</label><input name=\"people_counting_stale_after_minutes\" type=\"number\" min=\"2\" max=\"1440\" value=\"{escape(str(people_cfg.get('stale_after_minutes', 10)))}\"><p class=\"muted\">Minutes without a camera heartbeat or count message before showing an alert.</p></div>"
                 f"<div><label class=\"label\">Daily activity change alert</label><input name=\"people_counting_anomaly_threshold_percent\" type=\"number\" min=\"20\" max=\"500\" value=\"{escape(str(people_cfg.get('anomaly_threshold_percent', 50)))}\"><p class=\"muted\">Percentage change from the recent complete-day average before an operational warning appears.</p></div>"
                 "</div>"
                 "<input name=\"people_counting_event_transport\" type=\"hidden\" value=\"http_push\">"
@@ -1540,6 +1540,7 @@ def start_web(cfg):
             today = daily[-1] if daily else {}
             status_text = str(summary.get("status") or "waiting")
             stale = bool(summary.get("stale"))
+            quiet = bool(summary.get("quiet"))
             listening = status_text in {"listening", "receiving", "ONVIF listening"} and not stale
             forward_label, back_label = crossing_direction_labels(camera)
 
@@ -1570,7 +1571,8 @@ def start_web(cfg):
             latest_http_type = str(summary.get("last_http_message_type") or "")
             non_counting_http = unrecognised_http and bool(latest_http_type) and "count" not in latest_http_type.lower()
             unsupported_http = unrecognised_http and int(summary.get("last_http_documents", 0) or 0) == 0
-            connection_state = ("Listening" if listening else "Unsupported HTTP format" if unsupported_http
+            connection_state = ("Connected, no recent crossings" if quiet else "Listening" if listening
+                                else "Unsupported HTTP format" if unsupported_http
                                 else "Connected, waiting for counters" if non_counting_http
                                 else "Message not recognised" if unrecognised_http
                                 else "No recent messages" if stale else "Waiting")
@@ -1670,6 +1672,12 @@ def start_web(cfg):
                         "<div class=\"notice critical\"><strong>No counting message has been received yet.</strong> "
                         "Open Camera setup and complete the camera upload requirements before testing another vehicle.</div>"
                     )
+            elif quiet:
+                counter_age_minutes = int(summary.get("counter_age_seconds") or 0) // 60
+                collection_notice = (
+                    "<div class=\"notice healthy\"><strong>Camera connection healthy.</strong> "
+                    f"No validated counter update has arrived for {counter_age_minutes} minutes, which is normal during a quiet period.</div>"
+                )
             elif unexpected_resets:
                 collection_notice = (
                     "<div class=\"notice critical\"><strong>Unexpected daytime counter reset detected.</strong> "
@@ -1731,7 +1739,7 @@ def start_web(cfg):
                 f"<tr><th>Last HTTP message type</th><td>{escape(latest_http_type or '-')}</td></tr>"
                 f"<tr><th>Safe fields seen</th><td>{escape(', '.join(str(value) for value in summary.get('last_http_fields', [])[:40]) or '-')}</td></tr>"
                 f"<tr><th>Numeric count candidates</th><td>{escape(', '.join(f'{key}={value}' for key, value in list((summary.get('last_http_candidate_counters') or {}).items())[:20]) or '-')}</td></tr>"
-                f"<tr><th>No-message alert</th><td>{escape(str(summary.get('stale_after_minutes')))} minutes</td></tr>"
+                f"<tr><th>Connection alert</th><td>{escape(str(summary.get('stale_after_minutes')))} minutes without a heartbeat or count message</td></tr>"
                 f"<tr><th>Unexpected resets today</th><td class=\"{'critical' if unexpected_resets else 'healthy'}\">{unexpected_resets}</td></tr>"
                 "<tr><th>Barrier/train correlation</th><td>Not configured. No barrier or signalling data source is connected.</td></tr>"
                 "<tr><th>Evidence use</th><td>Operational analytics only; not safety-certified crossing detection.</td></tr>"

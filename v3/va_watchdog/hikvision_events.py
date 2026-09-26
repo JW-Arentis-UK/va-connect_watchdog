@@ -436,10 +436,18 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
     daily_rollups = _daily_count_history(observations, now, 40)
     daily_history = daily_rollups[-7:]
     last_event = _source_datetime(state.get("last_event_at"))
+    last_http_post = _source_datetime(state.get("last_http_post_at"))
     stale_after_minutes = max(1, int(camera.get("stale_after_minutes", 10) or 10))
-    message_age_seconds = max(0, int((now - last_event.astimezone(now.tzinfo)).total_seconds())) if last_event else None
+    counter_age_seconds = max(0, int((now - last_event.astimezone(now.tzinfo)).total_seconds())) if last_event else None
+    transport_age_seconds = max(0, int((now - last_http_post.astimezone(now.tzinfo)).total_seconds())) if last_http_post else None
+    http_push = str(camera.get("event_transport") or "").lower() == "http_push"
+    message_age_seconds = transport_age_seconds if http_push and transport_age_seconds is not None else counter_age_seconds
     stale = bool(camera.get("event_collection_enabled")) and (
         message_age_seconds is None or message_age_seconds > stale_after_minutes * 60
+    )
+    quiet = bool(
+        http_push and not stale and counter_age_seconds is not None
+        and counter_age_seconds > stale_after_minutes * 60
     )
     return {**state, "enabled": bool(camera.get("event_collection_enabled")), "today": totals,
             "counts_verified": False, "counter_resets": resets,
@@ -453,6 +461,8 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
             ),
             "anomaly_threshold_percent": int(camera.get("anomaly_threshold_percent", 50) or 50),
             "stale_after_minutes": stale_after_minutes, "message_age_seconds": message_age_seconds,
+            "counter_age_seconds": counter_age_seconds, "transport_age_seconds": transport_age_seconds,
+            "quiet": quiet,
             "interval_reports": len(intervals)}
 
 
