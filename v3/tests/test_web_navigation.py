@@ -295,11 +295,13 @@ class WebNavigationTests(unittest.TestCase):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 
         self.assertIn('id="watchdog-cpu"', source)
+        self.assertIn('id="watchdog-cpu-source"', source)
         self.assertIn('id="watchdog-memory"', source)
         self.assertIn('id="watchdog-disk"', source)
         self.assertIn("processValue.data_used_mb", source)
         self.assertIn("processValue.data_limit_mb", source)
         self.assertIn("status.watchdog_process || {}", source)
+        self.assertIn("processValue.top_thread || {}", source)
 
     def test_build_badge_reports_the_code_loaded_by_the_running_process(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")

@@ -487,7 +487,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
     <header class="topbar">
       <div id="page-title">__SITE_NAME__ / __PAGE_MODE__ / __PAGE_TITLE__</div>
       <div class="topbar-right">
-        <div class="top-watchdog"><span>Watchdog</span><strong id="side-state" class="value">Loading</strong><span class="top-resource">CPU <strong id="watchdog-cpu">-</strong></span><span class="top-resource">RAM <strong id="watchdog-memory">-</strong></span><span class="top-resource">Disk <strong id="watchdog-disk">-</strong></span><span class="label">Build</span><strong>__BUILD_ID__</strong><span class="top-build-date">Built __BUILD_DATE__</span></div>
+        <div class="top-watchdog"><span>Watchdog</span><strong id="side-state" class="value">Loading</strong><span class="top-resource">CPU <strong id="watchdog-cpu">-</strong></span><span class="top-resource" id="watchdog-cpu-source-wrap" style="display:none">Source <strong id="watchdog-cpu-source">-</strong></span><span class="top-resource">RAM <strong id="watchdog-memory">-</strong></span><span class="top-resource">Disk <strong id="watchdog-disk">-</strong></span><span class="label">Build</span><strong>__BUILD_ID__</strong><span class="top-build-date">Built __BUILD_DATE__</span></div>
         <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="light">Light</option><option value="dark">Dark</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
         <span class="advanced-only"><label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label></span>
         <button class="ghost advanced-only" onclick="load()">Refresh now</button>
@@ -530,6 +530,8 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
     var lastUpdate = document.getElementById('last-update');
     var sideState = document.getElementById('side-state');
     var watchdogCpu = document.getElementById('watchdog-cpu');
+    var watchdogCpuSource = document.getElementById('watchdog-cpu-source');
+    var watchdogCpuSourceWrap = document.getElementById('watchdog-cpu-source-wrap');
     var watchdogMemory = document.getElementById('watchdog-memory');
     var watchdogDisk = document.getElementById('watchdog-disk');
     var checks = status.checks || [];
@@ -544,6 +546,14 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
     var state = status.critical_failed ? 'critical' : (hasIssue ? 'warning' : 'healthy');
     if (lastUpdate) lastUpdate.textContent = 'Last update: ' + (status.time || '-');
     if (watchdogCpu) watchdogCpu.textContent = processValue.cpu_percent === null || processValue.cpu_percent === undefined ? '-' : processValue.cpu_percent + '%';
+    var topThread = processValue.top_thread || {};
+    if (watchdogCpuSource && watchdogCpuSourceWrap && topThread.label) {
+      watchdogCpuSource.textContent = topThread.label + ' ' + topThread.cpu_percent + '%';
+      watchdogCpuSource.title = topThread.location || topThread.name || '';
+      watchdogCpuSourceWrap.style.display = '';
+    } else if (watchdogCpuSourceWrap) {
+      watchdogCpuSourceWrap.style.display = 'none';
+    }
     if (watchdogMemory) watchdogMemory.textContent = processValue.memory_mb === null || processValue.memory_mb === undefined ? '-' : processValue.memory_mb + ' MB';
     if (watchdogDisk) {
       var diskRead = processValue.disk_read_kbps === null || processValue.disk_read_kbps === undefined ? '-' : processValue.disk_read_kbps;
@@ -1736,6 +1746,7 @@ def start_web(cfg):
                 f"<tr><th>Last accepted sample</th><td>{escape(local_time(summary.get('last_event_at')))}</td></tr>"
                 f"<tr><th>Last HTTP request</th><td>{escape(local_time(summary.get('last_http_post_at')))}</td></tr>"
                 f"<tr><th>Last HTTP result</th><td>{escape(str(summary.get('last_http_accepted', 0)))} accepted; {escape(str(summary.get('last_http_ignored', 0)))} ignored; {escape(str(summary.get('last_http_unrecognised', 0)))} unrecognised</td></tr>"
+                f"<tr><th>HTTP request rate</th><td>{escape(str(summary.get('last_http_request_rate'))) + ' per second' if summary.get('last_http_request_rate') is not None else '-'}</td></tr>"
                 f"<tr><th>Last HTTP message type</th><td>{escape(latest_http_type or '-')}</td></tr>"
                 f"<tr><th>Safe fields seen</th><td>{escape(', '.join(str(value) for value in summary.get('last_http_fields', [])[:40]) or '-')}</td></tr>"
                 f"<tr><th>Numeric count candidates</th><td>{escape(', '.join(f'{key}={value}' for key, value in list((summary.get('last_http_candidate_counters') or {}).items())[:20]) or '-')}</td></tr>"

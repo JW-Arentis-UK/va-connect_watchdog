@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import sys
+import threading
 import time
 from pathlib import Path
 
@@ -12,6 +14,7 @@ class ProcessMonitor:
     def __init__(self):
         self.pid = os.getpid()
         self.previous_cpu_ticks = None
+        self.previous_thread_ticks = {}
         self.previous_io = None
         self.previous_time = None
         self.cpu_high_since = None
@@ -38,6 +41,9 @@ class ProcessMonitor:
             if io_bytes is not None and self.previous_io is not None:
                 disk_read_kbps = round(max(0, io_bytes[0] - self.previous_io[0]) / elapsed / 1024, 1)
                 disk_write_kbps = round(max(0, io_bytes[1] - self.previous_io[1]) / elapsed / 1024, 1)
+        else:
+            elapsed = None
+        thread_cpu = self._thread_cpu(elapsed)
         self.previous_cpu_ticks = cpu_ticks
         self.previous_io = io_bytes
         self.previous_time = now
@@ -78,11 +84,15 @@ class ProcessMonitor:
         else:
             state = "healthy"
             message = "Watchdog process resource usage is normal"
+        if cpu_percent is not None and cpu_percent >= cpu_warning and thread_cpu:
+            message += f"; busiest worker: {thread_cpu[0]['label']} at {thread_cpu[0]['cpu_percent']}%"
 
         value = {
             "enabled": True,
             "pid": self.pid,
             "cpu_percent": cpu_percent,
+            "top_thread": thread_cpu[0] if thread_cpu else None,
+            "thread_cpu": thread_cpu,
             "memory_mb": memory_mb,
             "disk_read_kbps": disk_read_kbps,
             "disk_write_kbps": disk_write_kbps,
@@ -103,6 +113,63 @@ class ProcessMonitor:
         # This check is deliberately non-critical to the hardware feed. If the
         # process is unhealthy, systemd must enforce the restart boundary.
         return CheckResult("watchdog_process", state, message, value, False)
+
+    def _thread_cpu(self, elapsed):
+        task_root = Path(f"/proc/{self.pid}/task")
+        threads = {thread.native_id: thread for thread in threading.enumerate() if thread.native_id}
+        frames = sys._current_frames()
+        current = {}
+        rows = []
+        try:
+            tasks = list(task_root.iterdir())
+        except OSError:
+            tasks = []
+        for task in tasks:
+            try:
+                tid = int(task.name)
+                fields = (task / "stat").read_text(encoding="utf-8").rsplit(") ", 1)[1].split()
+                ticks = int(fields[11]) + int(fields[12])
+            except (OSError, IndexError, ValueError):
+                continue
+            current[tid] = ticks
+            previous = self.previous_thread_ticks.get(tid)
+            if elapsed is None or previous is None:
+                continue
+            cpu = round(max(0.0, (ticks - previous) / os.sysconf("SC_CLK_TCK") / elapsed * 100), 1)
+            if cpu <= 0:
+                continue
+            thread = threads.get(tid)
+            name = thread.name if thread else f"thread-{tid}"
+            rows.append({
+                "name": name,
+                "label": self._thread_label(name),
+                "cpu_percent": cpu,
+                "location": self._thread_location(frames.get(thread.ident) if thread else None),
+            })
+        self.previous_thread_ticks = current
+        return sorted(rows, key=lambda item: item["cpu_percent"], reverse=True)[:5]
+
+    @staticmethod
+    def _thread_label(name):
+        lowered = str(name).lower()
+        if name == "MainThread":
+            return "Health loop"
+        if "hikvision" in lowered:
+            return "Camera listener"
+        if "blackbox" in lowered:
+            return "Evidence recorder"
+        if "heartbeat" in lowered:
+            return "Health heartbeat"
+        if "process_request_thread" in lowered:
+            return "Web request"
+        return str(name)[:80]
+
+    @staticmethod
+    def _thread_location(frame):
+        if frame is None:
+            return ""
+        code = frame.f_code
+        return f"{Path(code.co_filename).name}:{code.co_name}:{frame.f_lineno}"[:160]
 
     def _data_usage_mb(self, cfg, now):
         if self.data_usage_sampled_at is not None and now - self.data_usage_sampled_at < 60:

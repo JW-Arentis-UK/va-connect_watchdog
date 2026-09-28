@@ -67,7 +67,7 @@ def http_host_payload(slot, receiver_address, receiver_port, channel, *, namespa
         ET.SubElement(subscribe, tag("eventMode")).text = "list"
         event_list = ET.SubElement(subscribe, tag("EventList"))
         event = ET.SubElement(event_list, tag("Event"))
-        ET.SubElement(event, tag("type")).text = "mixedTargetDetection"
+        ET.SubElement(event, tag("type")).text = "regionTargetNumberCounting"
         ET.SubElement(subscribe, tag("channels")).text = str(int(channel))
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
@@ -112,7 +112,7 @@ def _replace_xml_text(document, name, value):
     return document
 
 
-def _ensure_subscription(document, channel, event_type="mixedTargetDetection"):
+def _ensure_subscription(document, channel, event_type="regionTargetNumberCounting"):
     """Subscribe the selected host without reserializing camera-owned XML."""
     root_match = re.search(
         r"<(?P<prefix>[A-Za-z_][A-Za-z0-9_.-]*:)?HttpHostNotification\b",
@@ -242,7 +242,7 @@ def _roundtrip_payload(previous, slot, receiver_address, receiver_port, channel,
         ET.SubElement(subscribe, tag("eventMode")).text = "list"
         event_list = ET.SubElement(subscribe, tag("EventList"))
         event = ET.SubElement(event_list, tag("Event"))
-        ET.SubElement(event, tag("type")).text = "mixedTargetDetection"
+        ET.SubElement(event, tag("type")).text = "regionTargetNumberCounting"
         ET.SubElement(subscribe, tag("channels")).text = str(int(channel))
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
@@ -315,7 +315,7 @@ def configure_http_push(settings, receiver_address, receiver_port, slot=1, opene
         event_type = fields.get("type", "").lower()
         subscription_confirmed = (
             event_mode == "all"
-            or (event_mode == "list" and event_type == "mixedtargetdetection")
+            or (event_mode == "list" and event_type == "regiontargetnumbercounting")
         )
         if (fields.get("ipaddress") != str(receiver_address)
                 or fields.get("portno") != str(int(receiver_port))

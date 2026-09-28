@@ -13,6 +13,8 @@ class ProcessMonitorTests(unittest.TestCase):
         self.assertIn("memory_mb", result.value)
         self.assertIn("disk_read_kbps", result.value)
         self.assertIn("disk_write_kbps", result.value)
+        self.assertIn("top_thread", result.value)
+        self.assertIn("thread_cpu", result.value)
         self.assertIn("data_used_mb", result.value)
         self.assertEqual(result.value["data_limit_mb"], 100)
         self.assertIn("sustained_seconds", result.value)
@@ -23,6 +25,12 @@ class ProcessMonitorTests(unittest.TestCase):
 
         self.assertEqual(result.state, "healthy")
         self.assertFalse(result.value["enabled"])
+
+    def test_worker_names_are_presented_for_operators(self):
+        self.assertEqual(ProcessMonitor._thread_label("MainThread"), "Health loop")
+        self.assertEqual(ProcessMonitor._thread_label("hikvision-events"), "Camera listener")
+        self.assertEqual(ProcessMonitor._thread_label("va-watchdog-blackbox"), "Evidence recorder")
+        self.assertEqual(ProcessMonitor._thread_label("Thread-2 (process_request_thread)"), "Web request")
 
     def test_short_cpu_burst_does_not_raise_overall_warning(self):
         monitor = ProcessMonitor()

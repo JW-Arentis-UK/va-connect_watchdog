@@ -17,7 +17,8 @@ import va_watchdog.hikvision_events as hikvision_events
 from va_watchdog.config import DEFAULT_CONFIG
 from va_watchdog.hikvision import _request_xml, _get_json, probe_people_counting
 from va_watchdog.hikvision_events import (daily_count_history, parse_notification, event_summary,
-                                          event_paths, HikvisionEventCollector, record_push_event)
+                                          event_paths, HikvisionEventCollector, record_http_delivery,
+                                          record_push_event)
 from va_watchdog.hikvision_push import configure_http_push, http_host_payload, metadata_documents
 from va_watchdog.hikvision_native import (native_diagnostics, bounded_native_diagnostic, response_error,
                                         capture_request_paths, read_bounded, MAX_RESPONSE)
@@ -216,7 +217,7 @@ class NativeTests(unittest.TestCase):
         self.assertIn(b"<url>/hikvision/events</url>", body)
         self.assertNotIn(b"http://192.168.1.100", body)
         self.assertIn(b"<eventMode>list</eventMode>", body)
-        self.assertIn(b"<type>mixedTargetDetection</type>", body)
+        self.assertIn(b"<type>regionTargetNumberCounting</type>", body)
         self.assertNotIn(b"password", body)
         self.assertIn(b"<userName></userName>", body)
         self.assertNotIn(b"<userName />", body)
@@ -272,7 +273,7 @@ class NativeTests(unittest.TestCase):
                         return FakeResponse(host.replace('<url></url>', '<url>/hikvision/events</url>')
                                             .replace('<ipAddress>0.0.0.0</ipAddress>', '<ipAddress>192.168.1.100</ipAddress>')
                                             .replace('<portNo>80</portNo>', '<portNo>9110</portNo>')
-                                            .replace('</HttpHostNotification>', '<SubscribeEvent><heartbeat>30</heartbeat><eventMode>list</eventMode><EventList><Event><type>mixedTargetDetection</type></Event></EventList><channels>1</channels></SubscribeEvent></HttpHostNotification>'))
+                                            .replace('</HttpHostNotification>', '<SubscribeEvent><heartbeat>30</heartbeat><eventMode>list</eventMode><EventList><Event><type>regionTargetNumberCounting</type></Event></EventList><channels>1</channels></SubscribeEvent></HttpHostNotification>'))
                     return FakeResponse(host)
                 if method == "GET":
                     return FakeResponse(f'<HttpHostNotificationList>{host}</HttpHostNotificationList>')
@@ -288,14 +289,14 @@ class NativeTests(unittest.TestCase):
 
         self.assertEqual(result["profile"], "camera host list with event subscription")
         self.assertIn(b"<eventMode>list</eventMode>", opener.assert_subscription)
-        self.assertIn(b"<type>mixedTargetDetection</type>", opener.assert_subscription)
+        self.assertIn(b"<type>regionTargetNumberCounting</type>", opener.assert_subscription)
         self.assertIn(b"<channels>1</channels>", opener.assert_subscription)
 
     def test_push_multipart_discards_media(self):
         payload = part(b"private-image", b"image/jpeg") + part(counting()) + b"--test--\r\n"
         self.assertEqual(metadata_documents("multipart/mixed; boundary=test", payload), [counting()])
         self.assertIn(b"<eventMode>list</eventMode>", http_host_payload(1, "192.168.1.100", 9110, 1))
-        self.assertIn(b"<type>mixedTargetDetection</type>", http_host_payload(1, "192.168.1.100", 9110, 1))
+        self.assertIn(b"<type>regionTargetNumberCounting</type>", http_host_payload(1, "192.168.1.100", 9110, 1))
 
     def test_authentication_failure_stops_further_diagnostic_requests(self):
         url = "http://192.168.1.72/ISAPI/System/deviceInfo"
@@ -582,6 +583,22 @@ class CounterTests(unittest.TestCase):
         self.assertEqual(build.call_count, 1)
         self.assertEqual(first["last_reported_counts"], second["last_reported_counts"])
         self.assertEqual(second["last_http_message_type"], "heartBeat")
+
+    def test_repeated_diagnostic_http_posts_are_batched(self):
+        details = {
+            "content_type": "application/xml", "body_size": 100, "documents": 1,
+            "accepted": 0, "ignored": 1, "unrecognised": 0,
+            "message_type": "heartBeat", "fields": ["eventtype"],
+        }
+        with patch("va_watchdog.hikvision_events.time.monotonic", side_effect=[100.0, 101.0, 106.0]):
+            record_http_delivery(self.cfg, **details)
+            record_http_delivery(self.cfg, **details)
+            record_http_delivery(self.cfg, **details)
+
+        _, state_path = event_paths(self.cfg)
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(state["http_posts_received"], 3)
+        self.assertEqual(state["last_http_request_rate"], 0.3)
 
     def test_event_summary_builds_hourly_and_period_category_totals(self):
         record_push_event(self.cfg, parse_notification(region_counting(

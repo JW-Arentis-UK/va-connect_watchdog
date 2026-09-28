@@ -27,6 +27,8 @@ _history_lock = threading.Lock()
 _summary_cache_lock = threading.Lock()
 _summary_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
 _SUMMARY_CACHE_LIMIT = 8
+_http_delivery_batches: dict[str, dict[str, Any]] = {}
+_HTTP_STATE_WRITE_SECONDS = 5.0
 
 
 _VALUE_FIELDS = {
@@ -792,6 +794,21 @@ def record_http_delivery(cfg, *, content_type, body_size, documents, accepted, i
     """Record a payload-free delivery outcome so transport and parsing faults are distinguishable."""
     _, state_path = event_paths(cfg)
     with _history_lock:
+        now = time.monotonic()
+        batch_key = str(state_path)
+        batch = _http_delivery_batches.setdefault(batch_key, {
+            "pending": 0, "last_write": 0.0, "last_message_type": None, "last_accepted": False,
+        })
+        batch["pending"] = int(batch.get("pending", 0)) + 1
+        flush = bool(
+            accepted or unrecognised or batch.get("last_message_type") is None
+            or (ignored and batch.get("last_accepted"))
+            or now - float(batch.get("last_write", 0.0)) >= _HTTP_STATE_WRITE_SECONDS
+        )
+        batch["last_message_type"] = str(message_type or "")
+        batch["last_accepted"] = bool(accepted)
+        if not flush:
+            return
         state_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
@@ -800,9 +817,11 @@ def record_http_delivery(cfg, *, content_type, body_size, documents, accepted, i
         if not isinstance(state, dict):
             state = {}
         try:
-            received = int(state.get("http_posts_received", 0)) + 1
+            received = int(state.get("http_posts_received", 0)) + int(batch["pending"])
         except (TypeError, ValueError):
-            received = 1
+            received = int(batch["pending"])
+        elapsed = now - float(batch.get("last_write", 0.0))
+        request_rate = round(int(batch["pending"]) / elapsed, 1) if batch.get("last_write") and elapsed > 0 else None
         state.update({
             "last_http_post_at": datetime.now(timezone.utc).isoformat(),
             "last_http_content_type": str(content_type or "unknown").split(";", 1)[0][:80],
@@ -815,11 +834,22 @@ def record_http_delivery(cfg, *, content_type, body_size, documents, accepted, i
             "last_http_fields": list(fields or [])[:80],
             "last_http_candidate_counters": dict(list((candidate_counters or {}).items())[:30]),
             "http_posts_received": received,
+            "last_http_request_rate": request_rate,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         })
         temporary = state_path.with_suffix(".http.tmp")
         temporary.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
         temporary.replace(state_path)
+        batch["pending"] = 0
+        batch["last_write"] = now
+        if len(_http_delivery_batches) > 32:
+            oldest = min(
+                (key for key in _http_delivery_batches if key != batch_key),
+                key=lambda key: float(_http_delivery_batches[key].get("last_write", 0.0)),
+                default=None,
+            )
+            if oldest is not None:
+                _http_delivery_batches.pop(oldest, None)
 
 
 class HikvisionEventCollector:
