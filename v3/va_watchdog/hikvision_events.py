@@ -209,7 +209,7 @@ def parse_notification(payload: bytes) -> dict[str, Any] | None:
                           and all(re.fullmatch(r"\d{1,12}", value) for value in count_values.values()))
     region_schema = (region_event
                      and bool(region_counts)
-                     and method.lower() == "realtime"
+                     and method.lower() in {"realtime", "timerange"}
                      and bool(values.get("ruleid"))
                      and bool(values.get("channelid") or values.get("channel"))
                      and bool(values.get("datetime")))
@@ -400,12 +400,13 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
             category_counts = _region_category_counts(row)
             if not category_counts and row.get("count_schema") == "region_forward_back":
                 category_counts = {"human": counts}
-            observations.append((stamp, key, row.get("count_schema"), category_counts))
             delta = (0, 0)
             method = str(row.get("method") or "").lower()
+            if method != "timerange":
+                observations.append((stamp, key, row.get("count_schema"), category_counts))
             if method == "realtime":
                 prior = previous.get(key)
-                if prior and stamp < prior[0]:
+                if prior and stamp <= prior[0]:
                     continue
                 if prior and stamp.date() == prior[0].astimezone(stamp.tzinfo).date():
                     if any(value < old for value, old in zip(counts, prior[1])):
@@ -487,24 +488,20 @@ def _daily_count_history(observations, now, days):
             continue
         local_day = stamp.astimezone(now.tzinfo).date()
         prior = per_key.get(key)
-        if prior and stamp < prior[0]:
+        if prior and stamp <= prior[0]:
             continue
+        next_categories = categories
         if local_day in rows:
             row = rows[local_day]
             row["samples"] += 1
             if prior and local_day == prior[1]:
-                dropped = False
-                for category, counts in categories.items():
-                    prior_counts = prior[2].get(category)
-                    if prior_counts is None:
-                        continue
+                deltas, reset, next_categories = _counter_transition(prior[2], categories)
+                for category, counts in deltas.items():
                     prefix = "" if category == "human" else f"{category}_"
                     for index, name in enumerate(("forward", "back")):
-                        delta = counts[index] if counts[index] < prior_counts[index] else counts[index] - prior_counts[index]
-                        dropped = dropped or counts[index] < prior_counts[index]
                         field = f"{prefix}{name}"
-                        row[field] = int(row[field] or 0) + delta
-                if dropped:
+                        row[field] = int(row[field] or 0) + counts[index]
+                if reset:
                     row["unexpected_resets"] += 1
             else:
                 for category, counts in categories.items():
@@ -520,8 +517,39 @@ def _daily_count_history(observations, now, days):
                 prefix = "" if category == "human" else f"{category}_"
                 forward, back = row.get(f"{prefix}forward"), row.get(f"{prefix}back")
                 row[f"{prefix}bothway"] = (int(forward) + int(back)) if forward is not None and back is not None else None
-        per_key[key] = (stamp, local_day, categories)
+        per_key[key] = (stamp, local_day, next_categories)
     return list(rows.values())
+
+
+def _counter_transition(prior_categories, categories):
+    """Return safe deltas, recognising only a coherent multi-category restart as a reset."""
+    common = {
+        category: (prior_categories[category], counts)
+        for category, counts in categories.items() if category in prior_categories
+    }
+    dropped = {
+        category for category, (old, value) in common.items()
+        if sum(value) < sum(old)
+    }
+    non_increasing = all(sum(value) <= sum(old) for old, value in common.values())
+    reset = bool(
+        "human" in dropped and non_increasing
+        and (len(common) == 1 or len(dropped) >= 2)
+    )
+    deltas = {}
+    next_categories = dict(prior_categories)
+    for category, counts in categories.items():
+        old = prior_categories.get(category)
+        if old is None:
+            deltas[category] = counts
+            next_categories[category] = counts
+        elif reset:
+            deltas[category] = counts
+            next_categories[category] = counts
+        else:
+            deltas[category] = tuple(max(0, value - previous) for previous, value in zip(old, counts))
+            next_categories[category] = tuple(max(previous, value) for previous, value in zip(old, counts))
+    return deltas, reset, next_categories
 
 
 def _hourly_count_history(observations, now, hours):
@@ -543,20 +571,19 @@ def _hourly_count_history(observations, now, hours):
         local_stamp = stamp.astimezone(now.tzinfo)
         bucket = local_stamp.replace(minute=0, second=0, microsecond=0)
         prior = per_key.get(key)
-        if prior and stamp < prior[0]:
+        if prior and stamp <= prior[0]:
             continue
+        next_categories = categories
         if bucket in rows and prior:
             rows[bucket]["samples"] += 1
             same_day = local_stamp.date() == prior[1]
-            for category, counts in categories.items():
-                prior_counts = prior[2].get(category)
-                if prior_counts is None:
-                    continue
-                change = 0
-                for old, value in zip(prior_counts, counts):
-                    change += value if (not same_day or value < old) else value - old
-                rows[bucket][category] += change
-        per_key[key] = (stamp, local_stamp.date(), categories)
+            if same_day:
+                deltas, _, next_categories = _counter_transition(prior[2], categories)
+            else:
+                deltas = categories
+            for category, counts in deltas.items():
+                rows[bucket][category] += sum(counts)
+        per_key[key] = (stamp, local_stamp.date(), next_categories)
     return list(rows.values())
 
 
@@ -616,7 +643,8 @@ def daily_count_history(cfg: dict[str, Any], now=None, days=7) -> list[dict[str,
             continue
         if (not isinstance(row, dict) or not row.get("schema_recognised")
                 or row.get("camera") != camera.get("address")
-                or str(row.get("channel")) != str(camera.get("channel", 1))):
+                or str(row.get("channel")) != str(camera.get("channel", 1))
+                or str(row.get("method") or "").lower() == "timerange"):
             continue
         stamp = _source_datetime(row.get("source_time"))
         if stamp is None:
@@ -649,15 +677,23 @@ def record_push_event(cfg, event):
             prior = {}
         if not isinstance(prior, dict):
             prior = {}
+        interval = str(event.get("method") or "").lower() == "timerange"
         current_source = _source_datetime(event.get("source_time"))
-        prior_source = _source_datetime(prior.get("last_source_time"))
+        prior_source = _source_datetime(prior.get(
+            "last_interval_source_time" if interval else "last_source_time"
+        ))
         source_day_changed = bool(
             current_source and prior_source
             and current_source.astimezone().date() != prior_source.astimezone().date()
         )
+        prefix = "last_interval_" if interval else "last_"
         counter_changed = (
-            event.get("counts") != prior.get("last_reported_counts")
-            or event.get("count_records") != prior.get("last_count_records")
+            event.get("counts") != prior.get(f"{prefix}reported_counts")
+            or event.get("count_records") != prior.get(f"{prefix}count_records")
+            or (interval and (
+                event.get("start_time") != prior.get("last_interval_start_time")
+                or event.get("end_time") != prior.get("last_interval_end_time")
+            ))
             or source_day_changed
         )
         if event.get("counts") and counter_changed:
@@ -672,18 +708,32 @@ def record_push_event(cfg, event):
             "transport": "HTTP push",
             "counts_verified": False,
             "last_event_at": event.get("time"),
-            "last_source_time": event.get("source_time"),
             "last_notification_type": event.get("event_type"),
-            "last_reported_counts": event.get("counts", {}),
             "last_notification_fields": event.get("fields_seen", []),
             "last_candidate_counters": event.get("candidate_counters", {}),
-            "last_count_records": event.get("count_records", []),
             "notifications_received": received,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         for key, value in prior.items():
-            if key.startswith("last_http_") or key == "http_posts_received":
+            if key.startswith("last_http_") or key.startswith("last_interval_") or key == "http_posts_received":
                 state[key] = value
+        if interval:
+            state.update({
+                "last_source_time": prior.get("last_source_time"),
+                "last_reported_counts": prior.get("last_reported_counts", {}),
+                "last_count_records": prior.get("last_count_records", []),
+                "last_interval_source_time": event.get("source_time"),
+                "last_interval_start_time": event.get("start_time"),
+                "last_interval_end_time": event.get("end_time"),
+                "last_interval_reported_counts": event.get("counts", {}),
+                "last_interval_count_records": event.get("count_records", []),
+            })
+        else:
+            state.update({
+                "last_source_time": event.get("source_time"),
+                "last_reported_counts": event.get("counts", {}),
+                "last_count_records": event.get("count_records", []),
+            })
         temporary = state_path.with_suffix(".push.tmp")
         temporary.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
         temporary.replace(state_path)

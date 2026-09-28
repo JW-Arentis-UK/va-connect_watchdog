@@ -44,9 +44,11 @@ def counting(enter=22, exit=9, stamp="2026-09-24T08:00:00+01:00", region="1", me
 
 
 def region_counting(forward=114, back=93, stamp="2026-09-24T08:00:00+01:00",
-                    non_motor_forward=18, non_motor_back=12, vehicle_forward=398, vehicle_back=353):
+                    non_motor_forward=18, non_motor_back=12, vehicle_forward=398, vehicle_back=353,
+                    method="realTime"):
     return f'''<EventNotificationAlert><channelID>1</channelID><dateTime>{stamp}</dateTime>
-    <eventType>regionTargetNumberCounting</eventType><ruleID>1</ruleID><statisticalMethod>realTime</statisticalMethod>
+    <eventType>regionTargetNumberCounting</eventType><ruleID>1</ruleID><statisticalMethod>{method}</statisticalMethod>
+    <TimeRange><startTime>2026-09-24T08:00:00+01:00</startTime><endTime>2026-09-24T08:15:00+01:00</endTime></TimeRange>
     <CountingList><DataList><statisticalDirection>forward</statisticalDirection><humanCount>{forward}</humanCount>
     <nonMotorCount>{non_motor_forward}</nonMotorCount><vehicleCount>{vehicle_forward}</vehicleCount></DataList>
     <DataList><statisticalDirection>back</statisticalDirection><humanCount>{back}</humanCount>
@@ -454,15 +456,41 @@ class CounterTests(unittest.TestCase):
         self.assertEqual(rows[1]["vehicle_bothway"], 751)
 
     def test_daily_rollup_continues_across_unexpected_daytime_reset(self):
-        record_push_event(self.cfg, parse_notification(region_counting(100, 50, "2026-09-24T08:00:00+01:00")))
-        record_push_event(self.cfg, parse_notification(region_counting(2, 1, "2026-09-24T12:00:00+01:00")))
-        record_push_event(self.cfg, parse_notification(region_counting(5, 3, "2026-09-24T13:00:00+01:00")))
+        record_push_event(self.cfg, parse_notification(region_counting(
+            100, 50, "2026-09-24T08:00:00+01:00", 10, 5, 200, 100
+        )))
+        record_push_event(self.cfg, parse_notification(region_counting(
+            2, 1, "2026-09-24T12:00:00+01:00", 1, 0, 3, 2
+        )))
+        record_push_event(self.cfg, parse_notification(region_counting(
+            5, 3, "2026-09-24T13:00:00+01:00", 2, 1, 7, 4
+        )))
 
         row = daily_count_history(self.cfg, self.now, days=1)[0]
 
         self.assertEqual(row["forward"], 105)
         self.assertEqual(row["back"], 53)
         self.assertEqual(row["unexpected_resets"], 1)
+
+    def test_single_category_regression_is_not_counted_as_a_reset(self):
+        record_push_event(self.cfg, parse_notification(region_counting(
+            100, 50, "2026-09-24T08:00:00+01:00", 10, 5, 2000, 1500
+        )))
+        record_push_event(self.cfg, parse_notification(region_counting(
+            101, 51, "2026-09-24T08:01:00+01:00", 10, 5, 900, 700
+        )))
+        record_push_event(self.cfg, parse_notification(region_counting(
+            102, 52, "2026-09-24T08:02:00+01:00", 11, 5, 2010, 1510
+        )))
+
+        summary = event_summary(self.cfg, self.now)
+        row = summary["daily_history"][-1]
+
+        self.assertEqual(row["bothway"], 154)
+        self.assertEqual(row["vehicle_bothway"], 3520)
+        self.assertEqual(row["unexpected_resets"], 0)
+        hour = next(item for item in summary["hourly_history"] if item["start"].startswith("2026-09-24T08:00"))
+        self.assertEqual(hour["vehicle"], 20)
 
     def test_category_only_counter_change_is_retained(self):
         record_push_event(self.cfg, parse_notification(region_counting()))
@@ -475,6 +503,27 @@ class CounterTests(unittest.TestCase):
         self.assertEqual(row["bothway"], 207)
         self.assertEqual(row["vehicle_forward"], 399)
         self.assertEqual(row["vehicle_bothway"], 752)
+
+    def test_interval_reports_do_not_inflate_realtime_daily_totals(self):
+        record_push_event(self.cfg, parse_notification(region_counting(
+            100, 50, "2026-09-24T08:00:00+01:00", 10, 5, 200, 100
+        )))
+        record_push_event(self.cfg, parse_notification(region_counting(
+            8, 4, "2026-09-24T08:15:00+01:00", 2, 1, 20, 10, method="timeRange"
+        )))
+        record_push_event(self.cfg, parse_notification(region_counting(
+            103, 52, "2026-09-24T08:30:00+01:00", 12, 6, 204, 103
+        )))
+
+        summary = event_summary(self.cfg, self.now)
+        row = summary["daily_history"][-1]
+
+        self.assertEqual(row["bothway"], 155)
+        self.assertEqual(row["non_motor_bothway"], 18)
+        self.assertEqual(row["vehicle_bothway"], 307)
+        self.assertEqual(row["unexpected_resets"], 0)
+        self.assertEqual(summary["last_reported_counts"]["bothway"], "155")
+        self.assertEqual(summary["interval_reports"], 1)
 
     def test_event_summary_marks_stale_collection_after_configured_limit(self):
         self.cfg["people_counting"] = {**CAMERA, "stale_after_minutes": 10}
