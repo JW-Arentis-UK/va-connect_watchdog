@@ -24,6 +24,9 @@ from .hikvision_stream import AlertParts
 
 
 _history_lock = threading.Lock()
+_summary_cache_lock = threading.Lock()
+_summary_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
+_SUMMARY_CACHE_LIMIT = 8
 
 
 _VALUE_FIELDS = {
@@ -351,15 +354,75 @@ def _history_lines(path):
         return
 
 
-def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
-    history, state_path = event_paths(cfg)
-    state: dict[str, Any] = {}
+def _file_signature(path: Path) -> tuple[int, int]:
     try:
-        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+        stat = path.stat()
+        return stat.st_mtime_ns, stat.st_size
+    except OSError:
+        return 0, 0
+
+
+def _read_event_state(path: Path) -> dict[str, Any]:
+    try:
+        state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     except (OSError, json.JSONDecodeError):
         state = {}
-    if not isinstance(state, dict):
-        state = {}
+    return state if isinstance(state, dict) else {}
+
+
+def _apply_live_state(summary, state, camera, now):
+    result = {**summary, **state}
+    last_event = _source_datetime(state.get("last_event_at"))
+    last_http_post = _source_datetime(state.get("last_http_post_at"))
+    stale_after_minutes = max(1, int(camera.get("stale_after_minutes", 10) or 10))
+    counter_age_seconds = max(0, int((now - last_event.astimezone(now.tzinfo)).total_seconds())) if last_event else None
+    transport_age_seconds = max(0, int((now - last_http_post.astimezone(now.tzinfo)).total_seconds())) if last_http_post else None
+    http_push = str(camera.get("event_transport") or "").lower() == "http_push"
+    message_age_seconds = transport_age_seconds if http_push and transport_age_seconds is not None else counter_age_seconds
+    stale = bool(camera.get("event_collection_enabled")) and (
+        message_age_seconds is None or message_age_seconds > stale_after_minutes * 60
+    )
+    result.update({
+        "enabled": bool(camera.get("event_collection_enabled")),
+        "stale": stale,
+        "quiet": bool(
+            http_push and not stale and counter_age_seconds is not None
+            and counter_age_seconds > stale_after_minutes * 60
+        ),
+        "stale_after_minutes": stale_after_minutes,
+        "message_age_seconds": message_age_seconds,
+        "counter_age_seconds": counter_age_seconds,
+        "transport_age_seconds": transport_age_seconds,
+    })
+    return result
+
+
+def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
+    """Reuse expensive history rollups while keeping receiver state live."""
+    history, state_path = event_paths(cfg)
+    camera = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting"), dict) else {}
+    current = now or datetime.now().astimezone()
+    cache_key = (
+        str(history), str(state_path), str(camera.get("address") or ""),
+        str(camera.get("channel", 1)), current.isoformat(timespec="minutes"),
+        str(camera.get("event_transport") or ""), bool(camera.get("event_collection_enabled")),
+        int(camera.get("stale_after_minutes", 10) or 10),
+        int(camera.get("anomaly_threshold_percent", 50) or 50), _file_signature(history),
+    )
+    with _summary_cache_lock:
+        cached = _summary_cache.get(cache_key)
+        if cached is not None:
+            return _apply_live_state(cached, _read_event_state(state_path), camera, current)
+        summary = _event_summary_uncached(cfg, current)
+        _summary_cache[cache_key] = summary
+        while len(_summary_cache) > _SUMMARY_CACHE_LIMIT:
+            _summary_cache.pop(next(iter(_summary_cache)))
+        return summary
+
+
+def _event_summary_uncached(cfg: dict[str, Any], now=None) -> dict[str, Any]:
+    history, state_path = event_paths(cfg)
+    state = _read_event_state(state_path)
     now = now or datetime.now().astimezone()
     today = now.date()
     totals = {"a_to_b": 0, "b_to_a": 0, "events": 0, "observed_enter": 0, "observed_exit": 0,
@@ -436,35 +499,19 @@ def event_summary(cfg: dict[str, Any], now=None) -> dict[str, Any]:
                     totals["observed_exit"] += delta[1]
     daily_rollups = _daily_count_history(observations, now, 40)
     daily_history = daily_rollups[-7:]
-    last_event = _source_datetime(state.get("last_event_at"))
-    last_http_post = _source_datetime(state.get("last_http_post_at"))
-    stale_after_minutes = max(1, int(camera.get("stale_after_minutes", 10) or 10))
-    counter_age_seconds = max(0, int((now - last_event.astimezone(now.tzinfo)).total_seconds())) if last_event else None
-    transport_age_seconds = max(0, int((now - last_http_post.astimezone(now.tzinfo)).total_seconds())) if last_http_post else None
-    http_push = str(camera.get("event_transport") or "").lower() == "http_push"
-    message_age_seconds = transport_age_seconds if http_push and transport_age_seconds is not None else counter_age_seconds
-    stale = bool(camera.get("event_collection_enabled")) and (
-        message_age_seconds is None or message_age_seconds > stale_after_minutes * 60
-    )
-    quiet = bool(
-        http_push and not stale and counter_age_seconds is not None
-        and counter_age_seconds > stale_after_minutes * 60
-    )
-    return {**state, "enabled": bool(camera.get("event_collection_enabled")), "today": totals,
+    summary = {**state, "today": totals,
             "counts_verified": False, "counter_resets": resets,
             "unexpected_resets_today": daily_history[-1]["unexpected_resets"] if daily_history else 0,
             "scheduled_resets": sum(row["scheduled_resets"] for row in daily_history),
-            "daily_history": daily_history, "stale": stale,
+            "daily_history": daily_history,
             "hourly_history": _hourly_count_history(observations, now, 24),
             "period_totals": _period_totals(daily_rollups, now),
             "activity_anomalies": _activity_anomalies(
                 daily_rollups, int(camera.get("anomaly_threshold_percent", 50) or 50)
             ),
             "anomaly_threshold_percent": int(camera.get("anomaly_threshold_percent", 50) or 50),
-            "stale_after_minutes": stale_after_minutes, "message_age_seconds": message_age_seconds,
-            "counter_age_seconds": counter_age_seconds, "transport_age_seconds": transport_age_seconds,
-            "quiet": quiet,
             "interval_reports": len(intervals)}
+    return _apply_live_state(summary, state, camera, now)
 
 
 def _daily_count_history(observations, now, days):

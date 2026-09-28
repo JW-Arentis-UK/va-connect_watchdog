@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import urlopen, Request
 
+import va_watchdog.hikvision_events as hikvision_events
 from va_watchdog.config import DEFAULT_CONFIG
 from va_watchdog.hikvision import _request_xml, _get_json, probe_people_counting
 from va_watchdog.hikvision_events import (daily_count_history, parse_notification, event_summary,
@@ -558,6 +559,29 @@ class CounterTests(unittest.TestCase):
         self.assertGreaterEqual(summary["counter_age_seconds"], 660)
         self.assertEqual(summary["transport_age_seconds"], 0)
         self.assertEqual(summary["message_age_seconds"], 0)
+
+    def test_heartbeat_refresh_reuses_history_rollup(self):
+        self.cfg["people_counting"] = {
+            **CAMERA, "event_transport": "http_push", "stale_after_minutes": 10,
+        }
+        record_push_event(self.cfg, parse_notification(region_counting()))
+        now = datetime.now().astimezone()
+
+        with patch.object(hikvision_events, "_event_summary_uncached",
+                          wraps=hikvision_events._event_summary_uncached) as build:
+            first = event_summary(self.cfg, now)
+            _, state_path = event_paths(self.cfg)
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state.update({
+                "last_http_post_at": now.isoformat(),
+                "last_http_message_type": "heartBeat",
+            })
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            second = event_summary(self.cfg, now)
+
+        self.assertEqual(build.call_count, 1)
+        self.assertEqual(first["last_reported_counts"], second["last_reported_counts"])
+        self.assertEqual(second["last_http_message_type"], "heartBeat")
 
     def test_event_summary_builds_hourly_and_period_category_totals(self):
         record_push_event(self.cfg, parse_notification(region_counting(
