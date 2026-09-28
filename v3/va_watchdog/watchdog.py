@@ -271,6 +271,14 @@ def main():
 
     health_sequence = 0
     last_kernel_scan = 0.0
+    last_retention_check = 0.0
+    collector_intervals = cfg.get("collector_intervals", {})
+    if not isinstance(collector_intervals, dict):
+        collector_intervals = {}
+    retention_interval = max(
+        30,
+        int(collector_intervals.get("retention_seconds", 60) or 60),
+    )
     while True:
         try:
             health_sequence += 1
@@ -310,9 +318,11 @@ def main():
             status["heartbeat"] = heartbeat.snapshot()
             atomic_write_json(cfg["status_path"], status)
             append_history(cfg, status)
-            retention_result = enforce_retention(cfg)
-            if retention_result.get("actions"):
-                event_log.add("warning", "retention", "Watchdog data retention purge completed", retention_result)
+            if time.monotonic() - last_retention_check >= retention_interval:
+                retention_result = enforce_retention(cfg)
+                last_retention_check = time.monotonic()
+                if retention_result.get("actions"):
+                    event_log.add("warning", "retention", "Watchdog data retention purge completed", retention_result)
             systemd_notify("WATCHDOG=1\nSTATUS=VA-Connect Watchdog healthy loop")
             last_trip_active = trip_active
         except Exception as e:

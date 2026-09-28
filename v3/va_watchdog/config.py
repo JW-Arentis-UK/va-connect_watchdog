@@ -19,7 +19,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "storage_seconds": 30,
         "network_seconds": 30,
         "router_seconds": 60,
-        "process_seconds": 5
+        "process_seconds": 5,
+        "retention_seconds": 60
     },
     "status_path": "/var/lib/va-watchdog/status.json",
     "events_path": "/var/lib/va-watchdog/events.jsonl",

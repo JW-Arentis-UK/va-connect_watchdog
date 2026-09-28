@@ -88,6 +88,7 @@ def retention_status(cfg: dict[str, Any]) -> dict[str, Any]:
     return {
         "data_dir": str(data_dir(cfg)),
         "max_total_mb": max_mb,
+        "used_bytes": used_bytes,
         "used_mb": round(used_bytes / 1024 / 1024, 2),
         "used_percent": round((used_bytes / max(1, max_mb * 1024 * 1024)) * 100, 1),
         "events_retention_days": retention.get("events_retention_days"),
@@ -142,7 +143,7 @@ def enforce_retention(cfg: dict[str, Any]) -> dict[str, Any]:
 
     status = retention_status(cfg)
     max_bytes = max_mb * 1024 * 1024
-    if dir_size(data_dir(cfg)) <= max_bytes:
+    if int(status.get("used_bytes", 0) or 0) <= max_bytes:
         return {"ok": True, "actions": [], "retention": status}
 
     days = min(

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from va_watchdog.events import EventLog, purge_events, read_events
 from va_watchdog.recovery import RecoveryEngine
-from va_watchdog.retention import purge_data
+from va_watchdog.retention import enforce_retention, purge_data
 from va_watchdog.update import launch_update_job
 
 
@@ -70,6 +70,18 @@ class EventTests(unittest.TestCase):
 
 
 class RetentionTests(unittest.TestCase):
+    def test_under_budget_enforcement_reuses_measured_directory_size(self):
+        cfg = {
+            "events_path": "/var/lib/va-watchdog/events.jsonl",
+            "retention": {"max_total_mb": 100},
+        }
+        with patch("va_watchdog.retention.dir_size", side_effect=[1024, 512]) as measure:
+            result = enforce_retention(cfg)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["retention"]["used_bytes"], 1024)
+        self.assertEqual(measure.call_count, 2)
+
     def test_old_purge_trims_jsonl_rows_instead_of_deleting_file(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
