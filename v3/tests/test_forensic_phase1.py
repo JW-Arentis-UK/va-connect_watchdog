@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from va_watchdog.heartbeat import HeartbeatPublisher, heartbeat_age_seconds, health_progress_age_seconds, read_state
-from va_watchdog.incident_archive import archive_previous_boot, list_archives
+from va_watchdog.incident_archive import archive_previous_boot, list_archives, read_archived_blackbox
 from va_watchdog.reboot_evidence import classify, create, event_level
 from va_watchdog.watchdog_feed import FeedWorker
 from va_watchdog.watchdog_feed_evidence import (
@@ -431,6 +431,9 @@ class ForensicPhase1Tests(unittest.TestCase):
 
             self.assertTrue(result["created"])
             self.assertEqual(len(list_archives(cfg)), 1)
+            archived_blackbox = read_archived_blackbox(cfg, archive_dir.name)
+            self.assertEqual(archived_blackbox["snapshots"], [{"boot_id": "old", "time": "old-blackbox"}])
+            self.assertEqual(archived_blackbox["archive"]["current_boot_id"], "new")
             self.assertEqual(heartbeat_rows, [{"boot_id": "old", "time": "old-heartbeat"}])
             self.assertTrue((archive_dir / "blackbox.jsonl.gz").is_file())
             self.assertTrue((archive_dir / "last-status.json").is_file())

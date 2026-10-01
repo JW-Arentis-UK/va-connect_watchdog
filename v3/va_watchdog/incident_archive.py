@@ -120,6 +120,22 @@ def list_archives(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+def read_archived_blackbox(cfg: dict[str, Any], name: str, limit: int | None = None) -> dict[str, Any] | None:
+    """Read a preserved boot by its listed archive name, never by a caller-supplied path."""
+    archive = next((item for item in list_archives(cfg) if item["name"] == name), None)
+    if archive is None:
+        return None
+    rows: list[dict[str, Any]] = []
+    with gzip.open(Path(archive["path"]) / "blackbox.jsonl.gz", "rt", encoding="utf-8") as handle:
+        for line in handle:
+            row = json.loads(line)
+            if isinstance(row, dict):
+                rows.append(row)
+    if limit is not None:
+        rows = rows[-max(0, limit):] if limit > 0 else []
+    return {"archive": archive["manifest"], "snapshots": rows}
+
+
 def enforce_archive_retention(cfg: dict[str, Any]) -> dict[str, Any]:
     settings = archive_config(cfg)
     root = settings["path"]

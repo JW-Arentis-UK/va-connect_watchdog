@@ -35,6 +35,7 @@ fi
 [[ -f "$APP_DIR/config.example.json" ]] || fail "Example configuration is missing"
 [[ -f "$APP_DIR/systemd/va-watchdog.service" ]] || fail "Main systemd unit is missing"
 [[ -f "$APP_DIR/systemd/va-watchdog-feed.service" ]] || fail "Feeder systemd unit is missing"
+[[ -f "$APP_DIR/systemd/va-watchdog-web.service" ]] || fail "Web systemd unit is missing"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
 command -v systemctl >/dev/null 2>&1 || fail "systemd is required"
 
@@ -123,18 +124,37 @@ fi
 
 install -m 0644 "$APP_DIR/systemd/va-watchdog.service" /etc/systemd/system/va-watchdog.service
 install -m 0644 "$APP_DIR/systemd/va-watchdog-feed.service" /etc/systemd/system/va-watchdog-feed.service
+install -m 0644 "$APP_DIR/systemd/va-watchdog-web.service" /etc/systemd/system/va-watchdog-web.service
 systemctl daemon-reload
-systemctl enable va-watchdog-feed.service va-watchdog.service
+systemctl enable va-watchdog-feed.service va-watchdog.service va-watchdog-web.service
 systemctl restart va-watchdog-feed.service
 systemctl restart va-watchdog.service
+web_enabled=0
+if python3 - "$CONFIG_PATH" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    cfg = json.load(handle)
+raise SystemExit(0 if cfg.get("web", {}).get("enabled", True) else 1)
+PY
+then
+  web_enabled=1
+  systemctl restart va-watchdog-web.service
+else
+  systemctl stop va-watchdog-web.service || true
+fi
 
 sleep 2
 systemctl is-active --quiet va-watchdog-feed.service || fail "va-watchdog-feed.service did not start"
 systemctl is-active --quiet va-watchdog.service || fail "va-watchdog.service did not start"
+if [[ "$web_enabled" == 1 ]]; then
+  systemctl is-active --quiet va-watchdog-web.service || fail "va-watchdog-web.service did not start"
+fi
 
 log "Installed VA-Connect Watchdog"
 log "Configuration: $CONFIG_PATH"
 log "Data: $DATA_DIR"
 log "Main service: active"
+log "Web service: installed and supervised"
 log "Hardware feeder service: active (hardware feed remains controlled by configuration)"
 log "Web: http://<gateway-ip>:9110/"

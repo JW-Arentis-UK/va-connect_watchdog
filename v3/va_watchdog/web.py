@@ -34,7 +34,7 @@ from .speedtest import run_speed_test
 from .heartbeat import heartbeat_paths, read_state, read_tail, heartbeat_age_seconds
 from .journal import persistent_status, enable_persistent
 from .crash_evidence import pstore_status
-from .incident_archive import archive_config, list_archives
+from .incident_archive import archive_config, list_archives, read_archived_blackbox
 from .baseline_capture import baseline_paths, baseline_status, completed_archive, start_baseline
 from .identity import configured_identity, hardware_identity, identity_slug, identity_summary
 from .manufacturer_report import collect_manufacturer_report, manufacturer_report_bundle, render_manufacturer_report
@@ -2510,6 +2510,58 @@ def start_web(cfg):
             service_enabled = _run(["systemctl", "is-enabled", "va-watchdog"], timeout=3)
             bb = blackbox_summary(cfg)
             incident_archives = list_archives(cfg)
+            selected_name = (getattr(request_context, "query", {}).get("blackbox_archive") or [""])[0]
+            selected_incident = next((item for item in incident_archives if item["name"] == selected_name), None)
+            if not selected_name and incident_archives:
+                selected_incident = incident_archives[0]
+            incident_rows = []
+            incident_error = ""
+            if selected_incident:
+                try:
+                    incident_data = read_archived_blackbox(cfg, selected_incident["name"], limit=12)
+                    incident_rows = incident_data["snapshots"] if incident_data else []
+                except (OSError, ValueError, EOFError) as exc:
+                    incident_error = f"Preserved samples could not be read: {exc}"
+            incident_manifest = selected_incident["manifest"] if selected_incident else {}
+            incident_blackbox = next(
+                (item for item in incident_manifest.get("files", []) if item.get("path") == "blackbox.jsonl.gz"), {}
+            )
+            incident_links = "".join(
+                f'<a class="ghost" href="/evidence?blackbox_archive={quote(item["name"])}#blackbox-archive">'
+                f'{escape(local_time(item["manifest"].get("detected_at")))}</a>'
+                for item in incident_archives
+            )
+            incident_sample_rows = "".join(
+                "<tr>"
+                f'<td>{escape(local_time(row.get("time")))}</td>'
+                f'<td>{escape(str(row.get("cpu", {}).get("overall_percent", "-")))}%</td>'
+                f'<td>{escape(str(row.get("memory", {}).get("used_percent", "-")))}%</td>'
+                f'<td>{escape(str(row.get("heartbeat", {}).get("health_sequence", "-")))}</td>'
+                f'<td>{escape(str(row.get("heartbeat", {}).get("last_hardware_watchdog_feed", "-")))}</td>'
+                "</tr>"
+                for row in incident_rows
+            )
+            incident_card = (
+                '<section id="blackbox-archive"><div class="card"><h2>Previous-boot black-box evidence</h2>'
+                '<p class="muted">Saved when the gateway boots again. This is separate from the current rolling window. '
+                'The final sample is the last successful recording, not necessarily the time the fault began.</p>'
+                + (f'<div class="button-row">{incident_links}</div>' if incident_links else '')
+                + (
+                    f'<p><strong>Previous boot:</strong> {escape(str(incident_manifest.get("previous_boot_id") or "-"))}</p>'
+                    f'<p><strong>Saved window:</strong> {escape(local_time(incident_blackbox.get("first_sample_utc")))} '
+                    f'to {escape(local_time(incident_blackbox.get("last_successful_sample_utc")))} '
+                    f'({escape(str(incident_blackbox.get("rows", 0)))} samples)</p>'
+                    f'<p><strong>Reboot detected:</strong> {escape(local_time(incident_manifest.get("detected_at")))}</p>'
+                    f'<div class="button-row"><a class="action" href="/api/blackbox/archive?name={quote(selected_incident["name"])}" '
+                    'download="previous-boot-blackbox.json">Download all preserved samples</a></div>'
+                    + (f'<p class="warning">{escape(incident_error)}</p>' if incident_error else '')
+                    + ('<h3>Final recorded samples</h3><div class="table-scroll"><table><thead><tr>'
+                       '<th>Time</th><th>CPU</th><th>RAM</th><th>Health sequence</th><th>Last hardware feed</th>'
+                       f'</tr></thead><tbody>{incident_sample_rows}</tbody></table></div>' if incident_sample_rows else '')
+                    if selected_incident else '<p class="muted">No previous-boot archive is available yet.</p>'
+                )
+                + '</div></section>'
+            )
             pstore = pstore_status()
             baseline = baseline_status(cfg)
             active_value = str(service_status.get("stdout") or service_status.get("stderr") or "unknown")
@@ -2581,9 +2633,10 @@ def start_web(cfg):
                 + tool_grid([
                     ("Download support bundle", "Best first step: logs, status, history, reboot, storage, network, and watchdog evidence.", "/api/diagnostics/support-bundle.zip", "primary"),
                     ("Download Neousys report", "Manufacturer-ready hardware, BIOS, software, driver, storage, and watchdog test evidence.", "/api/diagnostics/manufacturer-report.zip", ""),
-                    ("Black-box evidence", "Short-interval snapshots retained around a hang or reboot.", "/api/blackbox", ""),
+                    ("Current black-box window", "Live snapshots from the current boot; previous boots are shown below.", "/api/blackbox", ""),
                 ])
                 + "</div>"
+                + incident_card
                 + f"<div class=\"card\"><h2>Persistent Journal</h2><p class=\"{'healthy' if journal_state.get('healthy') else 'warning'}\">{escape(str(journal_state.get('summary') or 'Disabled or unavailable'))}</p><p class=\"muted\">Persistent logging preserves kernel and service evidence across a reboot. Configuration is managed in Setup.</p><div class=\"button-row\"><a class=\"ghost\" href=\"/setup#persistent-journal\">Open logging setup</a></div></div>"
                 + disclosure("Stage 0 baseline capture", baseline_card)
                 + disclosure("Advanced technical data", advanced_detail)
@@ -6287,7 +6340,7 @@ def start_web(cfg):
         )
         services = cfg.get("services", []) if isinstance(cfg.get("services", []), list) else []
         service_names = [str(item.get("name", "")).strip() for item in services if isinstance(item, dict) and item.get("name")]
-        watched_services = ["va-watchdog", "va-watchdog-feed"] + service_names
+        watched_services = ["va-watchdog", "va-watchdog-feed", "va-watchdog-web"] + service_names
         service_status_cmd = ["systemctl", "status", *watched_services, "--no-pager", "-l"]
         bundle = {
             "generated_utc": generated,
@@ -6303,6 +6356,7 @@ def start_web(cfg):
             "systemctl-status.txt": _run(service_status_cmd, timeout=10),
             "va-watchdog-journal.txt": _run(["journalctl", "-u", "va-watchdog", "--since", "7 days ago", "--no-pager"], timeout=15),
             "va-watchdog-feed-journal.txt": _run(["journalctl", "-u", "va-watchdog-feed", "--since", "7 days ago", "--no-pager"], timeout=15),
+            "va-watchdog-web-journal.txt": _run(["journalctl", "-u", "va-watchdog-web", "--since", "7 days ago", "--no-pager"], timeout=15),
             "kernel-journal.txt": _run(["journalctl", "-k", "--since", "7 days ago", "--no-pager"], timeout=15),
             "reboots-last-x.txt": _run(["last", "-x"], timeout=10),
             "disk-lsblk.txt": _run(["lsblk", "-o", "NAME,PATH,TYPE,SIZE,FSTYPE,LABEL,MOUNTPOINT,MODEL,SERIAL"], timeout=5),
@@ -6841,7 +6895,21 @@ def start_web(cfg):
                 return
             if route_path == "/api/blackbox":
                 summary = blackbox_summary(cfg)
-                self._send_json({"summary": summary, "snapshots": read_blackbox(cfg, limit=summary.get("max_rows", 450))})
+                current_boot = summary.get("last_boot_id") or ""
+                snapshots = read_blackbox(cfg, limit=summary.get("max_rows", 450), boot_id_filter=current_boot) if current_boot else []
+                self._send_json({"summary": summary, "snapshots": snapshots})
+                return
+            if route_path == "/api/blackbox/archive":
+                name = (request_context.query.get("name") or [""])[0]
+                try:
+                    archived = read_archived_blackbox(cfg, name)
+                except (OSError, ValueError, EOFError) as exc:
+                    self._send_json({"error": f"Preserved black-box evidence could not be read: {exc}"}, status=500)
+                    return
+                if archived is None:
+                    self._send_json({"error": "Previous-boot archive not found."}, status=404)
+                    return
+                self._send_json(archived)
                 return
             if route_path == "/api/diagnostics/support-bundle.zip":
                 try:
@@ -7693,4 +7761,5 @@ def start_web(cfg):
     server = ThreadingHTTPServer((web_cfg["host"], int(web_cfg["port"])), Handler)
     t = Thread(target=server.serve_forever, daemon=True)
     t.start()
+    server.serve_thread = t
     return server

@@ -19,7 +19,6 @@ from .systemd_notify import notify as systemd_notify
 from .watchdog_grace import startup_grace_status
 from .watchdog_test import trip_test_active
 from .watchdog_liveness_test import reconcile_liveness_test
-from .web import start_web
 from .heartbeat import HeartbeatPublisher
 from .reboot_evidence import create as create_reboot_evidence, event_level as reboot_event_level
 from .kernel_faults import scan as scan_kernel_faults
@@ -266,7 +265,6 @@ def main():
     append_history(cfg, status)
     status["blackbox"] = blackbox_summary(cfg)
     heartbeat.start()
-    start_web(cfg)
     systemd_notify("READY=1\nSTATUS=VA-Connect Watchdog running")
 
     health_sequence = 0

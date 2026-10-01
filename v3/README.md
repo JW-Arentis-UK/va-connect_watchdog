@@ -44,7 +44,7 @@ The installer:
 - installs Python, Git, SMART, sensor, network, and performance tools
 - clones or safely updates `/opt/va-connect-watchdog-v3`
 - backs up an existing configuration and preserves the previous Git commit
-- installs and enables both watchdog systemd services
+- installs and enables the core, hardware feeder, and web systemd services
 - verifies the local health and identity APIs
 
 Hardware watchdog feeding is deliberately not enabled on a clean install. This
@@ -81,6 +81,7 @@ bash ./bootstrap_v3_gateway.sh
 Check status:
 ```bash
 systemctl status va-watchdog
+systemctl status va-watchdog-feed va-watchdog-web
 curl http://127.0.0.1:9110/api/status
 ```
 
@@ -153,6 +154,13 @@ deferred, allowing the main application and remote access to initialise without 
 reboot loop. Ordinary service, storage, network, CPU, and RAM warnings never stop
 feeding. Only a stale main heartbeat, a deliberate trip test, shutdown, or an
 explicitly configured fatal condition can pause the hardware feed.
+
+The HTTP interface runs in `va-watchdog-web.service`, independently of the
+core health loop and the hardware feeder. Its local `/api/healthz` probe must
+respond before the service reports ready to systemd. Three failed probes exit
+the web process so systemd restarts it without restarting the gateway.
+The attended recovery procedure for Ellingers is in
+[`docs/ellingers-watchdog-recovery-test-plan.md`](docs/ellingers-watchdog-recovery-test-plan.md).
 
 ## Preserved crash evidence
 

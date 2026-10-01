@@ -607,10 +607,15 @@ def read_blackbox(cfg: dict[str, Any], limit: int = 100, boot_id_filter: str | N
 
 def blackbox_summary(cfg: dict[str, Any]) -> dict[str, Any]:
     settings = blackbox_cfg(cfg)
-    rows = _ACTIVE_RECORDER.snapshot() if _ACTIVE_RECORDER else read_blackbox(cfg, limit=settings["max_rows"])
+    state = _read_json(Path(settings["state_path"]))
+    if _ACTIVE_RECORDER:
+        rows = _ACTIVE_RECORDER.snapshot()
+    else:
+        available = read_blackbox(cfg, limit=None)
+        current_boot = str(state.get("boot_id") or (available[-1].get("boot_id") if available else "") or "")
+        rows = [row for row in available if str(row.get("boot_id") or "") == current_boot][-settings["max_rows"]:]
     last = rows[-1] if rows else {}
     segment_dir = Path(settings["segment_dir"])
-    state = _read_json(Path(settings["state_path"]))
     return {
         "enabled": settings["enabled"],
         "path": str(segment_dir),
@@ -621,7 +626,7 @@ def blackbox_summary(cfg: dict[str, Any]) -> dict[str, Any]:
         "rows": len(rows),
         "first_time": rows[0].get("time") if rows else "",
         "last_time": last.get("time", ""),
-        "last_boot_id": last.get("boot_id", ""),
+        "last_boot_id": last.get("boot_id") or state.get("boot_id", ""),
         "last_sequence": last.get("sequence"),
         "recorder_running": bool(_ACTIVE_RECORDER and _ACTIVE_RECORDER._thread and _ACTIVE_RECORDER._thread.is_alive()),
         "last_error": (_ACTIVE_RECORDER.last_error if _ACTIVE_RECORDER else "") or state.get("last_error", ""),

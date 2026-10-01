@@ -101,6 +101,10 @@ if [ -f "$ROOT_DIR/systemd/va-watchdog-feed.service" ]; then
   install -m 0644 "$ROOT_DIR/systemd/va-watchdog-feed.service" /etc/systemd/system/va-watchdog-feed.service
   log "installed current va-watchdog-feed systemd unit"
 fi
+if [ -f "$ROOT_DIR/systemd/va-watchdog-web.service" ]; then
+  install -m 0644 "$ROOT_DIR/systemd/va-watchdog-web.service" /etc/systemd/system/va-watchdog-web.service
+  log "installed current va-watchdog-web systemd unit"
+fi
 systemctl daemon-reload
 
 RUNTIME=python3
@@ -110,15 +114,25 @@ fi
 PYTHONPATH="$ROOT_DIR" "$RUNTIME" -c 'from va_watchdog.web import start_web'
 log "web runtime import check passed"
 
-systemctl unmask va-watchdog-feed va-watchdog 2>/dev/null || true
-systemctl enable va-watchdog-feed va-watchdog
+systemctl unmask va-watchdog-feed va-watchdog va-watchdog-web 2>/dev/null || true
+systemctl enable va-watchdog-feed va-watchdog va-watchdog-web
 systemctl restart va-watchdog-feed
 log "hardware feeder restart requested"
 systemctl restart va-watchdog
 log "main service restart requested"
+if PYTHONPATH="$ROOT_DIR" "$RUNTIME" -c 'from va_watchdog.config import load_config; raise SystemExit(0 if load_config().get("web", {}).get("enabled", True) else 1)'; then
+  systemctl restart va-watchdog-web
+  log "web service restart requested"
+else
+  systemctl stop va-watchdog-web || true
+  log "web service stopped because web is disabled"
+fi
 sleep 2
 systemctl is-active --quiet va-watchdog-feed
 systemctl is-active --quiet va-watchdog
+if PYTHONPATH="$ROOT_DIR" "$RUNTIME" -c 'from va_watchdog.config import load_config; raise SystemExit(0 if load_config().get("web", {}).get("enabled", True) else 1)'; then
+  systemctl is-active --quiet va-watchdog-web
+fi
 systemctl is-enabled --quiet va-watchdog-feed
 PYTHONPATH="$ROOT_DIR" "$RUNTIME" -m va_watchdog.web_smoke
 log "Setup HTTP smoke check passed"
