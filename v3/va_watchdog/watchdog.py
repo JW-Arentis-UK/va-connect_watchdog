@@ -24,6 +24,23 @@ from .reboot_evidence import create as create_reboot_evidence, event_level as re
 from .kernel_faults import scan as scan_kernel_faults
 from .hikvision_events import HikvisionEventCollector
 
+WEB_UNIT_PATH = Path("/etc/systemd/system/va-watchdog-web.service")
+
+
+def start_web_without_service(cfg, event_log, unit_path=WEB_UNIT_PATH):
+    if not cfg.get("web", {}).get("enabled", True) or unit_path.exists():
+        return False
+    try:
+        from .web import start_web
+
+        start_web(cfg)
+        event_log.add("warning", "web", "Web service unit missing; serving from core until installation")
+        return True
+    except Exception as exc:
+        event_log.add("warning", "web", f"Web fallback could not start: {exc}")
+        return False
+
+
 def atomic_write_json(path: str, data):
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -265,6 +282,7 @@ def main():
     append_history(cfg, status)
     status["blackbox"] = blackbox_summary(cfg)
     heartbeat.start()
+    start_web_without_service(cfg, event_log)
     systemd_notify("READY=1\nSTATUS=VA-Connect Watchdog running")
 
     health_sequence = 0

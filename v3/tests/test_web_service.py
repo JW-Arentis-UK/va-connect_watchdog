@@ -11,6 +11,7 @@ from urllib.request import urlopen
 from unittest.mock import Mock, patch
 
 from va_watchdog import web_service
+from va_watchdog.watchdog import start_web_without_service
 from va_watchdog.config import DEFAULT_CONFIG
 
 
@@ -97,6 +98,18 @@ class WebServiceTests(unittest.TestCase):
             self.assertIn("Download all preserved samples", page)
             self.assertEqual(unknown.exception.code, 404)
 
+    def test_first_update_keeps_web_available_until_new_unit_is_installed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            unit_path = Path(temporary) / "va-watchdog-web.service"
+            events = Mock()
+            with patch("va_watchdog.web.start_web") as start:
+                self.assertTrue(start_web_without_service({"web": {"enabled": True}}, events, unit_path))
+                start.assert_called_once()
+                unit_path.touch()
+                self.assertFalse(start_web_without_service({"web": {"enabled": True}}, events, unit_path))
+                self.assertFalse(start_web_without_service({"web": {"enabled": False}}, events, unit_path))
+                start.assert_called_once()
+
     def test_probe_accepts_live_web_even_when_core_status_is_unhealthy(self):
         response = Mock(status=200)
         response.__enter__ = Mock(return_value=response)
@@ -164,10 +177,12 @@ class WebServiceTests(unittest.TestCase):
         unit = (root / "systemd" / "va-watchdog-web.service").read_text(encoding="utf-8")
         install = (root / "scripts" / "install.sh").read_text(encoding="utf-8")
         update = (root / "scripts" / "update.sh").read_text(encoding="utf-8")
-        self.assertNotIn("start_web(cfg)", core)
+        self.assertIn("start_web_without_service(cfg, event_log)", core)
         self.assertIn("-m va_watchdog.web_service", unit)
         self.assertIn("WatchdogSec=30", unit)
         self.assertIn("Restart=on-failure", unit)
+        self.assertNotIn("After=local-fs.target va-watchdog.service", unit)
+        self.assertNotIn("Wants=va-watchdog.service", unit)
         self.assertNotIn("Requires=va-watchdog-feed.service", unit)
         self.assertIn("systemctl restart va-watchdog-web.service", install)
         self.assertIn("systemctl restart va-watchdog-web", update)

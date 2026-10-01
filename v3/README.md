@@ -159,6 +159,8 @@ The HTTP interface runs in `va-watchdog-web.service`, independently of the
 core health loop and the hardware feeder. Its local `/api/healthz` probe must
 respond before the service reports ready to systemd. Three failed probes exit
 the web process so systemd restarts it without restarting the gateway.
+During an upgrade from an older updater that has not installed the web unit,
+the core temporarily serves HTTP itself to keep the interface reachable.
 The attended recovery procedure for Ellingers is in
 [`docs/ellingers-watchdog-recovery-test-plan.md`](docs/ellingers-watchdog-recovery-test-plan.md).
 

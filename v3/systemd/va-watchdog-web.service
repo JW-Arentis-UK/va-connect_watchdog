@@ -1,7 +1,6 @@
 [Unit]
 Description=VA-Connect Watchdog Web
-After=local-fs.target va-watchdog.service
-Wants=va-watchdog.service
+After=local-fs.target
 
 [Service]
 Type=notify
