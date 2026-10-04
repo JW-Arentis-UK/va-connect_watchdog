@@ -264,7 +264,7 @@ class ForensicPhase1Tests(unittest.TestCase):
 
     def test_planned_reboots_are_information_not_failures(self):
         self.assertEqual(event_level({"reset_mechanism": "Requested reboot", "confidence": "High"}), "info")
-        self.assertEqual(event_level({"reset_mechanism": "Clean reboot", "confidence": "Medium"}), "info")
+        self.assertEqual(event_level({"reset_mechanism": "Clean reboot", "confidence": "Medium"}), "warning")
         self.assertEqual(
             event_level({"reset_mechanism": "Watchdog reset", "deliberate_trip_test": {"confirmed": True}}),
             "info",

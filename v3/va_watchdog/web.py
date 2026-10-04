@@ -1243,7 +1243,7 @@ def start_web(cfg):
                 classification_key = restart_type.lower()
                 classification_state = (
                     "healthy"
-                    if classification_key in {"automatic watchdog recovery", "clean reboot", "requested reboot"}
+                    if classification_key in {"automatic watchdog recovery", "requested reboot"}
                     else "warning"
                     if classification_key in {"deliberate trip test", "full liveness test"}
                     else "critical"
@@ -1254,7 +1254,7 @@ def start_web(cfg):
                     "restart-watchdog"
                     if classification_key == "automatic watchdog recovery"
                     else "restart-clean"
-                    if classification_key in {"clean reboot", "requested reboot"}
+                    if classification_key == "requested reboot"
                     else "restart-test"
                     if classification_key in {"deliberate trip test", "full liveness test"}
                     else "restart-fault"
@@ -1275,7 +1275,7 @@ def start_web(cfg):
                 "<p class=\"muted\">The latest ten gateway starts. Planned tests are labelled separately from automatic recovery.</p></div>"
                 "<a class=\"ghost\" href=\"/evidence\">Evidence</a></div>"
                 f"<div class=\"restart-list\">{''.join(rows)}</div>"
-                "<p class=\"muted\">Times use the gateway's local timezone and are recorded when the watchdog starts, normally a few seconds after boot.</p></div>"
+                "<p class=\"muted\">A shutdown record does not identify who or what initiated the restart. Times use the gateway's local timezone and are recorded when the watchdog starts, normally a few seconds after boot.</p></div>"
             )
 
         def updates_card():

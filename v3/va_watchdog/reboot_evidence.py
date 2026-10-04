@@ -13,6 +13,8 @@ from .incident_archive import archive_previous_boot
 from .watchdog_test import read_trip_test_state
 from .watchdog_liveness_test import confirmed_for_boot, read_liveness_test_state
 
+SHUTDOWN_RECORDED = "Shutdown recorded (cause unknown)"
+
 
 def recent_restarts(cfg: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
     """Return a compact, newest-first view without loading full evidence history."""
@@ -62,6 +64,8 @@ def recent_restarts(cfg: dict[str, Any], limit: int = 10) -> list[dict[str, Any]
             restart_type = "Full liveness test"
         elif classification == "Watchdog reset":
             restart_type = "Automatic watchdog recovery"
+        elif classification == "Clean reboot":
+            restart_type = SHUTDOWN_RECORDED
         else:
             restart_type = classification
         rows.append({
@@ -185,11 +189,11 @@ def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], prev
     elif watchdog_evidence:
         mechanism = "Watchdog reset"
         confidence = "High" if reset_reason or deliberate_trip or liveness_trip else "Medium"
-    elif clean:
-        mechanism = "Clean reboot"
-        confidence = "Medium"
     elif kernel_fault:
         mechanism = "Kernel fault"
+        confidence = "Medium"
+    elif clean:
+        mechanism = SHUTDOWN_RECORDED
         confidence = "Medium"
     else:
         mechanism = "Unknown"
@@ -214,7 +218,7 @@ def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], prev
     if watchdog_evidence:
         evidence_used.append("The platform or previous-boot kernel log explicitly reported a watchdog reset.")
     if clean:
-        evidence_used.append("The immediately preceding last -x session contains a clean shutdown record.")
+        evidence_used.append("The preceding last -x session contains a shutdown record; the initiator and reset cause are unknown.")
     if kernel_fault:
         evidence_used.append("The previous-boot kernel log contains an explicit kernel fault signature.")
     if storage_fault:
@@ -246,7 +250,7 @@ def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], prev
 def event_level(evidence: dict[str, Any]) -> str:
     """Map reboot evidence to an event severity without flagging planned restarts as failures."""
     mechanism = str(evidence.get("reset_mechanism") or evidence.get("classification") or "").lower()
-    if mechanism in {"requested reboot", "clean reboot"}:
+    if mechanism == "requested reboot":
         return "info"
     if evidence.get("deliberate_trip_test") or evidence.get("liveness_path_test"):
         return "info"
@@ -273,7 +277,7 @@ def _previous_session_lines(last_x: str) -> list[str]:
     reboot_indexes = [index for index, line in enumerate(lines) if "reboot   system boot" in line.lower()]
     if len(reboot_indexes) >= 2:
         return lines[reboot_indexes[0] + 1:reboot_indexes[1]]
-    return lines[:12]
+    return []
 
 
 def create(cfg: dict[str, Any], boot_change: dict[str, Any], feed_state: dict[str, Any] | None = None) -> dict[str, Any]:
