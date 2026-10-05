@@ -8,7 +8,13 @@ from urllib.request import ProxyHandler, build_opener
 
 from .config import load_config
 from .systemd_notify import notify
-from .web import start_web
+
+def start_web(cfg):
+    if cfg.get('web', {}).get('lightweight'):
+        from .lite_server import start_web as start
+    else:
+        from .web import start_web as start
+    return start(cfg)
 
 
 def health_url(cfg):
