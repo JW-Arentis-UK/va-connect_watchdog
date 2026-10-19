@@ -16,7 +16,7 @@ ROOT = Path(__file__).parents[1]
 
 class PiProfileTests(unittest.TestCase):
     def test_release_build_number(self):
-        self.assertEqual(build_number(), "20261019.7")
+        self.assertEqual(build_number(), "20261019.8")
 
     def config(self):
         base = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
@@ -46,7 +46,7 @@ class PiProfileTests(unittest.TestCase):
         self.assertNotIn("recordings_disk", storage)
         self.assertIn("root_disk", storage)
 
-    def test_lite_homepage_uses_pi_cards_without_recording_scan(self):
+    def test_lite_homepage_uses_pi_cards_with_recording_age(self):
         cfg = self.config()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -62,11 +62,15 @@ class PiProfileTests(unittest.TestCase):
                                  "temperature", "ram", "cpu_load")
                 ],
             }), encoding="utf-8")
-            with patch("va_watchdog.lite.recording_activity", side_effect=AssertionError("unexpected recording scan")):
+            with patch("va_watchdog.lite.recording_activity", return_value={"available": True,
+                       "oldest": {"display_local": "17:45:12 19/10/2026"},
+                       "latest": {"display_local": "17:46:12 19/10/2026"}}) as activity:
                 result = snapshot(cfg, now=1792411205)
+            activity.assert_called_once_with(cfg, recent_count=1, now_unix=1792411205, recording_suffix=".data")
         self.assertEqual([card["title"] for card in result["cards"]],
                          ["Pi services", "Network", "Storage", "System"])
         self.assertEqual(result["state"], "healthy")
+        self.assertIn("Oldest recording: 17:45:12", result["cards"][2]["detail"])
         self.assertEqual([card["href"] for card in result["cards"]],
                          ["/#diagnostics", "/#diagnostics", "/pi-storage", "/#diagnostics"])
 

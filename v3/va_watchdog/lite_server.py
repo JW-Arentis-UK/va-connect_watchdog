@@ -13,6 +13,7 @@ from .lite import page, read_object, snapshot
 from .build import build_number
 from .log_tail import tail_lines
 from .pi_storage import expand as expand_pi_storage, inspect as inspect_pi_storage, verify_account_password
+from .recording_activity import recording_activity
 from .gateway_reboot import request_gateway_reboot
 from .update import _git_value, last_completed, launch_update_job, load_update_status, update_in_progress
 
@@ -47,8 +48,19 @@ def action_page(title, body, follow_update=False):
     ).encode('utf-8')
 
 
-def pi_storage_page(result=None):
+def pi_storage_page(cfg, result=None):
     status = inspect_pi_storage()
+    recordings = recording_activity(cfg, recent_count=1, recording_suffix='.data')
+    if recordings.get('available'):
+        oldest = recordings.get('oldest') or {}
+        latest = recordings.get('latest') or {}
+        recording_summary = (
+            f'<div class="label">Oldest recording</div><div class="value">{escape(oldest.get("display_local", "Unknown"))}</div>'
+            f'<div class="label">Latest recording</div><div class="value">{escape(latest.get("display_local", "Unknown"))}</div>'
+            f'<p class="muted">From timestamped recording filenames in {escape(recordings.get("recordings_path", ""))}.</p>'
+        )
+    else:
+        recording_summary = f'<div class="label">Recordings</div><p>{escape(recordings.get("message", "No recordings found"))}</p>'
     notice = ''
     if result:
         notice = f'<p class="{"healthy" if result.get("ok") else "critical"}">{escape(str(result.get("message", "")))}</p>'
@@ -80,6 +92,7 @@ def pi_storage_page(result=None):
         f'<div class="label">Root partition</div><div class="value">{escape(status["root"] or "Unknown")} · {status["root_gib"]} GiB</div>'
         f'<div class="label">Space beyond root</div><div class="value">Approximately {status["free_gib"]} GiB</div>'
         f'<p>{escape(status["reason"])}</p>'
+        f'{recording_summary}'
         '<p>Expansion uses Raspberry Pi OS raspi-config. Reboot to finish the resize. It does not format the drive or choose a recording location.</p>'
         f'{action}<div class="actions"><a class="button" href="/">Back to Status</a></div>'
     )
@@ -239,7 +252,7 @@ def start_web(cfg):
                     return self.end_headers()
                 return self.send(update_page(cfg, follow=follow), 'text/html; charset=utf-8')
             if path == '/pi-storage' and cfg.get('platform', {}).get('kind') == 'raspberry_pi':
-                return self.send(pi_storage_page(), 'text/html; charset=utf-8')
+                return self.send(pi_storage_page(cfg), 'text/html; charset=utf-8')
             if path == '/api/healthz':
                 result = {'ok': True, 'mode': 'lightweight'}
             elif path == '/api/lite':
@@ -295,7 +308,7 @@ def start_web(cfg):
                         )
                 else:
                     result = expand_pi_storage(form.get('root', [''])[0])
-                return self.send(pi_storage_page(result), 'text/html; charset=utf-8')
+                return self.send(pi_storage_page(cfg, result), 'text/html; charset=utf-8')
             self.send(b'{"error":"This dashboard is read-only"}', status=405)
 
     server = ThreadingHTTPServer((web.get('host', '0.0.0.0'), int(web.get('port', 9110))), Handler)

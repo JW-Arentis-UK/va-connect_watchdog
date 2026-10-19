@@ -2996,6 +2996,17 @@ def start_web(cfg):
 
     def pi_storage_html(result=None):
         status = inspect_pi_storage()
+        recordings = recording_activity(cfg, recent_count=1, recording_suffix=".data")
+        if recordings.get("available"):
+            oldest = recordings.get("oldest") or {}
+            latest = recordings.get("latest") or {}
+            recording_summary = (
+                f'<div class="label">Oldest recording</div><div class="value">{escape(oldest.get("display_local", "Unknown"))}</div>'
+                f'<div class="label">Latest recording</div><div class="value">{escape(latest.get("display_local", "Unknown"))}</div>'
+                f'<p>From timestamped recording filenames in {escape(recordings.get("recordings_path", ""))}.</p>'
+            )
+        else:
+            recording_summary = f'<div class="label">Recordings</div><p>{escape(recordings.get("message", "No recordings found"))}</p>'
         notice = ""
         if result is not None:
             notice = f"<p class=\"{'healthy' if result.get('ok') else 'critical'}\">{escape(str(result.get('message', '')))}</p>"
@@ -3029,6 +3040,7 @@ def start_web(cfg):
             f'<div class="label">Root partition</div><div class="value">{escape(status["root"] or "Unknown")} · {status["root_gib"]} GiB</div>'
             f'<div class="label">Space beyond root partition</div><div class="value">Approximately {status["free_gib"]} GiB</div>'
             f'<p>{escape(status["reason"])}</p>'
+            f'{recording_summary}'
             '<p>This uses Raspberry Pi OS raspi-config. It changes the partition table; the filesystem resize completes after a reboot. It does not format the drive or change the recording location.</p>'
             f'{action}<div class="button-row"><a class="ghost" href="/">Back to Status</a></div></div>'
         )

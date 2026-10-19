@@ -83,10 +83,17 @@ def snapshot(cfg, now=None):
     if isinstance(storage.get("free_mb"), (int, float)):
         storage_note += f" · {storage['free_mb'] / 1024:.1f} GiB free"
     if pi_profile:
+        recordings = recording_activity(cfg, recent_count=1, now_unix=now, recording_suffix=".data")
+        if recordings.get("available"):
+            oldest = recordings.get("oldest") or {}
+            latest = recordings.get("latest") or {}
+            recording_detail = f"Oldest recording: {oldest.get('display_local', 'Unknown')} · Latest: {latest.get('display_local', 'Unknown')}"
+        else:
+            recording_detail = recordings.get("message") or "No timestamped recordings were found"
         cards = [
             card("Pi services", services + ["display_session"], f"{running} of {len(services)} monitored services running"),
             card("Network", ["network_module"]),
-            card("Storage", ["root_disk", "write_test"]),
+            card("Storage", ["root_disk", "write_test"], recording_detail),
             card("System", ["temperature", "ram", "cpu_load"]),
         ]
     else:

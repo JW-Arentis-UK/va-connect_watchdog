@@ -14,11 +14,44 @@ from va_watchdog import health, history
 from va_watchdog.common import CheckResult
 from va_watchdog.events import EventLog, read_events
 from va_watchdog.lite_server import evidence_zip, start_web
+from va_watchdog.lite import snapshot
 from va_watchdog.log_tail import tail_lines
 from va_watchdog.retention import enforce_retention, purge_data
 
 
 class LightweightTests(unittest.TestCase):
+    def test_pi_storage_shows_oldest_data_recording(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            recordings = base / 'recordings'
+            bucket = recordings / '1792368000'
+            bucket.mkdir(parents=True)
+            (bucket / '1792428312.data').touch()
+            (bucket / '1792428372.data').touch()
+            (bucket / '1792000000.db').touch()
+            cfg = {'platform': {'kind': 'raspberry_pi'}, 'storage': {'recordings_path': str(recordings)},
+                   'web': {'host': '127.0.0.1', 'port': 0},
+                   'events_path': str(base / 'events.jsonl'), 'status_path': str(base / 'status.json')}
+            (base / 'status.json').write_text(json.dumps({'time': datetime.now(timezone.utc).isoformat(),
+                'checks': [{'name': 'root_disk', 'state': 'healthy', 'message': 'OK'}]}))
+            storage = {'available': False, 'reason': 'No space beyond root', 'root': '/dev/nvme0n1p2',
+                       'disk': '/dev/nvme0n1', 'root_gib': 931.01, 'disk_gib': 931.51, 'free_gib': 0}
+            with patch('va_watchdog.lite_server.inspect_pi_storage', return_value=storage):
+                server = start_web(cfg)
+                try:
+                    url = f'http://127.0.0.1:{server.server_port}'
+                    with urlopen(url + '/pi-storage') as response:
+                        page = response.read().decode()
+                    self.assertIn('Oldest recording', page)
+                    self.assertIn('17:45:12 19/10/2026', page)
+                    self.assertNotIn('1792000000', page)
+                    storage_card = next(item for item in snapshot(cfg)['cards'] if item['title'] == 'Storage')
+                    self.assertIn('Oldest recording:', storage_card['detail'])
+                    self.assertEqual(storage_card['href'], '/pi-storage')
+                finally:
+                    server.shutdown()
+                    server.server_close()
+
     def test_tail_is_bounded_and_handles_partial_lines(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'log'

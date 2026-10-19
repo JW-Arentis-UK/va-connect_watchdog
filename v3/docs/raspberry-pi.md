@@ -80,6 +80,10 @@ Raspberry Pi OS has queued its one-time resize script. The button schedules a
 controlled reboot after the response is shown. Once the Pi returns, revisit
 Pi storage to confirm that the filesystem uses the expanded partition.
 
+From build `20261019.8`, the Pi Storage tile and page show the oldest and latest
+`.data` recording start times from their Unix-timestamped filenames. Database
+files and sidecars are excluded. The displayed times use the Pi's local timezone.
+
 Capture the reusable image **before** expanding a source drive. Expanding a
 29 GiB root partition to fill a 1 TB SSD makes the image unsuitable for a
 smaller target. A whole-disk raw image of a 1 TB SSD is also still a 1 TB

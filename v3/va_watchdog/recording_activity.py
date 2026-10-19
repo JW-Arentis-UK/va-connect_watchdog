@@ -48,7 +48,7 @@ def candidate_recording_paths(cfg: dict[str, Any]) -> list[Path]:
     return paths
 
 
-def _recordings_from_path(root: Path, recording_count: int, max_buckets: int) -> dict[str, Any]:
+def _recordings_from_path(root: Path, recording_count: int, max_buckets: int, recording_suffix: str | None = None) -> dict[str, Any]:
     newest: list[int] = []
     oldest: list[int] = []
     buckets: list[tuple[int, Path]] = []
@@ -79,7 +79,7 @@ def _recordings_from_path(root: Path, recording_count: int, max_buckets: int) ->
         timestamp = _timestamp_from_name(entry.name)
         if entry.is_dir() and timestamp is not None:
             buckets.append((timestamp, entry))
-        elif entry.is_file() and timestamp is not None:
+        elif entry.is_file() and timestamp is not None and (recording_suffix is None or entry.suffix == recording_suffix):
             add_timestamp(timestamp, include_oldest=True, include_newest=True)
         entries_checked += 1
 
@@ -94,7 +94,7 @@ def _recordings_from_path(root: Path, recording_count: int, max_buckets: int) ->
         try:
             for entry in bucket.iterdir():
                 entries_checked += 1
-                if not entry.is_file():
+                if not entry.is_file() or (recording_suffix is not None and entry.suffix != recording_suffix):
                     continue
                 timestamp = _timestamp_from_name(entry.name)
                 if timestamp is not None:
@@ -136,13 +136,14 @@ def recording_activity(
     recent_count: int = 10,
     max_buckets: int = 3,
     now_unix: float | None = None,
+    recording_suffix: str | None = None,
 ) -> dict[str, Any]:
     recent_count = min(50, max(1, int(recent_count)))
     max_buckets = min(7, max(1, int(max_buckets)))
     results = []
     for path in candidate_recording_paths(cfg):
         if path.is_dir():
-            results.append(_recordings_from_path(path, recent_count, max_buckets))
+            results.append(_recordings_from_path(path, recent_count, max_buckets, recording_suffix))
 
     best = max(
         (item for item in results if item.get("newest_timestamps")),
