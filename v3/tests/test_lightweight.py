@@ -163,6 +163,34 @@ class LightweightTests(unittest.TestCase):
                     server.shutdown()
                     server.server_close()
 
+    def test_pi_resize_reboot_requires_pending_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            cfg = {'platform': {'kind': 'raspberry_pi'}, 'web': {'host': '127.0.0.1', 'port': 0},
+                   'events_path': str(base / 'events.jsonl'), 'status_path': str(base / 'status.json')}
+            storage = {'available': False, 'reason': 'Reboot to finish resizing.', 'root': '/dev/nvme0n1p2',
+                       'disk': '/dev/nvme0n1', 'root_gib': 931.01, 'disk_gib': 931.51,
+                       'free_gib': 0, 'reboot_pending': True}
+            with (patch('va_watchdog.lite_server.inspect_pi_storage', return_value=storage),
+                  patch('va_watchdog.lite_server.verify_account_password', return_value=True),
+                  patch('va_watchdog.lite_server.request_gateway_reboot', return_value={'ok': True, 'message': 'Reboot scheduled'}) as reboot):
+                server = start_web(cfg)
+                url = f'http://127.0.0.1:{server.server_port}'
+                try:
+                    with urlopen(url + '/pi-storage') as response:
+                        self.assertIn('Reboot Pi to finish resize', response.read().decode())
+                    request = Request(url + '/pi-storage-reboot', data=b'password=test', method='POST')
+                    with urlopen(request) as response:
+                        self.assertIn('Reboot scheduled', response.read().decode())
+                    reboot.assert_called_once()
+                    storage['reboot_pending'] = False
+                    with urlopen(request) as response:
+                        self.assertIn('No pending filesystem resize', response.read().decode())
+                    reboot.assert_called_once()
+                finally:
+                    server.shutdown()
+                    server.server_close()
+
     def test_evidence_includes_syslog_rotations_and_marks_large_tail(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

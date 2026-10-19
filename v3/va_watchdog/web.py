@@ -3005,11 +3005,21 @@ def start_web(cfg):
         if status["available"] and result is None:
             action = (
                 '<form method="post" action="/pi-storage-expand">'
-                f'<p>To confirm, type the root partition <strong>{escape(status["root"])}</strong>:</p>'
+                f'<p>To confirm, type the root partition <strong>{escape(status["root"])}</strong></p>'
                 '<input name="root" required autocomplete="off">'
                 '<p>Enter the Pi account password to authorize the change:</p>'
                 '<input name="password" type="password" required autocomplete="off">'
                 '<div class="button-row"><button class="action" type="submit">Expand root partition</button></div>'
+                '</form>'
+            )
+        if status.get("reboot_pending"):
+            action += (
+                '<p>The Pi will briefly disconnect from SSH and TeamViewer.</p>'
+                '<form method="post" action="/pi-storage-reboot" '
+                'onsubmit="return confirm(\'Reboot this Pi now to finish the filesystem resize?\')">'
+                '<p>Enter the Pi account password to authorize the reboot</p>'
+                '<input name="password" type="password" required autocomplete="off">'
+                '<div class="button-row"><button class="action" type="submit">Reboot Pi to finish resize</button></div>'
                 '</form>'
             )
         body = (
@@ -7499,7 +7509,7 @@ def start_web(cfg):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            if route_path == "/pi-storage-expand" and cfg.get("platform", {}).get("kind") == "raspberry_pi":
+            if route_path in {"/pi-storage-expand", "/pi-storage-reboot"} and cfg.get("platform", {}).get("kind") == "raspberry_pi":
                 length = int(self.headers.get("Content-Length", "0"))
                 form = parse_qs(self.rfile.read(min(length, 4096)).decode("utf-8"), keep_blank_values=True)
                 local_client = self.client_address[0] in {"127.0.0.1", "::1", self.connection.getsockname()[0]}
@@ -7509,6 +7519,14 @@ def start_web(cfg):
                     result = {"ok": False, "message": "Invalid request."}
                 elif not verify_local_reset_password(form.get("password", [""])[0]):
                     result = {"ok": False, "message": "Pi account password was not accepted."}
+                elif route_path == "/pi-storage-reboot":
+                    if not inspect_pi_storage().get("reboot_pending"):
+                        result = {"ok": False, "message": "No pending filesystem resize was found. Reboot was not scheduled."}
+                    else:
+                        result = request_gateway_reboot(
+                            cfg, reason_message="Pi reboot requested to complete root filesystem resize.",
+                            requested_by="pi_storage", hardware_fallback_requested=False,
+                        )
                 else:
                     result = expand_pi_storage(form.get("root", [""])[0])
                 body = pi_storage_html(result).encode("utf-8")

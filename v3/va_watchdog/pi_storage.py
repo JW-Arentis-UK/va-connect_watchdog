@@ -10,7 +10,7 @@ def _run(*args, timeout=10):
 
 
 def inspect():
-    result = {"available": False, "reason": "", "root": "", "disk": "", "root_gib": 0, "disk_gib": 0, "free_gib": 0}
+    result = {"available": False, "reason": "", "root": "", "disk": "", "root_gib": 0, "disk_gib": 0, "free_gib": 0, "filesystem_gib": 0, "reboot_pending": False}
     try:
         root = os.path.realpath(_run("findmnt", "-n", "-o", "SOURCE", "/"))
         fstype = _run("findmnt", "-n", "-o", "FSTYPE", "/")
@@ -42,8 +42,15 @@ def inspect():
         # lsblk START is expressed in 512-byte sectors, independently of drive sector size.
         free_bytes = max(0, disk_bytes - root_start * 512 - root_bytes)
         result.update(root_gib=round(root_bytes / 2**30, 2), disk_gib=round(disk_bytes / 2**30, 2), free_gib=round(free_bytes / 2**30, 2))
+        filesystem_stats = os.statvfs("/")
+        filesystem_bytes = filesystem_stats.f_blocks * filesystem_stats.f_frsize
+        result["filesystem_gib"] = round(filesystem_bytes / 2**30, 2)
+        result["reboot_pending"] = (os.path.exists("/etc/init.d/resize2fs_once")
+                                    and root_bytes - filesystem_bytes > 1024**3)
         if not entries or root_start != max(start for start, _ in entries):
             result["reason"] = "Root is not the final partition; automatic expansion is disabled."
+        elif result["reboot_pending"]:
+            result["reason"] = "The partition has grown. Reboot to finish expanding the ext4 filesystem."
         elif free_bytes < 1024**3:
             result["reason"] = "There is less than 1 GiB to add to the root partition."
         elif not shutil.which("raspi-config"):

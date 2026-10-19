@@ -13,6 +13,7 @@ from .lite import page, read_object, snapshot
 from .build import build_number
 from .log_tail import tail_lines
 from .pi_storage import expand as expand_pi_storage, inspect as inspect_pi_storage, verify_account_password
+from .gateway_reboot import request_gateway_reboot
 from .update import _git_value, last_completed, launch_update_job, load_update_status, update_in_progress
 
 
@@ -57,10 +58,20 @@ def pi_storage_page(result=None):
     if status['available'] and result is None:
         action = (
             '<form method="post" action="/pi-storage-expand">'
-            f'<p>To confirm, type the root partition <strong>{escape(status["root"])}</strong>:</p>'
+            f'<p>To confirm, type the root partition <strong>{escape(status["root"])}</strong></p>'
             '<input name="root" required autocomplete="off">'
             '<p>Enter the Pi account password:</p><input name="password" type="password" required autocomplete="off">'
             '<div class="actions"><button type="submit">Expand root partition</button></div></form>'
+        )
+    if status.get('reboot_pending'):
+        action += (
+            '<p>The partition is expanded, but the filesystem still needs a reboot to use the new space. '
+            'The Pi will briefly disconnect from SSH and TeamViewer.</p>'
+            '<form method="post" action="/pi-storage-reboot" '
+            'onsubmit="return confirm(\'Reboot this Pi now to finish the filesystem resize?\')">'
+            '<p>Enter the Pi account password to authorize the reboot</p>'
+            '<input name="password" type="password" required autocomplete="off">'
+            '<div class="actions"><button type="submit">Reboot Pi to finish resize</button></div></form>'
         )
     body = (
         '<p>Use this after creating the reusable image and restoring it to its final SSD. '
@@ -253,7 +264,7 @@ def start_web(cfg):
 
         def do_POST(self):
             path = urlsplit(self.path).path
-            if path in ('/update-now', '/pi-storage-expand'):
+            if path in ('/update-now', '/pi-storage-expand', '/pi-storage-reboot'):
                 size = int(self.headers.get('Content-Length', '0'))
                 if size > 4096:
                     return self.send(action_page('Invalid request', '<p>Request is too large.</p>'), 'text/html; charset=utf-8', status=400)
@@ -274,6 +285,14 @@ def start_web(cfg):
                     result = {'ok': False, 'message': "Open this page in the Pi's own browser to expand storage."}
                 elif not verify_account_password(form.get('password', [''])[0]):
                     result = {'ok': False, 'message': 'Pi account password was not accepted.'}
+                elif path == '/pi-storage-reboot':
+                    if not inspect_pi_storage().get('reboot_pending'):
+                        result = {'ok': False, 'message': 'No pending filesystem resize was found. Reboot was not scheduled.'}
+                    else:
+                        result = request_gateway_reboot(
+                            cfg, reason_message='Pi reboot requested to complete root filesystem resize.',
+                            requested_by='pi_storage', hardware_fallback_requested=False,
+                        )
                 else:
                     result = expand_pi_storage(form.get('root', [''])[0])
                 return self.send(pi_storage_page(result), 'text/html; charset=utf-8')

@@ -74,6 +74,12 @@ and returns to Status after completion. Status displays the last successful
 update time and build number; failed or current attempts do not erase that
 record.
 
+From build `20261019.7`, Pi storage offers a password-confirmed reboot button
+when the root partition has grown, the ext4 filesystem is still smaller, and
+Raspberry Pi OS has queued its one-time resize script. The button schedules a
+controlled reboot after the response is shown. Once the Pi returns, revisit
+Pi storage to confirm that the filesystem uses the expanded partition.
+
 Capture the reusable image **before** expanding a source drive. Expanding a
 29 GiB root partition to fill a 1 TB SSD makes the image unsuitable for a
 smaller target. A whole-disk raw image of a 1 TB SSD is also still a 1 TB

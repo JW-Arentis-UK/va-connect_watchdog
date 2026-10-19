@@ -20,14 +20,27 @@ class PiStorageTests(unittest.TestCase):
             ("lsblk", "-n", "-b", "-o", "SIZE", "/dev/nvme0n1p2"): "31385976832",
             ("lsblk", "-n", "-d", "-b", "-o", "SIZE", "/dev/nvme0n1"): "1000204886016",
         }
-        with patch.object(pi_storage, "_run", side_effect=lambda *args: answers[args]), patch.object(pi_storage.os.path, "realpath", side_effect=lambda value: value), patch.object(pi_storage.shutil, "which", return_value="/usr/bin/raspi-config"):
+        with patch.object(pi_storage, "_run", side_effect=lambda *args: answers[args]), patch.object(pi_storage.os.path, "realpath", side_effect=lambda value: value), patch.object(pi_storage.shutil, "which", return_value="/usr/bin/raspi-config"), patch.object(pi_storage.os, "statvfs", create=True) as stats:
+            stats.return_value.f_blocks = 7659980
+            stats.return_value.f_frsize = 4096
             status = pi_storage.inspect()
         self.assertTrue(status["available"])
         self.assertEqual(status["free_gib"], 901.78)
 
         answers[("lsblk", "-n", "-l", "-b", "-o", "START,SIZE,TYPE", "/dev/nvme0n1")] += "\n999999999 1000000 part"
-        with patch.object(pi_storage, "_run", side_effect=lambda *args: answers[args]), patch.object(pi_storage.os.path, "realpath", side_effect=lambda value: value), patch.object(pi_storage.shutil, "which", return_value="/usr/bin/raspi-config"):
+        with patch.object(pi_storage, "_run", side_effect=lambda *args: answers[args]), patch.object(pi_storage.os.path, "realpath", side_effect=lambda value: value), patch.object(pi_storage.shutil, "which", return_value="/usr/bin/raspi-config"), patch.object(pi_storage.os, "statvfs", create=True) as stats:
+            stats.return_value.f_blocks = 7659980
+            stats.return_value.f_frsize = 4096
             self.assertFalse(pi_storage.inspect()["available"])
+
+        answers[("lsblk", "-n", "-b", "-o", "SIZE", "/dev/nvme0n1p2")] = "999550000000"
+        answers[("lsblk", "-n", "-l", "-b", "-o", "START,SIZE,TYPE", "/dev/nvme0n1")] = "8192 536870912 part\n1056768 999550000000 part"
+        with patch.object(pi_storage, "_run", side_effect=lambda *args: answers[args]), patch.object(pi_storage.os.path, "realpath", side_effect=lambda value: value), patch.object(pi_storage.os.path, "exists", return_value=True), patch.object(pi_storage.os, "statvfs", create=True) as stats:
+            stats.return_value.f_blocks = 7659980
+            stats.return_value.f_frsize = 4096
+            status = pi_storage.inspect()
+        self.assertTrue(status["reboot_pending"])
+        self.assertFalse(status["available"])
 
     def test_confirmation_must_match_current_root(self):
         with patch.object(pi_storage, "inspect", return_value={"available": True, "root": "/dev/nvme0n1p2"}), patch.object(pi_storage.subprocess, "run") as run:

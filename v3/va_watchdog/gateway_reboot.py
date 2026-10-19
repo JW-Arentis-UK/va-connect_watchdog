@@ -27,7 +27,10 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def request_gateway_reboot(cfg: dict[str, Any], delay_seconds: int = 8) -> dict[str, Any]:
+def request_gateway_reboot(cfg: dict[str, Any], delay_seconds: int = 8, *,
+                           reason_message: str = "Manual gateway reboot requested from the watchdog web interface.",
+                           requested_by: str = "watchdog_web",
+                           hardware_fallback_requested: bool = True) -> dict[str, Any]:
     """Record an operator request and schedule a controlled reboot independently."""
     systemd_run = shutil.which("systemd-run")
     systemctl = shutil.which("systemctl")
@@ -48,13 +51,13 @@ def request_gateway_reboot(cfg: dict[str, Any], delay_seconds: int = 8) -> dict[
     request_id = secrets.token_hex(8)
     reason = {
         "state": "requested",
-        "message": "Manual gateway reboot requested from the watchdog web interface.",
+        "message": reason_message,
         "requested_at": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(requested_at_unix)),
         "requested_at_unix": requested_at_unix,
-        "requested_by": "watchdog_web",
+        "requested_by": requested_by,
         "request_id": request_id,
         "boot_id": _boot_id(),
-        "hardware_fallback_requested": True,
+        "hardware_fallback_requested": hardware_fallback_requested,
     }
     try:
         _write_json_atomic(reason_path, reason)
