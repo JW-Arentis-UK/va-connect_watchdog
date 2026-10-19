@@ -104,6 +104,42 @@ class LightweightTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
+    def test_pi_navigation_reaches_storage_and_update_actions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            cfg = {'platform': {'kind': 'raspberry_pi'}, 'web': {'host': '127.0.0.1', 'port': 0},
+                   'events_path': str(base / 'events.jsonl'), 'status_path': str(base / 'status.json'),
+                   'update': {'enabled': True, 'state_path': str(base / 'update-state.json')}}
+            storage = {'available': True, 'reason': 'Space available', 'root': '/dev/nvme0n1p2',
+                       'disk': '/dev/nvme0n1', 'root_gib': 29.23, 'disk_gib': 931.51, 'free_gib': 901.78}
+            with (patch('va_watchdog.lite_server.inspect_pi_storage', return_value=storage),
+                  patch('va_watchdog.lite_server.verify_account_password', return_value=True),
+                  patch('va_watchdog.lite_server.expand_pi_storage', return_value={'ok': True, 'message': 'Reboot required'}) as expand,
+                  patch('va_watchdog.lite_server.launch_update_job', return_value={'ok': True, 'message': 'Update queued'}) as update):
+                server = start_web(cfg)
+                url = f'http://127.0.0.1:{server.server_port}'
+                try:
+                    with urlopen(url + '/') as response:
+                        homepage = response.read().decode()
+                    self.assertIn('href="/update-confirm"', homepage)
+                    with urlopen(url + '/pi-storage') as response:
+                        storage_page = response.read().decode()
+                    self.assertIn('901.78 GiB', storage_page)
+                    self.assertIn('Expand root partition', storage_page)
+                    with urlopen(url + '/update-confirm') as response:
+                        self.assertIn('Update watchdog now', response.read().decode())
+                    request = Request(url + '/pi-storage-expand', data=b'root=%2Fdev%2Fnvme0n1p2&password=test', method='POST')
+                    with urlopen(request) as response:
+                        self.assertIn('Reboot required', response.read().decode())
+                    expand.assert_called_once_with('/dev/nvme0n1p2')
+                    request = Request(url + '/update-now', data=b'', method='POST')
+                    with urlopen(request) as response:
+                        self.assertIn('Update queued', response.read().decode())
+                    update.assert_called_once_with(cfg)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+
     def test_evidence_includes_syslog_rotations_and_marks_large_tail(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

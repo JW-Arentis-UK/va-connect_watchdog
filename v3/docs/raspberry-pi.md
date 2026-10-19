@@ -53,6 +53,16 @@ the filesystem resize. The action requires the Pi's local browser, its account
 password, and the exact root device as confirmation. Unsupported layouts are
 shown without an action button.
 
+Install build `20261019.4` once through SSH if an earlier lightweight build
+shows those links but returns "Not found":
+
+```sh
+sudo bash /opt/va-connect-watchdog-v3/v3/scripts/update.sh origin codex/gui-refresh
+```
+
+The lightweight server in this build serves the linked update and Pi storage
+pages. Subsequent watchdog updates can be started from its top link.
+
 Capture the reusable image **before** expanding a source drive. Expanding a
 29 GiB root partition to fill a 1 TB SSD makes the image unsuitable for a
 smaller target. A whole-disk raw image of a 1 TB SSD is also still a 1 TB

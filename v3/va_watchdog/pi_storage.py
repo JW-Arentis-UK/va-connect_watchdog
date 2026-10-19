@@ -71,3 +71,18 @@ def expand(expected_root):
     if completed.returncode:
         return {"ok": False, "message": "raspi-config reported an error; check the system journal before retrying.", "detail": (completed.stderr or completed.stdout)[-1500:]}
     return {"ok": True, "message": "Partition expansion requested. Reboot the Pi to complete the filesystem resize, then check the capacity here."}
+
+
+def verify_account_password(password):
+    """Authenticate the local Pi account without placing credentials in config."""
+    if not password or os.name != "posix":
+        return False
+    import crypt
+    import hmac
+    import spwd
+    try:
+        stored = spwd.getspnam("vsuser").sp_pwdp
+        candidate = crypt.crypt(password, stored) if stored and stored[0] not in "! *" else None
+        return bool(candidate and hmac.compare_digest(candidate, stored))
+    except (KeyError, PermissionError, OSError):
+        return False
