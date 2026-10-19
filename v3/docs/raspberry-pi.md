@@ -44,5 +44,20 @@ the monitored services. If TeamViewer, LightDM, or SSH has a different unit name
 update `services` and `display_monitor.manager` before interpreting its alerts.
 Headless HDMI setup is separate; see [headless-display.md](headless-display.md).
 
+The Pi Status page has **Update watchdog** and **Pi storage** links in its top
+navigation. The storage page shows the physical drive, root partition, and
+unused space. On a standard Raspberry Pi OS DOS partition layout with ext4 as
+partition 2 and the final partition, an engineer can confirm the exact root
+device to run `raspi-config nonint do_expand_rootfs`. Reboot afterward to finish
+the filesystem resize. The action requires the Pi's local browser, its account
+password, and the exact root device as confirmation. Unsupported layouts are
+shown without an action button.
+
+Capture the reusable image **before** expanding a source drive. Expanding a
+29 GiB root partition to fill a 1 TB SSD makes the image unsuitable for a
+smaller target. A whole-disk raw image of a 1 TB SSD is also still a 1 TB
+layout even when most of it is empty; prepare a compact image whose partition
+table fits the smallest target, then expand the restored target from Pi storage.
+
 The current hardware feeder is specific to reviewed Neousys gateways. The Pi
 profile does not enable a Raspberry Pi hardware watchdog or automatic reboot.

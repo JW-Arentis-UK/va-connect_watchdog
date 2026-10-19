@@ -46,6 +46,7 @@ from .mobile_router import radio_metric_score, radio_quality, radio_score, signa
 from .recording_activity import recording_activity
 from .reboot_evidence import recent_restarts
 from .lite import page as lite_page, snapshot as lite_snapshot
+from .pi_storage import inspect as inspect_pi_storage, expand as expand_pi_storage
 from .gateway_reboot import request_gateway_reboot
 from .hikvision import probe_people_counting
 from .hikvision_events import daily_count_history, event_summary
@@ -2974,10 +2975,15 @@ def start_web(cfg):
         update_cfg = cfg.get("update", {}) if isinstance(cfg.get("update", {}), dict) else {}
         current_status = load_update_status(cfg)
         target_branch = update_cfg.get("branch") or current.get("branch", "-")
+        update_scope = (
+            "This updates VA-Connect Watchdog only; TeamViewer and LightDM are not deliberately restarted."
+            if cfg.get("platform", {}).get("kind") == "raspberry_pi"
+            else "This updates VA-Connect Watchdog only. It does not deliberately restart the four Videosoft services."
+        )
         body = (
             "<div class=\"card action-panel\"><h2>Confirm Watchdog Update</h2>"
             "<p class=\"warning\">The watchdog web page will be briefly unavailable while the update completes and the service restarts.</p>"
-            "<p>This updates VA-Connect Watchdog only. It does not deliberately restart the four Videosoft services.</p>"
+            f"<p>{escape(update_scope)}</p>"
             f"<div class=\"label\">Running build</div><div class=\"build-badge\">{escape(str(current.get('commit', '-')))}</div>"
             f"<div class=\"label\">Current branch</div><div class=\"value\">{escape(str(current.get('branch', '-')))}</div>"
             f"<div class=\"label\">Update target</div><div class=\"value\">{escape(str(update_cfg.get('remote', 'origin')))}/{escape(str(target_branch))}</div>"
@@ -2987,6 +2993,36 @@ def start_web(cfg):
             "</div>"
         )
         return page_shell(body, "Settings")
+
+    def pi_storage_html(result=None):
+        status = inspect_pi_storage()
+        notice = ""
+        if result is not None:
+            notice = f"<p class=\"{'healthy' if result.get('ok') else 'critical'}\">{escape(str(result.get('message', '')))}</p>"
+            if result.get("detail"):
+                notice += f"<pre>{escape(str(result['detail']))}</pre>"
+        action = ""
+        if status["available"] and result is None:
+            action = (
+                '<form method="post" action="/pi-storage-expand">'
+                f'<p>To confirm, type the root partition <strong>{escape(status["root"])}</strong>:</p>'
+                '<input name="root" required autocomplete="off">'
+                '<p>Enter the Pi account password to authorize the change:</p>'
+                '<input name="password" type="password" required autocomplete="off">'
+                '<div class="button-row"><button class="action" type="submit">Expand root partition</button></div>'
+                '</form>'
+            )
+        body = (
+            '<div class="card action-panel"><h2>Raspberry Pi storage</h2>'
+            '<p>Use this in the Pi’s own browser after writing the image to its final SSD. Expanding before capturing an image can prevent it fitting on a smaller drive.</p>'
+            f'{notice}<div class="label">Drive</div><div class="value">{escape(status["disk"] or "Unknown")} · {status["disk_gib"]} GiB</div>'
+            f'<div class="label">Root partition</div><div class="value">{escape(status["root"] or "Unknown")} · {status["root_gib"]} GiB</div>'
+            f'<div class="label">Space beyond root partition</div><div class="value">Approximately {status["free_gib"]} GiB</div>'
+            f'<p>{escape(status["reason"])}</p>'
+            '<p>This uses Raspberry Pi OS raspi-config. It changes the partition table; the filesystem resize completes after a reboot. It does not format the drive or change the recording location.</p>'
+            f'{action}<div class="button-row"><a class="ghost" href="/">Back to Status</a></div></div>'
+        )
+        return page_shell(body, "Setup")
 
     def update_started_html(result):
         status_class = "healthy" if result.get("ok") else "critical"
@@ -6572,6 +6608,10 @@ def start_web(cfg):
         def do_GET(self):
             request_context.theme = self._request_theme()
             route_path = self.path.split("?", 1)[0]
+            if route_path == "/pi-storage" and cfg.get("platform", {}).get("kind") == "raspberry_pi":
+                body = pi_storage_html().encode("utf-8")
+                self._send_bytes(body, content_type="text/html; charset=utf-8")
+                return
             if route_path == "/lite":
                 self.send_response(302)
                 self.send_header("Location", "/")
@@ -7442,6 +7482,20 @@ def start_web(cfg):
                 self._send_no_cache_headers()
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if route_path == "/pi-storage-expand" and cfg.get("platform", {}).get("kind") == "raspberry_pi":
+                length = int(self.headers.get("Content-Length", "0"))
+                form = parse_qs(self.rfile.read(min(length, 4096)).decode("utf-8"), keep_blank_values=True)
+                if self.client_address[0] not in {"127.0.0.1", "::1"}:
+                    result = {"ok": False, "message": "For safety, open this page in the Pi's own browser at localhost to expand storage."}
+                elif length > 4096:
+                    result = {"ok": False, "message": "Invalid request."}
+                elif not verify_local_reset_password(form.get("password", [""])[0]):
+                    result = {"ok": False, "message": "Pi account password was not accepted."}
+                else:
+                    result = expand_pi_storage(form.get("root", [""])[0])
+                body = pi_storage_html(result).encode("utf-8")
+                self._send_bytes(body, content_type="text/html; charset=utf-8")
                 return
             if route_path == "/settings-save":
                 try:

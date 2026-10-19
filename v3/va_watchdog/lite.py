@@ -186,6 +186,8 @@ def page(cfg=None):
             r'<nav aria-label="Page links">.*?</nav>',
             '<nav aria-label="Page links"><a href="/">Status</a>'
             '<a href="#diagnostics">Diagnostics</a>'
+            '<a href="/update-confirm">Update watchdog</a>'
+            '<a href="/pi-storage">Pi storage</a>'
             '<a class="button" href="/api/evidence.zip">Download evidence</a>'
             '<button id="refresh" type="button">Refresh</button></nav>',
             html,
