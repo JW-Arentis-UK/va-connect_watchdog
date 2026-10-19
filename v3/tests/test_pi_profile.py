@@ -16,7 +16,7 @@ ROOT = Path(__file__).parents[1]
 
 class PiProfileTests(unittest.TestCase):
     def test_release_build_number(self):
-        self.assertEqual(build_number(), "20261019.2")
+        self.assertEqual(build_number(), "20261019.3")
 
     def config(self):
         base = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
@@ -67,13 +67,14 @@ class PiProfileTests(unittest.TestCase):
         self.assertEqual([card["title"] for card in result["cards"]],
                          ["Pi services", "Network", "Storage", "System"])
         self.assertEqual(result["state"], "healthy")
-        self.assertTrue(all(card["href"] == "/#diagnostics" for card in result["cards"]))
+        self.assertEqual([card["href"] for card in result["cards"]],
+                         ["/#diagnostics", "/#diagnostics", "/pi-storage", "/#diagnostics"])
 
     def test_pi_page_only_links_to_available_lite_routes(self):
         html = page(self.config()).decode("utf-8")
         self.assertIn('href="/api/evidence.zip"', html)
         self.assertIn('href="/update-confirm"', html)
-        self.assertIn('href="/pi-storage"', html)
+        self.assertNotIn('href="/pi-storage"', html)
         self.assertNotIn('href="/analytics"', html)
         self.assertNotIn('href="/maintenance"', html)
 

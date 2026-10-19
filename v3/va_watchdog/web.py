@@ -3022,7 +3022,23 @@ def start_web(cfg):
             '<p>This uses Raspberry Pi OS raspi-config. It changes the partition table; the filesystem resize completes after a reboot. It does not format the drive or change the recording location.</p>'
             f'{action}<div class="button-row"><a class="ghost" href="/">Back to Status</a></div></div>'
         )
-        return page_shell(body, "Setup")
+        return (
+            '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>Pi storage · Watchdog</title><style>'
+            ':root{color-scheme:light}body{margin:0;background:#f3f5ef;color:#182c32;font:15px/1.55 system-ui,sans-serif}'
+            'main{max-width:780px;margin:auto;padding:28px 18px}header{display:flex;justify-content:space-between;align-items:center;gap:15px;border-bottom:1px solid #d9e2dd;padding-bottom:20px}'
+            'nav{display:flex;gap:18px;flex-wrap:wrap}a{color:#166859}.brand{font-weight:750;letter-spacing:.08em;text-transform:uppercase}'
+            '.card{background:white;border:1px solid #d9e2dd;border-radius:12px;padding:24px;margin-top:24px}'
+            'h2{margin:0 0 16px}.label{font-size:12px;color:#52696d;margin-top:18px}.value{font-size:18px;font-weight:700}'
+            'input{font:inherit;padding:9px;border:1px solid #bfd0c6;border-radius:7px;max-width:100%}'
+            'button,.ghost{display:inline-block;font:inherit;font-weight:650;border:1px solid #bfd0c6;border-radius:8px;padding:9px 14px;background:white;color:#166859;text-decoration:none;cursor:pointer}'
+            '.button-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:22px}.healthy{color:#166859}.critical{color:#a22c35}'
+            'p{margin:12px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}'
+            '</style></head><body><main><header><div class="brand">VA-Connect Watchdog</div>'
+            '<nav><a href="/">Status</a><a href="/update-confirm">Update watchdog</a></nav></header>'
+            + body + '</main></body></html>'
+        )
 
     def update_started_html(result):
         status_class = "healthy" if result.get("ok") else "critical"
@@ -7486,8 +7502,9 @@ def start_web(cfg):
             if route_path == "/pi-storage-expand" and cfg.get("platform", {}).get("kind") == "raspberry_pi":
                 length = int(self.headers.get("Content-Length", "0"))
                 form = parse_qs(self.rfile.read(min(length, 4096)).decode("utf-8"), keep_blank_values=True)
-                if self.client_address[0] not in {"127.0.0.1", "::1"}:
-                    result = {"ok": False, "message": "For safety, open this page in the Pi's own browser at localhost to expand storage."}
+                local_client = self.client_address[0] in {"127.0.0.1", "::1", self.connection.getsockname()[0]}
+                if not local_client:
+                    result = {"ok": False, "message": "For safety, open this page in the Pi's own browser to expand storage."}
                 elif length > 4096:
                     result = {"ok": False, "message": "Invalid request."}
                 elif not verify_local_reset_password(form.get("password", [""])[0]):

@@ -44,8 +44,8 @@ the monitored services. If TeamViewer, LightDM, or SSH has a different unit name
 update `services` and `display_monitor.manager` before interpreting its alerts.
 Headless HDMI setup is separate; see [headless-display.md](headless-display.md).
 
-The Pi Status page has **Update watchdog** and **Pi storage** links in its top
-navigation. The storage page shows the physical drive, root partition, and
+The Pi Status page has **Update watchdog** in its top navigation. The Storage
+tile opens Pi storage, which shows the physical drive, root partition, and
 unused space. On a standard Raspberry Pi OS DOS partition layout with ext4 as
 partition 2 and the final partition, an engineer can confirm the exact root
 device to run `raspi-config nonint do_expand_rootfs`. Reboot afterward to finish

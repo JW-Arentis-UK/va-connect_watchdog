@@ -122,7 +122,7 @@ def snapshot(cfg, now=None):
     destinations = {
         "Pi services": "/#diagnostics",
         "Network": "/#diagnostics",
-        "Storage": "/#diagnostics",
+        "Storage": "/pi-storage" if pi_profile else "/#diagnostics",
         "Videosoft services": "/videosoft-services",
         "Network & router": "/network-router",
         "Recording storage": "/setup?open=storage#storage",
@@ -187,7 +187,6 @@ def page(cfg=None):
             '<nav aria-label="Page links"><a href="/">Status</a>'
             '<a href="#diagnostics">Diagnostics</a>'
             '<a href="/update-confirm">Update watchdog</a>'
-            '<a href="/pi-storage">Pi storage</a>'
             '<a class="button" href="/api/evidence.zip">Download evidence</a>'
             '<button id="refresh" type="button">Refresh</button></nav>',
             html,
