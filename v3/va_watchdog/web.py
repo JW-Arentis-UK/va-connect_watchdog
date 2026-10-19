@@ -5,13 +5,16 @@ import os
 import platform
 import secrets
 import shutil
+import sqlite3
 import socket
 import subprocess
 import re
 import time
 import io
 import zipfile
-from datetime import datetime
+import hmac
+import ipaddress
+from datetime import datetime, timedelta, timezone
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,6 +22,7 @@ from threading import Thread, local, Lock
 from urllib.parse import parse_qs, quote, unquote, urlencode
 
 from .blackbox import blackbox_summary, read_blackbox
+from .build import build_number
 from .config import active_config_path, deep_merge, load_raw_config, save_raw_config
 from .history import history_path, read_history
 from .events import purge_events, read_events
@@ -41,6 +45,7 @@ from .manufacturer_report import collect_manufacturer_report, manufacturer_repor
 from .mobile_router import radio_metric_score, radio_quality, radio_score, signal_quality
 from .recording_activity import recording_activity
 from .reboot_evidence import recent_restarts
+from .lite import page as lite_page, snapshot as lite_snapshot
 from .gateway_reboot import request_gateway_reboot
 from .hikvision import probe_people_counting
 from .hikvision_events import daily_count_history, event_summary
@@ -48,9 +53,36 @@ from .hikvision_native import bounded_native_diagnostic, capture_request_paths
 from .hikvision_events import parse_notification, notification_diagnostic, record_http_delivery, record_push_event
 from .hikvision_push import MAX_PUSH_BODY, configure_http_push, metadata_documents
 from .web_links import LINK_GROUPS, MAX_LINKS, configured_web_links, normalize_web_link
+from .anpr import DEFAULT_DB as ANPR_DB, csv_report as anpr_csv_report, load_settings as anpr_load_settings, query_reads as anpr_query_reads, save_settings as anpr_save_settings, start_collector as anpr_start_collector, stop_collector as anpr_stop_collector
+from .factory_reset import reset_watchdog_data
+from .status_shortcuts import selected_shortcuts, validate_selection
 
 
 _camera_capture_lock = Lock()
+
+
+def verify_local_reset_password(password):
+    if not password or os.name != 'posix':
+        return False
+    import crypt
+    import spwd
+    try:
+        stored = spwd.getspnam('vsuser').sp_pwdp
+        candidate = crypt.crypt(password, stored) if stored and stored[0] not in '! *' else None
+        return bool(candidate and hmac.compare_digest(candidate, stored))
+    except (KeyError, PermissionError, OSError):
+        return False
+
+
+def restart_after_factory_reset():
+    time.sleep(2)
+    subprocess.run(['systemctl', 'restart', 'va-watchdog.service'], timeout=30, check=False)
+    subprocess.run(['systemctl', 'restart', 'va-watchdog-web.service'], timeout=30, check=False)
+
+
+def restart_watchdog_core():
+    time.sleep(1)
+    subprocess.run(['systemctl', 'restart', 'va-watchdog.service'], timeout=30, check=False)
 
 
 def render_camera_collector(summary):
@@ -139,7 +171,7 @@ LEGACY_PAGE_REDIRECTS = {
     "/overview": "/",
     "/hardware": "/evidence#system",
     "/network": "/evidence#network",
-    "/services": "/#services",
+    "/services": "/videosoft-services",
     "/history": "/evidence#history",
     "/diagnostics": "/evidence",
     "/settings": "/setup",
@@ -487,7 +519,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
     <header class="topbar">
       <div id="page-title">__SITE_NAME__ / __PAGE_MODE__ / __PAGE_TITLE__</div>
       <div class="topbar-right">
-        <div class="top-watchdog"><span>Watchdog</span><strong id="side-state" class="value">Loading</strong><span class="top-resource">CPU <strong id="watchdog-cpu">-</strong></span><span class="top-resource" id="watchdog-cpu-source-wrap" style="display:none">Source <strong id="watchdog-cpu-source">-</strong></span><span class="top-resource">RAM <strong id="watchdog-memory">-</strong></span><span class="top-resource">Disk <strong id="watchdog-disk">-</strong></span><span class="label">Build</span><strong>__BUILD_ID__</strong><span class="top-build-date">Built __BUILD_DATE__</span></div>
+        <div class="top-watchdog"><span>Watchdog</span><strong id="side-state" class="value">Loading</strong><span class="top-resource">CPU <strong id="watchdog-cpu">-</strong></span><span class="top-resource" id="watchdog-cpu-source-wrap" style="display:none">Source <strong id="watchdog-cpu-source">-</strong></span><span class="top-resource">RAM <strong id="watchdog-memory">-</strong></span><span class="top-resource">Disk <strong id="watchdog-disk">-</strong></span><span class="label">Build</span><strong>__BUILD_ID__</strong></div>
         <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="light">Light</option><option value="dark">Dark</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
         <span class="advanced-only"><label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label></span>
         <button class="ghost advanced-only" onclick="load()">Refresh now</button>
@@ -655,9 +687,9 @@ def start_web(cfg):
                 timeout=timeout,
                 check=False,
             )
-            return result.stdout.strip() or result.stderr.strip()
-        except Exception as exc:
-            return str(exc)
+            return result.stdout.strip() if result.returncode == 0 else ""
+        except Exception:
+            return ""
 
     def repo_root():
         return Path(__file__).resolve().parents[1]
@@ -666,13 +698,14 @@ def start_web(cfg):
     running_version = {
         "branch": _quick_run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=root),
         "commit": _quick_run(["git", "rev-parse", "--short", "HEAD"], cwd=root),
-        "build_at": _quick_run(["git", "show", "-s", "--format=%cI", "HEAD"], cwd=root),
+        "build_at": datetime.fromtimestamp(Path(__file__).stat().st_mtime, timezone.utc).isoformat(),
         "remote": _quick_run(["git", "config", "--get", "remote.origin.url"], cwd=root),
     }
 
     def version_info():
         return {
             "name": "VA-Connect Watchdog",
+            "build_number": build_number(),
             "branch": running_version["branch"],
             "commit": running_version["commit"],
             "commit_id": running_version["commit"],
@@ -716,9 +749,8 @@ def start_web(cfg):
         page = legacy_page_names.get(page, page)
         theme = current_theme_name()
         version = version_info()
-        build = version.get("commit") or "-"
         try:
-            build_date = datetime.fromisoformat(str(version.get("build_at") or "").replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
+            build_date = datetime.fromisoformat(str(version.get("build_at") or "").replace("Z", "+00:00")).astimezone().strftime("%d/%m/%Y %H:%M")
         except (TypeError, ValueError):
             build_date = "-"
         site_name = configured_identity(cfg)["display_name"]
@@ -727,8 +759,7 @@ def start_web(cfg):
             .replace("__SERVER_NAV__", server_nav_html(page))
             .replace("__PAGE_TITLE__", page)
             .replace("__PAGE_MODE__", mode_for_page(page))
-            .replace("__BUILD_ID__", escape(str(build)))
-            .replace("__BUILD_DATE__", escape(build_date))
+            .replace("__BUILD_ID__", escape(f"{version['build_number']} · {build_date}"))
             .replace("__SITE_NAME__", escape(str(site_name)))
             .replace("__BODY_THEME__", theme)
         )
@@ -753,7 +784,7 @@ def start_web(cfg):
         )
 
     def page_name_for_path(route_path):
-        if route_path in ("", "/"):
+        if route_path in ("", "/", "/advanced"):
             return "Status"
         cleaned = route_path.strip("/").lower()
         for name, path in server_pages:
@@ -768,8 +799,10 @@ def start_web(cfg):
             links.append(f"<div class=\"nav-section\">{escape(mode)}</div>")
             for name, path in pages:
                 active = "active" if name == current_page else ""
+                if name == "Status":
+                    path = "/advanced"
                 links.append(f"<a class=\"{active}\" href=\"{escape(path)}\">{escape(name)}</a>")
-        return "".join(links)
+        return '<a href="/">Simple status</a><a href="/maintenance">Maintenance</a>' + "".join(links)
 
     def status_snapshot():
         try:
@@ -1125,50 +1158,6 @@ def start_web(cfg):
                 "<script>function toggleEventEvidence(button){var summary=button.closest('tr');var detail=summary?summary.nextElementSibling:null;if(!detail||!detail.classList.contains('event-detail-row'))return;var opening=detail.hidden;detail.hidden=!opening;button.textContent=opening?'Hide':'View';button.setAttribute('aria-expanded',opening?'true':'false');}</script>"
                 f"<div class=\"button-row\">{more_link}<a class=\"action\" href=\"/api/events/export.csv{escape(export_suffix)}\" download=\"va-watchdog-events.csv\">Export CSV</a><a class=\"ghost\" href=\"/api/events/export{escape(export_suffix)}\" download=\"va-watchdog-events.json\">Export JSON</a></div>"
                 "</div>"
-            )
-
-        def services_card():
-            live = service_info().get("services", [])
-            videosoft = [svc for svc in live if str(svc.get("name", "")) not in {"va-watchdog", "va-watchdog.service"}]
-            watchdog_services = [svc for svc in live if str(svc.get("name", "")) in {"va-watchdog", "va-watchdog.service"}]
-
-            def service_rows(items, empty_message):
-                rows = []
-                for svc in items:
-                    name = str(svc.get("name", ""))
-                    active = str(svc.get("active", "unknown"))
-                    state_class = "healthy" if active == "active" else "critical" if svc.get("critical") else "warning"
-                    rows.append(
-                        "<tr>"
-                        f"<td>{escape(name)}</td>"
-                        f"<td class=\"{state_class}\">{escape(active.upper())}</td>"
-                        f"<td>{escape(str(svc.get('cpu_percent', '-')))}% / {escape(str(svc.get('cpu_system_percent', '-')))}% system</td>"
-                        f"<td>{escape(str(svc.get('memory_mb', '-')))} MB</td>"
-                        f"<td>{escape(str(svc.get('restarts', '-')))}</td>"
-                        f"<td>{escape(str(svc.get('uptime', '-')))}</td>"
-                        f"<td><a class=\"ghost\" href=\"/service/{quote(name)}\">Details</a> <a class=\"ghost\" href=\"/service-restart-confirm/{quote(name)}\">Restart</a></td>"
-                        "</tr>"
-                    )
-                return "".join(rows) if rows else f"<tr><td colspan=\"7\">{escape(empty_message)}</td></tr>"
-
-            active_count = sum(1 for svc in videosoft if str(svc.get("active", "")) == "active")
-            watchdog_service = watchdog_services[0] if watchdog_services else {}
-            critical_failures = sum(1 for svc in live if svc.get("critical") and str(svc.get("active", "")) != "active")
-            restart_count = sum(int(svc.get("restarts") or 0) for svc in live)
-            return (
-                summary_strip([
-                    ("Videosoft services", f"{active_count}/{len(videosoft)}", "Running now", "healthy" if videosoft and active_count == len(videosoft) else "warning"),
-                    ("VA-Connect monitor", str(watchdog_service.get("active", "unknown")).upper(), "Software supervision", "healthy" if watchdog_service.get("active") == "active" else "critical"),
-                    ("Critical failures", critical_failures, "Require attention", "critical" if critical_failures else "healthy"),
-                    ("Service restarts", restart_count, "Since service start", "warning" if restart_count else "healthy"),
-                ])
-                + "<div class=\"card\"><h2>Videosoft Services</h2>"
-                "<p class=\"muted\">These are the four gateway application services. CPU shows Linux per-core usage followed by the equivalent share of the whole gateway.</p>"
-                "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Status</th><th>CPU / system</th><th>Memory</th><th>Restarts</th><th>Uptime</th><th>Actions</th></tr></thead>"
-                f"<tbody>{service_rows(videosoft, 'No Videosoft services are configured.')}</tbody></table></div></div>"
-                + "<div class=\"card\"><div class=\"section-lead\"><div><h2>VA-Connect Monitor</h2><p class=\"muted\">The software service that collects health data and serves this dashboard. Hardware recovery is shown separately on Watchdog.</p></div><a class=\"ghost\" href=\"/history\">View service history</a></div>"
-                "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Status</th><th>CPU / system</th><th>Memory</th><th>Restarts</th><th>Uptime</th><th>Actions</th></tr></thead>"
-                f"<tbody>{service_rows(watchdog_services, 'VA-Connect service status is unavailable.')}</tbody></table></div></div>"
             )
 
         def operational_alerts_card():
@@ -2370,7 +2359,7 @@ def start_web(cfg):
             ]
             recovery_tools.extend([
                 ("Reinstall watchdog service", "Repair the VA-Connect systemd installation without deleting configuration or data.", "/recovery-install-confirm", "primary"),
-                ("Download support bundle", "Collect status, journals, history, storage, network, and reboot evidence.", "/api/diagnostics/support-bundle.zip", ""),
+                ("Download support bundle", "Collect status, journals, history, storage, network, and reboot evidence.", "/evidence-download", ""),
                 ("Hardware watchdog controls", "Open setup, timeout, and deliberate test controls.", "/watchdog", ""),
             ])
             recovery_detail = (
@@ -2631,7 +2620,7 @@ def start_web(cfg):
                 f"<p class=\"{'healthy' if incident_archives else 'muted'}\">{len(incident_archives)} preserved incident archive(s). {escape(str(pstore.get('message') or 'pstore status unavailable'))}.</p>"
                 "<p class=\"muted\">Start with the support bundle after a lockup or unexpected reboot. It combines the evidence needed for investigation.</p>"
                 + tool_grid([
-                    ("Download support bundle", "Best first step: logs, status, history, reboot, storage, network, and watchdog evidence.", "/api/diagnostics/support-bundle.zip", "primary"),
+                    ("Download support bundle", "Best first step: logs, status, history, reboot, storage, network, and watchdog evidence.", "/evidence-download", "primary"),
                     ("Download Neousys report", "Manufacturer-ready hardware, BIOS, software, driver, storage, and watchdog test evidence.", "/api/diagnostics/manufacturer-report.zip", ""),
                     ("Current black-box window", "Live snapshots from the current boot; previous boots are shown below.", "/api/blackbox", ""),
                 ])
@@ -2853,6 +2842,7 @@ def start_web(cfg):
             f"<tr><th>Last heartbeat</th><td>{escape(local_time(heartbeat.get('time')))}</td></tr>"
             f"<tr><th>Heartbeat age</th><td>{escape(str(heartbeat_age_seconds(heartbeat) if heartbeat else '-'))}s</td></tr>"
             f"<tr><th>Previous reboot</th><td>{escape(str(reboot_evidence.get('reset_mechanism') or 'No previous reboot evidence'))}; confidence {escape(str(reboot_evidence.get('confidence') or '-'))}</td></tr>"
+            f"<tr><th>Reboot reason</th><td>{escape(str((reboot_evidence.get('previous_reboot_reason') or {}).get('message') or 'Not established'))}</td></tr>"
             f"<tr><th>Persistent journal</th><td class=\"{'healthy' if journal.get('healthy') else 'warning'}\">{escape(str(journal.get('summary') or 'Disabled or unavailable'))}</td></tr>"
             "</tbody></table></div>"
             "<div class=\"button-row\"><a class=\"ghost\" href=\"/evidence\">Open incident evidence</a></div>"
@@ -2876,10 +2866,7 @@ def start_web(cfg):
             "<div class=\"summary-panel\">"
             "<div class=\"summary-panel-title\">Running software</div>"
             "<div class=\"label\">Build</div>"
-            f"<div class=\"build-badge\">{escape(str(version.get('commit', '-')))}</div>"
-            "<div class=\"label\">Build time and date</div>"
-            f"<div class=\"value\">{escape(local_time(version.get('build_at')))}</div>"
-            f"<div class=\"muted\">{escape(str(version.get('branch', '-')))}</div>"
+            f"<div class=\"build-badge\">{escape(version.get('build_number') or 'local-dev')}</div>"
             "<div class=\"label\">Last update</div>"
             f"<div class=\"value\">{escape(local_time(status.get('time')))}</div>"
             "</div>"
@@ -2891,7 +2878,7 @@ def start_web(cfg):
             + operational_alerts_card()
             + recent_restarts_card()
             + disclosure("Stability evidence", stability_detail)
-            + "<section id=\"services\">" + disclosure("Service details", services_card()) + "</section>"
+            + '<div class="card"><h2>Videosoft services</h2><p class="muted">Service health and restart controls are on their own page.</p><a class="ghost" href="/videosoft-services">Open Videosoft services</a></div>'
         )
 
         if page == "Status":
@@ -2909,11 +2896,11 @@ def start_web(cfg):
                 page_help_html(page)
                 + diagnostics_page()
                 + "<section id=\"history\">" + disclosure("History and trends", history_page()) + "</section>"
-                + "<section id=\"system\">" + disclosure("System hardware and storage", hardware_page()) + "</section>"
+                + "<section id=\"system\">" + disclosure("System hardware and storage", hardware_page(), opened=bool(getattr(request_context, "query", {}).get("open") == ["system"])) + "</section>"
                 + "<section id=\"network\">" + disclosure(
                     "Network evidence",
                     network_page(),
-                    opened=bool(getattr(request_context, "query", {}).get("router_period")),
+                    opened=bool(getattr(request_context, "query", {}).get("router_period") or getattr(request_context, "query", {}).get("open") == ["network"]),
                 ) + "</section>"
             )
         if page == "Setup":
@@ -2921,7 +2908,7 @@ def start_web(cfg):
                 page_help_html(page)
                 + settings_card()
                 + "<section id=\"storage\" class=\"moved-section\">"
-                + disclosure("Recording storage setup", storage_page())
+                + disclosure("Recording storage setup", storage_page(), opened=bool(getattr(request_context, "query", {}).get("open") == ["storage"]))
                 + "</section>"
                 + "<section id=\"software-update\" class=\"moved-section\">"
                 + disclosure("Software update", updates_card(), opened=True)
@@ -6585,6 +6572,119 @@ def start_web(cfg):
         def do_GET(self):
             request_context.theme = self._request_theme()
             route_path = self.path.split("?", 1)[0]
+            if route_path == "/lite":
+                self.send_response(302)
+                self.send_header("Location", "/")
+                self._send_no_cache_headers()
+                self.end_headers()
+                return
+            if route_path == "/":
+                body = lite_page()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/maintenance":
+                body = (Path(__file__).with_name("maintenance.html").read_bytes())
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/factory-reset":
+                self._send_bytes(Path(__file__).with_name("factory_reset.html").read_bytes(), content_type="text/html; charset=utf-8")
+                return
+            if route_path == "/evidence-download":
+                self._send_bytes(Path(__file__).with_name("evidence_download.html").read_bytes(), content_type="text/html; charset=utf-8")
+                return
+            if route_path == "/videosoft-services":
+                self._send_bytes(Path(__file__).with_name("videosoft_services.html").read_bytes(), content_type="text/html; charset=utf-8")
+                return
+            if route_path == "/network-router":
+                self._send_bytes(Path(__file__).with_name("network_router.html").read_bytes(), content_type="text/html; charset=utf-8")
+                return
+            if route_path == "/system-status":
+                self._send_bytes(Path(__file__).with_name("system_status.html").read_bytes(), content_type="text/html; charset=utf-8")
+                return
+            if route_path == "/hardware-protection":
+                self._send_bytes(Path(__file__).with_name("hardware_protection.html").read_bytes(), content_type="text/html; charset=utf-8")
+                return
+            if route_path in {"/analytics", "/analytics/anpr-setup", "/analytics/crossing-setup"}:
+                filename = {"/analytics": "analytics.html", "/analytics/anpr-setup": "analytics_anpr.html",
+                            "/analytics/crossing-setup": "analytics_crossing.html"}[route_path]
+                self._send_bytes(Path(__file__).with_name(filename).read_bytes(), content_type="text/html; charset=utf-8")
+                return
+            if route_path == "/teamviewer":
+                body = Path(__file__).with_name("teamviewer.html").read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/links":
+                body = Path(__file__).with_name("links.html").read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/anpr":
+                body = Path(__file__).with_name("anpr.html").read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/advanced/links":
+                body = html_page("/links").encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/crossing-activity":
+                body = Path(__file__).with_name("crossing.html").read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/advanced/crossing-activity":
+                body = html_page("/crossing-activity").encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/advanced":
+                body = html_page(route_path).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self._send_no_cache_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if route_path == "/api/lite":
+                self._send_json(lite_snapshot(cfg))
+                return
             request_context.query = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "", keep_blank_values=True)
             if route_path in LEGACY_PAGE_REDIRECTS:
                 self.send_response(302)
@@ -6798,7 +6898,14 @@ def start_web(cfg):
                     self._send_json({"error": str(e)}, status=503)
                 return
             if route_path in {"/api/crossing-activity", "/api/people-counting"}:
-                self._send_json(event_summary(cfg))
+                camera = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting"), dict) else {}
+                summary = event_summary(cfg)
+                summary.update({
+                    "forward_label": str(camera.get("forward_label") or "A to B"),
+                    "back_label": str(camera.get("back_label") or "B to A"),
+                    "transport": str(camera.get("event_transport") or "Not configured"),
+                })
+                self._send_json(summary)
                 return
             if route_path in {"/api/crossing-activity/export.csv", "/api/people-counting/export.csv"}:
                 self._send_bytes(
@@ -6838,6 +6945,62 @@ def start_web(cfg):
                 return
             if route_path == "/api/version":
                 self._send_json(version_info())
+                return
+            if route_path == "/api/status-shortcuts":
+                self._send_json({'selected': [item['id'] for item in selected_shortcuts(cfg)]})
+                return
+            if route_path == "/api/analytics-config":
+                anpr = anpr_load_settings()
+                crossing = cfg.get('people_counting') if isinstance(cfg.get('people_counting'), dict) else {}
+                self._send_json({
+                    'anpr': {'configured': bool(anpr), 'address': anpr.get('address', ''),
+                             'username': anpr.get('username', ''), 'retention_days': anpr.get('retention_days', 30)},
+                    'crossing': {key: crossing.get(key, default) for key, default in {
+                        'event_collection_enabled': False, 'event_transport': 'http_push',
+                        'address': '', 'scheme': 'http', 'port': 80, 'channel': 1,
+                        'username': '', 'push_receiver_address': '', 'push_slot': 1,
+                        'forward_label': 'A to B', 'back_label': 'B to A',
+                    }.items()} | {'password_set': bool(crossing.get('password'))},
+                })
+                return
+            if route_path == "/api/teamviewer-status":
+                installed = bool(shutil.which("teamviewer"))
+                service = _run(["systemctl", "is-active", "teamviewerd.service"], timeout=5) if installed else {"stdout": "", "returncode": 1}
+                info = _run(["teamviewer", "info"], timeout=10) if installed else {"stdout": "", "stderr": "", "returncode": 1}
+                output = str(info.get("stdout") or "") + "\n" + str(info.get("stderr") or "")
+                output = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", output)
+                id_match = re.search(r"TeamViewer ID:\s*(\d+)", output)
+                version_match = re.search(r"TeamViewer\s+([0-9][0-9.]*)", output)
+                self._send_json({
+                    "installed": installed,
+                    "active": str(service.get("stdout") or "").strip() == "active",
+                    "id": id_match.group(1) if id_match else "",
+                    "version": version_match.group(1) if version_match else "",
+                })
+                return
+            if route_path == "/api/web-links":
+                self._send_json({"links": configured_web_links(cfg)})
+                return
+            if route_path in {"/api/anpr", "/api/anpr/export.csv"}:
+                query = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                plate = str((query.get("plate") or [""])[0])[:32]
+                start = str((query.get("from") or [""])[0])[:10]
+                end = str((query.get("to") or [""])[0])[:10]
+                if any(value and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) for value in (start, end)):
+                    self._send_json({"error": "Use YYYY-MM-DD dates."}, status=400)
+                    return
+                try:
+                    end_exclusive = (datetime.fromisoformat(end) + timedelta(days=1)).date().isoformat() if end else ""
+                    offset = 0 if route_path.endswith(".csv") else min(max(int((query.get("offset") or ["0"])[0]), 0), 100000)
+                    data = anpr_query_reads(ANPR_DB, plate=plate, start=start, end=end_exclusive, limit=5000 if route_path.endswith(".csv") else 100, offset=offset)
+                except (ValueError, OSError, sqlite3.Error) as exc:
+                    self._send_json({"error": str(exc)}, status=400)
+                    return
+                if route_path.endswith(".csv"):
+                    self._send_bytes(anpr_csv_report(data["rows"]), content_type="text/csv; charset=utf-8", filename="anpr-report.csv")
+                else:
+                    settings = anpr_load_settings()
+                    self._send_json({"enabled": bool(settings), "camera": settings.get("address", ""), **data})
                 return
             if route_path == "/api/identity":
                 self._send_json(identity_summary(cfg))
@@ -6954,6 +7117,169 @@ def start_web(cfg):
         def do_POST(self):
             request_context.theme = self._request_theme()
             route_path = self.path.split("?", 1)[0]
+            if route_path == "/network-router-save":
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if length < 1 or length > 4096:
+                        raise ValueError('Invalid request size')
+                    form = parse_qs(self.rfile.read(length).decode('utf-8'), keep_blank_values=True)
+                    first = lambda key: form.get(key, [''])[0].strip()
+                    current = cfg.get('mobile_router') if isinstance(cfg.get('mobile_router'), dict) else {}
+                    address = _router_address(first('address'))
+                    enabled = first('enabled') == '1'
+                    if enabled and not address:
+                        raise ValueError('Enter the router address before enabling monitoring')
+                    port, snmp_port, interval = int(first('port')), int(first('snmp_port')), int(first('poll_interval_seconds'))
+                    if not (1 <= port <= 65535 and 1 <= snmp_port <= 65535 and 30 <= interval <= 300):
+                        raise ValueError('Router port or collection interval is outside the allowed range')
+                    community = first('snmp_community') or current.get('snmp_community', '')
+                    if len(community) > 64:
+                        raise ValueError('SNMP community is too long')
+                    snmp_enabled = first('snmp_enabled') == '1'
+                    if snmp_enabled and not community:
+                        raise ValueError('Enter a read-only SNMP community')
+                    updates = {'mobile_router': {
+                        'enabled': enabled, 'address': address, 'port': port,
+                        'poll_interval_seconds': interval, 'snmp_enabled': snmp_enabled,
+                        'snmp_port': snmp_port, 'snmp_community': community,
+                    }}
+                    save_raw_config(deep_merge(load_raw_config(), updates))
+                    cfg.update(deep_merge(cfg, updates))
+                    Thread(target=restart_watchdog_core, daemon=True).start()
+                    location = '/network-router?saved=1'
+                except (OSError, ValueError, TypeError) as exc:
+                    location = '/network-router?error=' + quote(str(exc))
+                self.send_response(303)
+                self.send_header('Location', location)
+                self._send_no_cache_headers()
+                self.end_headers()
+                return
+            if route_path == "/api/status-shortcuts":
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if length < 1 or length > 2048:
+                        raise ValueError('Invalid request size')
+                    payload = json.loads(self.rfile.read(length))
+                    ids = validate_selection(payload.get('ids'))
+                    save_raw_config(deep_merge(load_raw_config(), {'status_shortcuts': ids}))
+                    cfg['status_shortcuts'] = ids
+                    self._send_json({'selected': ids})
+                except (OSError, ValueError, AttributeError, TypeError) as exc:
+                    self._send_json({'error': str(exc)}, status=400)
+                return
+            if route_path == "/analytics/anpr-save":
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if length < 1 or length > 4096:
+                        raise ValueError('Invalid request size')
+                    form = parse_qs(self.rfile.read(length).decode('utf-8'), keep_blank_values=True)
+                    first = lambda key: form.get(key, [''])[0].strip()
+                    existing = anpr_load_settings()
+                    anpr_save_settings(first('address'), first('username'), first('password') or existing.get('password', ''),
+                                       first('retention_days') or 30)
+                    anpr_stop_collector()
+                    anpr_start_collector(anpr_load_settings())
+                    location = '/analytics/anpr-setup?saved=1'
+                except (OSError, ValueError, TimeoutError) as exc:
+                    location = '/analytics/anpr-setup?error=' + quote(str(exc))
+                self.send_response(303)
+                self.send_header('Location', location)
+                self._send_no_cache_headers()
+                self.end_headers()
+                return
+            if route_path == "/analytics/crossing-save":
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if length < 1 or length > 8192:
+                        raise ValueError('Invalid request size')
+                    form = parse_qs(self.rfile.read(length).decode('utf-8'), keep_blank_values=True)
+                    first = lambda key: form.get(key, [''])[0].strip()
+                    existing = cfg.get('people_counting') if isinstance(cfg.get('people_counting'), dict) else {}
+                    address, receiver = first('address'), first('push_receiver_address')
+                    if address:
+                        address = str(ipaddress.IPv4Address(address))
+                    if receiver:
+                        receiver = str(ipaddress.IPv4Address(receiver))
+                    enabled = first('enabled') == '1'
+                    username = first('username')
+                    password = first('password') or existing.get('password', '')
+                    transport = first('event_transport')
+                    if transport not in {'http_push', 'isapi', 'onvif'}:
+                        raise ValueError('Select a valid camera event method')
+                    if enabled and not (address and username and password):
+                        raise ValueError('Enter camera address, username and password before enabling')
+                    if enabled and transport == 'http_push' and not receiver:
+                        raise ValueError('Enter the gateway receiver IP for camera upload')
+                    port, channel, slot = int(first('port')), int(first('channel')), int(first('push_slot'))
+                    if not (1 <= port <= 65535 and 1 <= channel <= 64 and 1 <= slot <= 12):
+                        raise ValueError('Camera port, channel or upload slot is outside the allowed range')
+                    if len(username) > 64 or len(password) > 128:
+                        raise ValueError('Camera credentials are too long')
+                    forward, back = first('forward_label'), first('back_label')
+                    if not forward or not back or len(forward) > 40 or len(back) > 40:
+                        raise ValueError('Enter both direction names, up to 40 characters each')
+                    updates = {'people_counting': {
+                        'event_collection_enabled': enabled, 'event_transport': transport,
+                        'address': address, 'scheme': first('scheme') if first('scheme') in {'http', 'https'} else 'http',
+                        'port': port, 'channel': channel, 'username': username, 'password': password,
+                        'push_receiver_address': receiver, 'push_slot': slot,
+                        'forward_label': forward, 'back_label': back,
+                    }}
+                    save_raw_config(deep_merge(load_raw_config(), updates))
+                    cfg.update(deep_merge(cfg, updates))
+                    Thread(target=restart_watchdog_core, daemon=True).start()
+                    location = '/analytics/crossing-setup?saved=1'
+                except (OSError, ValueError) as exc:
+                    location = '/analytics/crossing-setup?error=' + quote(str(exc))
+                self.send_response(303)
+                self.send_header('Location', location)
+                self._send_no_cache_headers()
+                self.end_headers()
+                return
+            if route_path == "/factory-reset":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 1 or length > 4096:
+                        raise ValueError('Invalid request size')
+                    form = parse_qs(self.rfile.read(length).decode('utf-8'), keep_blank_values=True)
+                    if form.get('confirmation', [''])[0] != 'RESET WATCHDOG':
+                        raise ValueError('Enter RESET WATCHDOG exactly')
+                    if not verify_local_reset_password(form.get('password', [''])[0]):
+                        raise ValueError('The local vsuser password was not accepted')
+                    anpr_stop_collector()
+                    reset_watchdog_data()
+                    body = '<!doctype html><meta charset="utf-8"><title>Watchdog reset</title><main style="font:16px system-ui;max-width:650px;margin:60px auto"><h1>Watchdog data cleared</h1><p>Site details and saved watchdog data were cleared. Watchdog and web services are restarting. TeamViewer and protection settings remain in place.</p><a href="/maintenance">Return to maintenance</a></main>'
+                    self._send_text(body, content_type='text/html; charset=utf-8')
+                    Thread(target=restart_after_factory_reset, daemon=True).start()
+                except (OSError, ValueError, TimeoutError) as exc:
+                    self._send_text('<!doctype html><meta charset="utf-8"><title>Reset not completed</title><main style="font:16px system-ui;max-width:650px;margin:60px auto"><h1>Reset not completed</h1><p>' + escape(str(exc)) + '</p><a href="/factory-reset">Return to reset page</a></main>', content_type='text/html; charset=utf-8', status=400)
+                return
+            if route_path == "/teamviewer-password":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 1 or length > 4096:
+                        raise ValueError("Invalid request size.")
+                    form = parse_qs(self.rfile.read(length).decode("utf-8"), keep_blank_values=True)
+                    password = form.get("password", [""])[0]
+                    confirm = form.get("confirm", [""])[0]
+                    if password != confirm:
+                        raise ValueError("The passwords do not match.")
+                    if not 8 <= len(password) <= 64:
+                        raise ValueError("Use a password between 8 and 64 characters.")
+                    if not shutil.which("teamviewer"):
+                        raise ValueError("TeamViewer is not installed.")
+                    result = subprocess.run(["teamviewer", "passwd", password], capture_output=True, text=True, timeout=20, check=False)
+                    if result.returncode != 0 or "ok" not in str(result.stdout or "").lower():
+                        raise RuntimeError("TeamViewer did not accept the password.")
+                    append_web_event("info", "teamviewer", "TeamViewer permanent password updated", {})
+                    location = "/teamviewer?updated=1"
+                except Exception as exc:
+                    location = "/teamviewer?error=" + quote(str(exc))
+                self.send_response(303)
+                self.send_header("Location", location)
+                self._send_no_cache_headers()
+                self.end_headers()
+                return
             if route_path == "/hikvision/events":
                 camera = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting"), dict) else {}
                 source = str(self.client_address[0]).removeprefix("::ffff:")
@@ -7759,6 +8085,7 @@ def start_web(cfg):
             self._send_json({"error": "not found"}, status=404)
 
     server = ThreadingHTTPServer((web_cfg["host"], int(web_cfg["port"])), Handler)
+    anpr_start_collector(anpr_load_settings())
     t = Thread(target=server.serve_forever, daemon=True)
     t.start()
     server.serve_thread = t

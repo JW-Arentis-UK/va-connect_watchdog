@@ -2,7 +2,11 @@
 from datetime import datetime
 import json
 from pathlib import Path
+import re
 import time
+
+from .recording_activity import recording_activity
+from .status_shortcuts import selected_shortcuts
 
 
 def read_object(path):
@@ -73,16 +77,25 @@ def snapshot(cfg, now=None):
 
     services = [name for name in checks if name.endswith(".service")]
     running = sum(checks[name].get("state") == "healthy" for name in services)
+    pi_profile = cfg.get("platform", {}).get("kind") == "raspberry_pi"
     storage = status.get("recording_storage") or {}
     storage_note = storage.get("message") or "Dedicated recording storage is not measured"
     if isinstance(storage.get("free_mb"), (int, float)):
         storage_note += f" · {storage['free_mb'] / 1024:.1f} GiB free"
-    cards = [
-        card("Videosoft services", services + ["videosoft_process"], f"{running} of {len(services)} monitored services running"),
-        card("Network & router", ["network_module", "mobile_router"]),
-        card("Recording storage", ["recording_storage"], storage_note),
-        card("System", ["temperature", "ram", "cpu_load", "root_disk", "write_test"]),
-    ]
+    if pi_profile:
+        cards = [
+            card("Pi services", services + ["display_session"], f"{running} of {len(services)} monitored services running"),
+            card("Network", ["network_module"]),
+            card("Storage", ["root_disk", "write_test"]),
+            card("System", ["temperature", "ram", "cpu_load"]),
+        ]
+    else:
+        cards = [
+            card("Videosoft services", services + ["videosoft_process"], f"{running} of {len(services)} monitored services running"),
+            card("Network & router", ["network_module", "mobile_router"]),
+            card("Recording storage", ["recording_storage"], storage_note),
+            card("System", ["temperature", "ram", "cpu_load", "root_disk", "write_test"]),
+        ]
     if cards[-1]["state"] == "healthy":
         metrics = []
         for name, label, unit in [("temperature", "CPU", "°C"), ("ram", "RAM", "%"), ("cpu_load", "Load", "%")]:
@@ -94,9 +107,36 @@ def snapshot(cfg, now=None):
     feed_age = age(feed.get("last_feed_unix"), now)
     feed_fresh = feed_age is not None and feed_age < cfg.get("hardware_watchdog", {}).get("timeout_seconds", 30)
     feeding = feed.get("process_status") == "feeding" and feed_fresh
-    cards.append({"title": "Hardware protection", "state": "healthy" if feeding else "unknown", "detail": f"Feeding · last feed {int(feed_age)}s ago" if feeding else "Fresh hardware feeding is not confirmed"})
+    if not pi_profile:
+        recordings = recording_activity(cfg, recent_count=1, now_unix=now)
+        if recordings.get("available"):
+            oldest = recordings.get("oldest") or {}
+            latest = recordings.get("latest") or {}
+            recording_state = "healthy"
+            recording_detail = f"Oldest: {oldest.get('display_local', 'Unknown')} · Latest: {latest.get('display_local', 'Unknown')}"
+        else:
+            recording_state = "unknown"
+            recording_detail = recordings.get("message") or "No timestamped recordings were found"
+        cards.append({"title": "Recording history", "state": recording_state, "detail": recording_detail})
+        cards.append({"title": "Hardware protection", "state": "healthy" if feeding else "unknown", "detail": f"Feeding · last feed {int(feed_age)}s ago" if feeding else "Fresh hardware feeding is not confirmed"})
+    destinations = {
+        "Pi services": "/#diagnostics",
+        "Network": "/#diagnostics",
+        "Storage": "/#diagnostics",
+        "Videosoft services": "/videosoft-services",
+        "Network & router": "/network-router",
+        "Recording storage": "/setup?open=storage#storage",
+        "System": "/system-status",
+        "Recording history": "/setup?open=storage#storage",
+        "Hardware protection": "/hardware-protection",
+    }
+    if pi_profile:
+        destinations["System"] = "/#diagnostics"
+    for item in cards:
+        item["href"] = destinations[item["title"]]
     alerts = [{"name": c.get("name"), "state": c.get("state"), "message": c.get("message")} for c in checks.values() if c.get("state") not in ("healthy", "disabled")]
-    healthy = not stale and bool(checks) and not alerts and all(c["state"] == "healthy" for c in cards)
+    essential_cards = [card for card in cards if card["title"] != "Recording history"]
+    healthy = not stale and bool(checks) and not alerts and all(c["state"] in ("healthy", "disabled") for c in essential_cards)
     reason = evidence.get("previous_reboot_reason") or {}
     legacy_age = age(legacy.get("last_check_at"), now)
     legacy_fresh = legacy_age is not None and legacy_age < 120
@@ -135,8 +175,28 @@ def snapshot(cfg, now=None):
         "recovery": {"legacy": ("V3 owns application and network recovery" if recovery_live.get('owner') == 'v3' and not stale and recovery_live.get('state') != 'blocked' else "Consolidated recovery configured; live ownership needs checking") if consolidated else ("Older watchdog can request reboots" if legacy_fresh and legacy_config.get("reboot_enabled") is True else "Older watchdog detected; status or reboot permission needs checking" if legacy else "Older watchdog not observed"), "v3": str(recovery_live.get('message') or 'V3 software recovery enabled') if recovery.get("enabled") else "V3 software recovery disabled", "note": "Hardware protection is separate from software recovery."},
         "events": event_tail(cfg["events_path"]), "capture": [] if cfg.get("web", {}).get("lightweight") else capture, "log_sizes": files,
         "diagnostics": [{k: c.get(k) for k in ("name", "state", "message")} for c in checks.values()],
+        "shortcuts": selected_shortcuts(cfg),
     }
 
 
-def page():
-    return Path(__file__).with_name("lite.html").read_bytes()
+def page(cfg=None):
+    html = Path(__file__).with_name("lite.html").read_text(encoding="utf-8")
+    if (cfg or {}).get("platform", {}).get("kind") == "raspberry_pi":
+        html = re.sub(
+            r'<nav aria-label="Page links">.*?</nav>',
+            '<nav aria-label="Page links"><a href="/">Status</a>'
+            '<a href="#diagnostics">Diagnostics</a>'
+            '<a class="button" href="/api/evidence.zip">Download evidence</a>'
+            '<button id="refresh" type="button">Refresh</button></nav>',
+            html,
+            count=1,
+            flags=re.S,
+        )
+        html = html.replace('href="/evidence-download"', 'href="/api/evidence.zip"')
+        html = html.replace('href="/maintenance"', 'href="#diagnostics"')
+        html = html.replace('Gateway overview', 'Raspberry Pi overview')
+        html = html.replace('Connecting to gateway…', 'Connecting to Raspberry Pi…')
+        html = html.replace('Gateway monitoring · read-only dashboard.', 'Raspberry Pi monitoring · read-only dashboard.')
+        html = html.replace('A running service alone does not prove video is being recorded.', 'A running service alone does not prove remote desktop access works.')
+        html = html.replace('<section class="status-shortcuts"', '<section hidden class="status-shortcuts"', 1)
+    return html.encode("utf-8")

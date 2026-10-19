@@ -17,6 +17,10 @@ class RecoveryEngine:
     def __init__(self, cfg, event_log):
         self.cfg = cfg
         self.event_log = event_log
+        self.consolidated = None
+        if cfg.get('recovery', {}).get('consolidated_policy', {}).get('enabled'):
+            from .consolidated_recovery import ConsolidatedRecovery
+            self.consolidated = ConsolidatedRecovery(cfg, event_log)
         self.restart_attempts = defaultdict(int)
         self.restart_limit_logged = set()
         self.reboot_suppressed_logged = False
@@ -30,6 +34,8 @@ class RecoveryEngine:
         }
 
     def summary(self):
+        if self.consolidated:
+            return dict(self.consolidated.last)
         return dict(self.last_action)
 
     def _set_summary(self, state: str, message: str, actions=None, details=None):
@@ -46,6 +52,8 @@ class RecoveryEngine:
         return summary
 
     def process(self, checks):
+        if self.consolidated:
+            return self.consolidated.process(checks)
         recovery = self.cfg["recovery"]
         if not recovery["enabled"]:
             return self._set_summary("disabled", "Recovery is disabled.")

@@ -429,6 +429,17 @@ def classify_non_watchdog_reboot(snapshot_path: Optional[Path]) -> Dict[str, str
     }
 
 
+def watchdog_reboot_reason(checks: Dict[str, object]) -> str:
+    if checks.get("lan_ok") is False or checks.get("internet_ok") is False:
+        failed = []
+        if checks.get("lan_ok") is False:
+            failed.append("LAN")
+        if checks.get("internet_ok") is False:
+            failed.append("internet")
+        return "Watchdog reboot — no network access (" + " and ".join(failed) + " checks failed)"
+    return "Watchdog reboot after persistent health check failures"
+
+
 class SiteWatchdog:
     def __init__(self, config: Dict[str, object]):
         self.config = config
@@ -537,9 +548,9 @@ class SiteWatchdog:
         classification_meta = (
             {
                 "classification": "watchdog_reboot",
-                "title": "Watchdog reboot",
-                "reporting_text": "Watchdog requested a reboot after the unit stayed non-functional.",
-                "suspected_reason": "Watchdog itself requested the reboot.",
+                "title": watchdog_reboot_reason(last_checks),
+                "reporting_text": watchdog_reboot_reason(last_checks),
+                "suspected_reason": str(self.state.get("last_reboot_reason") or watchdog_reboot_reason(last_checks)),
             }
             if reboot_was_requested
             else classify_non_watchdog_reboot(snapshot_path)
@@ -584,7 +595,11 @@ class SiteWatchdog:
         if previous_boot_id and current_boot_id and previous_boot_id != current_boot_id:
             self.state["reboot_detections_count"] = int(self.state.get("reboot_detections_count", 0)) + 1
             last_reboot_attempt_at = float(self.state.get("last_reboot_attempt_at") or 0)
-            reboot_was_requested = last_reboot_attempt_at > 0 and (time.time() - last_reboot_attempt_at) < 1800
+            reboot_was_requested = (
+                last_reboot_attempt_at > 0
+                and 0 <= (time.time() - last_reboot_attempt_at) < 1800
+                and self.state.get("last_reboot_boot_id", previous_boot_id) == previous_boot_id
+            )
             event = {
                 "previous_boot_id": previous_boot_id,
                 "current_boot_id": current_boot_id,
@@ -595,7 +610,7 @@ class SiteWatchdog:
                 max_journal_lines=int(self.config["journal_lines"]),
             )
             if reboot_was_requested:
-                self.state["last_reboot_reason"] = "watchdog reboot observed"
+                self.state["last_reboot_reason"] = watchdog_reboot_reason(dict(self.state.get("last_checks") or {}))
                 self.log_event("watchdog_reboot_observed", **event)
             else:
                 self.state["unexpected_reboot_count"] = int(self.state.get("unexpected_reboot_count", 0)) + 1
@@ -701,11 +716,23 @@ class SiteWatchdog:
             self.log_event("action_skipped", action="reboot", reason="reboot disabled")
             return False
         command = str(self.config.get("reboot_command", "shutdown -r now")).strip()
-        code, output = run_action(command)
+        keys = ("last_reboot_attempt_at", "last_reboot_boot_id", "last_reboot_reason", "reboot_commands_sent_count")
+        previous = {key: self.state[key] for key in keys if key in self.state}
         self.state["last_reboot_attempt_at"] = time.time()
+        self.state["last_reboot_boot_id"] = read_boot_id()
         self.state["reboot_commands_sent_count"] = int(self.state.get("reboot_commands_sent_count", 0)) + 1
-        self.state["last_reboot_reason"] = "watchdog issued reboot command"
-        self.log_event("action", action="reboot", return_code=code, detail=output[-600:])
+        self.state["last_reboot_reason"] = watchdog_reboot_reason(dict(self.state.get("last_checks") or {}))
+        # Shutdown can terminate this process before the command returns.
+        write_json(self.state_path, self.state)
+        with self.state_path.open("r+") as handle:
+            os.fsync(handle.fileno())
+        code, output = run_action(command)
+        self.log_event("action", action="reboot", return_code=code, detail=output[-600:], reason=self.state["last_reboot_reason"])
+        if code != 0:
+            for key in keys:
+                self.state.pop(key, None)
+            self.state.update(previous)
+            write_json(self.state_path, self.state)
         return code == 0
 
     def perform_checks(self) -> Dict[str, object]:

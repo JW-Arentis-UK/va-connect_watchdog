@@ -59,6 +59,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "host": "0.0.0.0",
         "port": 9110
     },
+    "display_monitor": {
+        "enabled": False,
+        "manager": "",
+        "expect_x11": True,
+        "check_interval_seconds": 30,
+        "startup_grace_seconds": 90,
+        "restart_cooldown_seconds": 300,
+        "max_restarts_per_hour": 3
+    },
     "hardware_watchdog": {
         "enabled": False,
         "backend": "neousys_wdt_dio",

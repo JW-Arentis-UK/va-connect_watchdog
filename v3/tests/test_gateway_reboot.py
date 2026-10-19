@@ -22,6 +22,8 @@ class GatewayRebootTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             reason = json.loads(reason_path.read_text(encoding="utf-8"))
             self.assertEqual(reason["requested_by"], "watchdog_web")
+            self.assertTrue(reason["hardware_fallback_requested"])
+            self.assertIn("boot_id", reason)
             command = run.call_args.args[0]
             self.assertIn("--on-active=8s", command)
             self.assertEqual(command[-2:], ["/usr/bin/systemctl", "reboot"])

@@ -1,5 +1,6 @@
 import json
 import os
+import signal
 import tempfile
 import time
 import unittest
@@ -41,7 +42,7 @@ class NeousysWatchdogTests(unittest.TestCase):
         source = (Path(__file__).parents[1] / "scripts" / "install_neousys_wdt.sh").read_text(encoding="utf-8")
 
         model_check = source.index("python3 -m va_watchdog.hardware_profile")
-        package_install = source.index("apt-get update")
+        package_install = source.index("Installing build tools and headers")
         self.assertLess(model_check, package_install)
 
     def test_application_install_and_update_skip_model_specific_driver_when_unsupported(self):
@@ -51,7 +52,7 @@ class NeousysWatchdogTests(unittest.TestCase):
 
         for source in (install, update):
             self.assertIn("python3 -m va_watchdog.hardware_profile", source)
-            self.assertIn("skipping poc-451vtc watchdog driver", source.lower())
+            self.assertIn("skipping neousys watchdog driver", source.lower())
 
     def test_migrating_an_enabled_linux_backend_is_safely_disabled(self):
         config = _enforce_neousys_watchdog({
@@ -313,6 +314,76 @@ class NeousysWatchdogTests(unittest.TestCase):
 
         worker.hw.close.assert_not_called()
 
+    def test_requested_reboot_leaves_hardware_timer_armed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reason = root / "last-reboot-reason.json"
+            worker = FeedWorker({
+                "events_path": str(root / "events.jsonl"),
+                "last_reboot_reason_path": str(reason),
+                "hardware_watchdog": {"timeout_seconds": 30},
+            })
+            reason.write_text(json.dumps({
+                "state": "requested",
+                "hardware_fallback_requested": True,
+                "boot_id": worker.boot_id,
+                "requested_at_unix": time.time(),
+            }), encoding="utf-8")
+            worker.received_signal = "SIGTERM"
+            worker.hw.close = Mock()
+            worker._shutdown_hardware(abnormal_exit=False)
+
+            state = json.loads(worker.state_path.read_text(encoding="utf-8"))
+
+        worker.hw.close.assert_not_called()
+        self.assertEqual(state["process_status"], "reboot_fallback_armed")
+
+    def test_requested_reboot_signal_keeps_feeder_alive_for_countdown(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reason = root / "last-reboot-reason.json"
+            worker = FeedWorker({
+                "events_path": str(root / "events.jsonl"),
+                "last_reboot_reason_path": str(reason),
+                "hardware_watchdog": {"timeout_seconds": 30},
+            })
+            worker.hw.opened = True
+            reason.write_text(json.dumps({
+                "state": "requested",
+                "hardware_fallback_requested": True,
+                "boot_id": worker.boot_id,
+                "requested_at_unix": time.time(),
+            }), encoding="utf-8")
+
+            worker.stop(signal.SIGTERM)
+
+            state = json.loads(worker.state_path.read_text(encoding="utf-8"))
+
+        self.assertFalse(worker.stop_requested)
+        self.assertTrue(worker.reboot_guard_active)
+        self.assertEqual(state["process_status"], "reboot_fallback_countdown")
+
+    def test_stale_reboot_request_does_not_leave_timer_armed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reason = root / "last-reboot-reason.json"
+            worker = FeedWorker({
+                "events_path": str(root / "events.jsonl"),
+                "last_reboot_reason_path": str(reason),
+                "hardware_watchdog": {"timeout_seconds": 30},
+            })
+            reason.write_text(json.dumps({
+                "state": "requested",
+                "hardware_fallback_requested": True,
+                "boot_id": worker.boot_id,
+                "requested_at_unix": time.time() - 1000,
+            }), encoding="utf-8")
+            worker.received_signal = "SIGTERM"
+            worker.hw.close = Mock()
+            worker._shutdown_hardware(abnormal_exit=False)
+
+        worker.hw.close.assert_called_once()
+
     def test_consecutive_feeds_create_boot_specific_proof(self):
         with tempfile.TemporaryDirectory() as temporary:
             proof = Path(temporary) / "proof.json"
@@ -363,14 +434,15 @@ class NeousysWatchdogTests(unittest.TestCase):
         self.assertIn('if [[ "$ACTIVATE" != 1 ]]', text)
         self.assertIn("configuration was not changed", text)
         self.assertIn("python3 -m va_watchdog.hardware_profile", text)
-        self.assertIn("restricted to verified POC-451VTC hardware", text)
-        self.assertIn('apt-get install -y build-essential dkms gcc-12 "linux-headers-$kernel" unzip', text)
+        self.assertIn("restricted to verified Neousys hardware", text)
+        self.assertIn('install -y build-essential dkms "linux-headers-$kernel" unzip', text)
         self.assertIn('AUTOINSTALL="yes"', text)
         self.assertIn('dkms build -m "$DKMS_NAME" -v "$VERSION" -k "$kernel"', text)
         self.assertIn('dkms install -m "$DKMS_NAME" -v "$VERSION" -k "$kernel" --force', text)
         self.assertIn('Prebuilding wdt_dio.ko for installed kernel $latest_kernel', text)
+        self.assertIn('using newest bundled ABI library', text)
         self.assertIn("blacklist iTCO_wdt", text)
-        self.assertIn("apt-get remove -y watchdog", text)
+        self.assertIn('remove -y watchdog', text)
         self.assertIn("systemctl enable va-watchdog.service va-watchdog-feed.service", text)
         self.assertIn('fail "va-watchdog-feed.service is not enabled for reboot"', text)
 

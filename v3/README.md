@@ -1,6 +1,7 @@
 # VA-Connect Watchdog
 
-Health Engine prototype for Ubuntu gateways.
+Health Engine for Ubuntu gateways and Raspberry Pi OS. The Pi profile and setup
+notes are in [docs/raspberry-pi.md](docs/raspberry-pi.md).
 
 Current scope:
 - System health checks

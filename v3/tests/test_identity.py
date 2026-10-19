@@ -101,6 +101,46 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(identity["model_note"], "Legacy BIOS reports POC-400 Series")
         self.assertTrue(identity["wdt_supported"])
 
+    def test_verified_poc551_rev_a_profile_is_supported(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dmi_root = Path(temporary)
+            self.write_dmi(
+                dmi_root,
+                sys_vendor="Neousys Technology Inc.",
+                product_name="POC-551VTC",
+                product_version="Rev. A1",
+                board_vendor="Neousys Technology Inc.",
+                board_name="POC-500",
+                board_version="Rev. A1",
+                bios_version="POC55A02.Build201214",
+                bios_date="12/14/2020",
+            )
+
+            identity = hardware_identity(dmi_root)
+
+        self.assertEqual(identity["display_model"], "POC-551VTC")
+        self.assertTrue(identity["wdt_supported"])
+        self.assertIn("verified POC-551VTC", identity["wdt_support_reason"])
+
+    def test_unverified_poc551_bios_profile_remains_unsupported(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dmi_root = Path(temporary)
+            self.write_dmi(
+                dmi_root,
+                sys_vendor="Neousys Technology Inc.",
+                product_name="POC-551VTC",
+                product_version="Rev. A1",
+                board_vendor="Neousys Technology Inc.",
+                board_name="POC-500",
+                board_version="Rev. A1",
+                bios_version="UNVERIFIED",
+                bios_date="12/14/2020",
+            )
+
+            identity = hardware_identity(dmi_root)
+
+        self.assertFalse(identity["wdt_supported"])
+
     def test_other_generic_poc400_profile_remains_unsupported(self):
         with tempfile.TemporaryDirectory() as temporary:
             dmi_root = Path(temporary)

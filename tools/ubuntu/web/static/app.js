@@ -129,11 +129,19 @@ function renderSummary(deviceStatus) {
 
 function renderBuildInfo(buildInfo) {
   const value = buildInfo || {};
-  const buildNumber = value.build_number || "local-dev";
-  const commitSha = value.commit_sha || "unknown";
-  const builtAt = value.built_at || "";
-  const branch = value.source_branch || "master";
-  setText("build-info", `build: ${buildNumber} • ${commitSha}${builtAt ? ` • ${builtAt}` : ""} • ${branch}`);
+  const buildNumber = String(value.build_number || value.git_commit || value.commit_sha || "local-dev").trim();
+  const commitSha = String(value.commit_sha || value.git_commit || "unknown").trim();
+  const builtAt = String(value.built_at || value.deployed_at || "").trim();
+  const branch = value.source_branch || value.git_branch || "master";
+  const pieces = [`build: ${buildNumber}`];
+  if (commitSha && commitSha !== buildNumber) {
+    pieces.push(commitSha);
+  }
+  if (builtAt) {
+    pieces.push(builtAt.slice(0, 10));
+  }
+  pieces.push(branch);
+  setText("build-info", pieces.join(" • "));
 }
 
 function renderIncident(incident, keyEvents) {

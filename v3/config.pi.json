@@ -1,0 +1,25 @@
+{
+  "platform": {"kind": "raspberry_pi"},
+  "poll_interval_seconds": 10,
+  "heartbeat_interval_seconds": 10,
+  "collector_intervals": {"hardware_seconds": 10, "services_seconds": 15, "storage_seconds": 60, "network_seconds": 30, "process_seconds": 10},
+  "web": {"lightweight": true},
+  "blackbox": {"main_service": "teamviewerd.service", "interval_seconds": 5},
+  "hardware_watchdog": {"enabled": false},
+  "display_monitor": {"enabled": true, "manager": "lightdm.service", "expect_x11": true},
+  "recording_storage": {"enabled": false},
+  "storage": {
+    "root_path": "/",
+    "recordings_path": "/",
+    "write_test_path": "/tmp",
+    "monitored_paths": [
+      {"name": "Root Disk", "path": "/", "warning_percent": 80, "critical_percent": 95, "always_full_expected": false}
+    ]
+  },
+  "services": [
+    {"name": "teamviewerd.service", "critical": true, "restart": false},
+    {"name": "lightdm.service", "critical": false, "restart": false},
+    {"name": "ssh.service", "critical": true, "restart": false}
+  ],
+  "recovery": {"enabled": false, "restart_failed_services": false, "allow_reboot": false}
+}

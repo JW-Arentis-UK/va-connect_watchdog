@@ -23,8 +23,6 @@ def _cached_checks(name, interval, collect):
         _COLLECTOR_CACHE[name] = (now, checks)
         return checks
     except Exception as exc:
-        if cached:
-            return list(cached[1])
         return [CheckResult(f"{name}_collector", "unknown", f"Collector unavailable: {exc}")]
 
 

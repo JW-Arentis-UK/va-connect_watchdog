@@ -20,6 +20,14 @@ wget -O install_v3_gateway.sh https://raw.githubusercontent.com/JW-Arentis-UK/va
 bash ./install_v3_gateway.sh
 ```
 
+## Main web view
+
+The main gateway dashboard now defaults to the lightweight single-page view.
+
+- `http://<gateway-ip>/` opens the lite page
+- `http://<gateway-ip>/legacy` opens the older full dashboard
+- `http://<gateway-ip>/lite` also opens the lite page
+
 ## What is included
 
 - `tools/ubuntu/va_connect_watchdog.sh`

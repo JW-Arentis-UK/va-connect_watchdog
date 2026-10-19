@@ -53,6 +53,8 @@ def request_gateway_reboot(cfg: dict[str, Any], delay_seconds: int = 8) -> dict[
         "requested_at_unix": requested_at_unix,
         "requested_by": "watchdog_web",
         "request_id": request_id,
+        "boot_id": _boot_id(),
+        "hardware_fallback_requested": True,
     }
     try:
         _write_json_atomic(reason_path, reason)
@@ -89,3 +91,10 @@ def request_gateway_reboot(cfg: dict[str, Any], delay_seconds: int = 8) -> dict[
         "request_id": request_id,
         "output": (result.stdout or result.stderr or "Controlled reboot scheduled.").strip(),
     }
+
+
+def _boot_id() -> str:
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""

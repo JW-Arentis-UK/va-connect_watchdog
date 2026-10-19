@@ -23,7 +23,7 @@ class WebNavigationTests(unittest.TestCase):
             "/overview": "/",
             "/hardware": "/evidence#system",
             "/network": "/evidence#network",
-            "/services": "/#services",
+            "/services": "/videosoft-services",
             "/history": "/evidence#history",
             "/diagnostics": "/evidence",
             "/settings": "/setup",
@@ -169,7 +169,7 @@ class WebNavigationTests(unittest.TestCase):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 
         self.assertIn('disclosure("Stability evidence", stability_detail)', source)
-        self.assertIn('disclosure("Service details", services_card())', source)
+        self.assertIn('href="/videosoft-services">Open Videosoft services</a>', source)
 
     def test_evidence_offers_a_dedicated_neousys_report(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
@@ -308,8 +308,9 @@ class WebNavigationTests(unittest.TestCase):
 
         self.assertIn("running_version = {", source)
         self.assertIn('"commit": running_version["commit"]', source)
-        self.assertIn("Built __BUILD_DATE__", source)
-        self.assertIn('.replace("__BUILD_DATE__", escape(build_date))', source)
+        self.assertIn("__BUILD_ID__", source)
+        self.assertIn('.replace("__BUILD_ID__", escape(f"{version[\'build_number\']} · {build_date}"))', source)
+        self.assertIn('"build_number": build_number()', source)
         self.assertIn(".top-build-date { color:var(--green);", source)
 
     def test_obsolete_client_renderer_is_not_activated(self):

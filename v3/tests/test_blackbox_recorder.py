@@ -201,7 +201,7 @@ class BlackBoxRetentionTests(unittest.TestCase):
             self.assertEqual(current.sequence, 0)
             self.assertEqual(current.snapshot(), [])
 
-    def test_purge_all_removes_atomic_blackbox_segments(self):
+    def test_general_purge_preserves_atomic_blackbox_segments(self):
         with tempfile.TemporaryDirectory() as temporary:
             cfg = self._cfg(temporary)
             recorder = BlackBoxRecorder(cfg, sampler=FakeSampler())
@@ -210,8 +210,8 @@ class BlackBoxRetentionTests(unittest.TestCase):
 
             result = purge_data(cfg, mode="all")
 
-            self.assertFalse(list(Path(cfg["blackbox"]["segment_dir"]).glob("*.jsonl.gz")))
-            self.assertTrue(any(item["path"].endswith(".jsonl.gz") for item in result["removed"]))
+            self.assertTrue(list(Path(cfg["blackbox"]["segment_dir"]).glob("*.jsonl.gz")))
+            self.assertFalse(any(item["path"].endswith(".jsonl.gz") for item in result["removed"]))
 
     @staticmethod
     def _cfg(temporary):

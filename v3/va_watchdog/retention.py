@@ -24,6 +24,7 @@ def data_files(cfg: dict[str, Any]) -> list[Path]:
     files = [
         base / "status.json",
         base / "events.jsonl",
+        base / "events.jsonl.1",
         base / "update-state.json",
         base / "update.log",
         base / "last-reboot-reason.json",
@@ -101,13 +102,21 @@ def retention_status(cfg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def disposable_files(cfg):
+    # Control state and crash evidence have their own retention policies.
+    base = data_dir(cfg)
+    return [Path(cfg['events_path']), Path(cfg['events_path']).with_suffix('.jsonl.1'),
+            history_path(cfg), base / 'update.log', base / 'neousys-watchdog-install.log',
+            base / 'neousys-watchdog-probe.log', base / 'hikvision-people-events.jsonl']
+
+
 def purge_data(cfg: dict[str, Any], mode: str = "old", older_than_days: int | None = None) -> dict[str, Any]:
     cutoff = None
     if older_than_days is not None:
         cutoff = time.time() - max(0, int(older_than_days)) * 86400
     removed = []
     trimmed = []
-    for path in data_files(cfg):
+    for path in disposable_files(cfg):
         if not path.exists() or path.name == "status.json":
             continue
         if mode != "all" and cutoff is not None and path.suffix == ".jsonl":
@@ -122,16 +131,6 @@ def purge_data(cfg: dict[str, Any], mode: str = "old", older_than_days: int | No
                 removed.append({"path": str(path), "size_bytes": size})
             except OSError:
                 pass
-    segment_dir = blackbox_segment_dir(cfg)
-    if segment_dir.is_dir():
-        for path in segment_dir.glob("*.jsonl.gz"):
-            try:
-                if mode == "all" or (cutoff is not None and path.stat().st_mtime < cutoff):
-                    size = file_size(path)
-                    path.unlink()
-                    removed.append({"path": str(path), "size_bytes": size})
-            except OSError:
-                continue
     return {"removed": removed, "trimmed": trimmed, "retention": retention_status(cfg)}
 
 
@@ -157,15 +156,8 @@ def enforce_retention(cfg: dict[str, Any]) -> dict[str, Any]:
 
     if dir_size(data_dir(cfg)) > max_bytes:
         candidates = []
-        for path in data_files(cfg):
+        for path in disposable_files(cfg):
             if path.exists() and path.name != "status.json":
-                try:
-                    candidates.append((path.stat().st_mtime, path))
-                except OSError:
-                    continue
-        segment_dir = blackbox_segment_dir(cfg)
-        if segment_dir.is_dir():
-            for path in segment_dir.glob("*.jsonl.gz"):
                 try:
                     candidates.append((path.stat().st_mtime, path))
                 except OSError:
@@ -204,33 +196,33 @@ def _write_lines_atomic(path: Path, lines: list[str]) -> None:
     os.replace(temporary, path)
 
 
-def _trim_jsonl_before(path: Path, cutoff: float) -> dict[str, Any]:
-    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    kept = []
-    removed = 0
-    for line in lines:
-        timestamp = _json_timestamp(line)
-        if timestamp is not None and timestamp < cutoff:
-            removed += 1
-        else:
-            kept.append(line)
-    if removed:
-        _write_lines_atomic(path, kept)
-    return {"path": str(path), "removed_rows": removed, "remaining_rows": len(kept)}
+def _stream_trim(path, discard):
+    from .events import EVENTS_LOCK
+    temporary = path.with_suffix(path.suffix + '.tmp')
+    removed = kept = removed_bytes = 0
+    with EVENTS_LOCK:
+        try:
+            with path.open('rb') as source, temporary.open('wb') as target:
+                for line in source:
+                    if discard(line, removed_bytes):
+                        removed += 1
+                        removed_bytes += len(line)
+                    else:
+                        target.write(line)
+                        kept += 1
+            if removed:
+                os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return {'path': str(path), 'removed_rows': removed, 'remaining_rows': kept, 'removed_bytes': removed_bytes}
 
 
-def _trim_jsonl_bytes(path: Path, minimum_bytes: int) -> dict[str, Any]:
-    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    removed_rows = 0
-    removed_bytes = 0
-    while lines and removed_bytes < max(1, minimum_bytes):
-        removed_bytes += len(lines.pop(0).encode("utf-8")) + 1
-        removed_rows += 1
-    if removed_rows:
-        _write_lines_atomic(path, lines)
-    return {
-        "path": str(path),
-        "removed_rows": removed_rows,
-        "remaining_rows": len(lines),
-        "removed_bytes": removed_bytes,
-    }
+def _trim_jsonl_before(path, cutoff):
+    def discard(line, _):
+        stamp = _json_timestamp(line.decode('utf-8', errors='replace'))
+        return stamp is not None and stamp < cutoff
+    return _stream_trim(path, discard)
+
+
+def _trim_jsonl_bytes(path, minimum_bytes):
+    return _stream_trim(path, lambda line, removed: removed < max(1, minimum_bytes))

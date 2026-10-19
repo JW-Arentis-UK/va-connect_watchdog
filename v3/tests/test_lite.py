@@ -27,6 +27,18 @@ class LiteTests(unittest.TestCase):
         self.assertIn('Actual CCTV disk', result['cards'][2]['detail'])
         self.assertIn('5.0 GiB', result['cards'][2]['detail'])
 
+    def test_recording_history_lists_oldest_and_latest_recording(self):
+        recordings = self.root / 'recordings'
+        recordings.mkdir()
+        (recordings / '1791071000.mp4').write_bytes(b'')
+        (recordings / '1791071900.mp4').write_bytes(b'')
+        self.cfg['storage'] = {'recordings_path': str(recordings)}
+        result = snapshot(self.cfg, self.now)
+        card = next(card for card in result['cards'] if card['title'] == 'Recording history')
+        self.assertEqual(card['state'], 'healthy')
+        self.assertIn('Oldest:', card['detail'])
+        self.assertIn('Latest:', card['detail'])
+
     def test_stale_and_missing_data_never_appear_healthy(self):
         result = snapshot(self.cfg, self.now + 120)
         self.assertTrue(result['stale'])

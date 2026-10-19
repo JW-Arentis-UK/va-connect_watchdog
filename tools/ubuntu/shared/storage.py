@@ -236,16 +236,34 @@ def append_metric(config: V2Config, metric: Any) -> dict[str, Any]:
 
 
 def load_build_info() -> dict[str, Any]:
-    return read_json(
-        build_info_path(),
-        {
-            "build_number": "local-dev",
-            "commit_sha": "unknown",
-            "built_at": "",
-            "source_branch": "master",
-            "source_repo": "JW-Arentis-UK/va-connect_watchdog",
-        },
-    )
+    raw = read_json(build_info_path(), {})
+    if not isinstance(raw, dict):
+        raw = {}
+
+    git_commit = str(raw.get("git_commit") or raw.get("commit_sha") or "unknown").strip() or "unknown"
+    built_at = str(raw.get("built_at") or raw.get("deployed_at") or "").strip()
+    source_branch = str(raw.get("source_branch") or raw.get("git_branch") or "master").strip() or "master"
+    source_repo = str(raw.get("source_repo") or raw.get("source_repo_dir") or "JW-Arentis-UK/va-connect_watchdog").strip()
+    build_number = str(raw.get("build_number") or "").strip()
+    if not build_number:
+        if built_at and git_commit != "unknown":
+            build_number = f"{built_at[:10]}-{git_commit}"
+        elif git_commit != "unknown":
+            build_number = git_commit
+        else:
+            build_number = "local-dev"
+
+    return {
+        **raw,
+        "build_number": build_number,
+        "commit_sha": str(raw.get("commit_sha") or git_commit),
+        "git_commit": git_commit,
+        "built_at": built_at,
+        "deployed_at": str(raw.get("deployed_at") or built_at),
+        "source_branch": source_branch,
+        "git_branch": str(raw.get("git_branch") or source_branch),
+        "source_repo": source_repo,
+    }
 
 
 def log_path(config: V2Config) -> Path:

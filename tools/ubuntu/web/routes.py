@@ -10,6 +10,7 @@ from .services import debug_last_incident_payload, gateways_payload, health_payl
 
 router = APIRouter()
 INDEX_PATH = Path(__file__).resolve().parent / "templates" / "index.html"
+LITE_INDEX_PATH = Path(__file__).resolve().parent / "templates" / "lite.html"
 
 
 def _config(request: Request):
@@ -33,4 +34,14 @@ def debug_last_incident(request: Request):
 
 @router.get("/")
 def index():
+    return FileResponse(LITE_INDEX_PATH)
+
+
+@router.get("/lite")
+def lite():
+    return FileResponse(LITE_INDEX_PATH)
+
+
+@router.get("/legacy")
+def legacy():
     return FileResponse(INDEX_PATH)

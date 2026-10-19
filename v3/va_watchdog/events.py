@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from threading import RLock
 from .common import now_iso
+from .log_tail import tail_lines
 
 EVENTS_LOCK = RLock()
 
@@ -27,7 +28,7 @@ def read_events(path: str | Path, limit: int = 500) -> list[dict]:
     safe_limit = max(1, min(int(limit), 5000))
     rows = []
     with EVENTS_LOCK:
-        lines = target.read_text(encoding="utf-8", errors="ignore").splitlines()
+        lines = tail_lines(target, safe_limit, 8 * 1024 * 1024)
     for line in lines:
         try:
             payload = json.loads(line)
@@ -70,8 +71,9 @@ def purge_events(path: str | Path, before: str | None = None, purge_all: bool = 
     return {"ok": True, "removed": removed, "remaining": len(kept)}
 
 class EventLog:
-    def __init__(self, path: str):
+    def __init__(self, path: str, compact=False):
         self.path = Path(path)
+        self.compact = compact
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.previous_states = {}
         self.resource_candidates = {}
@@ -79,6 +81,9 @@ class EventLog:
         self.immediate_markers = {}
 
     def add(self, level: str, source: str, message: str, data=None):
+        if self.compact and level == 'info' and source == 'mobile_router':
+            value = (data or {}).get('value', {}) if isinstance(data, dict) else {}
+            data = {key: value[key] for key in ('collected_at', 'cell_id', 'signal_dbm', 'connection_uptime_seconds', 'uptime_seconds') if key in value}
         event = {
             "time": now_iso(),
             "level": level,
@@ -87,6 +92,8 @@ class EventLog:
             "data": data or {}
         }
         with EVENTS_LOCK:
+            if self.compact and self.path.exists() and self.path.stat().st_size >= 4 * 1024 * 1024:
+                os.replace(self.path, self.path.with_suffix('.jsonl.1'))
             with self.path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(event) + "\n")
 

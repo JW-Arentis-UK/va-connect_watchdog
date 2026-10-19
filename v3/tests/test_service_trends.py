@@ -39,7 +39,7 @@ class ServiceTrendTests(unittest.TestCase):
             path = Path(temporary) / "history.jsonl"
             cfg = {"history_path": str(path), "events_path": str(Path(temporary) / "events.jsonl"), "retention": {"history_sample_seconds": 0, "history_max_rows": 100}}
             status = {
-                "time": "2026-09-17T12:00:00+00:00",
+                "time": datetime.now(timezone.utc).isoformat(),
                 "checks": [
                     {"name": "network_module", "state": "warning", "value": {}},
                     {"name": "mobile_router", "state": "healthy", "value": {"available": True, "signal_dbm": -67, "rsrp_dbm": -91, "rsrq_db": -11, "sinr_db": 18, "radio_score": 60, "radio_score_label": "Fair", "radio_score_limiting": "RSRQ", "temperature_c": 43.0, "network_type": "5G-NSA", "cell_id": 12345, "cell_changed": True, "connection_uptime_seconds": 1800, "mobile_reconnected": True, "uptime_seconds": 3600, "started_at": "2026-09-17T11:00:00+00:00", "registration": "Registered, home"}},

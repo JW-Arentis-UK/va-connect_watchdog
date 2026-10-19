@@ -11,6 +11,7 @@ from .blackbox import blackbox_summary, check_unexpected_boot, start_recorder
 from .config import load_config
 from .common import CheckResult, score_from_checks, worst_state
 from .events import EventLog
+from .display_monitor import DisplayMonitor
 from .health import build_startup_summary, collect_health
 from .history import append_history
 from .recovery import RecoveryEngine
@@ -22,7 +23,6 @@ from .watchdog_liveness_test import reconcile_liveness_test
 from .heartbeat import HeartbeatPublisher
 from .reboot_evidence import create as create_reboot_evidence, event_level as reboot_event_level
 from .kernel_faults import scan as scan_kernel_faults
-from .hikvision_events import HikvisionEventCollector
 
 WEB_UNIT_PATH = Path("/etc/systemd/system/va-watchdog-web.service")
 
@@ -31,7 +31,7 @@ def start_web_without_service(cfg, event_log, unit_path=WEB_UNIT_PATH):
     if not cfg.get("web", {}).get("enabled", True) or unit_path.exists():
         return False
     try:
-        from .web import start_web
+        from .web_service import start_web
 
         start_web(cfg)
         event_log.add("warning", "web", "Web service unit missing; serving from core until installation")
@@ -47,6 +47,17 @@ def atomic_write_json(path: str, data):
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     tmp.replace(p)
+
+
+def add_display_status(status, checks, monitor, cfg):
+    check = monitor.poll()
+    if check is None:
+        return
+    checks.append(check)
+    status["checks"].append(check.to_dict())
+    status["state"] = worst_state([item.state for item in checks])
+    status["score"] = score_from_checks(checks)
+    status["startup_summary"] = build_startup_summary(cfg, checks)
 
 def write_startup_error_log():
     payload = traceback.format_exc()
@@ -229,7 +240,8 @@ def hardware_feed_status(cfg, startup_grace, trip_active=False, trip_summary=Non
 
 def main():
     cfg = load_config()
-    event_log = EventLog(cfg["events_path"])
+    event_log = EventLog(cfg["events_path"], compact=bool(cfg.get('web', {}).get('lightweight')))
+    display_monitor = DisplayMonitor(cfg, event_log)
     recovery = RecoveryEngine(cfg, event_log)
     last_trip_active = False
     reconcile_liveness_test(cfg)
@@ -244,8 +256,10 @@ def main():
         )
 
     _blackbox_recorder = start_recorder(cfg)
-    _hikvision_events = HikvisionEventCollector(cfg, event_log)
-    _hikvision_events.start()
+    if cfg.get('people_counting', {}).get('event_collection_enabled') and not cfg.get('web', {}).get('lightweight'):
+        from .hikvision_events import HikvisionEventCollector
+        _hikvision_events = HikvisionEventCollector(cfg, event_log)
+        _hikvision_events.start()
 
     event_log.add("info", "watchdog", "VA-Connect Watchdog starting")
     trip_active, trip_summary = trip_test_active(cfg)
@@ -259,6 +273,7 @@ def main():
         )
 
     status, checks = collect_health(cfg)
+    add_display_status(status, checks, display_monitor, cfg)
     status["hardware_watchdog_feed"] = hardware_feed_status(
         cfg,
         startup_grace,
@@ -299,6 +314,7 @@ def main():
         try:
             health_sequence += 1
             status, checks = collect_health(cfg)
+            add_display_status(status, checks, display_monitor, cfg)
             event_log.add_state_changes(checks)
             event_log.add_service_resource_changes(checks, cfg)
             event_log.add_recording_storage_change(status.get("recording_storage"))

@@ -8,6 +8,7 @@ from unittest.mock import patch
 from va_watchdog.storage import (
     _RECORDING_WARNING_STATE,
     _stabilize_recording_storage_warning,
+    recording_storage_recordings_path,
     recording_storage_status,
     validate_system_recording_directory,
 )
@@ -16,6 +17,17 @@ from va_watchdog.storage import (
 class RecordingStorageModeTests(unittest.TestCase):
     def setUp(self):
         _RECORDING_WARNING_STATE.clear()
+
+    def test_empty_recording_subdirectory_uses_mountpoint_itself(self):
+        cfg = {
+            "recording_storage": {
+                "mode": "dedicated_mount",
+                "mountpoint": "/recordings",
+                "recording_subdir": "",
+            }
+        }
+
+        self.assertEqual(recording_storage_recordings_path(cfg), "/recordings")
 
     def _cfg(self, directory: str):
         return {

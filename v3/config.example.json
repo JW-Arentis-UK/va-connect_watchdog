@@ -47,6 +47,15 @@
     "host": "0.0.0.0",
     "port": 9110
   },
+  "display_monitor": {
+    "enabled": false,
+    "manager": "",
+    "expect_x11": true,
+    "check_interval_seconds": 30,
+    "startup_grace_seconds": 90,
+    "restart_cooldown_seconds": 300,
+    "max_restarts_per_hour": 3
+  },
   "hardware_watchdog": {
     "enabled": false,
     "backend": "neousys_wdt_dio",
@@ -124,7 +133,7 @@
   },
   "storage": {
     "root_path": "/",
-    "recordings_path": "/home/vsuser/recordings",
+    "recordings_path": "/recordings",
     "write_test_path": "/tmp",
     "monitored_paths": [
       {
@@ -136,7 +145,7 @@
       },
       {
         "name": "Recordings Disk",
-        "path": "/home/vsuser/recordings",
+        "path": "/recordings",
         "warning_percent": 85,
         "critical_percent": 95,
         "always_full_expected": false
@@ -147,11 +156,11 @@
     "enabled": true,
     "mode": "dedicated_mount",
     "directory_path": "",
-    "expected_label": "CCTV_STORAGE",
-    "mountpoint": "/media/vsuser/Storage",
+    "expected_label": "recordings",
+    "mountpoint": "/recordings",
     "filesystem": "ext4",
     "fstab_options": "defaults,nofail,x-systemd.device-timeout=5",
-    "recording_subdir": "recordings",
+    "recording_subdir": "",
     "owner": "vsuser",
     "group": "",
     "directory_mode": "775",

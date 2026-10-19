@@ -20,6 +20,19 @@ LEGACY_POC451_DMI = {
     "bios_date": "06/14/2022",
 }
 
+# POC-551VTC Rev. A1 verified on the development unit after a successful
+# Neousys WDT_DIO safe-feed test and deliberate hardware-reset trip test.
+VERIFIED_POC551_DMI = {
+    "manufacturer": "Neousys Technology Inc.",
+    "model": "POC-551VTC",
+    "version": "Rev. A1",
+    "board_vendor": "Neousys Technology Inc.",
+    "board": "POC-500",
+    "board_version": "Rev. A1",
+    "bios_version": "POC55A02.Build201214",
+    "bios_date": "12/14/2020",
+}
+
 
 def hardware_identity(dmi_root: Path = DEFAULT_DMI_ROOT) -> dict[str, Any]:
     """Return raw DMI details plus the reviewed VA-Connect hardware profile."""
@@ -40,6 +53,17 @@ def hardware_identity(dmi_root: Path = DEFAULT_DMI_ROOT) -> dict[str, Any]:
 def _classify(identity: dict[str, Any]) -> dict[str, Any]:
     manufacturer = str(identity.get("manufacturer") or "")
     reported_model = str(identity.get("model") or "")
+    if all(
+        str(identity.get(key) or "").casefold() == expected.casefold()
+        for key, expected in VERIFIED_POC551_DMI.items()
+    ):
+        return {
+            "display_model": "POC-551VTC",
+            "model_note": "Exact verified POC-551VTC Rev. A1 hardware profile",
+            "wdt_supported": True,
+            "wdt_support_reason": "verified POC-551VTC Rev. A1 WDT_DIO profile",
+        }
+
     if "neousys" in manufacturer.casefold() and "poc-451vtc" in reported_model.casefold():
         return {
             "display_model": "POC-451VTC",

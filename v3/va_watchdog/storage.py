@@ -246,7 +246,8 @@ def recording_storage_recordings_path(cfg: dict[str, Any]) -> str:
     if str(rec_cfg.get("mode") or "dedicated_mount") == "system_directory":
         return str(rec_cfg.get("directory_path") or "").rstrip("/")
     mountpoint = str(rec_cfg.get("mountpoint") or "/media/vsuser/Storage").rstrip("/")
-    subdir = str(rec_cfg.get("recording_subdir") or "recordings").strip().strip("/")
+    raw_subdir = rec_cfg.get("recording_subdir")
+    subdir = str("recordings" if raw_subdir is None else raw_subdir).strip().strip("/")
     return posixpath.join(mountpoint, subdir) if subdir else mountpoint
 
 def _prepare_recording_directories(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -954,12 +955,14 @@ def _stabilize_recording_storage_warning(recording, cfg, now=None):
 def check_storage(cfg):
     th = cfg["thresholds"]
     st = cfg["storage"]
-    recording = _stabilize_recording_storage_warning(recording_storage_status(cfg), cfg)
     checks = [
         _usage_check("root_disk", st["root_path"], th["root_disk_warning_percent"], th["root_disk_critical_percent"], True),
-        _usage_check("recordings_disk", st["recordings_path"], th["recordings_disk_warning_percent"], th["recordings_disk_critical_percent"], False),
-        CheckResult("recording_storage", recording["status"], recording["message"], recording, False),
     ]
+    if cfg.get("recording_storage", {}).get("enabled", True):
+        recording = _stabilize_recording_storage_warning(recording_storage_status(cfg), cfg)
+        checks.append(CheckResult("recording_storage", recording["status"], recording["message"], recording, False))
+    if cfg.get("recording_storage", {}).get("enabled", True) and not cfg.get('web', {}).get('lightweight'):
+        checks.append(_usage_check("recordings_disk", st["recordings_path"], th["recordings_disk_warning_percent"], th["recordings_disk_critical_percent"], False))
     writable = _writable(st["write_test_path"])
     checks.append(CheckResult(
         "write_test",

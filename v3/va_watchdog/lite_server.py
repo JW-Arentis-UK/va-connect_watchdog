@@ -1,6 +1,7 @@
 """Small read-only operator server; no commissioning or recovery actions."""
 import io
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -8,6 +9,7 @@ from urllib.parse import urlsplit
 import zipfile
 
 from .lite import page, read_object, snapshot
+from .build import build_number
 from .log_tail import tail_lines
 
 
@@ -121,13 +123,15 @@ def start_web(cfg):
         def do_GET(self):
             path = urlsplit(self.path).path
             if path in ('/', '/lite'):
-                return self.send(page(), 'text/html; charset=utf-8')
+                return self.send(page(cfg), 'text/html; charset=utf-8')
             if path == '/api/healthz':
                 result = {'ok': True, 'mode': 'lightweight'}
             elif path == '/api/lite':
                 result = snapshot(cfg)
             elif path == '/api/status':
                 result = read_object(cfg['status_path'])
+            elif path == '/api/version':
+                result = {'build_number': build_number(), 'build_at': datetime.fromtimestamp(Path(__file__).stat().st_mtime, timezone.utc).isoformat()}
             elif path == '/api/evidence.zip':
                 return self.send(evidence_zip(cfg), 'application/zip', download=True)
             elif path in ('/evidence', '/events', '/watchdog', '/setup'):

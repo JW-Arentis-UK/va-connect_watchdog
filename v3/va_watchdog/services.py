@@ -81,10 +81,18 @@ def check_services(cfg):
     for svc in cfg["services"]:
         name = svc["name"]
         active, restarts, runtime = _service_properties(name)
-        value = {"active": active, "restarts": restarts, **runtime}
+        value = {"active": active, "restarts": restarts, "collected_at": time.time(), **runtime}
         if active == "active":
             checks.append(CheckResult(name, "healthy", "Service active", value, svc.get("critical", False)))
         else:
             state = "critical" if svc.get("critical", False) else "degraded"
             checks.append(CheckResult(name, state, f"Service is {active}", value, svc.get("critical", False)))
+    policy = cfg.get('recovery', {}).get('consolidated_policy', {})
+    if policy.get('enabled'):
+        try:
+            result = subprocess.run(['pgrep', '-f', str(policy.get('app_match', 'vsapp'))], capture_output=True, timeout=3, check=False)
+            state = 'healthy' if result.returncode == 0 else 'critical' if result.returncode == 1 else 'unknown'
+        except (OSError, subprocess.TimeoutExpired):
+            state = 'unknown'
+        checks.append(CheckResult('videosoft_process', state, 'Videosoft process present' if state == 'healthy' else 'Videosoft process missing' if state == 'critical' else 'Videosoft process check unavailable', {'collected_at': time.time()}, True))
     return checks

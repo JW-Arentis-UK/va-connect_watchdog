@@ -5,6 +5,7 @@ try:
 except ImportError:  # Windows development/test hosts do not expose Linux file locks.
     fcntl = None
 import os
+import json
 import signal
 import subprocess
 import time
@@ -76,6 +77,7 @@ class FeedWorker:
         self.last_lifecycle_checkpoint = 0.0
         self.lifecycle_checkpoint_seconds = max(10, int(hw_cfg.get("lifecycle_checkpoint_seconds", 60) or 60))
         self.received_signal = ""
+        self.reboot_guard_active = False
         heartbeat_boot = str(read_state(cfg).get("boot_id") or "")
         self.preservation_result = preserve_previous_boot_state(
             cfg,
@@ -115,6 +117,15 @@ class FeedWorker:
                 self.received_signal = signal.Signals(int(_args[0])).name
             except (TypeError, ValueError):
                 self.received_signal = str(_args[0])
+        if self.received_signal == "SIGTERM" and self.hw.opened and self._reboot_fallback_requested():
+            self.reboot_guard_active = True
+            self.last_decision = "requested reboot; waiting for hardware reset fallback"
+            self.write_state("reboot_fallback_countdown")
+            self.log_lifecycle("hardware_reboot_fallback_countdown_started", {
+                "feed_count": self.hw.feed_count,
+                "timeout_seconds": self.hw.get_timeout(),
+            })
+            return
         self.stop_requested = True
 
     def write_state(self, status):
@@ -329,7 +340,27 @@ class FeedWorker:
         return None
 
     def _shutdown_behavior(self):
-        return "StopWDT on orderly service stop; feeder crash leaves hardware timer active"
+        return "StopWDT on ordinary service stop; requested reboot or feeder crash leaves hardware timer active"
+
+    def _reboot_fallback_requested(self, now=None):
+        """Recognise a fresh, same-boot reboot request before systemd stops the feeder."""
+        path = Path(self.cfg.get("last_reboot_reason_path") or self.state_path.parent / "last-reboot-reason.json")
+        try:
+            reason = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return False
+        if not isinstance(reason, dict) or reason.get("state") != "requested":
+            return False
+        if reason.get("hardware_fallback_requested") is not True:
+            return False
+        requested_boot = str(reason.get("boot_id") or "")
+        if requested_boot and requested_boot != self.boot_id:
+            return False
+        try:
+            age = float(now if now is not None else time.time()) - float(reason.get("requested_at_unix"))
+        except (TypeError, ValueError):
+            return False
+        return -5 <= age <= 600
 
     def _legacy_conflict(self):
         for unit in ("watchdog.service", "wd_keepalive.service"):
@@ -409,6 +440,14 @@ class FeedWorker:
         if abnormal_exit:
             self.log_lifecycle("hardware_left_armed_after_exception", {"feed_count": self.hw.feed_count})
             return
+        if self.received_signal == "SIGTERM" and self._reboot_fallback_requested():
+            self.last_decision = "requested reboot; hardware reset fallback left armed"
+            self.write_state("reboot_fallback_armed")
+            self.log_lifecycle("hardware_left_armed_for_requested_reboot", {
+                "feed_count": self.hw.feed_count,
+                "timeout_seconds": self.hw.get_timeout(),
+            })
+            return
         self.write_state("stopping")
         try:
             self.log_lifecycle("stop_wdt_requested", {"opened": self.hw.opened, "feed_count": self.hw.feed_count})
@@ -443,6 +482,9 @@ class FeedWorker:
             if not self._open_when_available():
                 return 0
             while not self.stop_requested:
+                if self.reboot_guard_active:
+                    self._wait_interruptibly(min(1, self.interval))
+                    continue
                 if not bool(load_config().get("hardware_watchdog", {}).get("enabled", False)):
                     self.log_lifecycle("feed_disabled_by_config")
                     self.stop_requested = True

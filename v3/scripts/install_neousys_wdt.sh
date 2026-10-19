@@ -52,25 +52,32 @@ if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
   if [[ "$ACTIVATE" == 1 ]]; then
     sudo_args+=("--activate")
   fi
-  exec sudo --preserve-env=VA_WATCHDOG_CONFIG_PATH "$0" "${sudo_args[@]}"
+  exec sudo --preserve-env=VA_WATCHDOG_APT_SOURCES,VA_WATCHDOG_CONFIG_PATH "$0" "${sudo_args[@]}"
+fi
+
+APT_OPTIONS=()
+if [[ -n "${VA_WATCHDOG_APT_SOURCES:-}" ]]; then
+  [[ "$VA_WATCHDOG_APT_SOURCES" == /* && -s "$VA_WATCHDOG_APT_SOURCES" ]] || fail "APT sources must be an absolute path to a non-empty file"
+  APT_OPTIONS=(-o "Dir::Etc::sourcelist=$VA_WATCHDOG_APT_SOURCES" -o "Dir::Etc::sourceparts=-")
+  log "Using only APT sources from $VA_WATCHDOG_APT_SOURCES (signature checks remain enabled)"
 fi
 
 [[ -f "$BUNDLE" ]] || fail "vendor bundle not found: $BUNDLE"
 [[ "$(uname -m)" == "x86_64" ]] || fail "the supplied vendor library supports x86_64 only"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
 if ! hardware_profile="$(PYTHONPATH="$APP_DIR" python3 -m va_watchdog.hardware_profile 2>&1)"; then
-  fail "this reviewed installation path is restricted to verified POC-451VTC hardware; $hardware_profile"
+  fail "this reviewed installation path is restricted to verified Neousys hardware; $hardware_profile"
 fi
 log "Hardware accepted: $hardware_profile"
 kernel="$(uname -r)"
 kernel_build="/lib/modules/$kernel/build"
-kernel_cc="x86_64-linux-gnu-gcc-12"
+kernel_cc="gcc"
 
 if ! command -v make >/dev/null 2>&1 || ! command -v "$kernel_cc" >/dev/null 2>&1 || ! command -v dkms >/dev/null 2>&1 || [[ ! -d "$kernel_build" ]] || { [[ "$BUNDLE" == *.zip ]] && ! command -v unzip >/dev/null 2>&1; }; then
   command -v apt-get >/dev/null 2>&1 || fail "build tools or kernel headers are missing and apt-get is unavailable"
   log "Installing build tools and headers for $kernel"
-  apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential dkms gcc-12 "linux-headers-$kernel" unzip
+  apt-get "${APT_OPTIONS[@]}" update
+  DEBIAN_FRONTEND=noninteractive apt-get "${APT_OPTIONS[@]}" install -y build-essential dkms "linux-headers-$kernel" unzip
 fi
 
 for command in sha256sum tar make dkms "$kernel_cc" install depmod modprobe modinfo python3; do
@@ -113,7 +120,11 @@ driver_dir="$package_root/linux/driver"
 kernel_major="${kernel%%.*}"
 library_source="$package_root/linux/deploy/lib${kernel_major}.x/libwdt_dio.so"
 [[ -f "$driver_dir/wdt_dio.c" && -f "$driver_dir/wdt_sys.h" && -f "$driver_dir/Makefile" ]] || fail "vendor driver source is incomplete"
-[[ -f "$library_source" ]] || fail "vendor library for kernel major $kernel_major is unavailable"
+if [[ ! -f "$library_source" ]]; then
+  library_source="$(find "$package_root/linux/deploy" -mindepth 2 -maxdepth 2 -type f -path '*/lib*.x/libwdt_dio.so' -print | sort -V | tail -n 1)"
+  [[ -n "$library_source" && -f "$library_source" ]] || fail "no vendor user-space library is available"
+  log "No lib${kernel_major}.x user-space library is supplied; using newest bundled ABI library: $library_source"
+fi
 
 dkms_source="/usr/src/$DKMS_NAME-$VERSION"
 log "Registering $DKMS_NAME v$VERSION with DKMS"
@@ -200,7 +211,7 @@ for unit in watchdog.service wd_keepalive.service; do
   systemctl mask "$unit" 2>/dev/null || true
 done
 if command -v apt-get >/dev/null 2>&1 && dpkg-query -W -f='${Status}' watchdog 2>/dev/null | grep -q 'install ok installed'; then
-  DEBIAN_FRONTEND=noninteractive apt-get remove -y watchdog
+  DEBIAN_FRONTEND=noninteractive apt-get "${APT_OPTIONS[@]}" remove -y watchdog
 fi
 rm -f /etc/modules-load.d/iTCO_wdt.conf /etc/modprobe.d/va-watchdog-itco.conf
 cat > /etc/modprobe.d/va-watchdog-neousys-only.conf <<'EOF'

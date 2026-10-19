@@ -7,11 +7,13 @@ INSTALL_DIR="${VA_WATCHDOG_INSTALL_DIR:-/opt/va-connect-watchdog-v3}"
 SITE_NAME="${VA_WATCHDOG_SITE_NAME:-}"
 ASSET_ID="${VA_WATCHDOG_ASSET_ID:-}"
 ENABLE_PERSISTENT_JOURNAL="${VA_WATCHDOG_ENABLE_PERSISTENT_JOURNAL:-}"
+APT_SOURCES="${VA_WATCHDOG_APT_SOURCES:-}"
+APPLY_PI_PROFILE="${VA_WATCHDOG_APPLY_PI_PROFILE:-0}"
 NON_INTERACTIVE=0
 
 usage() {
   cat <<'EOF'
-Install VA-Connect Watchdog on Ubuntu 22.04.
+Install VA-Connect Watchdog on Ubuntu gateways or Raspberry Pi OS.
 
 Usage:
   bash install_v3_gateway.sh [options]
@@ -22,7 +24,10 @@ Options:
   --ref BRANCH           Git branch (default: codex/gui-refresh)
   --repo URL             Git repository URL
   --install-dir PATH     Checkout path (default: /opt/va-connect-watchdog-v3)
+  --apt-sources FILE    Use only this APT sources file for this installation
   --persistent-journal   Enable persistent journald for post-crash evidence
+  --apply-pi-profile     Replace Pi-specific monitoring settings in an existing
+                         config after making a timestamped backup
   --no-persistent-journal
                          Do not change journald persistence
   --non-interactive      Do not prompt; use supplied options/environment
@@ -69,8 +74,17 @@ while [[ $# -gt 0 ]]; do
       INSTALL_DIR="$2"
       shift 2
       ;;
+    --apt-sources)
+      [[ $# -ge 2 ]] || fail "--apt-sources requires a file"
+      APT_SOURCES="$2"
+      shift 2
+      ;;
     --persistent-journal)
       ENABLE_PERSISTENT_JOURNAL=1
+      shift
+      ;;
+    --apply-pi-profile)
+      APPLY_PI_PROFILE=1
       shift
       ;;
     --no-persistent-journal)
@@ -99,10 +113,19 @@ else
   "${SUDO[@]}" -v
 fi
 
-[[ -r /etc/os-release ]] || fail "This installer requires Ubuntu with systemd"
+[[ -r /etc/os-release ]] || fail "This installer requires a supported Linux system with systemd"
 # shellcheck disable=SC1091
 source /etc/os-release
-[[ "${ID:-}" == "ubuntu" ]] || fail "Unsupported operating system: ${PRETTY_NAME:-unknown}"
+PLATFORM_PROFILE=standard
+if [[ -r /proc/device-tree/model ]] && grep -aq 'Raspberry Pi' /proc/device-tree/model &&
+   { [[ "${ID:-}" == "raspbian" ]] || [[ -e /etc/rpi-issue ]]; }; then
+  PLATFORM_PROFILE=pi
+elif [[ "${ID:-}" != "ubuntu" ]]; then
+  fail "Unsupported operating system: ${PRETTY_NAME:-unknown}; expected Ubuntu or Raspberry Pi OS"
+fi
+if [[ "$APPLY_PI_PROFILE" == 1 && "$PLATFORM_PROFILE" != pi ]]; then
+  fail "--apply-pi-profile is only valid on Raspberry Pi OS"
+fi
 command -v systemctl >/dev/null 2>&1 || fail "systemd is required"
 command -v apt-get >/dev/null 2>&1 || fail "apt-get is required"
 
@@ -125,22 +148,32 @@ fi
 ENABLE_PERSISTENT_JOURNAL="${ENABLE_PERSISTENT_JOURNAL:-0}"
 [[ "$ENABLE_PERSISTENT_JOURNAL" =~ ^[01]$ ]] || fail "Persistent journal selection must be 0 or 1"
 
-log "Installing Ubuntu runtime and diagnostic packages"
-"${SUDO[@]}" apt-get update
-"${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  git \
-  python3 \
-  smartmontools \
-  lm-sensors \
-  sysstat \
-  ethtool \
-  iproute2 \
-  iputils-ping \
-  util-linux \
-  procps \
-  pciutils \
-  curl \
+export VA_WATCHDOG_APT_SOURCES="$APT_SOURCES"
+APT_OPTIONS=()
+if [[ -n "${VA_WATCHDOG_APT_SOURCES:-}" ]]; then
+  [[ "$VA_WATCHDOG_APT_SOURCES" == /* && -s "$VA_WATCHDOG_APT_SOURCES" ]] || fail "APT sources must be an absolute path to a non-empty file"
+  APT_OPTIONS=(-o "Dir::Etc::sourcelist=$VA_WATCHDOG_APT_SOURCES" -o "Dir::Etc::sourceparts=-")
+  log "Using only APT sources from $VA_WATCHDOG_APT_SOURCES (signature checks remain enabled)"
+fi
+
+log "Installing $PLATFORM_PROFILE runtime and diagnostic packages"
+"${SUDO[@]}" apt-get "${APT_OPTIONS[@]}" update || fail "Package index update failed. Repair the reported repository, or use --apt-sources /etc/apt/sources.list if that file contains only Ubuntu repositories."
+PACKAGES=(
+  git
+  python3
+  smartmontools
+  ethtool
+  iproute2
+  iputils-ping
+  util-linux
+  procps
+  curl
   wget
+)
+if [[ "$PLATFORM_PROFILE" == standard ]]; then
+  PACKAGES+=(lm-sensors sysstat pciutils)
+fi
+"${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get "${APT_OPTIONS[@]}" install -y "${PACKAGES[@]}"
 
 if [[ -e "$INSTALL_DIR" && ! -d "$INSTALL_DIR/.git" ]]; then
   fail "$INSTALL_DIR exists but is not a Git checkout; move it aside and run again"
@@ -173,10 +206,12 @@ fi
 
 log "Installing services and configuration"
 "${SUDO[@]}" env \
+  VA_WATCHDOG_APT_SOURCES="$APT_SOURCES" \
   VA_WATCHDOG_INSTALL_DIR="$INSTALL_DIR" \
   VA_WATCHDOG_SITE_NAME="$SITE_NAME" \
   VA_WATCHDOG_ASSET_ID="$ASSET_ID" \
   VA_WATCHDOG_ENABLE_PERSISTENT_JOURNAL="$ENABLE_PERSISTENT_JOURNAL" \
+  VA_WATCHDOG_APPLY_PI_PROFILE="$APPLY_PI_PROFILE" \
   "$INSTALL_DIR/v3/scripts/install.sh"
 
 log "Running post-install verification"

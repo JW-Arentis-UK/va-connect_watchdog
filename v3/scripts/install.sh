@@ -10,9 +10,10 @@ CONFIG_PATH="$CONFIG_DIR/config.json"
 SITE_NAME="${VA_WATCHDOG_SITE_NAME:-}"
 ASSET_ID="${VA_WATCHDOG_ASSET_ID:-}"
 ENABLE_PERSISTENT_JOURNAL="${VA_WATCHDOG_ENABLE_PERSISTENT_JOURNAL:-0}"
+APPLY_PI_PROFILE="${VA_WATCHDOG_APPLY_PI_PROFILE:-0}"
 
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-  exec sudo --preserve-env=VA_WATCHDOG_APT_SOURCES,VA_WATCHDOG_INSTALL_DIR,VA_WATCHDOG_CONFIG_DIR,VA_WATCHDOG_DATA_DIR,VA_WATCHDOG_SITE_NAME,VA_WATCHDOG_ASSET_ID,VA_WATCHDOG_ENABLE_PERSISTENT_JOURNAL "$0" "$@"
+  exec sudo --preserve-env=VA_WATCHDOG_APT_SOURCES,VA_WATCHDOG_INSTALL_DIR,VA_WATCHDOG_CONFIG_DIR,VA_WATCHDOG_DATA_DIR,VA_WATCHDOG_SITE_NAME,VA_WATCHDOG_ASSET_ID,VA_WATCHDOG_ENABLE_PERSISTENT_JOURNAL,VA_WATCHDOG_APPLY_PI_PROFILE "$0" "$@"
 fi
 
 log() {
@@ -33,6 +34,8 @@ fi
 
 [[ -d "$APP_DIR/va_watchdog" ]] || fail "Application package was not found at $APP_DIR/va_watchdog"
 [[ -f "$APP_DIR/config.example.json" ]] || fail "Example configuration is missing"
+[[ -f "$APP_DIR/config.pi.json" ]] || fail "Raspberry Pi configuration profile is missing"
+[[ -f "$APP_DIR/build.json" ]] || fail "V3 build number is missing"
 [[ -f "$APP_DIR/systemd/va-watchdog.service" ]] || fail "Main systemd unit is missing"
 [[ -f "$APP_DIR/systemd/va-watchdog-feed.service" ]] || fail "Feeder systemd unit is missing"
 [[ -f "$APP_DIR/systemd/va-watchdog-web.service" ]] || fail "Web systemd unit is missing"
@@ -53,10 +56,10 @@ if [[ -f "$APP_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" ]]; then
   if HARDWARE_PROFILE="$(PYTHONPATH="$APP_DIR" python3 -m va_watchdog.hardware_profile 2>&1)"; then
     log "Installing bundled Neousys WDT_DIO driver on $HARDWARE_PROFILE without activating hardware feeding"
     apt-get "${APT_OPTIONS[@]}" update
-    apt-get "${APT_OPTIONS[@]}" install -y build-essential dkms gcc-12 "linux-headers-$(uname -r)" unzip
+    apt-get "${APT_OPTIONS[@]}" install -y build-essential dkms "linux-headers-$(uname -r)" unzip
     /bin/bash "$APP_DIR/scripts/install_neousys_wdt.sh"
   else
-    log "Skipping POC-451VTC watchdog driver: $HARDWARE_PROFILE"
+    log "Skipping Neousys watchdog driver: $HARDWARE_PROFILE"
   fi
 fi
 
@@ -65,13 +68,43 @@ PYTHONPATH="$APP_DIR" python3 -m compileall -q "$APP_DIR/va_watchdog"
 python3 -m json.tool "$APP_DIR/config.example.json" >/dev/null
 
 install -d -m 0755 "$CONFIG_DIR" "$DATA_DIR"
+[[ "$APPLY_PI_PROFILE" =~ ^[01]$ ]] || fail "VA_WATCHDOG_APPLY_PI_PROFILE must be 0 or 1"
+PLATFORM_PROFILE=standard
+if [[ -r /proc/device-tree/model ]] && grep -aq 'Raspberry Pi' /proc/device-tree/model; then
+  PLATFORM_PROFILE=pi
+fi
+apply_pi_profile() {
+  PYTHONPATH="$APP_DIR" python3 - "$CONFIG_PATH" "$APP_DIR/config.pi.json" <<'PY'
+import json
+import pathlib
+import sys
+
+from va_watchdog.config import deep_merge
+
+path = pathlib.Path(sys.argv[1])
+profile = pathlib.Path(sys.argv[2])
+base = json.loads(path.read_text(encoding="utf-8"))
+overrides = json.loads(profile.read_text(encoding="utf-8"))
+path.write_text(json.dumps(deep_merge(base, overrides), indent=2) + "\n", encoding="utf-8")
+PY
+}
 if [[ ! -f "$CONFIG_PATH" ]]; then
   install -m 0640 "$APP_DIR/config.example.json" "$CONFIG_PATH"
+  if [[ "$PLATFORM_PROFILE" == pi ]]; then
+    apply_pi_profile
+    log "Applied Raspberry Pi profile to new configuration"
+  fi
   log "Created $CONFIG_PATH"
 else
   backup="$CONFIG_PATH.$(date -u +%Y%m%dT%H%M%SZ).install.bak"
   cp -a "$CONFIG_PATH" "$backup"
   log "Preserved existing configuration and created $backup"
+  if [[ "$PLATFORM_PROFILE" == pi && "$APPLY_PI_PROFILE" == 1 ]]; then
+    apply_pi_profile
+    log "Applied Raspberry Pi profile to existing configuration; previous file: $backup"
+  elif [[ "$PLATFORM_PROFILE" == pi ]]; then
+    log "Existing configuration was not changed to the Pi profile; review $CONFIG_PATH"
+  fi
 fi
 
 python3 - "$CONFIG_PATH" "$SITE_NAME" "$ASSET_ID" <<'PY'
@@ -152,6 +185,7 @@ if [[ "$web_enabled" == 1 ]]; then
 fi
 
 log "Installed VA-Connect Watchdog"
+log "Build: $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["build_number"])' "$APP_DIR/build.json")"
 log "Configuration: $CONFIG_PATH"
 log "Data: $DATA_DIR"
 log "Main service: active"

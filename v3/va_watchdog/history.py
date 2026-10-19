@@ -5,6 +5,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from .log_tail import tail_lines
 
 
 _LAST_TRIM_UNIX: dict[str, float] = {}
@@ -87,6 +88,8 @@ def append_history(cfg: dict[str, Any], status: dict[str, Any]) -> None:
         "mobile_router_restart_detected": bool(mobile_router.get("restart_detected", False)),
     }
     with path.open("a", encoding="utf-8") as f:
+        if cfg.get('retention', {}).get('compact_history'):
+            payload = compact_row(payload)
         f.write(json.dumps(payload, separators=(",", ":")) + "\n")
     trim_history(cfg)
 
@@ -96,7 +99,7 @@ def read_history(cfg: dict[str, Any], limit: int = 288) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines()[-limit:]:
+    for line in tail_lines(path, max(1, min(limit, 50000)), 32 * 1024 * 1024):
         try:
             payload = json.loads(line)
         except Exception:
@@ -119,13 +122,25 @@ def trim_history(cfg: dict[str, Any]) -> None:
     cutoff = time.time() - max(1, days) * 86400
     original = path.read_text(encoding="utf-8", errors="ignore").splitlines()
     kept = []
+    last_bucket = None
     for line in original:
         try:
             payload = json.loads(line)
             timestamp = payload.get("time", "")
             # ISO strings sort by date, but mtime fallback keeps malformed rows bounded.
             if timestamp and _iso_to_unix(timestamp) >= cutoff:
-                kept.append(line)
+                if retention.get('compact_history'):
+                    payload = compact_row(payload)
+                    stamp = _iso_to_unix(timestamp)
+                    healthy = payload.get('state') == 'healthy' and not any(payload.get(k) for k in ['warning_checks', 'critical_checks', 'degraded_checks'])
+                    bucket = int(stamp // 300) if healthy and stamp < now - 48 * 3600 else None
+                    if bucket is not None and bucket == last_bucket:
+                        kept[-1] = json.dumps(payload, separators=(',', ':'))
+                    else:
+                        kept.append(json.dumps(payload, separators=(',', ':')))
+                    last_bucket = bucket
+                else:
+                    kept.append(line)
         except Exception:
             continue
     max_rows = int(retention.get("history_max_rows", 50000) or 50000)
@@ -235,7 +250,7 @@ def _last_history_row(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
-        lines = [line for line in path.read_text(encoding="utf-8", errors="ignore").splitlines() if line.strip()]
+        lines = [line for line in tail_lines(path, 2, 16384) if line.strip()]
     except Exception:
         return None
     if not lines:
@@ -245,3 +260,16 @@ def _last_history_row(path: Path) -> dict[str, Any] | None:
     except Exception:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def compact_row(row):
+    """Keep fault context and numeric trends; full detail lives in incident capture."""
+    keys = ('time', 'state', 'boot_id', 'uptime_seconds', 'sample_gap_seconds',
+            'temperature', 'cpu_load', 'ram', 'root_disk', 'warning_checks',
+            'degraded_checks', 'critical_checks', 'service_states',
+            'recording_storage_status', 'recording_storage_free_mb',
+            'recording_storage_used_percent', 'hardware_watchdog_feed_status',
+            'network_module_state', 'mobile_router_signal_dbm', 'mobile_router_uptime_seconds')
+    result = {key: row[key] for key in keys if row.get(key) is not None}
+    result['schema'] = 'compact-v1'
+    return result

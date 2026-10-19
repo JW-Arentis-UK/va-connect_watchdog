@@ -10,8 +10,11 @@ from typing import Any
 
 from .heartbeat import heartbeat_paths, read_tail
 from .incident_archive import archive_previous_boot
+from .legacy_reboot import NETWORK_REBOOT, apply_legacy_reason
+from .reset_attribution import current_boot_started_at, reset_attribution
 from .watchdog_test import read_trip_test_state
 from .watchdog_liveness_test import confirmed_for_boot, read_liveness_test_state
+from .watchdog_feed_evidence import feeder_state_for_boot
 
 SHUTDOWN_RECORDED = "Shutdown recorded (cause unknown)"
 
@@ -58,10 +61,13 @@ def recent_restarts(cfg: dict[str, Any], limit: int = 10) -> list[dict[str, Any]
         classification = str(payload.get("reset_mechanism") or payload.get("classification") or "Unknown")
         deliberate = payload.get("deliberate_trip_test", {})
         liveness = payload.get("liveness_path_test", {})
+        reason = payload.get("previous_reboot_reason") or {}
         if isinstance(deliberate, dict) and deliberate.get("confirmed"):
             restart_type = "Deliberate trip test"
         elif isinstance(liveness, dict) and liveness.get("confirmed"):
             restart_type = "Full liveness test"
+        elif classification == "Requested reboot" and isinstance(reason, dict) and reason.get("cause") == "network_access_lost":
+            restart_type = NETWORK_REBOOT
         elif classification == "Watchdog reset":
             restart_type = "Automatic watchdog recovery"
         elif classification == "Clean reboot":
@@ -170,7 +176,7 @@ def _apply_confirmed_trip(evidence: dict[str, Any], trip_state: dict[str, Any]) 
     return True
 
 
-def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], previous_reboot_reason: dict[str, Any], kernel_text: str, last_x: str, reset_reason: str = "", trip_state: dict[str, Any] | None = None, liveness_state: dict[str, Any] | None = None) -> dict[str, Any]:
+def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], previous_reboot_reason: dict[str, Any], kernel_text: str, last_x: str, reset_reason: str = "", trip_state: dict[str, Any] | None = None, liveness_state: dict[str, Any] | None = None, previous_feed: dict[str, Any] | None = None) -> dict[str, Any]:
     previous_boot = str(boot_change.get("previous_boot_id") or "")
     previous_rows = [row for row in heartbeats if str(row.get("boot_id")) == previous_boot]
     last_heartbeat = previous_rows[-1] if previous_rows else (heartbeats[-1] if heartbeats else {})
@@ -227,7 +233,7 @@ def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], prev
         evidence_used.append("No direct reset-cause evidence was found; classification remains Unknown.")
     return {
         "reset_mechanism": mechanism,
-        "probable_preceding_fault": "storage I/O" if storage_fault else ("kernel fault" if kernel_fault else "none identified"),
+        "probable_preceding_fault": "loss of network access" if previous_reboot_reason.get("cause") == "network_access_lost" else ("application or service failure" if previous_reboot_reason.get("cause") == "application_failure" else ("storage I/O" if storage_fault else ("kernel fault" if kernel_fault else "none identified"))),
         "classification": mechanism,
         "confidence": confidence,
         "previous_boot_id": previous_boot,
@@ -243,6 +249,13 @@ def classify(boot_change: dict[str, Any], heartbeats: list[dict[str, Any]], prev
         "reset_reason": reset_reason,
         "deliberate_trip_test": deliberate_trip,
         "liveness_path_test": liveness_trip,
+        "reset_attribution": reset_attribution(
+            boot_change,
+            last_heartbeat,
+            previous_feed or {},
+            requested,
+            any("crash" in line.lower() for line in recent_session),
+        ),
         "created_at": time.time(),
     }
 
@@ -290,13 +303,22 @@ def create(cfg: dict[str, Any], boot_change: dict[str, Any], feed_state: dict[st
             value = json.loads(latest.read_text(encoding="utf-8")) if latest.exists() else {}
             if not isinstance(value, dict):
                 return {}
-            if _apply_confirmed_trip(value, trip_state):
+            amended = _apply_confirmed_trip(value, trip_state)
+            amended = apply_legacy_reason(cfg, value) or amended
+            if amended:
                 _write(latest, value)
                 with path.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(value, separators=(",", ":")) + "\n")
                 archive_path = value.get("incident_archive", {}).get("path") if isinstance(value.get("incident_archive", {}), dict) else ""
                 if archive_path:
                     _write(Path(str(archive_path)) / "reboot-evidence.json", value)
+                    manifest_path = Path(str(archive_path)) / "manifest.json"
+                    if manifest_path.exists():
+                        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                        if isinstance(manifest, dict):
+                            for key in ("classification", "reset_mechanism", "probable_preceding_fault"):
+                                manifest[key] = value.get(key)
+                            _write(manifest_path, manifest)
             _consume_reboot_reason(cfg, value, path)
             return value
         except Exception:
@@ -308,9 +330,16 @@ def create(cfg: dict[str, Any], boot_change: dict[str, Any], feed_state: dict[st
         reason = json.loads(reason_path.read_text(encoding="utf-8")) if reason_path.exists() else {}
     except Exception:
         reason = {}
+    if isinstance(reason, dict) and reason.get('source') == 'v3_consolidated_recovery' and reason.get('boot_id') != boot_change.get('previous_boot_id'):
+        reason = {}
     kernel = _run(["journalctl", "-b", "-1", "-k", "--no-pager"], timeout=15)
     last_x = _run(["last", "-x"], timeout=10)
-    evidence = classify(boot_change, heartbeats, reason if isinstance(reason, dict) else {}, kernel, last_x, str((feed_state or {}).get("reset_reason") or _reset_reason()), trip_state, liveness_state)
+    previous_feed, _ = feeder_state_for_boot(cfg, str(boot_change.get("previous_boot_id") or ""))
+    if feed_state and feed_state.get("boot_id") == boot_change.get("previous_boot_id"):
+        previous_feed = feed_state
+    boot_change = {**boot_change, "boot_started_at": boot_change.get("boot_started_at") or current_boot_started_at(boot_change.get("detected_at"))}
+    evidence = classify(boot_change, heartbeats, reason if isinstance(reason, dict) else {}, kernel, last_x, str((previous_feed or {}).get("reset_reason") or _reset_reason()), trip_state, liveness_state, previous_feed)
+    apply_legacy_reason(cfg, evidence)
     try:
         archive = archive_previous_boot(cfg, boot_change, evidence, kernel, last_x)
     except Exception as exc:

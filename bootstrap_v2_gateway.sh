@@ -104,6 +104,7 @@ write_build_info() {
   local git_branch="unknown"
   local git_status="unknown"
   local deployed_at
+  local build_number
   deployed_at="$(date -Is)"
 
   if [[ -d "$TARGET_DIR/.git" ]]; then
@@ -116,12 +117,23 @@ write_build_info() {
     fi
   fi
 
+  if [[ "$git_commit" != "unknown" ]]; then
+    build_number="$(date -u +%Y%m%d)-${git_commit}"
+  else
+    build_number="$(date -u +%Y%m%d)"
+  fi
+
   cat > "$TARGET_DIR/build-info.json" <<EOF
 {
+  "build_number": "$build_number",
+  "commit_sha": "$git_commit",
   "deployed_at": "$deployed_at",
+  "built_at": "$deployed_at",
   "git_branch": "$git_branch",
   "git_commit": "$git_commit",
   "git_status": "$git_status",
+  "source_branch": "$git_branch",
+  "source_repo": "JW-Arentis-UK/va-connect_watchdog",
   "source_repo_dir": "$TARGET_DIR"
 }
 EOF

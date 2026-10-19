@@ -3009,6 +3009,7 @@ def launch_update_check() -> Dict[str, Any]:
         return {"ok": False, "message": "Update task already running."}
 
     build_info = read_json(BUILD_INFO_PATH, {})
+    current_branch = _git_value(["rev-parse", "--abbrev-ref", "HEAD"]) or "master"
     payload = {
         "state": "running",
         "mode": "check",
@@ -3022,6 +3023,7 @@ def launch_update_check() -> Dict[str, Any]:
         "from_build": str(build_info.get("git_commit", "unknown")),
         "to_build": "",
         "update_available": False,
+        "branch": current_branch,
     }
     write_json(UPDATE_STATUS_PATH, payload)
     UPDATE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -3031,9 +3033,10 @@ def launch_update_check() -> Dict[str, Any]:
         "import json, subprocess, traceback\n"
         "from datetime import datetime\n"
         "from pathlib import Path\n"
-        "repo_dir = Path('/opt/va-connect-watchdog')\n"
-        "status_path = Path('/var/lib/va-connect-site-watchdog/web-update-status.json')\n"
-        "log_path = Path('/var/log/va-connect-site-watchdog/web-update.log')\n"
+          "repo_dir = Path('/opt/va-connect-watchdog')\n"
+          f"branch = {current_branch!r}\n"
+          "status_path = Path('/var/lib/va-connect-site-watchdog/web-update-status.json')\n"
+          "log_path = Path('/var/log/va-connect-site-watchdog/web-update.log')\n"
         "build_info_path = repo_dir / 'build-info.json'\n"
         "def load_status():\n"
         "    return json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
@@ -3050,7 +3053,7 @@ def launch_update_check() -> Dict[str, Any]:
         "    payload = load_status()\n"
         "    stage(payload, 'fetching', 'Checking GitHub for updates.', 'Fetching remote GitHub state.')\n"
         "    build_info_path.unlink(missing_ok=True)\n"
-        "    fetch = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'fetch', '--prune', 'origin', 'master'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+          "    fetch = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'fetch', '--prune', 'origin', branch], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
         "    if fetch.returncode != 0:\n"
         "        stage(payload, 'failed', 'Update check failed while fetching GitHub.', 'Git fetch failed.', 'See web-update.log for git fetch output.')\n"
         "        payload['state'] = 'failed'\n"
@@ -3058,8 +3061,8 @@ def launch_update_check() -> Dict[str, Any]:
         "        payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
         "    else:\n"
         "        stage(payload, 'comparing', 'Comparing local and remote builds.', 'Reading current and remote build numbers.')\n"
-        "        local = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True)\n"
-        "        remote = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'origin/master'], capture_output=True, text=True)\n"
+          "        local = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True)\n"
+          "        remote = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', f'origin/{branch}'], capture_output=True, text=True)\n"
         "        payload['from_build'] = local.stdout.strip() or payload.get('from_build', 'unknown')\n"
         "        payload['to_build'] = remote.stdout.strip() or payload.get('to_build', 'unknown')\n"
         "        if local.returncode != 0 or remote.returncode != 0:\n"
@@ -6492,6 +6495,7 @@ def launch_update() -> Dict[str, Any]:
         return {"ok": False, "message": "Update already running."}
 
     build_info = read_json(BUILD_INFO_PATH, {})
+    current_branch = _git_value(["rev-parse", "--abbrev-ref", "HEAD"]) or "master"
     payload = {
         "state": "running",
         "mode": "update",
@@ -6504,6 +6508,7 @@ def launch_update() -> Dict[str, Any]:
         "log_path": str(UPDATE_LOG_PATH),
         "from_build": str(build_info.get("git_commit", "unknown")),
         "to_build": "",
+        "branch": current_branch,
     }
     write_json(UPDATE_STATUS_PATH, payload)
     UPDATE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -6513,9 +6518,10 @@ def launch_update() -> Dict[str, Any]:
         "import json, subprocess, traceback\n"
         "from datetime import datetime\n"
         "from pathlib import Path\n"
-        "repo_dir = Path('/opt/va-connect-watchdog')\n"
-        "status_path = Path('/var/lib/va-connect-site-watchdog/web-update-status.json')\n"
-        "log_path = Path('/var/log/va-connect-site-watchdog/web-update.log')\n"
+          "repo_dir = Path('/opt/va-connect-watchdog')\n"
+          f"branch = {current_branch!r}\n"
+          "status_path = Path('/var/lib/va-connect-site-watchdog/web-update-status.json')\n"
+          "log_path = Path('/var/log/va-connect-site-watchdog/web-update.log')\n"
         "build_info_path = repo_dir / 'build-info.json'\n"
         "def load_status():\n"
         "    return json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}\n"
@@ -6532,7 +6538,7 @@ def launch_update() -> Dict[str, Any]:
         "    payload = load_status()\n"
         "    stage(payload, 'fetching', 'Starting update from GitHub.', 'Fetching remote GitHub state.')\n"
         "    build_info_path.unlink(missing_ok=True)\n"
-        "    fetch = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'fetch', '--prune', 'origin', 'master'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+          "    fetch = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'fetch', '--prune', 'origin', branch], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
         "    if fetch.returncode != 0:\n"
         "        stage(payload, 'failed', 'Update failed while fetching GitHub.', 'Git fetch failed.', 'See web-update.log for git fetch output.')\n"
         "        payload['state'] = 'failed'\n"
@@ -6540,8 +6546,8 @@ def launch_update() -> Dict[str, Any]:
         "        payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
         "    else:\n"
         "        stage(payload, 'comparing', 'Comparing local and remote builds.', 'Reading current and remote build numbers.')\n"
-        "        local = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True)\n"
-        "        remote = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'origin/master'], capture_output=True, text=True)\n"
+          "        local = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True)\n"
+          "        remote = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'rev-parse', '--short', f'origin/{branch}'], capture_output=True, text=True)\n"
         "        payload['from_build'] = local.stdout.strip() or payload.get('from_build', 'unknown')\n"
         "        payload['to_build'] = remote.stdout.strip() or payload.get('to_build', 'unknown')\n"
         "        if local.returncode != 0 or remote.returncode != 0:\n"
@@ -6556,7 +6562,7 @@ def launch_update() -> Dict[str, Any]:
         "            payload['finished_at'] = datetime.utcnow().replace(microsecond=0).isoformat() + '+00:00'\n"
         "        else:\n"
         "            stage(payload, 'pulling', 'Pulling latest changes from GitHub.', f\"{payload['from_build']} -> {payload['to_build']}\")\n"
-        "            pull = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'pull', '--ff-only', 'origin', 'master'], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
+          "            pull = subprocess.run(['git', '-c', 'safe.directory=/opt/va-connect-watchdog', '-C', str(repo_dir), 'pull', '--ff-only', 'origin', branch], stdout=log, stderr=subprocess.STDOUT, text=True)\n"
         "            if pull.returncode != 0:\n"
         "                stage(payload, 'failed', 'Update failed while pulling changes.', 'Git pull failed.', 'See web-update.log for git pull output.')\n"
         "                payload['state'] = 'failed'\n"

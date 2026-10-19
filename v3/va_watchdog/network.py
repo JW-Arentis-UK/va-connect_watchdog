@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import subprocess
+import time
 from urllib.parse import urlparse
 
 from .common import CheckResult
@@ -22,6 +23,7 @@ def check_network(cfg):
         results.append(
             {
                 "target": target,
+                "group": "internet" if target in network_cfg.get("internet_hosts", []) else "local",
                 "host": parsed["host"],
                 "port": parsed["port"],
                 "ping_ok": ping["ok"],
@@ -38,7 +40,7 @@ def check_network(cfg):
                 "network_module",
                 "warning",
                 f"{len(failed)} of {len(results)} configured network targets failed",
-                {"targets": results},
+                {"targets": results, "collected_at": time.time()},
                 False,
             )
         ]
@@ -47,7 +49,7 @@ def check_network(cfg):
             "network_module",
             "healthy",
             f"{len(results)} configured network targets reachable",
-            {"targets": results},
+            {"targets": results, "collected_at": time.time()},
             False,
         )
     ]

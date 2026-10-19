@@ -104,7 +104,11 @@ def check_hardware(cfg):
     else:
         checks.append(CheckResult("cpu_load", "healthy", "CPU load", cpu))
 
-    wdt_device = cfg["hardware_watchdog"]["device"]
+    hardware_watchdog = cfg.get("hardware_watchdog", {})
+    wdt_device = hardware_watchdog.get("device", "/dev/wdt_dio")
+    if not hardware_watchdog.get("enabled", False):
+        checks.append(CheckResult("hardware_watchdog_present", "disabled", "Hardware watchdog feeding not configured", False, False))
+        return checks
     checks.append(CheckResult(
         "hardware_watchdog_present",
         "healthy" if os.path.exists(wdt_device) else "critical",

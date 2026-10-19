@@ -89,7 +89,7 @@ if [ -f "$ROOT_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" ]; then
     /bin/bash "$ROOT_DIR/scripts/install_neousys_wdt.sh"
     log "Neousys WDT_DIO driver installed"
   else
-    log "skipping POC-451VTC watchdog driver: $HARDWARE_PROFILE"
+    log "skipping Neousys watchdog driver: $HARDWARE_PROFILE"
   fi
 fi
 
