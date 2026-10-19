@@ -16,7 +16,7 @@ ROOT = Path(__file__).parents[1]
 
 class PiProfileTests(unittest.TestCase):
     def test_release_build_number(self):
-        self.assertEqual(build_number(), "20261019.5")
+        self.assertEqual(build_number(), "20261019.6")
 
     def config(self):
         base = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))

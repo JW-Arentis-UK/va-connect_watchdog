@@ -68,6 +68,12 @@ whose `lsblk` does not provide the `PARTN` column. It reads the disk capacity
 without `blockdev`, so the storage page can report size without raw-device
 access. The root-expansion action remains disabled until all layout checks pass.
 
+From build `20261019.6`, the lightweight update page disables the action while
+an update is running, retries status checks through the web-service restart,
+and returns to Status after completion. Status displays the last successful
+update time and build number; failed or current attempts do not erase that
+record.
+
 Capture the reusable image **before** expanding a source drive. Expanding a
 29 GiB root partition to fill a 1 TB SSD makes the image unsuitable for a
 smaller target. A whole-disk raw image of a 1 TB SSD is also still a 1 TB

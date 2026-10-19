@@ -17,8 +17,9 @@ write_state() {
   local state="$1"
   local message="$2"
   local commit="${3:-}"
-  python3 - "$STATE_FILE" "$state" "$message" "$BRANCH" "$commit" <<'PY'
+  python3 - "$STATE_FILE" "$state" "$message" "$BRANCH" "$commit" "$ROOT_DIR/build.json" <<'PY'
 import json
+import os
 import pathlib
 import sys
 from datetime import datetime, timezone
@@ -28,15 +29,37 @@ state = sys.argv[2]
 message = sys.argv[3]
 branch = sys.argv[4]
 commit = sys.argv[5]
+build_file = pathlib.Path(sys.argv[6])
+try:
+    previous = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(previous, dict):
+        previous = {}
+except (OSError, ValueError):
+    previous = {}
+try:
+    build = str(json.loads(build_file.read_text(encoding="utf-8")).get("build_number") or "")
+except (OSError, ValueError, AttributeError):
+    build = ""
+now = datetime.now(timezone.utc).isoformat()
+last_at = previous.get("last_completed_at") or (previous.get("updated_at") if previous.get("state") == "completed" else "")
+last_build = previous.get("last_completed_build") or (build if previous.get("state") == "completed" else "")
+last_commit = previous.get("last_completed_commit") or (previous.get("commit") if previous.get("state") == "completed" else "")
+if state == "completed":
+    last_at, last_build, last_commit = now, build, commit
 payload = {
     "state": state,
     "message": message,
     "branch": branch,
     "commit": commit,
-    "updated_at": datetime.now(timezone.utc).isoformat(),
+    "updated_at": now,
+    "last_completed_at": last_at or "",
+    "last_completed_build": last_build or "",
+    "last_completed_commit": last_commit or "",
 }
 path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+os.replace(temporary, path)
 PY
 }
 

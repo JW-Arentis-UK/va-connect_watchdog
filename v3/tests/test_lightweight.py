@@ -115,7 +115,14 @@ class LightweightTests(unittest.TestCase):
             with (patch('va_watchdog.lite_server.inspect_pi_storage', return_value=storage),
                   patch('va_watchdog.lite_server.verify_account_password', return_value=True),
                   patch('va_watchdog.lite_server.expand_pi_storage', return_value={'ok': True, 'message': 'Reboot required'}) as expand,
-                  patch('va_watchdog.lite_server.launch_update_job', return_value={'ok': True, 'message': 'Update queued'}) as update):
+                  patch('va_watchdog.lite_server.launch_update_job') as update):
+                def queue_update(_cfg):
+                    (base / 'update-state.json').write_text(json.dumps({
+                        'state': 'queued', 'message': 'Update queued',
+                        'updated_at': datetime.now(timezone.utc).isoformat(),
+                    }))
+                    return {'ok': True, 'message': 'Update queued'}
+                update.side_effect = queue_update
                 server = start_web(cfg)
                 url = f'http://127.0.0.1:{server.server_port}'
                 try:
@@ -134,8 +141,24 @@ class LightweightTests(unittest.TestCase):
                     expand.assert_called_once_with('/dev/nvme0n1p2')
                     request = Request(url + '/update-now', data=b'', method='POST')
                     with urlopen(request) as response:
-                        self.assertIn('Update queued', response.read().decode())
+                        progress = response.read().decode()
+                    self.assertIn('Update running…', progress)
+                    self.assertIn('window.location.replace("/")', progress)
+                    self.assertIn('Reconnecting to the watchdog', progress)
+                    self.assertNotIn('>Update watchdog now</button>', progress)
+                    with urlopen(request) as response:
+                        self.assertIn('An update is already running', response.read().decode())
                     update.assert_called_once_with(cfg)
+                    (base / 'update-state.json').write_text(json.dumps({
+                        'state': 'completed', 'message': 'update completed',
+                        'updated_at': '2026-10-19T14:30:00+00:00',
+                    }))
+                    with urlopen(url + '/update-confirm?follow=1') as response:
+                        self.assertEqual(response.url, url + '/')
+                    with urlopen(url + '/api/version') as response:
+                        version = json.load(response)
+                    self.assertEqual(version['last_update_build'], version['build_number'])
+                    self.assertEqual(version['last_update_at'], '2026-10-19T14:30:00+00:00')
                 finally:
                     server.shutdown()
                     server.server_close()

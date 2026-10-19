@@ -55,6 +55,27 @@ def load_update_status(cfg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def last_completed(status: dict[str, Any], current_build: str) -> dict[str, str]:
+    """Return the latest successful update, including pre-metadata deployments."""
+    when = str(status.get("last_completed_at") or "")
+    build = str(status.get("last_completed_build") or "")
+    if not when and status.get("state") == "completed":
+        when = str(status.get("updated_at") or "")
+        build = current_build
+    return {"at": when, "build": build or (current_build if when else "")}
+
+
+def update_in_progress(status: dict[str, Any], max_age_seconds: int = 900) -> bool:
+    if status.get("state") not in {"queued", "running"}:
+        return False
+    try:
+        stamp = datetime.fromisoformat(str(status.get("updated_at") or "").replace("Z", "+00:00"))
+        age = (datetime.now(timezone.utc) - stamp.astimezone(timezone.utc)).total_seconds()
+        return -30 <= age < max_age_seconds
+    except (ValueError, TypeError):
+        return False
+
+
 def launch_update_job(cfg: dict[str, Any]) -> dict[str, Any]:
     script = update_script_path()
     if not script.exists():
@@ -174,12 +195,26 @@ def _git_value(arguments: list[str]) -> str:
 
 
 def _write_state(path: Path, state: str, message: str, branch: str, commit: str) -> None:
+    try:
+        previous = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(previous, dict):
+            previous = {}
+    except (OSError, ValueError):
+        previous = {}
+    last_at = previous.get("last_completed_at") or (previous.get("updated_at") if previous.get("state") == "completed" else "")
+    last_build = previous.get("last_completed_build")
+    if last_at and not last_build:
+        from .build import build_number
+        last_build = build_number()
     payload = {
         "state": state,
         "message": message,
         "branch": branch,
         "commit": commit,
         "updated_at": datetime.now(timezone.utc).isoformat(),
+        "last_completed_at": last_at or "",
+        "last_completed_build": last_build or "",
+        "last_completed_commit": previous.get("last_completed_commit") or (previous.get("commit") if previous.get("state") == "completed" else ""),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")

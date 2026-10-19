@@ -13,15 +13,24 @@ from .lite import page, read_object, snapshot
 from .build import build_number
 from .log_tail import tail_lines
 from .pi_storage import expand as expand_pi_storage, inspect as inspect_pi_storage, verify_account_password
-from .update import _git_value, launch_update_job, load_update_status
+from .update import _git_value, last_completed, launch_update_job, load_update_status, update_in_progress
 
 
-def action_page(title, body, refresh=False):
-    refresh_tag = '<meta http-equiv="refresh" content="15;url=/update-confirm">' if refresh else ''
+def action_page(title, body, follow_update=False):
+    follow_script = (
+        '<script>async function watchUpdate(){try{const response=await fetch("/api/version",{cache:"no-store"});'
+        'if(!response.ok)throw Error();const data=await response.json();'
+        'if(data.update_state==="completed"){window.location.replace("/");return}'
+        'if(data.update_state==="failed"){window.location.replace("/update-confirm");return}'
+        'document.getElementById("update-live").textContent="Update running… checking again shortly."'
+        '}catch(e){document.getElementById("update-live").textContent="Reconnecting to the watchdog…"}'
+        'setTimeout(watchUpdate,3000)}setTimeout(watchUpdate,3000)</script>'
+        if follow_update else ''
+    )
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        + refresh_tag + f'<title>{escape(title)} · Watchdog</title><style>'
+        + f'<title>{escape(title)} · Watchdog</title><style>'
         ':root{color-scheme:light}body{margin:0;background:#f3f5ef;color:#182c32;font:15px/1.55 system-ui,sans-serif}'
         'main{max-width:780px;margin:auto;padding:28px 18px}header{display:flex;justify-content:space-between;align-items:center;gap:15px;border-bottom:1px solid #d9e2dd;padding-bottom:20px}'
         'nav{display:flex;gap:18px;flex-wrap:wrap}a{color:#166859}.brand{font-weight:750;letter-spacing:.08em;text-transform:uppercase}'
@@ -33,7 +42,7 @@ def action_page(title, body, refresh=False):
         'p{margin:12px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}'
         '</style></head><body><main><header><div class="brand">VA-Connect Watchdog</div>'
         '<nav><a href="/">Status</a><a href="/update-confirm">Update watchdog</a></nav></header>'
-        f'<section class="card"><h1>{escape(title)}</h1>{body}</section></main></body></html>'
+        f'<section class="card"><h1>{escape(title)}</h1>{body}</section></main>{follow_script}</body></html>'
     ).encode('utf-8')
 
 
@@ -66,21 +75,34 @@ def pi_storage_page(result=None):
     return action_page('Pi storage', body)
 
 
-def update_page(cfg, result=None):
+def update_page(cfg, result=None, follow=False):
     update_cfg = cfg.get('update', {})
     state = load_update_status(cfg)
+    running = update_in_progress(state)
+    completed = last_completed(state, build_number())
     branch = str(update_cfg.get('branch') or _git_value(['rev-parse', '--abbrev-ref', 'HEAD']) or 'current branch')
     remote = str(update_cfg.get('remote') or 'origin')
     notice = '' if result is None else f'<p class="{"healthy" if result.get("ok") else "critical"}">{escape(str(result.get("message", "")))}</p>'
-    action = '<form method="post" action="/update-now"><button type="submit">Update watchdog now</button></form>' if update_cfg.get('enabled', True) else '<p>Web updates are disabled in configuration.</p>'
+    if running:
+        action = '<button type="button" disabled aria-live="polite">Update running…</button>'
+    elif update_cfg.get('enabled', True):
+        action = ('<form method="post" action="/update-now" onsubmit="this.querySelector(\'button\').disabled=true;this.querySelector(\'button\').textContent=\'Starting update…\'">'
+                  '<button type="submit">Update watchdog now</button></form>')
+    else:
+        action = '<p>Web updates are disabled in configuration.</p>'
+    try:
+        local_time = datetime.fromisoformat(completed['at'].replace('Z', '+00:00')).astimezone().strftime('%d/%m/%Y %H:%M:%S %Z') if completed['at'] else 'Not recorded'
+    except ValueError:
+        local_time = 'Not recorded'
     body = (
         '<p>The watchdog page will briefly disconnect while its services restart.</p>'
         f'{notice}<div class="label">Current build</div><div class="value">{escape(build_number())}</div>'
         f'<div class="label">Target</div><div class="value">{escape(remote)}/{escape(branch)}</div>'
-        f'<div class="label">Last result</div><p>{escape(str(state.get("state", "idle")))}: {escape(str(state.get("message", "")))}</p>'
+        f'<div class="label">Update status</div><p>{escape(str(state.get("state", "idle")))}: {escape(str(state.get("message", "")))}</p>'
+        f'<div class="label">Last successful update</div><p>{escape(local_time)} · build {escape(completed["build"] or "not recorded")}</p>'
         f'<div class="actions">{action}<a class="button" href="/">Back to Status</a></div>'
     )
-    return action_page('Update watchdog', body, refresh=bool(result and result.get('ok')))
+    return action_page('Update watchdog', body + ('<p id="update-live" role="status">Update running… checking again shortly.</p>' if follow and running else ''), follow_update=follow and running)
 
 
 def evidence_zip(cfg, max_bytes=32 * 1024 * 1024):
@@ -174,6 +196,7 @@ def start_web(cfg):
     web = cfg.get('web', {})
     if not web.get('enabled', True):
         return None
+    update_launch_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -191,11 +214,19 @@ def start_web(cfg):
             self.wfile.write(payload)
 
         def do_GET(self):
-            path = urlsplit(self.path).path
+            request = urlsplit(self.path)
+            path = request.path
             if path in ('/', '/lite'):
                 return self.send(page(cfg), 'text/html; charset=utf-8')
             if path == '/update-confirm':
-                return self.send(update_page(cfg), 'text/html; charset=utf-8')
+                follow = parse_qs(request.query).get('follow') == ['1']
+                state = load_update_status(cfg)
+                if follow and state.get('state') == 'completed':
+                    self.send_response(303)
+                    self.send_header('Location', '/')
+                    self.send_header('Content-Length', '0')
+                    return self.end_headers()
+                return self.send(update_page(cfg, follow=follow), 'text/html; charset=utf-8')
             if path == '/pi-storage' and cfg.get('platform', {}).get('kind') == 'raspberry_pi':
                 return self.send(pi_storage_page(), 'text/html; charset=utf-8')
             if path == '/api/healthz':
@@ -205,7 +236,10 @@ def start_web(cfg):
             elif path == '/api/status':
                 result = read_object(cfg['status_path'])
             elif path == '/api/version':
-                result = {'build_number': build_number(), 'build_at': datetime.fromtimestamp(Path(__file__).stat().st_mtime, timezone.utc).isoformat()}
+                state = load_update_status(cfg)
+                completed = last_completed(state, build_number())
+                result = {'build_number': build_number(), 'build_at': datetime.fromtimestamp(Path(__file__).stat().st_mtime, timezone.utc).isoformat(),
+                          'last_update_at': completed['at'], 'last_update_build': completed['build'], 'update_state': state.get('state', 'idle')}
             elif path == '/api/evidence.zip':
                 return self.send(evidence_zip(cfg), 'application/zip', download=True)
             elif path in ('/evidence', '/events', '/watchdog', '/setup'):
@@ -225,8 +259,14 @@ def start_web(cfg):
                     return self.send(action_page('Invalid request', '<p>Request is too large.</p>'), 'text/html; charset=utf-8', status=400)
                 form = parse_qs(self.rfile.read(size).decode('utf-8'), keep_blank_values=True)
                 if path == '/update-now':
-                    result = launch_update_job(cfg) if cfg.get('update', {}).get('enabled', True) else {'ok': False, 'message': 'Web updates are disabled.'}
-                    return self.send(update_page(cfg, result), 'text/html; charset=utf-8')
+                    with update_launch_lock:
+                        if not cfg.get('update', {}).get('enabled', True):
+                            result = {'ok': False, 'message': 'Web updates are disabled.'}
+                        elif update_in_progress(load_update_status(cfg)):
+                            result = {'ok': False, 'message': 'An update is already running.'}
+                        else:
+                            result = launch_update_job(cfg)
+                    return self.send(update_page(cfg, result, follow=bool(result.get('ok') or update_in_progress(load_update_status(cfg)))), 'text/html; charset=utf-8')
                 if cfg.get('platform', {}).get('kind') != 'raspberry_pi':
                     return self.send(b'{"error":"Not found"}', status=404)
                 local_client = self.client_address[0] in {'127.0.0.1', '::1', self.connection.getsockname()[0]}
