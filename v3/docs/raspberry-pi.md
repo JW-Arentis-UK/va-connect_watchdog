@@ -63,6 +63,11 @@ sudo bash /opt/va-connect-watchdog-v3/v3/scripts/update.sh origin codex/gui-refr
 The lightweight server in this build serves the linked update and Pi storage
 pages. Subsequent watchdog updates can be started from its top link.
 
+Build `20261019.5` fixes the storage layout probe for Raspberry Pi OS images
+whose `lsblk` does not provide the `PARTN` column. It reads the disk capacity
+without `blockdev`, so the storage page can report size without raw-device
+access. The root-expansion action remains disabled until all layout checks pass.
+
 Capture the reusable image **before** expanding a source drive. Expanding a
 29 GiB root partition to fill a 1 TB SSD makes the image unsuitable for a
 smaller target. A whole-disk raw image of a 1 TB SSD is also still a 1 TB

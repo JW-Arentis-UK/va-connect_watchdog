@@ -22,11 +22,10 @@ def inspect():
             result["reason"] = "Root is not a direct disk partition."
             return result
         parent = _run("lsblk", "-n", "-o", "PKNAME", root)
-        number = _run("lsblk", "-n", "-o", "PARTN", root)
-        if not parent or number != "2":
+        disk = "/dev/" + parent
+        if not parent or root not in {disk + "2", disk + "p2"}:
             result["reason"] = "The root partition must be partition 2 on a physical drive."
             return result
-        disk = "/dev/" + parent
         result["disk"] = disk
         if _run("lsblk", "-n", "-d", "-o", "PTTYPE", disk) != "dos":
             result["reason"] = "Automatic expansion supports the standard Raspberry Pi OS DOS partition layout only."
@@ -39,9 +38,9 @@ def inspect():
                 entries.append((int(columns[0]), int(columns[1])))
         root_start = int(_run("lsblk", "-n", "-o", "START", root))
         root_bytes = int(_run("lsblk", "-n", "-b", "-o", "SIZE", root))
-        disk_bytes = int(_run("blockdev", "--getsize64", disk))
-        sector_bytes = int(_run("blockdev", "--getss", disk))
-        free_bytes = max(0, disk_bytes - root_start * sector_bytes - root_bytes)
+        disk_bytes = int(_run("lsblk", "-n", "-d", "-b", "-o", "SIZE", disk))
+        # lsblk START is expressed in 512-byte sectors, independently of drive sector size.
+        free_bytes = max(0, disk_bytes - root_start * 512 - root_bytes)
         result.update(root_gib=round(root_bytes / 2**30, 2), disk_gib=round(disk_bytes / 2**30, 2), free_gib=round(free_bytes / 2**30, 2))
         if not entries or root_start != max(start for start, _ in entries):
             result["reason"] = "Root is not the final partition; automatic expansion is disabled."
@@ -52,6 +51,9 @@ def inspect():
         else:
             result["available"] = True
             result["reason"] = "The root partition can be expanded into the unused space."
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or "command failed").strip()[:160]
+        result["reason"] = f"Storage check failed at {exc.cmd[0]}: {detail}"
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         result["reason"] = f"Storage layout could not be checked: {type(exc).__name__}."
     return result

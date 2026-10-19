@@ -14,18 +14,16 @@ class PiStorageTests(unittest.TestCase):
             ("findmnt", "-n", "-o", "FSTYPE", "/"): "ext4",
             ("lsblk", "-n", "-o", "TYPE", "/dev/nvme0n1p2"): "part",
             ("lsblk", "-n", "-o", "PKNAME", "/dev/nvme0n1p2"): "nvme0n1",
-            ("lsblk", "-n", "-o", "PARTN", "/dev/nvme0n1p2"): "2",
             ("lsblk", "-n", "-d", "-o", "PTTYPE", "/dev/nvme0n1"): "dos",
-            ("lsblk", "-n", "-l", "-b", "-o", "START,SIZE,TYPE", "/dev/nvme0n1"): "1000 536870912 part\n1050000 31460622336 part",
-            ("lsblk", "-n", "-o", "START", "/dev/nvme0n1p2"): "1050000",
-            ("lsblk", "-n", "-b", "-o", "SIZE", "/dev/nvme0n1p2"): "31460622336",
-            ("blockdev", "--getsize64", "/dev/nvme0n1"): "1000000000000",
-            ("blockdev", "--getss", "/dev/nvme0n1"): "512",
+            ("lsblk", "-n", "-l", "-b", "-o", "START,SIZE,TYPE", "/dev/nvme0n1"): "8192 536870912 part\n1056768 31385976832 part",
+            ("lsblk", "-n", "-o", "START", "/dev/nvme0n1p2"): "1056768",
+            ("lsblk", "-n", "-b", "-o", "SIZE", "/dev/nvme0n1p2"): "31385976832",
+            ("lsblk", "-n", "-d", "-b", "-o", "SIZE", "/dev/nvme0n1"): "1000204886016",
         }
         with patch.object(pi_storage, "_run", side_effect=lambda *args: answers[args]), patch.object(pi_storage.os.path, "realpath", side_effect=lambda value: value), patch.object(pi_storage.shutil, "which", return_value="/usr/bin/raspi-config"):
             status = pi_storage.inspect()
         self.assertTrue(status["available"])
-        self.assertGreater(status["free_gib"], 800)
+        self.assertEqual(status["free_gib"], 901.78)
 
         answers[("lsblk", "-n", "-l", "-b", "-o", "START,SIZE,TYPE", "/dev/nvme0n1")] += "\n999999999 1000000 part"
         with patch.object(pi_storage, "_run", side_effect=lambda *args: answers[args]), patch.object(pi_storage.os.path, "realpath", side_effect=lambda value: value), patch.object(pi_storage.shutil, "which", return_value="/usr/bin/raspi-config"):
