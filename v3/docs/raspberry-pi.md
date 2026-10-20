@@ -89,6 +89,22 @@ Pi profile leaves feeding disabled. It no longer labels the Neousys `/dev/wdt_di
 feeder as a critical Pi fault. This status change does not activate the Pi's
 native `/dev/watchdog0` device or protect against a system hang.
 
+Build `20261020.2` adds native Pi hardware watchdog reporting. It reads the
+Broadcom watchdog state and systemd manager's `RuntimeWatchdogUSec`, and shows
+the result on the Pi Status page as Hardware protection. The separate Neousys
+feeder remains disabled on Pi. To enable systemd's hardware feeding after
+updating the watchdog, run:
+
+```sh
+sudo bash /opt/va-connect-watchdog-v3/v3/scripts/enable_pi_native_watchdog.sh
+```
+
+The script checks Raspberry Pi hardware, confirms `/dev/watchdog0` is idle,
+installs a 15-second `RuntimeWatchdogSec` setting, reexecutes systemd, and
+verifies that the device becomes active. It restores the previous setting if
+activation fails. This protects against a system hang; it does not reboot the
+Pi merely because TeamViewer or the watchdog application stops responding.
+
 Capture the reusable image **before** expanding a source drive. Expanding a
 29 GiB root partition to fill a 1 TB SSD makes the image unsuitable for a
 smaller target. A whole-disk raw image of a 1 TB SSD is also still a 1 TB

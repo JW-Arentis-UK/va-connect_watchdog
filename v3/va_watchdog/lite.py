@@ -95,6 +95,7 @@ def snapshot(cfg, now=None):
             card("Network", ["network_module"]),
             card("Storage", ["root_disk", "write_test"], recording_detail),
             card("System", ["temperature", "ram", "cpu_load"]),
+            card("Hardware protection", ["hardware_watchdog_feed_status"]),
         ]
     else:
         cards = [
@@ -103,14 +104,15 @@ def snapshot(cfg, now=None):
             card("Recording storage", ["recording_storage"], storage_note),
             card("System", ["temperature", "ram", "cpu_load", "root_disk", "write_test"]),
         ]
-    if cards[-1]["state"] == "healthy":
+    system_card = next(item for item in cards if item["title"] == "System")
+    if system_card["state"] == "healthy":
         metrics = []
         for name, label, unit in [("temperature", "CPU", "°C"), ("ram", "RAM", "%"), ("cpu_load", "Load", "%")]:
             value = checks.get(name, {}).get("value")
             if isinstance(value, (float, int)):
                 metrics.append(f"{label} {value:g}{unit}")
         if metrics:
-            cards[-1]["detail"] = " · ".join(metrics)
+            system_card["detail"] = " · ".join(metrics)
     feed_age = age(feed.get("last_feed_unix"), now)
     feed_fresh = feed_age is not None and feed_age < cfg.get("hardware_watchdog", {}).get("timeout_seconds", 30)
     feeding = feed.get("process_status") == "feeding" and feed_fresh
@@ -139,6 +141,7 @@ def snapshot(cfg, now=None):
     }
     if pi_profile:
         destinations["System"] = "/#diagnostics"
+        destinations["Hardware protection"] = "/#diagnostics"
     for item in cards:
         item["href"] = destinations[item["title"]]
     alerts = [{"name": c.get("name"), "state": c.get("state"), "message": c.get("message")} for c in checks.values() if c.get("state") not in ("healthy", "disabled")]

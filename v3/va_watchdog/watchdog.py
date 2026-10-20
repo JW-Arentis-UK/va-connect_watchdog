@@ -23,6 +23,7 @@ from .watchdog_liveness_test import reconcile_liveness_test
 from .heartbeat import HeartbeatPublisher
 from .reboot_evidence import create as create_reboot_evidence, event_level as reboot_event_level
 from .kernel_faults import scan as scan_kernel_faults
+from .pi_native_watchdog import inspect as inspect_pi_native_watchdog
 
 WEB_UNIT_PATH = Path("/etc/systemd/system/va-watchdog-web.service")
 
@@ -74,6 +75,24 @@ def write_startup_error_log():
 def add_hardware_feed_check(status, cfg):
     feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
     hw_cfg = cfg.get("hardware_watchdog", {}) if isinstance(cfg.get("hardware_watchdog", {}), dict) else {}
+    if cfg.get("platform", {}).get("kind") == "raspberry_pi":
+        if feed.get("active"):
+            state, message = "healthy", "Pi hardware watchdog active; systemd owns and feeds /dev/watchdog0"
+        elif feed.get("configured"):
+            state, message = "critical", "Pi hardware watchdog is configured in systemd but /dev/watchdog0 is not active"
+        elif feed.get("present"):
+            state, message = "disabled", "Pi hardware watchdog is available but systemd feeding is disabled"
+        else:
+            state, message = "warning", "Pi hardware watchdog device /dev/watchdog0 was not found"
+        check = CheckResult("hardware_watchdog_feed_status", state, message, feed, False)
+        checks = [CheckResult(**item) for item in status.get("checks", []) if item.get("name") != check.name]
+        checks.append(check)
+        status["checks"] = [item.to_dict() for item in checks]
+        status["state"] = worst_state([item.state for item in checks])
+        status["score"] = score_from_checks(checks)
+        status["critical_failed"] = any(item.state == "critical" and item.critical for item in checks)
+        status["startup_summary"] = build_startup_summary(cfg, checks)
+        return status
     enabled = bool(feed.get("enabled") or hw_cfg.get("enabled"))
     opened = bool(feed.get("opened"))
     device = str(feed.get("device") or hw_cfg.get("device") or "/dev/wdt_dio")
@@ -102,14 +121,6 @@ def add_hardware_feed_check(status, cfg):
             "hardware_watchdog_feed_status",
             "healthy",
             f"Hardware watchdog is feeding; liveness enforcement starts in {int(startup_grace.get('remaining_seconds', 0))}s",
-            feed,
-            False,
-        )
-    elif not enabled and cfg.get("platform", {}).get("kind") == "raspberry_pi":
-        check = CheckResult(
-            "hardware_watchdog_feed_status",
-            "disabled",
-            "Pi hardware watchdog feeding is not configured",
             feed,
             False,
         )
@@ -173,6 +184,17 @@ def add_hardware_feed_check(status, cfg):
 
 
 def hardware_feed_status(cfg, startup_grace, trip_active=False, trip_summary=None, fed=False):
+    if cfg.get("platform", {}).get("kind") == "raspberry_pi":
+        native = inspect_pi_native_watchdog()
+        return {
+            **native,
+            "enabled": native["configured"],
+            "opened": native["active"],
+            "feeding": native["active"],
+            "process_status": "feeding" if native["active"] else "inactive",
+            "timeout_seconds": native["device_timeout_seconds"],
+            "proven_this_boot": False,
+        }
     feed_path = Path(cfg.get("hardware_watchdog_feed_state_path") or Path(cfg["events_path"]).parent / "hardware-watchdog-feed.json")
     feed = {}
     try:

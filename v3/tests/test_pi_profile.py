@@ -17,7 +17,7 @@ ROOT = Path(__file__).parents[1]
 
 class PiProfileTests(unittest.TestCase):
     def test_release_build_number(self):
-        self.assertEqual(build_number(), "20261020.1")
+        self.assertEqual(build_number(), "20261020.2")
 
     def config(self):
         base = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
@@ -31,13 +31,14 @@ class PiProfileTests(unittest.TestCase):
                          {"teamviewerd.service", "lightdm.service", "ssh.service"})
         self.assertFalse(cfg["recording_storage"]["enabled"])
         self.assertFalse(cfg["hardware_watchdog"]["enabled"])
+        self.assertEqual(cfg["hardware_watchdog"]["backend"], "systemd")
         self.assertFalse(cfg["recovery"]["allow_reboot"])
         self.assertTrue(cfg["display_monitor"]["enabled"])
 
     def test_disabled_gateway_hardware_and_recording_checks_do_not_alarm(self):
         cfg = self.config()
         hardware = {item.name: item for item in check_hardware(cfg)}
-        self.assertEqual(hardware["hardware_watchdog_present"].state, "disabled")
+        self.assertIn(hardware["hardware_watchdog_present"].state, {"healthy", "warning"})
         with tempfile.TemporaryDirectory() as directory:
             cfg["storage"]["root_path"] = directory
             cfg["storage"]["write_test_path"] = directory
@@ -49,7 +50,7 @@ class PiProfileTests(unittest.TestCase):
 
     def test_pi_disabled_hardware_feed_does_not_claim_neousys_failure(self):
         cfg = self.config()
-        status = {"checks": [], "hardware_watchdog_feed": {"enabled": False, "device": "/dev/wdt_dio"}}
+        status = {"checks": [], "hardware_watchdog_feed": {"configured": False, "active": False, "present": True, "device": "/dev/watchdog0"}}
         result = add_hardware_feed_check(status, cfg)
         check = next(item for item in result["checks"] if item["name"] == "hardware_watchdog_feed_status")
         self.assertEqual(check["state"], "disabled")
@@ -69,7 +70,7 @@ class PiProfileTests(unittest.TestCase):
                     {"name": name, "state": "healthy", "message": "OK"}
                     for name in ("teamviewerd.service", "lightdm.service", "ssh.service",
                                  "display_session", "network_module", "root_disk", "write_test",
-                                 "temperature", "ram", "cpu_load")
+                                 "temperature", "ram", "cpu_load", "hardware_watchdog_feed_status")
                 ],
             }), encoding="utf-8")
             with patch("va_watchdog.lite.recording_activity", return_value={"available": True,
@@ -78,11 +79,11 @@ class PiProfileTests(unittest.TestCase):
                 result = snapshot(cfg, now=1792411205)
             activity.assert_called_once_with(cfg, recent_count=1, now_unix=1792411205, recording_suffix=".data")
         self.assertEqual([card["title"] for card in result["cards"]],
-                         ["Pi services", "Network", "Storage", "System"])
+                         ["Pi services", "Network", "Storage", "System", "Hardware protection"])
         self.assertEqual(result["state"], "healthy")
         self.assertIn("Oldest recording: 17:45:12", result["cards"][2]["detail"])
         self.assertEqual([card["href"] for card in result["cards"]],
-                         ["/#diagnostics", "/#diagnostics", "/pi-storage", "/#diagnostics"])
+                         ["/#diagnostics", "/#diagnostics", "/pi-storage", "/#diagnostics", "/#diagnostics"])
 
     def test_pi_page_only_links_to_available_lite_routes(self):
         html = page(self.config()).decode("utf-8")

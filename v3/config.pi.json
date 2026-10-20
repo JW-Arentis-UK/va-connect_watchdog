@@ -5,7 +5,7 @@
   "collector_intervals": {"hardware_seconds": 10, "services_seconds": 15, "storage_seconds": 60, "network_seconds": 30, "process_seconds": 10},
   "web": {"lightweight": true},
   "blackbox": {"main_service": "teamviewerd.service", "interval_seconds": 5},
-  "hardware_watchdog": {"enabled": false},
+  "hardware_watchdog": {"enabled": false, "backend": "systemd", "device": "/dev/watchdog0"},
   "display_monitor": {"enabled": true, "manager": "lightdm.service", "expect_x11": true},
   "recording_storage": {"enabled": false},
   "storage": {

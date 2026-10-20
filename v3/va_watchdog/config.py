@@ -265,9 +265,13 @@ def _migrate_default_videosoft_services(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _enforce_neousys_watchdog(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """This test build has one hardware backend and cannot fall back to alternatives."""
+    """Keep Neousys feeding on gateways and reserve Pi hardware for systemd."""
     cfg = dict(cfg)
     hardware = dict(cfg.get("hardware_watchdog", {}))
+    if cfg.get("platform", {}).get("kind") == "raspberry_pi":
+        hardware.update({"enabled": False, "backend": "systemd", "device": "/dev/watchdog0"})
+        cfg["hardware_watchdog"] = hardware
+        return cfg
     migrating_backend = hardware.get("backend") != "neousys_wdt_dio"
     hardware.update({
         "backend": "neousys_wdt_dio",

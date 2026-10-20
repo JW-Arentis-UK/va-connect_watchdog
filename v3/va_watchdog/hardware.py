@@ -105,6 +105,16 @@ def check_hardware(cfg):
         checks.append(CheckResult("cpu_load", "healthy", "CPU load", cpu))
 
     hardware_watchdog = cfg.get("hardware_watchdog", {})
+    if cfg.get("platform", {}).get("kind") == "raspberry_pi":
+        present = os.path.exists("/dev/watchdog0")
+        checks.append(CheckResult(
+            "hardware_watchdog_present",
+            "healthy" if present else "warning",
+            "Pi hardware watchdog device available" if present else "Pi hardware watchdog device not found",
+            present,
+            False,
+        ))
+        return checks
     wdt_device = hardware_watchdog.get("device", "/dev/wdt_dio")
     if not hardware_watchdog.get("enabled", False):
         checks.append(CheckResult("hardware_watchdog_present", "disabled", "Hardware watchdog feeding not configured", False, False))
