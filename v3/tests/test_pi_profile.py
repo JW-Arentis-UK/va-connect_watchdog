@@ -9,6 +9,7 @@ from va_watchdog.build import build_number
 from va_watchdog.hardware import check_hardware
 from va_watchdog.lite import page, snapshot
 from va_watchdog.storage import check_storage
+from va_watchdog.watchdog import add_hardware_feed_check
 
 
 ROOT = Path(__file__).parents[1]
@@ -16,7 +17,7 @@ ROOT = Path(__file__).parents[1]
 
 class PiProfileTests(unittest.TestCase):
     def test_release_build_number(self):
-        self.assertEqual(build_number(), "20261019.8")
+        self.assertEqual(build_number(), "20261020.1")
 
     def config(self):
         base = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
@@ -45,6 +46,15 @@ class PiProfileTests(unittest.TestCase):
         self.assertNotIn("recording_storage", storage)
         self.assertNotIn("recordings_disk", storage)
         self.assertIn("root_disk", storage)
+
+    def test_pi_disabled_hardware_feed_does_not_claim_neousys_failure(self):
+        cfg = self.config()
+        status = {"checks": [], "hardware_watchdog_feed": {"enabled": False, "device": "/dev/wdt_dio"}}
+        result = add_hardware_feed_check(status, cfg)
+        check = next(item for item in result["checks"] if item["name"] == "hardware_watchdog_feed_status")
+        self.assertEqual(check["state"], "disabled")
+        self.assertIn("Pi hardware watchdog", check["message"])
+        self.assertNotIn("/dev/wdt_dio", check["message"])
 
     def test_lite_homepage_uses_pi_cards_with_recording_age(self):
         cfg = self.config()

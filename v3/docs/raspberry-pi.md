@@ -84,6 +84,11 @@ From build `20261019.8`, the Pi Storage tile and page show the oldest and latest
 `.data` recording start times from their Unix-timestamped filenames. Database
 files and sidecars are excluded. The displayed times use the Pi's local timezone.
 
+Build `20261020.1` reports the Pi hardware watchdog as unconfigured when the
+Pi profile leaves feeding disabled. It no longer labels the Neousys `/dev/wdt_dio`
+feeder as a critical Pi fault. This status change does not activate the Pi's
+native `/dev/watchdog0` device or protect against a system hang.
+
 Capture the reusable image **before** expanding a source drive. Expanding a
 29 GiB root partition to fill a 1 TB SSD makes the image unsuitable for a
 smaller target. A whole-disk raw image of a 1 TB SSD is also still a 1 TB

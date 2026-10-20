@@ -105,6 +105,14 @@ def add_hardware_feed_check(status, cfg):
             feed,
             False,
         )
+    elif not enabled and cfg.get("platform", {}).get("kind") == "raspberry_pi":
+        check = CheckResult(
+            "hardware_watchdog_feed_status",
+            "disabled",
+            "Pi hardware watchdog feeding is not configured",
+            feed,
+            False,
+        )
     elif not enabled:
         check = CheckResult(
             "hardware_watchdog_feed_status",

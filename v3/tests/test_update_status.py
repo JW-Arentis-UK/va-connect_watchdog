@@ -19,7 +19,7 @@ class UpdateStatusTests(unittest.TestCase):
             payload = json.loads(path.read_text())
             self.assertEqual(payload['last_completed_at'], '2026-10-19T12:00:00+00:00')
             self.assertEqual(payload['last_completed_commit'], 'abc1234')
-            self.assertTrue(last_completed(payload, '20261019.8')['build'])
+            self.assertTrue(last_completed(payload, '20261020.1')['build'])
 
     def test_only_recent_queued_or_running_state_blocks_another_update(self):
         now = datetime.now(timezone.utc)
