@@ -33,7 +33,7 @@ from .services import _runtime_stats
 from .watchdog_grace import arm_current_boot, delay_current_boot, startup_grace_status
 from .watchdog_test import arm_trip_test, confirm_trip_test, read_trip_test_state, trigger_trip_test, trip_test_summary
 from .watchdog_liveness_test import reconcile_liveness_test, start_liveness_test
-from .update import launch_update_job, load_update_status
+from .update import last_completed, launch_update_job, load_update_status
 from .speedtest import run_speed_test
 from .heartbeat import heartbeat_paths, read_state, read_tail, heartbeat_age_seconds
 from .journal import persistent_status, enable_persistent
@@ -704,9 +704,12 @@ def start_web(cfg):
     }
 
     def version_info():
+        completed_update = last_completed(load_update_status(cfg), build_number())
         return {
             "name": "VA-Connect Watchdog",
             "build_number": build_number(),
+            "last_update_at": completed_update["at"],
+            "last_update_build": completed_update["build"],
             "branch": running_version["branch"],
             "commit": running_version["commit"],
             "commit_id": running_version["commit"],
