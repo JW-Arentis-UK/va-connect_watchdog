@@ -34,11 +34,13 @@ class PiNativeWatchdogTests(unittest.TestCase):
                 self.assertFalse(disabled["active"])
                 self.assertFalse(disabled["configured"])
                 (sysfs / "state").write_text("active")
-                run.return_value = subprocess.CompletedProcess([], 0, "15000000", "")
+                run.return_value = subprocess.CompletedProcess([], 0, "15s", "")
                 active = pi_native_watchdog.inspect()
             self.assertTrue(active["active"])
             self.assertEqual(active["manager_timeout_seconds"], 15)
             self.assertEqual(active["device_timeout_seconds"], 15)
+            self.assertEqual(pi_native_watchdog._runtime_seconds("15000000"), 15)
+            self.assertEqual(pi_native_watchdog._runtime_seconds("0"), 0)
 
     def test_pi_status_uses_systemd_instead_of_neousys_feed(self):
         cfg = {"platform": {"kind": "raspberry_pi"}, "hardware_watchdog": {"enabled": False}}

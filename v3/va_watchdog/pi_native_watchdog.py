@@ -1,6 +1,7 @@
 """Read-only status for the Raspberry Pi watchdog owned by systemd PID 1."""
 
 import subprocess
+import re
 from pathlib import Path
 
 
@@ -15,6 +16,18 @@ def _read(path):
         return ""
 
 
+def _runtime_seconds(raw):
+    """systemctl may render the manager timeout as microseconds or e.g. '15s'."""
+    value = str(raw).strip()
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)(us|ms|s|min|h)?", value)
+    if not match:
+        return 0.0
+    number = float(match.group(1))
+    multiplier = {None: 0.000001, "us": 0.000001, "ms": 0.001,
+                  "s": 1, "min": 60, "h": 3600}[match.group(2)]
+    return number * multiplier
+
+
 def inspect():
     present = DEVICE.exists()
     state = _read(SYSFS / "state")
@@ -25,10 +38,10 @@ def inspect():
             ["systemctl", "show", "-p", "RuntimeWatchdogUSec", "--value"],
             capture_output=True, text=True, timeout=5, check=False,
         )
-        runtime_usec = int(manager.stdout.strip()) if manager.returncode == 0 else 0
-    except (OSError, ValueError, subprocess.SubprocessError):
-        runtime_usec = 0
-    configured = runtime_usec > 0
+        runtime_seconds = _runtime_seconds(manager.stdout) if manager.returncode == 0 else 0.0
+    except (OSError, subprocess.SubprocessError):
+        runtime_seconds = 0.0
+    configured = runtime_seconds > 0
     active = configured and present and state == "active"
     return {
         "backend": "systemd",
@@ -38,6 +51,6 @@ def inspect():
         "state": state or "unknown",
         "configured": configured,
         "active": active,
-        "manager_timeout_seconds": round(runtime_usec / 1_000_000, 1),
+        "manager_timeout_seconds": round(runtime_seconds, 1),
         "device_timeout_seconds": int(timeout) if timeout.isdigit() else None,
     }

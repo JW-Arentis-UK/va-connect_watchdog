@@ -110,6 +110,12 @@ web server. Earlier updates could install the requested build and restart its
 services, then report failure because the check expected the Ubuntu Setup page.
 The updater now checks the lightweight Status page when that layout is active.
 
+Build `20261021.2` accepts systemd's human-readable `RuntimeWatchdogUSec=15s`
+output in both the Pi setup script and dashboard. Earlier setup scripts could
+activate the device, then mistakenly treat `15s` as an invalid result and
+restore the previous configuration. Check the current manager timeout and
+device state before retrying the corrected script.
+
 Capture the reusable image **before** expanding a source drive. Expanding a
 29 GiB root partition to fill a 1 TB SSD makes the image unsuitable for a
 smaller target. A whole-disk raw image of a 1 TB SSD is also still a 1 TB

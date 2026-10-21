@@ -19,7 +19,10 @@ runtime_usec=$(systemctl show -p RuntimeWatchdogUSec --value)
 state=$(cat "$STATE")
 echo "Device: $DEVICE ($(cat "$IDENTITY"))"
 echo "Before: systemd RuntimeWatchdogUSec=$runtime_usec; device state=$state"
-if [[ "$runtime_usec" =~ ^[0-9]+$ && "$runtime_usec" -gt 0 ]]; then
+runtime_enabled() {
+  [[ "$1" =~ ^[1-9][0-9]*(\.[0-9]+)?(us|ms|s|min|h)?$ ]]
+}
+if runtime_enabled "$runtime_usec"; then
   [[ "$state" == active ]] && { echo 'Systemd hardware watchdog is already active.'; exit 0; }
   echo 'Systemd is configured for a watchdog, but the device is not active. Investigate before changing ownership.' >&2
   exit 1
@@ -49,9 +52,9 @@ fi
 sleep 3
 runtime_usec=$(systemctl show -p RuntimeWatchdogUSec --value)
 state=$(cat "$STATE")
-if [[ ! "$runtime_usec" =~ ^[0-9]+$ || "$runtime_usec" -eq 0 || "$state" != active ]]; then
+if ! runtime_enabled "$runtime_usec" || [[ "$state" != active ]]; then
   rollback
   echo "Hardware watchdog did not activate (systemd=$runtime_usec, state=$state); previous configuration restored." >&2
   exit 1
 fi
-echo "Pi hardware watchdog active: systemd requests ${runtime_usec}µs; kernel timeout $(cat /sys/class/watchdog/watchdog0/timeout)s."
+echo "Pi hardware watchdog active: systemd timeout $runtime_usec; kernel timeout $(cat /sys/class/watchdog/watchdog0/timeout)s."
