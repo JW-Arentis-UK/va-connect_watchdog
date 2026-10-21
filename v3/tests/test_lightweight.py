@@ -14,6 +14,7 @@ from va_watchdog import health, history
 from va_watchdog.common import CheckResult
 from va_watchdog.events import EventLog, read_events
 from va_watchdog.lite_server import evidence_zip, start_web
+from va_watchdog.web_smoke import check_setup
 from va_watchdog.lite import snapshot
 from va_watchdog.log_tail import tail_lines
 from va_watchdog.retention import enforce_retention, purge_data
@@ -115,6 +116,9 @@ class LightweightTests(unittest.TestCase):
             server = start_web(cfg)
             url = f'http://127.0.0.1:{server.server_port}'
             try:
+                cfg['web']['lightweight'] = True
+                cfg['web']['port'] = server.server_port
+                check_setup(cfg, attempts=1)
                 with urlopen(url) as response:
                     page = response.read().decode()
                 self.assertIn('id="diagnostics"', page)
@@ -159,6 +163,9 @@ class LightweightTests(unittest.TestCase):
                 server = start_web(cfg)
                 url = f'http://127.0.0.1:{server.server_port}'
                 try:
+                    cfg['web']['lightweight'] = True
+                    cfg['web']['port'] = server.server_port
+                    check_setup(cfg, attempts=1)
                     with urlopen(url + '/') as response:
                         homepage = response.read().decode()
                     self.assertIn('href="/update-confirm"', homepage)

@@ -105,6 +105,11 @@ verifies that the device becomes active. It restores the previous setting if
 activation fails. This protects against a system hang; it does not reboot the
 Pi merely because TeamViewer or the watchdog application stops responding.
 
+Build `20261021.1` corrects the update completion check for the lightweight Pi
+web server. Earlier updates could install the requested build and restart its
+services, then report failure because the check expected the Ubuntu Setup page.
+The updater now checks the lightweight Status page when that layout is active.
+
 Capture the reusable image **before** expanding a source drive. Expanding a
 29 GiB root partition to fill a 1 TB SSD makes the image unsuitable for a
 smaller target. A whole-disk raw image of a 1 TB SSD is also still a 1 TB
