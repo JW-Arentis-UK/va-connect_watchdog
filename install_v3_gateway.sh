@@ -202,7 +202,9 @@ fi
 "${SUDO[@]}" git -c "safe.directory=$INSTALL_DIR" -C "$INSTALL_DIR" \
   checkout -B "$REPO_REF" "refs/remotes/origin/$REPO_REF"
 "${SUDO[@]}" git -c "safe.directory=$INSTALL_DIR" -C "$INSTALL_DIR" \
-  branch --set-upstream-to="origin/$REPO_REF" "$REPO_REF"
+  config "branch.$REPO_REF.remote" origin
+"${SUDO[@]}" git -c "safe.directory=$INSTALL_DIR" -C "$INSTALL_DIR" \
+  config "branch.$REPO_REF.merge" "refs/heads/$REPO_REF"
 
 log "Installing services and configuration"
 "${SUDO[@]}" env \

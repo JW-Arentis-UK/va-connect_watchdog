@@ -72,6 +72,13 @@ log "Hardware accepted: $hardware_profile"
 kernel="$(uname -r)"
 kernel_build="/lib/modules/$kernel/build"
 kernel_cc="gcc"
+kernel_compiler_header="/lib/modules/$kernel/build/include/generated/compile.h"
+if [[ -r "$kernel_compiler_header" ]]; then
+  detected_cc="$(grep -oE 'gcc-[0-9]+' "$kernel_compiler_header" | head -n 1 || true)"
+  if [[ -n "$detected_cc" ]] && command -v "$detected_cc" >/dev/null 2>&1; then
+    kernel_cc="$detected_cc"
+  fi
+fi
 
 if ! command -v make >/dev/null 2>&1 || ! command -v "$kernel_cc" >/dev/null 2>&1 || ! command -v dkms >/dev/null 2>&1 || [[ ! -d "$kernel_build" ]] || { [[ "$BUNDLE" == *.zip ]] && ! command -v unzip >/dev/null 2>&1; }; then
   command -v apt-get >/dev/null 2>&1 || fail "build tools or kernel headers are missing and apt-get is unavailable"
