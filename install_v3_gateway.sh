@@ -190,6 +190,12 @@ else
 fi
 
 log "Selecting validated source ref $REPO_REF"
+fetch_ref="+refs/heads/$REPO_REF:refs/remotes/origin/$REPO_REF"
+if ! "${SUDO[@]}" git -c "safe.directory=$INSTALL_DIR" -C "$INSTALL_DIR" \
+  config --get-all remote.origin.fetch | grep -Fxq -- "$fetch_ref"; then
+  "${SUDO[@]}" git -c "safe.directory=$INSTALL_DIR" -C "$INSTALL_DIR" \
+    config --add remote.origin.fetch "$fetch_ref"
+fi
 "${SUDO[@]}" git -c "safe.directory=$INSTALL_DIR" -C "$INSTALL_DIR" \
   fetch --prune origin "+refs/heads/$REPO_REF:refs/remotes/origin/$REPO_REF"
 current_commit="$("${SUDO[@]}" git -c "safe.directory=$INSTALL_DIR" -C "$INSTALL_DIR" rev-parse HEAD)"
