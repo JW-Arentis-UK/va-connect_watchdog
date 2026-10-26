@@ -285,7 +285,7 @@ class WebNavigationTests(unittest.TestCase):
         setup = source.split("def recording_storage_configure_html():", 1)[1].split("def recording_storage_confirm_html(", 1)[0]
         self.assertNotIn("Use Existing ext4 Filesystem", setup)
         self.assertNotIn("/recording-storage-confirm", setup)
-        self.assertIn("choose Monitor only", source)
+        self.assertIn("choose Monitor an existing recording location", source)
         self.assertIn('name=\\"cpu_temp_warning_c\\"', source)
         self.assertIn('name=\\"cpu_temp_critical_c\\"', source)
 

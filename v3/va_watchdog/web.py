@@ -1363,7 +1363,7 @@ def start_web(cfg):
                 f"<tr><th>Filesystem</th><td>{escape(str(live_recording_storage.get('filesystem') or '-'))}</td></tr>"
                 f"<tr><th>Writable</th><td>{'Yes' if live_recording_storage.get('writable') else 'No'}</td></tr>"
                 "</tbody></table></div>"
-                "<p class=\"muted\"><strong>Existing working recorder:</strong> choose Monitor only on the next page. It accepts the current mount and label without relabelling, formatting, remounting, changing ownership, or editing /etc/fstab.</p>"
+                "<p class=\"muted\"><strong>Existing working recorder:</strong> choose Monitor an existing recording location on the next page. Enter the folder Videosoft already uses; the watchdog will check it without changing the disk or mount.</p>"
                 "<div class=\"button-row\"><a class=\"action\" href=\"/recording-storage-configure\">Review recording storage setup</a></div>"
             )
             network_settings = (
