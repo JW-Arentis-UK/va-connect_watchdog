@@ -3373,6 +3373,7 @@ def start_web(cfg):
 
     def recording_storage_blank_confirm_html(disk):
         candidates = recording_storage_candidates(cfg)
+        expected_label = str(cfg.get("recording_storage", {}).get("expected_label") or "CCTV_STORAGE")
         selected = next((item for item in candidates if os.path.realpath(str(item.get("device", ""))) == os.path.realpath(str(disk or ""))), None)
         if not selected:
             body = (
@@ -3392,7 +3393,7 @@ def start_web(cfg):
         body = (
             "<div class=\"card\">"
             "<h2>Final Confirmation: Prepare Blank Recording Disk</h2>"
-            "<p class=\"critical\">This will erase the selected disk, create one ext4 partition labelled CCTV_STORAGE, add the labelled fstab entry, run mount -a, and confirm the mount is writable.</p>"
+            f"<p class=\"critical\">This will erase the selected disk, create one ext4 partition labelled {escape(expected_label)}, add the labelled fstab entry, run mount -a, and confirm the mount is writable.</p>"
             f"<div class=\"label\">Disk</div><div class=\"value\">{escape(device)}</div>"
             f"<div class=\"label\">Model</div><div class=\"value\">{escape(str(selected.get('model', '-')))}</div>"
             f"<div class=\"label\">Serial</div><div class=\"value\">{escape(str(selected.get('serial', '-')))}</div>"
@@ -3402,8 +3403,8 @@ def start_web(cfg):
             "<label><input type=\"checkbox\" name=\"ack\" value=\"1\"> I understand this will erase the selected disk</label>"
             "<label class=\"label\">Type the disk path exactly</label>"
             f"<input name=\"confirm_device\" autocomplete=\"off\" placeholder=\"{escape(device)}\">"
-            "<label class=\"label\">Type CCTV_STORAGE to confirm</label>"
-            "<input name=\"confirm_label\" autocomplete=\"off\" placeholder=\"CCTV_STORAGE\">"
+            f"<label class=\"label\">Type {escape(expected_label)} to confirm</label>"
+            f"<input name=\"confirm_label\" autocomplete=\"off\" placeholder=\"{escape(expected_label)}\">"
             "<div class=\"button-row\"><button class=\"danger\" type=\"submit\">Erase and prepare recording disk</button><a class=\"ghost\" href=\"/recording-storage-configure\">Cancel</a></div>"
             "</form>"
             "</div>"

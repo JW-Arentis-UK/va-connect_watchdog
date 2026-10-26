@@ -285,6 +285,9 @@ class WebNavigationTests(unittest.TestCase):
         setup = source.split("def recording_storage_configure_html():", 1)[1].split("def recording_storage_confirm_html(", 1)[0]
         self.assertNotIn("Use Existing ext4 Filesystem", setup)
         self.assertNotIn("/recording-storage-confirm", setup)
+        blank_confirm = source.split("def recording_storage_blank_confirm_html(", 1)[1].split("def recording_storage_monitor_confirm_html(", 1)[0]
+        self.assertIn("Type {escape(expected_label)} to confirm", blank_confirm)
+        self.assertNotIn("Type CCTV_STORAGE to confirm", blank_confirm)
         self.assertIn("choose Monitor an existing recording location", source)
         self.assertIn('name=\\"cpu_temp_warning_c\\"', source)
         self.assertIn('name=\\"cpu_temp_critical_c\\"', source)

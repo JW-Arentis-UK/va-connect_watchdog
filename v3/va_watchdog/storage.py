@@ -818,7 +818,7 @@ def prepare_blank_recording_disk(cfg: dict[str, Any], disk: str, confirm_device:
     original = ""
     output = [
         f"Preparing blank recording disk {disk}.",
-        "This creates one ext4 partition labelled CCTV_STORAGE and writes the labelled fstab entry.",
+        f"This creates one ext4 partition labelled {expected_label} and writes the labelled fstab entry.",
     ]
     try:
         wipe = _run(["wipefs", "-a", disk], timeout=30)
