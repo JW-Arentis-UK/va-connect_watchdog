@@ -3295,107 +3295,37 @@ def start_web(cfg):
 
     def recording_storage_configure_html():
         candidates = recording_storage_candidates(cfg)
-        rows = []
-        blank_rows = []
-        partition_options = []
         blank_options = []
         for item in candidates:
-            allowed = bool(item.get("allowed"))
             blank_allowed = bool(item.get("blank_prepare_allowed"))
             device = str(item.get("device", ""))
-            row_class = "selectable-row" if allowed else ""
-            row_onclick = "onclick=\"selectStorageRadio(this, 'device')\"" if allowed else ""
-            monitor_action = ""
-            if allowed and item.get("mountpoint"):
-                monitor_action = (
-                    f"<a class=\"ghost\" href=\"/recording-storage-monitor-confirm/{quote(device, safe='')}\">Monitor only</a>"
-                )
-            rows.append(
-                f"<tr class=\"{row_class}\" {row_onclick}>"
-                f"<td><label><input type=\"radio\" name=\"device\" value=\"{escape(device)}\" {'disabled' if not allowed else ''}> Select</label></td>"
-                f"<td>{escape(str(item.get('device', '-')))}</td>"
-                f"<td>{escape(str(item.get('model', '-')))}</td>"
-                f"<td>{escape(str(item.get('serial', '-')))}</td>"
-                f"<td>{escape(str(item.get('size_gb', '-')))} GB</td>"
-                f"<td>{escape(str(item.get('filesystem', '-') or '-'))}</td>"
-                f"<td>{escape(str(item.get('label', '-') or '-'))}</td>"
-                f"<td>{escape(str(item.get('mountpoint', '-') or '-'))}</td>"
-                f"<td class=\"{'healthy' if allowed else 'warning'}\">{escape(str(item.get('existing_mode', 'Selectable')) if allowed else str(item.get('blocked_reason', 'Blocked')))} {monitor_action}</td>"
-                "</tr>"
-            )
-            if allowed:
-                partition_options.append(
-                    f"<option value=\"{escape(device)}\">{escape(device)} - {escape(str(item.get('existing_mode', 'ext4 filesystem')))} - {escape(str(item.get('model', '-') or '-'))} - {escape(str(item.get('size_gb', '-')))} GB</option>"
-                )
             if item.get("type") == "disk":
-                blank_row_class = "selectable-row" if blank_allowed else ""
-                blank_row_onclick = "onclick=\"selectStorageRadio(this, 'disk')\"" if blank_allowed else ""
-                blank_rows.append(
-                    f"<tr class=\"{blank_row_class}\" {blank_row_onclick}>"
-                    f"<td><label><input type=\"radio\" name=\"disk\" value=\"{escape(device)}\" {'disabled' if not blank_allowed else ''}> Select</label></td>"
-                    f"<td>{escape(str(item.get('device', '-')))}</td>"
-                    f"<td>{escape(str(item.get('model', '-')))}</td>"
-                    f"<td>{escape(str(item.get('serial', '-')))}</td>"
-                    f"<td>{escape(str(item.get('size_gb', '-')))} GB</td>"
-                    f"<td>{escape(str(item.get('filesystem', '-') or '-'))}</td>"
-                    f"<td>{escape(str(item.get('label', '-') or '-'))}</td>"
-                    f"<td>{escape(str(item.get('mountpoint', '-') or '-'))}</td>"
-                    f"<td class=\"{'healthy' if blank_allowed else 'warning'}\">{escape('Can prepare as blank recording disk' if blank_allowed else str(item.get('blank_prepare_reason', 'Blocked')))}</td>"
-                    "</tr>"
-                )
                 if blank_allowed:
                     blank_options.append(
-                        f"<option value=\"{escape(device)}\">{escape(device)} - {escape(str(item.get('model', '-') or '-'))} - {escape(str(item.get('size_gb', '-')))} GB</option>"
+                        f"<option value=\"{escape(device)}\">{escape(str(item.get('model', '-') or '-'))} - {escape(str(item.get('size_gb', '-')))} GB - {escape(device)} - serial {escape(str(item.get('serial', '-') or '-'))}</option>"
                     )
-        if not rows:
-            rows.append("<tr><td colspan=\"9\">No block devices detected.</td></tr>")
-        if not blank_rows:
-            blank_rows.append("<tr><td colspan=\"9\">No whole disks detected.</td></tr>")
         rec = recording_storage_status(cfg)
-        fstab_entry = rec.get("fstab_entry", "LABEL=CCTV_STORAGE /media/vsuser/Storage ext4 defaults,nofail,x-systemd.device-timeout=5 0 2")
         current_directory = rec.get("recordings_path") if rec.get("mode") == "system_directory" else "/home/vsuser/recordings"
         body = (
             "<div class=\"card\">"
-            "<h2>One Drive: Monitor Existing Recording Folder</h2>"
-            "<p class=\"section-lead\">Use this when the operating system and Videosoft recordings share the same physical drive. "
-            "The OS disk remains protected and is never relabelled, repartitioned, formatted, mounted, or added to /etc/fstab.</p>"
+            "<h2>Monitor an existing recording location</h2>"
+            "<p class=\"section-lead\">Choose the folder already used by Videosoft. The watchdog checks it without changing the disk or mount.</p>"
             "<form method=\"post\" action=\"/recording-storage-system-directory\">"
             "<label class=\"label\">Existing Videosoft recording folder</label>"
             f"<input name=\"recording_path\" value=\"{escape(str(current_directory))}\" placeholder=\"/home/vsuser/recordings\">"
-            "<label><input type=\"checkbox\" name=\"ack\" value=\"1\"> Monitor this folder without changing the operating-system disk</label>"
-            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Monitor one-drive recording folder</button><a class=\"ghost\" href=\"/storage\">Cancel</a></div>"
+            "<label><input type=\"checkbox\" name=\"ack\" value=\"1\"> Monitor this folder without changing its disk</label>"
+            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Monitor existing location</button></div>"
             "</form>"
-            "<p class=\"muted\">Enter the path selected in Videosoft. It must already exist and be writable. The watchdog only performs a temporary write test.</p>"
+            "<p class=\"muted\">The folder must already exist and be writable. A missing mount is rejected rather than recording onto the Ubuntu system drive.</p>"
             "</div>"
             "<div class=\"card\">"
-            "<h2>Configure Recording Storage</h2>"
-            "<p class=\"warning\">Existing filesystem setup does not format, erase, unmount, or automatically repair a drive. It only labels the selected ext4 partition or whole-disk ext4 filesystem after confirmation and writes a labelled /etc/fstab entry.</p>"
-            "<div class=\"label\">Intended fstab entry</div>"
-            f"<pre>{escape(str(fstab_entry))}</pre>"
-            f"<div class=\"label\">Current status</div><div class=\"value {escape(str(rec.get('status', 'unknown')))}\">{escape(str(rec.get('message', '-')))}</div>"
-            "<script>"
-            "function selectStorageRadio(row,name){var input=row.querySelector('input[type=radio][name='+name+']');if(!input||input.disabled){return;}input.checked=true;var rows=row.closest('tbody').querySelectorAll('tr');for(var i=0;i<rows.length;i++){rows[i].classList.remove('selected');}row.classList.add('selected');}"
-            "function selectStorageDropdown(select,name){var form=select.form;var inputs=form.querySelectorAll('input[type=radio][name='+name+']');for(var i=0;i<inputs.length;i++){if(inputs[i].value===select.value&&!inputs[i].disabled){inputs[i].checked=true;var row=inputs[i].closest('tr');if(row){selectStorageRadio(row,name);}break;}}}"
-            "</script>"
-            "<h3>Use Existing ext4 Filesystem</h3>"
-            "<p class=\"muted\">Use selected storage if the watchdog is allowed to relabel and manage the fstab entry. Use Monitor only for an already-working recorder mount that must not be changed.</p>"
-            "<form method=\"post\" action=\"/recording-storage-confirm\">"
-            "<label class=\"label\">Choose existing ext4 storage</label>"
-            f"<select onchange=\"selectStorageDropdown(this, 'device')\"><option value=\"\">Select existing storage...</option>{''.join(partition_options)}</select>"
-            "<table><thead><tr><th>Select</th><th>Device</th><th>Model</th><th>Serial</th><th>Size</th><th>Filesystem</th><th>Label</th><th>Mountpoint</th><th>Safety</th></tr></thead>"
-            f"<tbody>{''.join(rows)}</tbody></table>"
-            "<div class=\"button-row\"><button class=\"action\" type=\"submit\">Use selected partition</button><a class=\"ghost\" href=\"/storage\">Cancel</a></div>"
-            "</form>"
-            "</div>"
-            "<div class=\"card\">"
-            "<h2>Prepare New Blank Recording Disk</h2>"
-            "<p class=\"critical\">This path creates a new partition and ext4 filesystem. Use it only for a new/empty recording disk. Existing data on the selected disk will be erased after confirmation.</p>"
+            "<h2>Prepare a new recording drive</h2>"
+            "<p class=\"critical\">Only choose a new, empty drive. Preparing it erases everything on that drive after a separate confirmation.</p>"
             "<form method=\"post\" action=\"/recording-storage-blank-confirm\">"
-            "<label class=\"label\">Choose blank disk</label>"
-            f"<select onchange=\"selectStorageDropdown(this, 'disk')\"><option value=\"\">Select blank disk...</option>{''.join(blank_options)}</select>"
-            "<table><thead><tr><th>Select</th><th>Disk</th><th>Model</th><th>Serial</th><th>Size</th><th>Filesystem</th><th>Label</th><th>Mountpoint</th><th>Safety</th></tr></thead>"
-            f"<tbody>{''.join(blank_rows)}</tbody></table>"
-            "<div class=\"button-row\"><button class=\"danger\" type=\"submit\">Prepare selected blank disk</button><a class=\"ghost\" href=\"/storage\">Cancel</a></div>"
+            "<label class=\"label\">Choose new drive</label>"
+            f"<select name=\"disk\" required><option value=\"\">Select a new drive...</option>{''.join(blank_options)}</select>"
+            "<p class=\"muted\">Only eligible empty drives are listed. The Ubuntu system drive is excluded.</p>"
+            "<div class=\"button-row\"><button class=\"danger\" type=\"submit\">Review selected drive</button><a class=\"ghost\" href=\"/storage\">Cancel</a></div>"
             "</form>"
             "</div>"
         )
@@ -3567,6 +3497,7 @@ def start_web(cfg):
                 "enabled": True,
                 "mode": "system_directory",
                 "directory_path": str(validation["path"]),
+                "directory_mountpoint": str(validation.get("mountpoint") or ""),
                 "managed_fstab": False,
                 "filesystem": str(validation.get("filesystem") or "ext4"),
             },
@@ -3583,7 +3514,7 @@ def start_web(cfg):
         status = recording_storage_status(cfg)
         return {
             "ok": status.get("status") in {"healthy", "warning"},
-            "message": "Watchdog is now monitoring the recording folder on the OS disk.",
+            "message": "Watchdog is now monitoring the existing recording folder.",
             "output": (
                 f"Path: {validation['path']}\n"
                 f"Containing device: {validation.get('device') or '-'}\n"
@@ -3591,7 +3522,7 @@ def start_web(cfg):
                 "No partition, label, mount, ownership, or fstab changes were made."
             ),
             "backup": f"Config backup created automatically beside {saved_path}",
-            "fstab_entry": "Not used - recording directory is on the OS filesystem",
+            "fstab_entry": "Not used - existing recording directory is monitored without mount changes",
             "status": status,
         }
 

@@ -81,6 +81,19 @@ class RecordingStorageModeTests(unittest.TestCase):
         self.assertEqual(status["recording_service_mount_guards"], [])
         self.assertIn("Not used", status["fstab_entry"])
 
+    @patch("va_watchdog.storage._smart_info", return_value={"status": "PASSED"})
+    @patch("va_watchdog.storage._blkid_value", return_value="")
+    @patch("va_watchdog.storage._row_for_device", return_value={})
+    @patch("va_watchdog.storage._findmnt_for_path", return_value={"source": "/dev/sda2", "target": "/", "fstype": "ext4", "options": "rw"})
+    def test_missing_existing_mount_is_critical(self, _findmnt, _row, _blkid, _smart):
+        with tempfile.TemporaryDirectory() as temporary:
+            cfg = self._cfg(temporary)
+            cfg["recording_storage"]["directory_mountpoint"] = "/recordings"
+            status = recording_storage_status(cfg)
+
+        self.assertEqual(status["status"], "critical")
+        self.assertEqual(status["message"], "Recording filesystem mount missing or changed")
+
     @patch(
         "va_watchdog.storage._smart_info",
         return_value={"status": "PASSED", "temperature_c": 35, "device": "/dev/sda"},
@@ -214,6 +227,18 @@ class RecordingStorageModeTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["device"], "/dev/sda2")
         self.assertEqual(result["mountpoint"], "/")
+
+    @patch("va_watchdog.storage._run", return_value={"ok": True})
+    @patch("va_watchdog.storage._recording_writable", return_value=True)
+    @patch("va_watchdog.storage._parent_disk", return_value="/dev/nvme0n1")
+    @patch("va_watchdog.storage._root_parent_disk", return_value="/dev/sda")
+    @patch("va_watchdog.storage._findmnt_for_path", return_value={"source": "/dev/nvme0n1p1", "target": "/recordings", "fstype": "ext4", "options": "rw"})
+    @patch.object(Path, "is_dir", return_value=True)
+    @patch("va_watchdog.storage.os.path.realpath", side_effect=lambda value: value)
+    def test_existing_separate_recording_mount_is_accepted(self, *_mocks):
+        result = validate_system_recording_directory("/recordings", "vsuser")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["mountpoint"], "/recordings")
 
 
 if __name__ == "__main__":

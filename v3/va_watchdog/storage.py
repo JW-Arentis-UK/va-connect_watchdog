@@ -293,6 +293,7 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
     checked_at = _now_iso()
     mounted_info = _findmnt_for_path(monitored_path) if directory_mode else _findmnt(configured_mountpoint)
     mountpoint = str(mounted_info.get("target") or configured_mountpoint)
+    expected_directory_mount = str(rec_cfg.get("directory_mountpoint") or "") if directory_mode else ""
     path_present = Path(monitored_path).is_dir() if monitored_path else False
     mounted = bool(mounted_info) and (path_present if directory_mode else True)
     label_device = None if directory_mode else _device_by_label(expected_label)
@@ -347,6 +348,9 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
     if directory_mode and not path_present:
         status = "critical"
         message = "Recording directory missing"
+    elif expected_directory_mount and mountpoint != expected_directory_mount:
+        status = "critical"
+        message = "Recording filesystem mount missing or changed"
     elif not present:
         status = "critical"
         message = "Recording storage missing"
@@ -441,10 +445,11 @@ def validate_system_recording_directory(path: str, owner: str = "") -> dict[str,
     protected = {"/", "/boot", "/boot/efi", "/etc", "/var", "/var/lib", "/var/lib/va-watchdog"}
     if resolved in protected:
         return {"ok": False, "message": f"{resolved} is a protected system path.", "path": resolved}
-    if not (resolved.startswith("/home/") or resolved.startswith("/srv/") or resolved.startswith("/opt/")):
+    allowed_roots = ("/home/", "/srv/", "/opt/", "/mnt/", "/media/", "/recordings/")
+    if resolved != "/recordings" and not resolved.startswith(allowed_roots):
         return {
             "ok": False,
-            "message": "One-drive recording folders must be below /home, /srv, or /opt.",
+            "message": "Recording folders must be below /home, /srv, /opt, /mnt, /media, or /recordings.",
             "path": resolved,
         }
     target = Path(resolved)
@@ -456,10 +461,11 @@ def validate_system_recording_directory(path: str, owner: str = "") -> dict[str,
     device = str(mounted_info.get("source") or "")
     root_parent = _root_parent_disk()
     selected_parent = _parent_disk(device) or device
-    if root_parent and os.path.realpath(selected_parent) != os.path.realpath(root_parent):
+    mountpoint = str(mounted_info.get("target") or "")
+    if mountpoint == "/" and root_parent and os.path.realpath(selected_parent) != os.path.realpath(root_parent):
         return {
             "ok": False,
-            "message": "This folder is not on the operating-system disk. Use existing mounted storage instead.",
+            "message": "Could not verify the recording filesystem mount.",
             "path": resolved,
         }
     filesystem = str(mounted_info.get("fstype") or "")
@@ -485,10 +491,10 @@ def validate_system_recording_directory(path: str, owner: str = "") -> dict[str,
             }
     return {
         "ok": True,
-        "message": "Recording directory is on the OS disk and is writable.",
+        "message": "Existing recording directory is mounted and writable.",
         "path": resolved,
         "device": device,
-        "mountpoint": str(mounted_info.get("target") or "/"),
+        "mountpoint": mountpoint,
         "filesystem": filesystem,
         "owner": owner,
     }
