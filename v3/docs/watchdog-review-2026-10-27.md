@@ -123,6 +123,30 @@ and actual Firefox page recovered. Its recording-history permissions limitation
 prompted build .3's core-owned timestamp collector rather than broadening web
 access to private footage.
 
+Build .3 (software commit `d50a146`) was installed through the updater and passed
+its setup smoke check. All six live dashboard cards were healthy, including
+recording history, before a normal test reboot at approximately 12:37 UTC.
+After reboot, the public status APIs confirmed build .3, a fresh healthy core,
+all four monitored application services running, and the expected ext4 recording
+drive mounted read-write. Old footage remained visible and new timestamps advanced
+from 12:38:09 to 12:40:09. The before-crash buffer resumed with two-second samples,
+no missed deadlines, no dropped pending samples, and no recorder errors.
+
+The new boot identity was `c2df67e8-1f8b-42e4-b3c9-b8caf4e2c319`. Hardware proof
+matched that boot and consecutive feeds completed with no errors. The normal
+300-second startup safety window was preserved, not bypassed for the test.
+At 12:43 UTC the safety window had ended, the feeder reported that the main
+process and health loop were fresh, and hardware feeding continued with zero
+errors. New recording timestamps had advanced to 12:42:09. This verifies normal
+post-boot enforcement startup, not a deliberate hardware trip or power-cut test.
+Remote readiness returned HTTP 200; anonymous settings POSTs, invalid operator
+credentials, and unauthenticated evidence downloads returned HTTP 401.
+
+The USB-powered KVM also restarted and required its admin login again. Read-only
+API access remained available and was used for the post-reboot checks. A successful
+operator sign-in/settings change still needs the user's existing local account;
+the password was neither requested in chat nor changed for testing.
+
 Successful operator sign-in, an authenticated settings change, forwarded browser
 access, prolonged network-loss/blocked-I/O testing, a new hardware trip, and power-cut
 retention testing have not yet been established by these deployment checks.
