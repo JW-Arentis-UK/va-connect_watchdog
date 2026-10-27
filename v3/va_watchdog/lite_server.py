@@ -9,6 +9,7 @@ import zipfile
 from .lite import read_object
 from .build import build_number
 from .log_tail import tail_lines
+from .system_logs import add_syslogs
 from .pi_storage import inspect as inspect_pi_storage
 from .recording_activity import recording_activity
 from .update import _git_value, last_completed, load_update_status, update_in_progress
@@ -177,37 +178,10 @@ def evidence_zip(cfg, max_bytes=32 * 1024 * 1024):
                 manifest['included'].append(name)
             else:
                 manifest['omitted'].append(name)
-        syslog_dir = Path(cfg.get('evidence_syslog_dir', '/var/log'))
-        syslog_budget = min(20 * 1024 * 1024, max_bytes - total)
-        for filename in ('syslog', 'syslog.1', 'syslog.2.gz', 'syslog.3.gz', 'syslog.4.gz'):
-            path = syslog_dir / filename
-            if not path.is_file() or path.is_symlink():
-                continue
-            name = f'system-logs/{filename}'
-            try:
-                size = path.stat().st_size
-                allowance = min(4 * 1024 * 1024, syslog_budget, max_bytes - total)
-                if allowance <= 0:
-                    manifest['omitted'].append(name)
-                    continue
-                with path.open('rb') as source:
-                    if size > allowance and not filename.endswith('.gz'):
-                        source.seek(size - allowance)
-                        source.readline()  # Start the tail at a complete log line.
-                        payload = source.read(allowance)
-                        name += '.tail'
-                    elif size <= allowance:
-                        payload = source.read(allowance + 1)
-                    else:
-                        manifest['omitted'].append(name)
-                        continue
-            except OSError:
-                manifest['omitted'].append(name)
-                continue
-            archive.writestr(name, payload)
-            total += len(payload)
-            syslog_budget -= len(payload)
-            manifest['included'].append(name)
+        logs = add_syslogs(archive, cfg, min(20 * 1024 * 1024, max_bytes - total))
+        manifest['included'].extend(logs['included'])
+        manifest['omitted'].extend(logs['omitted'])
+        manifest['missing'] = logs['missing']
         archive.writestr('manifest.json', json.dumps(manifest, indent=2))
     return output.getvalue()
 

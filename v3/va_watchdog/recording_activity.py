@@ -141,9 +141,16 @@ def recording_activity(
     recent_count = min(50, max(1, int(recent_count)))
     max_buckets = min(7, max(1, int(max_buckets)))
     results = []
+    unreadable_paths = []
     for path in candidate_recording_paths(cfg):
-        if path.is_dir():
-            results.append(_recordings_from_path(path, recent_count, max_buckets, recording_suffix))
+        try:
+            if path.is_dir():
+                result = _recordings_from_path(path, recent_count, max_buckets, recording_suffix)
+                results.append(result)
+                if result.get("error"):
+                    unreadable_paths.append(str(path))
+        except OSError:
+            unreadable_paths.append(str(path))
 
     best = max(
         (item for item in results if item.get("newest_timestamps")),
@@ -154,7 +161,7 @@ def recording_activity(
     if best is None:
         return {
             "available": False,
-            "message": "No Unix-timestamped recording files were found.",
+            "message": "Recording history could not be read from one or more locations." if unreadable_paths else "No Unix-timestamped recording files were found.",
             "recordings_path": next((item["path"] for item in results), "-"),
             "oldest": None,
             "oldest_recordings": [],
@@ -162,6 +169,7 @@ def recording_activity(
             "recent": [],
             "checked_at": checked_at,
             "paths_checked": [item["path"] for item in results],
+            "unreadable_paths": unreadable_paths,
         }
 
     oldest_source = best.get("oldest_timestamps") or list(reversed(best["newest_timestamps"]))
@@ -191,4 +199,5 @@ def recording_activity(
         "entries_checked": best.get("entries_checked", 0),
         "checked_at": checked_at,
         "paths_checked": [item["path"] for item in results],
+        "unreadable_paths": unreadable_paths,
     }

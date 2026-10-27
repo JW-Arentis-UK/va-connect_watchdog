@@ -59,6 +59,7 @@ from .factory_reset import reset_watchdog_data
 from .status_shortcuts import selected_shortcuts, validate_selection
 from .web_security import BoundedHTTPServer, ProtectedHandler, protect
 from .web_health import health_response
+from .system_logs import add_syslogs
 
 
 _camera_capture_lock = Lock()
@@ -5964,6 +5965,7 @@ def start_web(cfg, handler_only=False):
             )
             archive.writestr("history-export.csv", history_csv(limit=5000))
             archive.writestr("events-export.csv", events_csv(limit=1000))
+            archive.writestr("system-logs/manifest.json", json.dumps(add_syslogs(archive, cfg), indent=2))
             for name, result in command_outputs.items():
                 archive.writestr(name, json.dumps(result, indent=2) + "\n\nSTDOUT:\n" + str(result.get("stdout") or "") + "\n\nSTDERR:\n" + str(result.get("stderr") or ""))
             for name, path in file_sources.items():
@@ -6117,11 +6119,13 @@ def start_web(cfg, handler_only=False):
                 self.send_header("Location", "/")
                 self.end_headers()
                 return
-            if lightweight and route_path in {"/update-confirm", "/pi-storage", "/api/evidence.zip"}:
-                from .lite_server import evidence_zip, pi_storage_page, update_page
-                if route_path == "/api/evidence.zip":
-                    self._send_bytes(evidence_zip(cfg), content_type="application/zip", filename="watchdog-evidence.zip")
-                elif route_path == "/pi-storage":
+            if route_path == "/api/evidence.zip":
+                from .lite_server import evidence_zip
+                self._send_bytes(evidence_zip(cfg), content_type="application/zip", filename="watchdog-evidence.zip")
+                return
+            if lightweight and route_path in {"/update-confirm", "/pi-storage"}:
+                from .lite_server import pi_storage_page, update_page
+                if route_path == "/pi-storage":
                     if cfg.get("platform", {}).get("kind") != "raspberry_pi":
                         self._send_json({"error": "Not found"}, status=404)
                     else:

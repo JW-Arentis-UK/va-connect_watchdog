@@ -1,7 +1,13 @@
 # Watchdog Implementation And Reassessment
 
-Candidate build: `20261027.1`. This is a repository change; no gateway deployment
-or hardware trip was performed as part of this review implementation.
+Candidate build: `20261027.2`. Build `20261027.1` was installed on the local
+POC-551VTC test gateway on 27 October. Its live reassessment found that the full
+support bundle omitted syslog, despite the compact bundle including it. Build .2
+shares the bounded syslog collector between both formats and retains the compact
+download URL on full dashboards. The live browser also exposed a permission error
+when recording history scanned an optional private-home fallback as the new web
+account. Build .2 reports unreadable paths without losing accessible recording
+history or the dashboard. Deployment checks are recorded below.
 
 ## Implemented Changes
 
@@ -50,7 +56,7 @@ web listener when the separate web unit is absent.
 
 ## Verification
 
-Final full suites: 356 tests on Windows/Python 3.13 (10 skipped), and 356 on
+Final full suites: 359 tests on Windows/Python 3.13 (10 skipped), and 359 on
 Ubuntu/Python 3.14 (9 skipped). Both completed successfully. Bash syntax checks
 passed for installation, update, and web-access setup. `git diff --check` passed.
 
@@ -90,6 +96,25 @@ Passing unit tests does not establish those results.
    preserved pre-crash samples and explicitly quantify the final checkpoint gap.
 
 ## Reassessment
+
+### Local Gateway Checks
+
+Build .1 installation completed with all three watchdog services and Videosoft
+active. The web unit runs as `va-watchdog-web`; the installed helper rejected an
+invalid operator password. Anonymous administrative POSTs returned an authentication
+challenge. The web account could not write the heartbeat state. Health and readiness
+both reported healthy, with all saved checks healthy. Hardware proof recorded
+successful consecutive feeds on the current boot, with no feed errors.
+
+The existing ext4 `/recordings` mount and camera configuration were preserved;
+new recording files were present during testing. The full support ZIP passed its
+integrity check and contained current and archived black-box and feeder evidence.
+Its missing syslog collection prompted build .2 rather than treating that download
+as complete. A rollback archive is retained on the gateway.
+
+Successful operator sign-in, an authenticated settings change, forwarded browser
+access, prolonged network-loss/blocked-I/O testing, a new hardware trip, and power-cut
+retention testing have not yet been established by these deployment checks.
 
 The core responsibilities are now clearer: supervise liveness, observe faults,
 retain evidence, and perform only bounded service recovery. Existing configuration

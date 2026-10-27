@@ -1,11 +1,34 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from va_watchdog.recording_activity import recording_activity
 
 
 class RecordingActivityTests(unittest.TestCase):
+    def test_unreadable_fallback_does_not_hide_accessible_recordings(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "1784246800.data").touch()
+            denied = root / "private"
+            original = Path.is_dir
+
+            def is_dir(path):
+                if path == denied:
+                    raise PermissionError("private home directory")
+                return original(path)
+
+            with patch("va_watchdog.recording_activity.candidate_recording_paths", return_value=[root, denied]), patch.object(Path, "is_dir", is_dir):
+                result = recording_activity({})
+            self.assertTrue(result["available"])
+            self.assertEqual(result["latest"]["unix"], 1784246800)
+            self.assertEqual(result["unreadable_paths"], [str(denied)])
+            with patch("va_watchdog.recording_activity.candidate_recording_paths", return_value=[denied]), patch.object(Path, "is_dir", is_dir):
+                result = recording_activity({})
+            self.assertFalse(result["available"])
+            self.assertIn("could not be read", result["message"])
+
     def test_decodes_latest_unix_recording_filename(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "recordings"
