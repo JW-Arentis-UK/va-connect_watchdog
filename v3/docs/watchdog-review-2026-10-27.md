@@ -1,13 +1,16 @@
 # Watchdog Implementation And Reassessment
 
-Candidate build: `20261027.2`. Build `20261027.1` was installed on the local
+Candidate build: `20261027.3`. Build `20261027.1` was installed on the local
 POC-551VTC test gateway on 27 October. Its live reassessment found that the full
 support bundle omitted syslog, despite the compact bundle including it. Build .2
 shares the bounded syslog collector between both formats and retains the compact
 download URL on full dashboards. The live browser also exposed a permission error
 when recording history scanned an optional private-home fallback as the new web
 account. Build .2 reports unreadable paths without losing accessible recording
-history or the dashboard. Deployment checks are recorded below.
+history or the dashboard. Build .3 collects recording timestamps in a bounded core
+worker and shares the saved, freshness-checked result with the read-only dashboard;
+the web account does not need access to private footage directories. Deployment
+checks are recorded below.
 
 ## Implemented Changes
 
@@ -56,7 +59,7 @@ web listener when the separate web unit is absent.
 
 ## Verification
 
-Final full suites: 359 tests on Windows/Python 3.13 (10 skipped), and 359 on
+Final full suites: 361 tests on Windows/Python 3.13 (10 skipped), and 361 on
 Ubuntu/Python 3.14 (9 skipped). Both completed successfully. Bash syntax checks
 passed for installation, update, and web-access setup. `git diff --check` passed.
 
@@ -111,6 +114,14 @@ new recording files were present during testing. The full support ZIP passed its
 integrity check and contained current and archived black-box and feeder evidence.
 Its missing syslog collection prompted build .2 rather than treating that download
 as complete. A rollback archive is retained on the gateway.
+
+Build .2 was then installed through the updater, which passed its setup smoke
+check. Both support formats passed ZIP integrity checks. The full bundle contained
+the bounded current syslog tail, syslog.1, and compressed rotations .2 through .4;
+its syslog manifest had no omitted or missing files. The dashboard data endpoint
+and actual Firefox page recovered. Its recording-history permissions limitation
+prompted build .3's core-owned timestamp collector rather than broadening web
+access to private footage.
 
 Successful operator sign-in, an authenticated settings change, forwarded browser
 access, prolonged network-loss/blocked-I/O testing, a new hardware trip, and power-cut

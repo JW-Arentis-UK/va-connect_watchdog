@@ -9,6 +9,7 @@ from .services import check_services
 from .network import check_network
 from .process_monitor import check_watchdog_process
 from .mobile_router import check_mobile_router
+from .recording_activity import recording_activity
 
 _COLLECTOR_CACHE = {}
 
@@ -104,6 +105,14 @@ def collect_health(cfg, collectors=None):
     router_interval = router_cfg.get("poll_interval_seconds", intervals.get("router_seconds", 60))
     checks.extend(collect("router", router_interval, lambda: check_mobile_router(cfg)))
     checks.extend(collect("process", intervals.get("process_seconds", 5), lambda: [check_watchdog_process(cfg)]))
+    def recording_history():
+        suffix = ".data" if cfg.get("platform", {}).get("kind") == "raspberry_pi" else None
+        value = recording_activity(cfg, recent_count=1, recording_suffix=suffix)
+        return [CheckResult("recording_history", "healthy" if value.get("available") else "unknown",
+                            value.get("message", ""), value)]
+
+    # Keep footage traversal in a bounded core worker, not the unprivileged web process.
+    history = collect("recording_history", intervals.get("storage_seconds", 30), recording_history)
 
     critical_failed = any(c.state == "critical" and c.critical for c in checks)
     recording_storage = next((c.value for c in checks if c.name == "recording_storage"), None)
@@ -118,6 +127,10 @@ def collect_health(cfg, collectors=None):
     }
     if isinstance(recording_storage, dict):
         status["recording_storage"] = recording_storage
+    history_value = next((item.value for item in history if item.name == "recording_history"), None)
+    status["recording_activity"] = history_value if isinstance(history_value, dict) else {
+        "available": False, "message": history[0].message if history else "Recording history is unavailable"
+    }
     process_check = next((c.value for c in checks if c.name == "watchdog_process"), None)
     if isinstance(process_check, dict):
         status["watchdog_process"] = process_check

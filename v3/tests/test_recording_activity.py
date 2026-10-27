@@ -1,12 +1,46 @@
 import tempfile
+import json
+import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from va_watchdog.recording_activity import recording_activity
+from va_watchdog.health import collect_health
+from va_watchdog.lite import snapshot
 
 
 class RecordingActivityTests(unittest.TestCase):
+    def test_core_publishes_recording_history_through_collector_pool(self):
+        pool = Mock()
+        pool.poll.side_effect = lambda name, interval, deadline, callback: callback() if name == "recording_history" else []
+        value = {"available": True, "checked_at": datetime.now(timezone.utc).isoformat(), "message": "recording"}
+        with patch("va_watchdog.health.recording_activity", return_value=value):
+            status, checks = collect_health({}, pool)
+        self.assertEqual(status["recording_activity"], value)
+        self.assertEqual(checks, [])
+        self.assertTrue(any(call.args[0] == "recording_history" for call in pool.poll.call_args_list))
+
+    def test_dashboard_uses_saved_history_and_rejects_stale_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            now = time.time()
+            status = {"time": datetime.fromtimestamp(now, timezone.utc).isoformat(), "checks": [],
+                      "recording_activity": {"available": True, "checked_at": now,
+                                             "oldest": {"display_local": "old"},
+                                             "latest": {"display_local": "new"}}}
+            cfg = {"status_path": str(base / "status.json"), "events_path": str(base / "events.jsonl")}
+            (base / "status.json").write_text(json.dumps(status))
+            with patch("va_watchdog.lite.recording_activity", side_effect=AssertionError("web must not scan footage")):
+                result = snapshot(cfg, now=now)
+                card = next(item for item in result["cards"] if item["title"] == "Recording history")
+                self.assertEqual(card["state"], "healthy")
+                result = snapshot(cfg, now=now + 91)
+                card = next(item for item in result["cards"] if item["title"] == "Recording history")
+                self.assertEqual(card["state"], "unknown")
+                self.assertIn("stale", card["detail"])
+
     def test_unreadable_fallback_does_not_hide_accessible_recordings(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

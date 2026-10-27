@@ -80,10 +80,17 @@ def snapshot(cfg, now=None):
     pi_profile = cfg.get("platform", {}).get("kind") == "raspberry_pi"
     storage = status.get("recording_storage") or {}
     storage_note = storage.get("message") or "Dedicated recording storage is not measured"
+    recordings = status.get("recording_activity")
+    if isinstance(recordings, dict):
+        history_age = age(recordings.get("checked_at"), now)
+        if recordings.get("available") and (history_age is None or history_age > 90):
+            recordings = {"available": False, "message": "Saved recording history is stale; waiting for a fresh check"}
+    else:
+        suffix = ".data" if pi_profile else None
+        recordings = recording_activity(cfg, recent_count=1, now_unix=now, recording_suffix=suffix)
     if isinstance(storage.get("free_mb"), (int, float)):
         storage_note += f" · {storage['free_mb'] / 1024:.1f} GiB free"
     if pi_profile:
-        recordings = recording_activity(cfg, recent_count=1, now_unix=now, recording_suffix=".data")
         if recordings.get("available"):
             oldest = recordings.get("oldest") or {}
             latest = recordings.get("latest") or {}
@@ -117,7 +124,6 @@ def snapshot(cfg, now=None):
     feed_fresh = feed_age is not None and feed_age < cfg.get("hardware_watchdog", {}).get("timeout_seconds", 30)
     feeding = feed.get("process_status") == "feeding" and feed_fresh
     if not pi_profile:
-        recordings = recording_activity(cfg, recent_count=1, now_unix=now)
         if recordings.get("available"):
             oldest = recordings.get("oldest") or {}
             latest = recordings.get("latest") or {}
