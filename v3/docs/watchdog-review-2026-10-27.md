@@ -181,13 +181,38 @@ already been rewritten as an independent command module.
 | Cross-boot readiness, status and dashboard claims | Corrected in .4; regression coverage includes current, previous, missing and unavailable boot IDs. |
 | Black Box write-error reporting on the main page | Corrected in .4; a fresh in-memory sample cannot hide a reported persistence error. |
 | Unreadable system-log directory | Corrected in .4; omissions are listed in the support manifest. |
-| .4 installation on POC-551VTC | Pending authenticated access. KVM remains at its admin login; SSH key-only access was rejected. The live gateway remains healthy on .3. |
+| .4 installation on POC-551VTC | Completed after KVM access was restored. Updater finished software commit `83458ff`; all three watchdog services and Videosoft are active. |
 | Operator sign-in and authenticated settings round trip | Pending the existing local operator account; no bypass or replacement password is introduced. |
 | Actual router/HTTPS forwarding | Pending testing through that deployed path; plain HTTP does not encrypt operator credentials. |
 | Network-loss and blocked-collector acceptance | Automated policy/isolation coverage exists; sustained live fault injection is still outstanding. |
 | Bounded application-service recovery | Automated recovery coverage exists; attended live stop/restart verification is still outstanding. |
 | Hardware trip and forced-power-loss preservation | Not performed in this follow-up. Require attended access and recovery capability. |
 | Large compatibility renderer and optional camera analytics | Retained to avoid removing deployed functions. Further extraction is optional maintenance, not an incident fix. |
+
+### Build .4 Deployment Verification
+
+On 27 October at approximately 13:53 UTC, the complete updater installed build
+`20261027.4` / software commit `83458ff` on POC-551VTC and passed its setup HTTP
+smoke check. The 12 new boot-freshness regression tests also passed using the
+gateway's own deployed Python runtime. These tests use temporary fixtures; they
+do not replace or falsify the gateway's live evidence files.
+
+Live health, status and dashboard responses agreed: ready, fresh, same-boot and
+healthy. All six dashboard cards were healthy. The recording drive remained
+mounted, footage timestamps advanced past the update, and Black Box recording
+reported its full 450-sample window without errors. Hardware feeding continued
+with current-boot proof, fresh main-loop progress and zero feed errors.
+
+The web service still runs as `va-watchdog-web`. Readiness returned HTTP 200;
+anonymous settings changes and unauthenticated remote evidence downloads returned
+HTTP 401. A locally generated full support bundle passed ZIP integrity validation
+and included the current syslog tail, syslog.1 and compressed rotations .2 through
+.4. Its system-log manifest reported no missing or omitted files.
+
+No new reboot, deliberate hardware trip, network interruption or power cut was
+performed during this deployment. The earlier .3 normal reboot results remain
+documented separately. Restored KVM access is not evidence that the distinct local
+gateway operator sign-in and authenticated settings round trip have passed.
 
 The remaining acceptance risks are physical watchdog behavior, device I/O under
 recording load, and the new authentication/permission boundary on a real gateway.
