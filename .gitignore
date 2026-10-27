@@ -16,3 +16,9 @@ tools/ubuntu/*journal*.txt
 __pycache__/
 *.pyc
 .v3-data/
+
+# Historical/local generated data; existing tracked evidence stays in Git.
+.v2-data/
+.tmp_script*.js
+tmp_script*.js
+tmp_rendered_script.js

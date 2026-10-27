@@ -1,5 +1,10 @@
 # VA-Connect Watchdog V3 - System Overview and Settings
 
+> Historical design snapshot. Current installation, storage choices and recovery
+> policy are described in [the V3 README](../README.md). In current builds,
+> automatic software reboot is unavailable and the old reboot-grace setting is
+> ignored. Do not use the recovery examples below as current instructions.
+
 Last updated: 2026-07-20
 
 This document explains what the current V3 watchdog system does, what each web page is for, and what the main configuration settings mean.

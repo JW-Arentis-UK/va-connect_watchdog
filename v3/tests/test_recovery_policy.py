@@ -6,11 +6,10 @@ import unittest
 from unittest.mock import Mock, patch
 
 from va_watchdog.common import CheckResult
-from va_watchdog.consolidated_recovery import ConsolidatedRecovery
 from va_watchdog.recovery import RecoveryEngine
 
 
-class ConsolidatedTests(unittest.TestCase):
+class BoundedRecoveryTests(unittest.TestCase):
     def setUp(self):
         self.tmp = TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -30,7 +29,7 @@ class ConsolidatedTests(unittest.TestCase):
                          'max_restart_attempts': 3, 'allow_reboot': True,
                          'consolidated_policy': {'enabled': True}}}
         self.log = Mock()
-        self.engine = ConsolidatedRecovery(self.cfg, self.log)
+        self.engine = RecoveryEngine(self.cfg, self.log)
 
     def run_command(self, args, **kwargs):
         self.commands.append(args)
@@ -50,7 +49,7 @@ class ConsolidatedTests(unittest.TestCase):
 
     def test_network_and_application_faults_never_reboot_or_restart_network(self):
         self.cfg['recovery']['restart_failed_services'] = False
-        for policy in (RecoveryEngine, ConsolidatedRecovery):
+        for policy in (RecoveryEngine,):
             engine = policy(self.cfg, self.log)
             for advance in (0, 60, 3600, 86400):
                 self.now += advance
@@ -62,7 +61,7 @@ class ConsolidatedTests(unittest.TestCase):
         for _ in range(8):
             self.engine.process(self.checks())
             self.now += 60
-            self.engine = ConsolidatedRecovery(self.cfg, self.log)
+            self.engine = RecoveryEngine(self.cfg, self.log)
         for item in self.cfg['services']:
             self.assertEqual(sum(command[-1] == item['name'] for command in self.commands), 3)
 

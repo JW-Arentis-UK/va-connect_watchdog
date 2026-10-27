@@ -85,15 +85,16 @@ class PiProfileTests(unittest.TestCase):
         self.assertEqual(result["state"], "healthy")
         self.assertIn("Oldest recording: 17:45:12", result["cards"][2]["detail"])
         self.assertEqual([card["href"] for card in result["cards"]],
-                         ["/#diagnostics", "/#diagnostics", "/pi-storage", "/#diagnostics", "/#diagnostics"])
+                         ["/#diagnostics", "/#diagnostics", "/pi-storage", "/#diagnostics", "/hardware-protection"])
 
     def test_pi_page_only_links_to_available_lite_routes(self):
         html = page(self.config()).decode("utf-8")
         self.assertIn('href="/api/evidence.zip"', html)
         self.assertIn('href="/update-confirm"', html)
         self.assertNotIn('href="/pi-storage"', html)
-        self.assertNotIn('href="/analytics"', html)
-        self.assertNotIn('href="/maintenance"', html)
+        self.assertIn('href="/analytics"', html)
+        self.assertIn('href="/links"', html)
+        self.assertIn('href="/maintenance"', html)
 
 
 if __name__ == "__main__":

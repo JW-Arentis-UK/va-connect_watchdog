@@ -103,7 +103,6 @@
     "restart_failed_services": false,
     "restart_noncritical_services": false,
     "max_restart_attempts": 3,
-    "critical_grace_seconds": 60,
     "allow_reboot": false
   },
   "network": {

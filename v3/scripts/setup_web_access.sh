@@ -35,8 +35,9 @@ if path.exists():
     config = json.loads(original)
     recovery = config.setdefault("recovery", {})
     recovery["allow_reboot"] = False
+    recovery.pop("critical_grace_seconds", None)
     if isinstance(recovery.get("consolidated_policy"), dict):
-        recovery["consolidated_policy"]["restart_network_before_reboot"] = False
+        recovery["consolidated_policy"].pop("restart_network_before_reboot", None)
     if config != json.loads(original):
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         shutil.copy2(path, path.with_name(path.name + ".pre-hardening-" + stamp + ".bak"))

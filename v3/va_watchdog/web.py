@@ -61,6 +61,7 @@ from .web_security import BoundedHTTPServer, ProtectedHandler, protect
 from .web_health import health_response
 from .system_logs import add_syslogs
 from .status_freshness import status_view
+from .ui_profile import is_pi, maintenance_page
 
 
 _camera_capture_lock = Lock()
@@ -167,6 +168,10 @@ VISIBLE_PAGE_GROUPS = (
 )
 
 LEGACY_PAGE_REDIRECTS = {
+    "/advanced": "/",
+    "/legacy": "/",
+    "/advanced/links": "/links",
+    "/advanced/crossing-activity": "/crossing-activity",
     "/overview": "/",
     "/hardware": "/evidence#system",
     "/network": "/evidence#network",
@@ -331,8 +336,6 @@ def start_web(cfg, handler_only=False):
             links.append(f"<div class=\"nav-section\">{escape(mode)}</div>")
             for name, path in pages:
                 active = "active" if name == current_page else ""
-                if name == "Status":
-                    path = "/advanced"
                 links.append(f"<a class=\"{active}\" href=\"{escape(path)}\">{escape(name)}</a>")
         return '<a href="/">Simple status</a><a href="/maintenance">Maintenance</a>' + "".join(links)
 
@@ -375,7 +378,6 @@ def start_web(cfg, handler_only=False):
         status = status_snapshot()
         version = version_info()
         update_status = load_update_status(cfg)
-        overview_recording_activity = recording_activity(cfg) if page == "Status" else {}
         critical = bool(status.get("critical_failed", False))
         checks = [check for check in status.get("checks", []) or [] if isinstance(check, dict)]
         check_map = {str(check.get("name", "")): check for check in checks}
@@ -469,76 +471,6 @@ def start_web(cfg, handler_only=False):
                     )
             return f"<div class=\"tool-grid\">{''.join(cards)}</div>"
 
-        def metric_tiles():
-            rec_storage = status.get("recording_storage", {}) if isinstance(status.get("recording_storage", {}), dict) else {}
-            watchdog_feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
-            gateway_hardware = hardware_identity()
-            hardware_model = str(gateway_hardware.get("display_model") or gateway_hardware.get("model") or "Unknown model")
-            hardware_detail = str(gateway_hardware.get("model_note") or gateway_hardware.get("manufacturer") or "Manufacturer unavailable")
-            hardware_state = "healthy" if gateway_hardware.get("model") else "warning"
-            startup_grace = watchdog_feed.get("startup_grace", {}) if isinstance(watchdog_feed.get("startup_grace", {}), dict) else {}
-            if startup_grace.get("active"):
-                watchdog_seconds = int(startup_grace.get("remaining_seconds", 0) or 0)
-                watchdog_minutes, watchdog_remainder = divmod(watchdog_seconds, 60)
-                watchdog_value = f"Waiting {watchdog_minutes}:{watchdog_remainder:02d}"
-                watchdog_state = "waiting"
-            elif watchdog_feed.get("feeding"):
-                watchdog_value = "Feeding"
-                watchdog_state = "healthy"
-            else:
-                watchdog_value = "Not feeding" if check_value("hardware_watchdog_present", False) else "Not present"
-                watchdog_state = check_state("hardware_watchdog_feed_status", check_state("hardware_watchdog_present", "warning"))
-            rec_storage_state = str(rec_storage.get("status") or check_state("recording_storage", "unknown"))
-            oldest_recording = (
-                overview_recording_activity.get("oldest", {})
-                if isinstance(overview_recording_activity.get("oldest", {}), dict)
-                else {}
-            )
-            if oldest_recording.get("display_local"):
-                oldest_recording_value = str(oldest_recording.get("display_local"))
-                oldest_recording_detail = "Oldest available Videosoft recording"
-            elif rec_storage.get("mounted"):
-                oldest_recording_value = "No recording found"
-                oldest_recording_detail = "No timestamped recording found"
-            else:
-                oldest_recording_value = "Storage unavailable"
-                oldest_recording_detail = str(rec_storage.get("message") or "Recording storage is not mounted")
-            oldest_recording_state = "healthy" if oldest_recording.get("display_local") else ("warning" if rec_storage.get("mounted") else "critical")
-            dedicated_storage = rec_storage.get("mode") != "system_directory"
-            root_used = disk_used("root_disk")
-            disk_value = f"Root {root_used}" if dedicated_storage else f"Root / Storage {root_used}"
-            disk_detail = (
-                (f"Storage {escape(str(rec_storage.get('used_percent', '-')))}%" if rec_storage.get("mounted") else "Storage unavailable")
-                if dedicated_storage
-                else disk_free("root_disk")
-            )
-            disk_state = check_state("root_disk", "healthy")
-            if disk_state == "healthy" and dedicated_storage:
-                disk_state = rec_storage_state
-            return (
-                "<div class=\"grid metric-grid\">"
-                + tile("CPU Temp", check_value("temperature", "-"), check_message("temperature", ""), check_state("temperature", "healthy"))
-                + tile("CPU Load", percent_value("cpu_load"), check_message("cpu_load", ""), check_state("cpu_load", "healthy"))
-                + tile("RAM", percent_value("ram", "Unavailable"), check_message("ram", ""), check_state("ram", "healthy"))
-                + tile("Disk Usage", disk_value, disk_detail, disk_state)
-                + tile("Oldest Recording", oldest_recording_value, oldest_recording_detail, oldest_recording_state, "recording-tile")
-                + tile("Hardware", hardware_model, hardware_detail, hardware_state)
-                + tile(
-                    "Hardware Recovery",
-                    watchdog_value,
-                    (
-                        f"Safety window: {watchdog_minutes}:{watchdog_remainder:02d} remaining"
-                        if startup_grace.get("active")
-                        else (
-                            f"{cfg.get('hardware_watchdog', {}).get('timeout_seconds', '-')}s timeout"
-                            if watchdog_feed.get("feeding")
-                            else ("Device detected; feed inactive" if check_value("hardware_watchdog_present", False) else "No verified hardware watchdog")
-                        )
-                    ),
-                    watchdog_state,
-                )
-                + "</div>"
-            )
 
         def service_rows():
             rows = []
@@ -704,112 +636,7 @@ def start_web(cfg, handler_only=False):
                 "</div>"
             )
 
-        def operational_alerts_card():
-            hardware_present = bool(check_value("hardware_watchdog_present", False))
-            issues = [
-                check
-                for check in checks
-                if str(check.get("state", "unknown")) != "healthy"
-                and not (str(check.get("name", "")) == "hardware_watchdog_feed_status" and not hardware_present)
-            ][:6]
-            rows = []
-            people_summary = event_summary(cfg)
-            if people_summary.get("enabled") and people_summary.get("stale"):
-                age = people_summary.get("message_age_seconds")
-                age_text = f"{int(age) // 60} minutes" if age is not None else "an unknown period"
-                rows.append(
-                    "<div class=\"issue-row\"><span class=\"pill critical\">CRITICAL</span><div>"
-                    "<div class=\"value\">Crossing camera connection lost</div>"
-                    f"<div class=\"muted\">No camera heartbeat or count message has arrived for {escape(age_text)}. <a href=\"/crossing-activity\">Open Crossing Activity</a></div>"
-                    "</div></div>"
-                )
-            if int(people_summary.get("unexpected_resets_today", 0) or 0):
-                rows.append(
-                    "<div class=\"issue-row\"><span class=\"pill warning\">WARNING</span><div>"
-                    "<div class=\"value\">Unexpected crossing counter reset</div>"
-                    "<div class=\"muted\">A counter dropped during the day. The midnight reset remains expected. <a href=\"/crossing-activity\">Review totals</a></div>"
-                    "</div></div>"
-                )
-            anomalies = people_summary.get("activity_anomalies", [])
-            if anomalies:
-                detail = "; ".join(
-                    f"{item.get('category')}: {int(item.get('change_percent', 0)):+d}%"
-                    for item in anomalies[:3]
-                )
-                rows.append(
-                    "<div class=\"issue-row\"><span class=\"pill warning\">WARNING</span><div>"
-                    "<div class=\"value\">Unusual crossing activity</div>"
-                    f"<div class=\"muted\">Latest complete day differs from the recent baseline: {escape(detail)}. "
-                    "<a href=\"/crossing-activity\">Review activity</a></div></div></div>"
-                )
-            for check in issues:
-                if len(rows) >= 6:
-                    break
-                item_state = str(check.get("state", "unknown"))
-                check_name = str(check.get("name", "Unknown check"))
-                display_name = "Hardware recovery unavailable" if check_name == "hardware_watchdog_present" else check_name.replace("_", " ")
-                rows.append(
-                    "<div class=\"issue-row\">"
-                    f"<span class=\"pill {escape(item_state)}\">{escape(item_state.upper())}</span>"
-                    "<div>"
-                    f"<div class=\"value\">{escape(display_name)}</div>"
-                    f"<div class=\"muted\">{escape(str(check.get('message', 'No detail')))}</div>"
-                    "</div></div>"
-                )
-            if not rows:
-                rows.append(
-                    "<div class=\"issue-row\"><span class=\"pill\">CLEAR</span>"
-                    "<div><div class=\"value\">No active alerts</div>"
-                    "<div class=\"muted\">All current checks are healthy.</div></div></div>"
-                )
-            return (
-                "<div class=\"card\"><h2>Active Alerts</h2>"
-                f"<div class=\"issue-list\">{''.join(rows)}</div>"
-                "<div class=\"button-row\"><a class=\"ghost\" href=\"/events\">Open event history</a></div></div>"
-            )
 
-        def recent_restarts_card():
-            restarts = recent_restarts(cfg, limit=10)
-            rows = []
-            for index, restart in enumerate(restarts):
-                restart_type = str(restart.get("restart_type") or restart.get("classification") or "Unknown")
-                classification_key = restart_type.lower()
-                classification_state = (
-                    "healthy"
-                    if classification_key in {"automatic watchdog recovery", "requested reboot"}
-                    else "warning"
-                    if classification_key in {"deliberate trip test", "full liveness test"}
-                    else "critical"
-                    if classification_key == "kernel fault"
-                    else "warning"
-                )
-                classification_style = (
-                    "restart-watchdog"
-                    if classification_key == "automatic watchdog recovery"
-                    else "restart-clean"
-                    if classification_key == "requested reboot"
-                    else "restart-test"
-                    if classification_key in {"deliberate trip test", "full liveness test"}
-                    else "restart-fault"
-                    if classification_key == "kernel fault"
-                    else "restart-unknown"
-                )
-                rows.append(
-                    f"<div class=\"restart-row {classification_style}\">"
-                    f"<div class=\"restart-number\">{'Latest' if index == 0 else f'#{index + 1}'}</div>"
-                    f"<div class=\"restart-time\">{escape(unix_time(restart.get('created_at')))}</div>"
-                    f"<span class=\"pill {classification_state} {classification_style}\">{escape(restart_type)}</span>"
-                    "</div>"
-                )
-            if not rows:
-                rows.append("<div class=\"restart-row\"><div class=\"restart-number\">-</div><div>No restart history recorded yet.</div></div>")
-            return (
-                "<div class=\"card\"><div class=\"section-lead\"><div><h2>Recent Restarts</h2>"
-                "<p class=\"muted\">The latest ten gateway starts. Planned tests are labelled separately from automatic recovery.</p></div>"
-                "<a class=\"ghost\" href=\"/evidence\">Evidence</a></div>"
-                f"<div class=\"restart-list\">{''.join(rows)}</div>"
-                "<p class=\"muted\">A shutdown record does not identify who or what initiated the restart. Times use the gateway's local timezone and are recorded when the watchdog starts, normally a few seconds after boot.</p></div>"
-            )
 
         def updates_card():
             current = version_info()
@@ -1056,9 +883,9 @@ def start_web(cfg, handler_only=False):
                 "<div class=\"button-row\"><button class=\"ghost\" type=\"button\" onclick=\"document.querySelectorAll('.section-disclosure').forEach(function(item){item.open=true})\">Show all</button><button class=\"ghost\" type=\"button\" onclick=\"document.querySelectorAll('.section-disclosure').forEach(function(item){item.open=false})\">Hide all</button></div>"
                 + settings_disclosure("Gateway identity", identity_settings, opened=True)
                 + settings_disclosure("Monitoring and data retention", general_settings, opened=True)
-                + settings_disclosure("Watchdog startup safety", watchdog_settings)
+                + (settings_disclosure("Watchdog startup safety", watchdog_settings) if not is_pi(cfg) else "")
                 + "<div id=\"persistent-journal\">" + settings_disclosure("Persistent evidence logging", journal_settings) + "</div>"
-                + "<div id=\"storage\">" + settings_disclosure("Recording storage setup", recording_setup, opened=recording_setup_state != "healthy") + "</div>"
+                + ("<div id=\"storage\">" + settings_disclosure("Recording storage setup", recording_setup, opened=recording_setup_state != "healthy") + "</div>" if not is_pi(cfg) else '<p><a href="/pi-storage">Pi storage and recording history</a></p>')
                 + settings_disclosure("System and storage alert levels", storage_settings, opened=check_state("temperature") != "healthy")
                 + settings_disclosure("Network and remote access", network_settings)
                 + settings_disclosure("Mobile router monitoring", router_settings)
@@ -1845,7 +1672,7 @@ def start_web(cfg, handler_only=False):
                 "<p class=\"section-lead\">Configured internet and local reachability checks. Add or change targets in Settings.</p>"
                 "<div class=\"table-scroll\"><table><thead><tr><th>Target</th><th>Check</th><th>Status</th><th>Detail</th></tr></thead>"
                 f"<tbody>{''.join(ping_rows)}</tbody></table></div></div>"
-                + router_card
+                + (router_card if cfg.get("mobile_router", {}).get("enabled") else "")
                 + "<div class=\"card\"><div class=\"section-lead\"><div><h2>Remote Access</h2><p class=\"muted\">Configured support service state.</p></div><a class=\"ghost\" href=\"/settings\">Edit network settings</a></div>"
                 "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Status</th><th>Enabled</th></tr></thead>"
                 f"<tbody>{''.join(remote_rows)}</tbody></table></div>"
@@ -1923,7 +1750,7 @@ def start_web(cfg, handler_only=False):
             policy_detail = (
                 "<div class=\"table-scroll\"><table><thead><tr><th>Service</th><th>Critical</th><th>Restart allowed</th></tr></thead>"
                 f"<tbody>{''.join(service_rows)}</tbody></table></div>"
-                f"<p class=\"muted\">Recovery engine enabled: {escape(str(cfg_recovery.get('enabled', False)))}. Restart failed services: {escape(str(cfg_recovery.get('restart_failed_services', False)))}. Allow reboot: {escape(str(cfg_recovery.get('allow_reboot', False)))}.</p>"
+                f"<p class=\"muted\">Recovery engine enabled: {escape(str(cfg_recovery.get('enabled', False)))}. Restart failed services: {escape(str(cfg_recovery.get('restart_failed_services', False)))}. Automatic software reboot is unavailable.</p>"
                 "<div class=\"button-row\"><a class=\"ghost\" href=\"/settings\">Edit recovery policy</a></div>"
             )
             return (
@@ -2164,7 +1991,7 @@ def start_web(cfg, handler_only=False):
                 "<p class=\"muted\">Start with the support bundle after a lockup or unexpected reboot. It combines the evidence needed for investigation.</p>"
                 + tool_grid([
                     ("Download support bundle", "Best first step: logs, status, history, reboot, storage, network, and watchdog evidence.", "/evidence-download", "primary"),
-                    ("Download Neousys report", "Manufacturer-ready hardware, BIOS, software, driver, storage, and watchdog test evidence.", "/api/diagnostics/manufacturer-report.zip", ""),
+                    *([] if is_pi(cfg) else [("Download Neousys report", "Manufacturer-ready hardware, BIOS, software, driver, storage, and watchdog test evidence.", "/api/diagnostics/manufacturer-report.zip", "")]),
                     ("Current black-box window", "Live snapshots from the current boot; previous boots are shown below.", "/api/blackbox", ""),
                 ])
                 + "</div>"
@@ -2226,206 +2053,8 @@ def start_web(cfg, handler_only=False):
             )
             return launch_html + management
 
-        error_html = ""
-        if status.get("error"):
-            error_html = f"<p class=\"critical\">{escape(str(status.get('error')))}</p>"
-        issue_checks = [check for check in checks if check.get("state") in ("critical", "warning", "unknown")]
-        issue_names = {
-            "recording_storage": "Recording storage",
-            "root_disk": "Root disk",
-            "hardware_watchdog_present": "Hardware recovery",
-            "hardware_watchdog_feed_status": "Hardware recovery",
-            "network_module": "Network",
-        }
-        primary_issue = issue_checks[0] if issue_checks else {}
-        primary_issue_name = issue_names.get(
-            str(primary_issue.get("name") or ""),
-            str(primary_issue.get("name") or "Gateway").replace("_", " ").strip().title(),
-        )
-        additional_issue_count = max(0, len(issue_checks) - 1)
-        issue_summary = f"{primary_issue_name} needs attention"
-        if additional_issue_count:
-            issue_summary += f" +{additional_issue_count} more"
-        if critical:
-            issue_pill = f"<span class=\"pill critical\">{escape(issue_summary)}</span>"
-        elif has_any_critical:
-            issue_pill = f"<span class=\"pill warning\">{escape(issue_summary)}</span>"
-        elif has_warning:
-            issue_pill = f"<span class=\"pill warning\">{escape(issue_summary)}</span>"
-        else:
-            issue_pill = "<span class=\"pill\">No critical issues</span>"
-        service_checks = [check for check in checks if str(check.get("name", "")).endswith(".service")]
-        healthy_service_count = sum(1 for check in service_checks if check.get("state") == "healthy")
-        feed = status.get("hardware_watchdog_feed", {}) if isinstance(status.get("hardware_watchdog_feed", {}), dict) else {}
-        heartbeat = status.get("heartbeat", {}) if isinstance(status.get("heartbeat", {}), dict) else {}
-        reboot_evidence = status.get("reboot_evidence", {}) if isinstance(status.get("reboot_evidence", {}), dict) else {}
-        journal = persistent_status()
-        identity = version.get("identity", {}) if isinstance(version.get("identity", {}), dict) else {}
-        recording = status.get("recording_storage", {}) if isinstance(status.get("recording_storage", {}), dict) else {}
-
-        def worst_check_state(items):
-            ranks = {"healthy": 0, "degraded": 1, "warning": 2, "unknown": 2, "critical": 3}
-            worst = "healthy"
-            for item in items:
-                item_state = str(item.get("state", "unknown"))
-                if ranks.get(item_state, 2) > ranks.get(worst, 2):
-                    worst = item_state
-            return worst
-
-        def operational_row(area, detail, row_state, href, configured=True):
-            if not configured:
-                label, css_state = "Not configured", "unknown"
-            elif row_state == "critical":
-                label, css_state = "Failed", "critical"
-            elif row_state == "healthy":
-                label, css_state = "Correct", "healthy"
-            else:
-                label, css_state = "Warning", "warning"
-            return (
-                "<div class=\"operational-row\">"
-                f"<div class=\"operational-area\">{escape(area)}</div>"
-                f"<div class=\"operational-detail\">{escape(str(detail))}</div>"
-                f"<div class=\"operational-state {css_state}\">{label}</div>"
-                f"<a class=\"ghost operational-link\" href=\"{escape(href)}\">Details</a>"
-                "</div>"
-            )
-
-        system_checks = [check_map[name] for name in ("temperature", "cpu_load", "ram", "root_disk", "write_test") if name in check_map]
-        system_issue = next((check for check in system_checks if check.get("state") != "healthy"), None)
-        service_issue = next((check for check in service_checks if check.get("state") != "healthy"), None)
-        recording_check = check_map.get("recording_storage", {})
-        network_check = check_map.get("network_module", {})
-        router_check = check_map.get("mobile_router", {})
-        router_configured = bool(cfg.get("mobile_router", {}).get("enabled", False))
-        people_cfg = cfg.get("people_counting", {}) if isinstance(cfg.get("people_counting"), dict) else {}
-        people_summary = event_summary(cfg)
-        people_counts = people_summary.get("last_reported_counts", {}) if isinstance(people_summary.get("last_reported_counts"), dict) else {}
-        people_configured = bool(people_cfg.get("event_collection_enabled") and people_cfg.get("address"))
-        people_listening = str(people_summary.get("status") or "") in {"listening", "receiving", "ONVIF listening"}
-        people_forward_label, people_back_label = crossing_direction_labels(people_cfg)
-        people_detail = (
-            f"{people_forward_label} {people_counts.get('forward', '-')}; {people_back_label} {people_counts.get('back', '-')}; "
-            f"both directions {people_counts.get('bothway', '-')}"
-            if people_counts else "Waiting for validated camera counters."
-        )
-        network_message = str(network_check.get("message") or "Network checks have not been configured.")
-        network_configured = bool(network_check) and "not configured" not in network_message.lower()
-        watchdog_present = bool(check_value("hardware_watchdog_present", False))
-        watchdog_configured = bool(feed.get("enabled"))
-        watchdog_state = "healthy" if watchdog_present and feed.get("feeding") and feed.get("proven_this_boot") else "warning"
-        if watchdog_present and feed.get("feeding") and feed.get("proven_this_boot"):
-            watchdog_detail = f"Protection proven this boot; feeding {feed.get('device') or '/dev/wdt_dio'}"
-        elif watchdog_present and feed.get("feeding"):
-            watchdog_detail = "Hardware feed started; waiting for current-boot proof"
-        elif watchdog_present:
-            watchdog_detail = "Device detected but the hardware feed is stale or inactive"
-        else:
-            watchdog_detail = "No verified hardware watchdog device"
-        operational_rows = "".join(
-            (
-                operational_row(
-                    "System",
-                    (system_issue or {}).get("message") or "Operating system, CPU, memory and root storage checks are normal.",
-                    worst_check_state(system_checks),
-                    "/evidence#system",
-                    bool(system_checks),
-                ),
-                operational_row(
-                    "Services",
-                    (service_issue or {}).get("message") or f"{healthy_service_count}/{len(service_checks)} monitored services running",
-                    worst_check_state(service_checks),
-                    "/#services",
-                    bool(service_checks),
-                ),
-                operational_row(
-                    "Crossing activity",
-                    people_detail,
-                    "healthy" if people_listening else "warning",
-                    "/crossing-activity",
-                    people_configured,
-                ),
-                operational_row(
-                    "Recording storage",
-                    recording.get("message") or recording_check.get("message") or "Recording storage has not been configured.",
-                    str(recording.get("status") or recording_check.get("state") or "unknown"),
-                    "/setup#storage",
-                    bool(recording.get("mode") or recording.get("mountpoint") or recording_check),
-                ),
-                operational_row(
-                    "Network",
-                    network_message,
-                    str(network_check.get("state") or "unknown"),
-                    "/evidence#network",
-                    network_configured,
-                ),
-                (
-                    operational_row(
-                        "Mobile router",
-                        str(router_check.get("message") or "Waiting for local mobile router data."),
-                        str(router_check.get("state") or "unknown"),
-                        "/evidence?router_period=24#network",
-                        True,
-                    )
-                    if router_configured else ""
-                ),
-                operational_row(
-                    "Hardware watchdog",
-                    watchdog_detail,
-                    watchdog_state,
-                    "/watchdog",
-                    watchdog_configured,
-                ),
-            )
-        )
-        stability_detail = (
-            "<div class=\"table-scroll\"><table class=\"compact-table\"><tbody>"
-            f"<tr><th>Last health sample</th><td>{escape(local_time(status.get('time')))}</td></tr>"
-            f"<tr><th>Last watchdog feed</th><td>{escape(str(feed.get('last_feed_utc') or '-'))}</td></tr>"
-            f"<tr><th>Feed status</th><td>{escape(str(feed.get('feed_process_status') or 'unknown'))}; age {escape(str(feed.get('feed_age_seconds') if feed.get('feed_age_seconds') is not None else '-'))}s</td></tr>"
-            f"<tr><th>Last heartbeat</th><td>{escape(local_time(heartbeat.get('time')))}</td></tr>"
-            f"<tr><th>Heartbeat age</th><td>{escape(str(heartbeat_age_seconds(heartbeat) if heartbeat else '-'))}s</td></tr>"
-            f"<tr><th>Previous reboot</th><td>{escape(str(reboot_evidence.get('reset_mechanism') or 'No previous reboot evidence'))}; confidence {escape(str(reboot_evidence.get('confidence') or '-'))}</td></tr>"
-            f"<tr><th>Reboot reason</th><td>{escape(str((reboot_evidence.get('previous_reboot_reason') or {}).get('message') or 'Not established'))}</td></tr>"
-            f"<tr><th>Persistent journal</th><td class=\"{'healthy' if journal.get('healthy') else 'warning'}\">{escape(str(journal.get('summary') or 'Disabled or unavailable'))}</td></tr>"
-            "</tbody></table></div>"
-            "<div class=\"button-row\"><a class=\"ghost\" href=\"/evidence\">Open incident evidence</a></div>"
-        )
-        overview_html = (
-            "<div class=\"card summary-card\">"
-            "<div class=\"summary-panel summary-status\">"
-            "<div class=\"summary-panel-title\">Overall state</div>"
-            f"<div class=\"status-word {state}\">{word}</div>"
-            f"{issue_pill}"
-            f"{error_html}"
-            "</div>"
-            "<div class=\"summary-panel\">"
-            "<div class=\"summary-panel-title\">Gateway identity</div>"
-            f"<div class=\"summary-primary\">{escape(str(identity.get('display_name') or identity.get('site_name') or platform.node() or 'Site not configured'))}</div>"
-            "<div class=\"summary-pairs\">"
-            f"<div><div class=\"label\">Asset ID</div><div class=\"value\">{escape(str(identity.get('asset_id') or '-'))}</div></div>"
-            f"<div><div class=\"label\">Hostname</div><div class=\"value\">{escape(str(identity.get('hostname') or platform.node() or '-'))}</div></div>"
-            "</div>"
-            "</div>"
-            "<div class=\"summary-panel\">"
-            "<div class=\"summary-panel-title\">Running software</div>"
-            "<div class=\"label\">Build</div>"
-            f"<div class=\"build-badge\">{escape(version.get('build_number') or 'local-dev')}</div>"
-            "<div class=\"label\">Last update</div>"
-            f"<div class=\"value\">{escape(local_time(status.get('time')))}</div>"
-            "</div>"
-            "</div>"
-            "<div class=\"card\"><h2>Operational Status</h2>"
-            "<p class=\"muted\">This list shows what is ready and where attention is needed. Open Details for the relevant setup or evidence.</p>"
-            f"<div class=\"operational-list\">{operational_rows}</div></div>"
-            + metric_tiles()
-            + operational_alerts_card()
-            + recent_restarts_card()
-            + disclosure("Stability evidence", stability_detail)
-            + '<div class="card"><h2>Videosoft services</h2><p class="muted">Service health and restart controls are on their own page.</p><a class="ghost" href="/videosoft-services">Open Videosoft services</a></div>'
-        )
-
         if page == "Status":
-            return page_help_html(page) + "<div class=\"overview-page\">" + overview_html + "</div>"
+            return '<p><a href="/">Open the current Status page</a></p>'
         if page == "Crossing Activity":
             return page_help_html(page) + people_counting_page()
         if page == "Web Links":
@@ -2451,7 +2080,7 @@ def start_web(cfg, handler_only=False):
                 page_help_html(page)
                 + settings_card()
                 + "<section id=\"storage\" class=\"moved-section\">"
-                + disclosure("Recording storage setup", storage_page(), opened=bool(getattr(request_context, "query", {}).get("open") == ["storage"]))
+                + (disclosure("Recording storage setup", storage_page(), opened=bool(getattr(request_context, "query", {}).get("open") == ["storage"])) if not is_pi(cfg) else '<p><a href="/pi-storage">Pi storage</a></p>')
                 + "</section>"
                 + "<section id=\"software-update\" class=\"moved-section\">"
                 + disclosure("Software update", updates_card(), opened=True)
@@ -2460,7 +2089,7 @@ def start_web(cfg, handler_only=False):
                 + disclosure("Recovery and repair tools", recovery_page())
                 + "</section>"
             )
-        return page_help_html("Status") + overview_html
+        return '<p><a href="/">Open the current Status page</a></p>'
 
     def html_page(route_path="/"):
         page = page_name_for_path(route_path)
@@ -5872,7 +5501,7 @@ def start_web(cfg, handler_only=False):
             cfg,
             identity=gateway_identity,
             app_version=version_info(),
-        )
+        ) if not is_pi(cfg) else {}
         services = cfg.get("services", []) if isinstance(cfg.get("services", []), list) else []
         service_names = [str(item.get("name", "")).strip() for item in services if isinstance(item, dict) and item.get("name")]
         watched_services = ["va-watchdog", "va-watchdog-feed", "va-watchdog-web"] + service_names
@@ -5950,11 +5579,12 @@ def start_web(cfg, handler_only=False):
             archive.writestr("hardware-info.json", json.dumps(hardware_info(), indent=2))
             archive.writestr("network-info.json", json.dumps(network_info(), indent=2))
             archive.writestr("services-info.json", json.dumps(service_info(), indent=2))
-            archive.writestr("NEOUSYS-SYSTEM-REPORT.txt", render_manufacturer_report(manufacturer))
-            archive.writestr(
-                "NEOUSYS-SYSTEM-REPORT.json",
-                json.dumps({key: value for key, value in manufacturer.items() if key != "evidence"}, indent=2),
-            )
+            if not is_pi(cfg):
+                archive.writestr("NEOUSYS-SYSTEM-REPORT.txt", render_manufacturer_report(manufacturer))
+                archive.writestr(
+                    "NEOUSYS-SYSTEM-REPORT.json",
+                    json.dumps({key: value for key, value in manufacturer.items() if key != "evidence"}, indent=2),
+                )
             for name, content in manufacturer.get("evidence", {}).items():
                 archive.writestr(f"manufacturer-evidence/{name}", str(content))
             blackbox_state = blackbox_summary(cfg)
@@ -6115,6 +5745,16 @@ def start_web(cfg, handler_only=False):
                 return
             request_context.theme = self._request_theme()
             route_path = self.path.split("?", 1)[0]
+            if route_path in {"/advanced", "/legacy", "/advanced/links", "/advanced/crossing-activity"}:
+                self.send_response(302)
+                self.send_header("Location", LEGACY_PAGE_REDIRECTS[route_path])
+                self.end_headers()
+                return
+            if is_pi(cfg) and route_path == "/watchdog":
+                self.send_response(302)
+                self.send_header("Location", "/hardware-protection")
+                self.end_headers()
+                return
             if route_path == "/operator-login":
                 self.send_response(303)
                 self.send_header("Location", "/")
@@ -6151,7 +5791,7 @@ def start_web(cfg, handler_only=False):
                 self.end_headers()
                 return
             if route_path == "/":
-                body = lite_page(cfg if lightweight else None)
+                body = lite_page(cfg)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -6160,7 +5800,7 @@ def start_web(cfg, handler_only=False):
                 self.wfile.write(body)
                 return
             if route_path == "/maintenance":
-                body = (Path(__file__).with_name("maintenance.html").read_bytes())
+                body = maintenance_page(cfg)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -6184,7 +5824,8 @@ def start_web(cfg, handler_only=False):
                 self._send_bytes(Path(__file__).with_name("system_status.html").read_bytes(), content_type="text/html; charset=utf-8")
                 return
             if route_path == "/hardware-protection":
-                self._send_bytes(Path(__file__).with_name("hardware_protection.html").read_bytes(), content_type="text/html; charset=utf-8")
+                filename = "pi_hardware_protection.html" if is_pi(cfg) else "hardware_protection.html"
+                self._send_bytes(Path(__file__).with_name(filename).read_bytes(), content_type="text/html; charset=utf-8")
                 return
             if route_path in {"/analytics", "/analytics/anpr-setup", "/analytics/crossing-setup"}:
                 filename = {"/analytics": "analytics.html", "/analytics/anpr-setup": "analytics_anpr.html",
@@ -6218,35 +5859,8 @@ def start_web(cfg, handler_only=False):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            if route_path == "/advanced/links":
-                body = html_page("/links").encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self._send_no_cache_headers()
-                self.end_headers()
-                self.wfile.write(body)
-                return
             if route_path == "/crossing-activity":
                 body = Path(__file__).with_name("crossing.html").read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self._send_no_cache_headers()
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            if route_path == "/advanced/crossing-activity":
-                body = html_page("/crossing-activity").encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self._send_no_cache_headers()
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            if route_path == "/advanced":
-                body = html_page(route_path).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))

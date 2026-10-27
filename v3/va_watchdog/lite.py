@@ -152,7 +152,7 @@ def snapshot(cfg, now=None):
     }
     if pi_profile:
         destinations["System"] = "/#diagnostics"
-        destinations["Hardware protection"] = "/#diagnostics"
+        destinations["Hardware protection"] = "/hardware-protection"
     for item in cards:
         item["href"] = destinations[item["title"]]
     alerts = [{"name": c.get("name"), "state": c.get("state"), "message": c.get("message")} for c in checks.values() if c.get("state") not in ("healthy", "disabled")]
@@ -208,6 +208,8 @@ def page(cfg=None):
         html = re.sub(
             r'<nav aria-label="Page links">.*?</nav>',
             '<nav aria-label="Page links"><a href="/">Status</a>'
+            '<a href="/analytics">Analytics</a><a href="/links">Web links</a>'
+            '<a href="/maintenance">Maintenance</a>'
             '<a href="#diagnostics">Diagnostics</a>'
             '<a href="/update-confirm">Update watchdog</a>'
             '<a class="button" href="/api/evidence.zip">Download evidence</a>'
@@ -217,11 +219,9 @@ def page(cfg=None):
             flags=re.S,
         )
         html = html.replace('href="/evidence-download"', 'href="/api/evidence.zip"')
-        html = html.replace('href="/maintenance"', 'href="#diagnostics"')
         html = html.replace('Gateway overview', 'Raspberry Pi overview')
         html = html.replace('Connecting to gateway…', 'Connecting to Raspberry Pi…')
         html = html.replace('Gateway monitoring · read-only dashboard.', 'Raspberry Pi monitoring · read-only dashboard.')
         html = html.replace('A running service alone does not prove video is being recorded.', 'A running service alone does not prove remote desktop access works.')
-        html = html.replace('<section class="status-shortcuts"', '<section hidden class="status-shortcuts"', 1)
     html = html.replace('<nav aria-label="Page links">', '<nav aria-label="Page links"><a href="/operator-login">Operator sign-in</a>', 1)
     return html.encode("utf-8")

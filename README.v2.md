@@ -1,3 +1,8 @@
+# Historical V2 Documentation
+
+This file is archived. Do not use it for a current installation. See
+[the V3 entry point](README.md) and [legacy migration notes](docs/legacy-runtime.md).
+
 # VA-Connect Monitoring v2 Core
 
 This is the minimal v2 scaffold.

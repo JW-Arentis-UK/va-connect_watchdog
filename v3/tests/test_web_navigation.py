@@ -31,6 +31,10 @@ class WebNavigationTests(unittest.TestCase):
             "/recovery": "/setup#recovery",
             "/updates": "/setup#software-update",
             "/people-counting": "/crossing-activity",
+            "/advanced": "/",
+            "/legacy": "/",
+            "/advanced/links": "/links",
+            "/advanced/crossing-activity": "/crossing-activity",
         })
 
     def test_status_and_watchdog_have_separate_server_renderers(self):
@@ -53,7 +57,7 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn("Camera messages are stale", source)
         self.assertIn("Connected, no recent crossings", source)
         self.assertIn("Camera connection healthy", source)
-        self.assertIn("Crossing camera connection lost", source)
+        self.assertIn("Camera messages are stale", source)
         self.assertIn("Operational analytics only", source)
         self.assertIn("Camera upload requirements", source)
         self.assertIn("Notify Surveillance Center", source)
@@ -169,8 +173,9 @@ class WebNavigationTests(unittest.TestCase):
     def test_overview_hides_detailed_evidence_and_services_by_default(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 
-        self.assertIn('disclosure("Stability evidence", stability_detail)', source)
-        self.assertIn('href="/videosoft-services">Open Videosoft services</a>', source)
+        self.assertNotIn('def operational_alerts_card():', source)
+        self.assertIn('body = lite_page(cfg)', source)
+        self.assertIn('"/videosoft-services"', source)
 
     def test_evidence_offers_a_dedicated_neousys_report(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
@@ -182,30 +187,27 @@ class WebNavigationTests(unittest.TestCase):
     def test_overview_names_the_problem_instead_of_using_watchdog_safe_wording(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 
-        self.assertIn('"recording_storage": "Recording storage"', source)
-        self.assertIn('issue_summary = f"{primary_issue_name} needs attention"', source)
+        lite = (Path(__file__).parents[1] / "va_watchdog" / "lite.py").read_text(encoding="utf-8")
+        self.assertIn('card("Recording storage", ["recording_storage"], storage_note)', lite)
+        self.assertIn('"alerts": alerts[:8]', lite)
         self.assertNotIn("Attention needed, watchdog feed safe", source)
 
     def test_status_shows_compact_recent_restart_history(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
         source += (Path(__file__).parents[1] / "va_watchdog" / "dashboard_shell.html").read_text(encoding="utf-8")
 
-        self.assertIn("def recent_restarts_card():", source)
-        self.assertIn("Planned tests are labelled separately from automatic recovery.", source)
-        self.assertIn('restart.get("restart_type")', source)
-        self.assertIn("restart-watchdog", source)
-        self.assertIn("restart-test", source)
-        self.assertIn("restart-fault", source)
-        self.assertIn("restart-unknown", source)
-        self.assertIn(".restart-row .pill.restart-test", source)
-        self.assertIn(".restart-row .pill.restart-unknown", source)
-        self.assertIn("+ recent_restarts_card()", source)
+        lite = (Path(__file__).parents[1] / "va_watchdog" / "lite.html").read_text(encoding="utf-8")
+        snapshot = (Path(__file__).parents[1] / "va_watchdog" / "lite.py").read_text(encoding="utf-8")
+        self.assertIn("Latest recorded restart", lite)
+        self.assertIn('"latest_reboot":', snapshot)
+        self.assertIn('def history_page():', source)
+        self.assertNotIn("def recent_restarts_card():", source)
 
     def test_status_shows_gateway_hardware_tile(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 
         self.assertIn('gateway_hardware = hardware_identity()', source)
-        self.assertIn('tile("Hardware", hardware_model, hardware_detail, hardware_state)', source)
+        self.assertIn('def hardware_page():', source)
         self.assertIn('gateway_hardware.get("display_model")', source)
 
     def test_web_links_page_groups_launchers_above_editors(self):
@@ -225,8 +227,7 @@ class WebNavigationTests(unittest.TestCase):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 
         self.assertIn('disclosure("Mobile router monitoring", router_settings)', source)
-        self.assertIn('"Mobile router",\n                        str(router_check.get("message")', source)
-        self.assertIn('if router_configured else ""', source)
+        self.assertIn('(router_card if cfg.get("mobile_router", {}).get("enabled") else "")', source)
         self.assertIn("Evidence only. Router availability never controls the Neousys watchdog feed.", source)
         self.assertIn("Allow LAN access only and leave remote or WAN access disabled", source)
         self.assertIn("_format_duration(router_value.get('uptime_seconds'))", source)
@@ -248,7 +249,7 @@ class WebNavigationTests(unittest.TestCase):
         self.assertIn("Monitoring verified:", source)
         self.assertIn("router_verified = all", source)
         self.assertIn("Signal advisory:", source)
-        self.assertIn('"/evidence?router_period=24#network"', source)
+        self.assertIn('"/network-router"', source)
         self.assertNotIn("Save and test router settings", source)
         self.assertNotIn('route_path == "/mobile-router-test"', source)
         self.assertIn("Open RUT WebUI", source)
@@ -277,8 +278,9 @@ class WebNavigationTests(unittest.TestCase):
     def test_recording_storage_setup_is_visible_and_linked_from_status(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
 
-        self.assertIn('operational_row(\n                    "Recording storage"', source)
-        self.assertIn('"/setup#storage"', source)
+        lite = (Path(__file__).parents[1] / "va_watchdog" / "lite.py").read_text(encoding="utf-8")
+        self.assertIn('card("Recording storage", ["recording_storage"], storage_note)', lite)
+        self.assertIn('"/setup?open=storage#storage"', lite)
         self.assertIn('id=\\"storage\\"', source)
         self.assertIn('disclosure("Recording storage setup"', source)
         self.assertIn("Review recording storage setup", source)

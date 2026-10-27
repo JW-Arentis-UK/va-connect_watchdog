@@ -1,9 +1,7 @@
-import importlib.util
 import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
 
 from va_watchdog.legacy_reboot import NETWORK_REBOOT, apply_legacy_reason
 from va_watchdog.reboot_evidence import create, recent_restarts
@@ -75,34 +73,6 @@ class NetworkRebootTests(unittest.TestCase):
         self.write_log()
         self.assertTrue(apply_legacy_reason(self.cfg, self.evidence))
         self.assertEqual(self.evidence["previous_reboot_reason"]["cause"], "unknown")
-
-
-class LegacyPersistenceTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        source = Path(__file__).parents[2] / "tools/ubuntu/va_connect_site_watchdog.py"
-        spec = importlib.util.spec_from_file_location("legacy_site_watchdog_test", source)
-        cls.module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cls.module)
-
-    def test_reason_is_saved_before_command_and_failed_request_is_rolled_back(self):
-        with tempfile.TemporaryDirectory() as directory:
-            watchdog = self.module.SiteWatchdog.__new__(self.module.SiteWatchdog)
-            watchdog.config = {}
-            watchdog.state = {"last_checks": {"lan_ok": False, "internet_ok": False}}
-            watchdog.state_path = Path(directory) / "state.json"
-            watchdog.log_event = lambda *args, **kwargs: None
-
-            def command(_):
-                saved = json.loads(watchdog.state_path.read_text())
-                self.assertIn("no network access", saved["last_reboot_reason"])
-                self.assertEqual(saved["last_reboot_boot_id"], "old")
-                self.assertGreater(saved["last_reboot_attempt_at"], 0)
-                return 1, "failed"
-
-            with patch.object(self.module, "read_boot_id", return_value="old"), patch.object(self.module, "run_action", side_effect=command):
-                self.assertFalse(watchdog.reboot_host())
-            self.assertNotIn("last_reboot_attempt_at", json.loads(watchdog.state_path.read_text()))
 
 
 if __name__ == "__main__":

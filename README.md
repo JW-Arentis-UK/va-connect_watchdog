@@ -1,138 +1,55 @@
 # VA-Connect Watchdog
 
-Lightweight Ubuntu watchdog tooling for a PC running VA-Connect.
+V3 is the current watchdog for Videosoft gateways and Raspberry Pi units. It
+monitors system, services, connectivity and recording storage, keeps pre-crash
+evidence, and provides independent hardware protection where configured.
 
-## V3 Start
+## Install Or Update
 
-The v3 line now has its own entrypoint and notes:
+For a new installation, download the current installer:
 
-- [`v3/README.md`](v3/README.md)
-- [`v3/docs/start.md`](v3/docs/start.md)
-- [`v3/run_v3.bat`](v3/run_v3.bat)
-- [`bootstrap_v3_gateway.sh`](bootstrap_v3_gateway.sh)
-- Pinned gateway download: `https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/1758091/bootstrap_v3_gateway.sh`
-
-For a complete current V3 install on a clean Ubuntu 22.04 gateway:
-
-```bash
-cd ~/Desktop
+```sh
 wget -O install_v3_gateway.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/codex/gui-refresh/install_v3_gateway.sh
-bash ./install_v3_gateway.sh
+bash install_v3_gateway.sh
 ```
 
-## Main web view
+For an existing V3 installation, use the authenticated update button or run:
 
-The main gateway dashboard now defaults to the lightweight single-page view.
-
-- `http://<gateway-ip>/` opens the lite page
-- `http://<gateway-ip>/legacy` opens the older full dashboard
-- `http://<gateway-ip>/lite` also opens the lite page
-
-## What is included
-
-- `tools/ubuntu/va_connect_watchdog.sh`
-- `tools/ubuntu/va_connect_site_watchdog.py`
-- `tools/ubuntu/va_connect_watchdog_web.py`
-- `tools/ubuntu/collect_va_connect_site_info.sh`
-- `tools/ubuntu/restart_watchdog_services.sh`
-- `tools/ubuntu/update_watchdog.sh`
-- `tools/ubuntu/git_update_watchdog.sh`
-- `tools/ubuntu/bootstrap_watchdog_from_github.sh`
-- `tools/ubuntu/bootstrap_gateway_watchdog.sh`
-- `tools/ubuntu/install_watchdog.sh`
-- `tools/ubuntu/va-connect-watchdog.service`
-- `tools/ubuntu/va-connect-watchdog.timer`
-- `tools/ubuntu/va-connect-site-watchdog.service`
-- `tools/ubuntu/va-connect-watchdog-web.service`
-- `tools/ubuntu/va-connect.env.example`
-- `tools/ubuntu/site-watchdog.json.example`
-- `docs/ubuntu_va_connect_watchdog.md`
-
-## Purpose
-
-This project checks whether the VA-Connect process is running and starts it again if it is not detected.
-
-It is designed for Ubuntu systems where VA-Connect is launched by a script, binary, AppImage, or other vendor-provided command.
-
-For harder remote-site faults, it also includes a continuous site watchdog that:
-
-- checks WAN connectivity against multiple hosts
-- checks TCP reachability to local targets such as a RUT or RTSP device
-- can check critical `systemd` services as well as process presence
-- checks whether the VA-Connect process is still running
-- captures evidence snapshots when a fault starts or changes
-- tries app restart, optional network restart, and only then reboots with expanding backoff
-- exposes a small web GUI on the VA-Connect encoder so you can review health, edit config, and enable or disable actions remotely
-
-## Quick start
-
-1. Review `docs/ubuntu_va_connect_watchdog.md`.
-2. Copy the project onto the Ubuntu machine, for example `~/Desktop/va-connect-watchdog`.
-3. Run `sudo ./tools/ubuntu/install_watchdog.sh`.
-4. Update the environment file with the real VA-Connect launch command.
-5. Update the site watchdog JSON with the real IPs and commands.
-6. Verify the `systemd` timer, the continuous site watchdog service, and the web UI service.
-
-## POC-451VTC baseline
-
-The current encoder details recovered from site are:
-
-- host: `POC-451VTC`
-- user: `vsuser`
-- source checkout: `/home/vsuser/Desktop/va-connect-watchdog`
-- installed runtime: `/opt/va-connect-watchdog`
-- encoder LAN IP: `192.168.1.100`
-- default gateway / RUT: `192.168.1.1`
-- app launcher: `/home/vsuser/vsgwgui/vsgwgui`
-- remote access service present: `teamviewerd`
-
-The example config files in `tools/ubuntu` are now prefilled to match that baseline, including the `vsgwgui` launcher command from the Desktop shortcut.
-
-## Fastest new-gateway install
-
-If the gateway can reach GitHub, the quickest first-time install is:
-
-```bash
-cd ~/Desktop
-wget -O bootstrap_watchdog_from_github.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/master/tools/ubuntu/bootstrap_watchdog_from_github.sh
-bash ./bootstrap_watchdog_from_github.sh
+```sh
+sudo bash /opt/va-connect-watchdog-v3/v3/scripts/update.sh origin codex/gui-refresh
 ```
 
-If you want a fuller first-install audit on a brand new gateway, use:
+Open `http://<unit-ip>:9110/`. Operator actions require the existing configured
+local account. Use VPN or HTTPS forwarding for remote sign-in; plain HTTP does
+not encrypt passwords.
 
-```bash
-cd ~/Desktop
-wget -O bootstrap_gateway_watchdog.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/master/tools/ubuntu/bootstrap_gateway_watchdog.sh
-bash ./bootstrap_gateway_watchdog.sh
-```
+The complete installer/updater is required: copying a Python file alone does not
+install service accounts, permissions, helpers or systemd units. Existing
+configuration and evidence are preserved. Hardware watchdog activation is an
+explicit attended commissioning step, not an automatic installation action.
 
-That script additionally:
+## Included Features
 
-- checks mounted drives and free space before install
-- installs the watchdog runtime packages and diagnostic tools
-- checks the expected VA-Connect and TeamViewer baselines
-- clones the repo and runs the installer
+- Health, recording/storage monitoring, bounded service recovery and event history.
+- Independent hardware feeding on supported Neousys gateways; native systemd
+  watchdog observation on Pi.
+- Persistent Black Box buffer, boot attribution, syslog and support bundles.
+- ANPR collection, plate searches/database and exports.
+- People/crossing analytics, camera delivery/configuration diagnostics and PDF reports.
+- Network speed tests, custom web links and TeamViewer password management.
+- Updates, evidence, protected commissioning and recovery tools.
 
-That defaults to the public GitHub repo and installs the watchdog into:
+Network and general health failures cannot request a V3 software reboot.
+Explicit manual reboot and deliberate hardware tests remain guarded actions.
+Hardware reset protection and service recovery are different mechanisms.
 
-```text
-~/Desktop/va-connect-watchdog
-```
+## Documentation
 
-If you ever want to use SSH instead of HTTPS, the same script also accepts:
+- [Installation and configuration](v3/README.md)
+- [Raspberry Pi profile](v3/docs/raspberry-pi.md)
+- [Current reassessment and acceptance status](v3/docs/watchdog-review-2026-10-27.md)
+- [Legacy runtime archive and migration](docs/legacy-runtime.md)
 
-```bash
-bash ./bootstrap_watchdog_from_github.sh git@github.com:JW-Arentis-UK/va-connect_watchdog.git
-```
-
-## Notes
-
-- The timer example runs once per minute.
-- The watchdog includes a restart cooldown to avoid rapid restart loops.
-- The site watchdog writes JSONL events and diagnostic snapshots for remote fault finding.
-- The web UI can now plot the last 24 hours of basic PC metrics.
-- Snapshots now include extra PC-health and recording-storage evidence for post-fault review.
-- On the next boot, the watchdog now captures a previous-boot review if the machine appears to have restarted unexpectedly.
-- The Ubuntu tooling now supports GitHub-based bootstrap and update scripts for repeatable deployment on the gateway PC.
-- The installer also creates easy operator commands: `watchdog-update` and `watchdog-restart`.
-- If VA-Connect already has its own `systemd` service, native `systemd` restart rules may be a better fit than an external watchdog.
+The old V1/V2 runtime, installers and duplicate dashboards are retired from the
+current branch. Their source remains recoverable in Git. Historical incident
+evidence is not removed by this cleanup.

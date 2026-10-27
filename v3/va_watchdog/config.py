@@ -178,7 +178,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "restart_failed_services": False,
         "restart_noncritical_services": False,
         "max_restart_attempts": 3,
-        "critical_grace_seconds": 60,
         "allow_reboot": False
     },
     "update": {
@@ -308,6 +307,13 @@ def load_config() -> Dict[str, Any]:
     cfg = _enforce_neousys_watchdog(cfg)
     cfg = dict(cfg)
     cfg["recovery"] = {**cfg.get("recovery", {}), "allow_reboot": False}
+    cfg["recovery"].pop("critical_grace_seconds", None)
+    policy = cfg["recovery"].get("consolidated_policy")
+    if isinstance(policy, dict):
+        cfg["recovery"]["consolidated_policy"] = {
+            key: value for key, value in policy.items()
+            if key != "restart_network_before_reboot"
+        }
     return _enforce_recording_free_space_reserve(cfg)
 
 def active_config_path() -> Path:

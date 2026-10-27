@@ -1,198 +1,137 @@
-# VA-Connect Watchdog
+# VA-Connect Watchdog V3
 
-Health Engine for Ubuntu gateways and Raspberry Pi OS. The Pi profile and setup
-notes are in [docs/raspberry-pi.md](docs/raspberry-pi.md).
+Health monitoring and crash evidence for Ubuntu Videosoft gateways and Raspberry
+Pi OS. Build `20261027.5` retires historical V1/V2 deployment sources and duplicate
+status rendering. Existing operational features remain.
 
-Build `20261027.1` removes automatic gateway reboots for network and health faults,
-isolates collectors from supervisor liveness, and requires operator authentication
-for web actions. Installation updates are required for the unprivileged web account
-and action helper. See [the implementation and reassessment](docs/watchdog-review-2026-10-27.md)
-for compatibility details and the attended gateway acceptance tests.
+## Operator Pages
 
-Current scope:
-- System health checks
-- Service checks
-- Storage checks
-- Temperature/RAM/CPU
-- Event log
-- JSON status output
-- Local HTTP status page/API
-- Optional hardware watchdog feeding
+- Status: current services, connectivity, storage, hardware protection and latest
+  restart evidence. Saved results from another boot cannot appear healthy.
+- Maintenance: identity, storage, protection, analytics, remote access, updates
+  and support. Device-specific tools appear where applicable.
+- Analytics: ANPR collection/search/export, people/crossing counts, charts and PDF
+  reports. Hikvision diagnostics, push setup and event capture remain.
+- Network and remote access: optional router monitoring, speed tests, saved web
+  links and TeamViewer monitoring/password controls remain.
+- Evidence: before-crash recorder, boot incidents, journals, system logs, compact
+  history and support downloads. Neousys reports are not offered on Pi.
 
-Working plan:
-- [`docs/plan.md`](docs/plan.md)
-- [`docs/stage1_reboot_checklist.md`](docs/stage1_reboot_checklist.md)
-- [`docs/stage3_recovery.md`](docs/stage3_recovery.md)
-- [`docs/stage4_dashboard.md`](docs/stage4_dashboard.md)
-- [`scripts/stage1_reboot_check.sh`](scripts/stage1_reboot_check.sh)
+Status has one renderer. Historical `/advanced`, `/legacy` and `/overview` links
+redirect to it. Detailed setup and support still use the shared page renderer.
 
-The web page includes a watchdog update action that pulls the configured/current branch in a separate transient systemd unit. This allows the updater to restart `va-watchdog` without being terminated with the service, then records the final result in the Updates page and update log.
+## Install And Update
 
-Default monitored services:
-- esg.service
-- bridge.service
-- sysops.service
-- esg-config.service
-
-## Full installation on a gateway
-
-For a clean Ubuntu 22.04 Videosoft gateway, download and run the full installer:
+For a clean Ubuntu Videosoft gateway:
 
 ```bash
-cd ~/Desktop
 wget -O install_v3_gateway.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/codex/gui-refresh/install_v3_gateway.sh
 bash ./install_v3_gateway.sh
 ```
 
-The installer:
+The installer asks for site identity, offers persistent journald, installs
+dependencies/services and preserves existing configuration. Confirm the gateway
+identity before changing a remote unit, particularly a cloned image.
+The dashboard is at `http://<gateway-ip>:9110/`.
 
-- prompts for the site name and optional asset ID
-- explicitly offers persistent journald for post-crash evidence
-- installs Python, Git, SMART, sensor, network, and performance tools
-- clones or safely updates `/opt/va-connect-watchdog-v3`
-- backs up an existing configuration and preserves the previous Git commit
-- installs and enables the core, hardware feeder, and web systemd services
-- verifies the local health and identity APIs
-
-Hardware watchdog feeding is deliberately not enabled on a clean install. This
-test branch installs the bundled Neousys driver, but activation and the first trip
-test must be performed from the Watchdog page during an attended maintenance window.
-
-For an unattended install:
+Update an existing V3 installation through the dashboard or:
 
 ```bash
-bash ./install_v3_gateway.sh \
-  --site-name "Ellingers" \
-  --asset-id "GW-017" \
-  --persistent-journal \
-  --non-interactive
+sudo bash /opt/va-connect-watchdog-v3/v3/scripts/update.sh origin codex/gui-refresh
 ```
 
-Manual install on target:
+Use the complete updater rather than copying Python files: service accounts,
+permissions and the restricted helper must match the code. Updates restart
+watchdog services, not the gateway. The updater runs outside those services and
+records its result.
+
+V1/V2 deployments need an attended migration. Do not run an old uninstall helper
+against historical evidence. See [legacy migration](../docs/legacy-runtime.md).
+
+## Recording Storage
+
+Gateway setup offers two choices:
+
+1. **Prepare a new recording drive**: guarded destructive preparation, explicit
+   disk selection and confirmation, with system disks excluded.
+2. **Monitor an existing recording location**: monitor the path already selected
+   in Videosoft, including a folder on the OS drive. No formatting, relabelling,
+   remounting, ownership or filesystem-table changes.
+
+For new-drive preparation, confirm the resulting path in Videosoft. Normal looping
+recording and its free-space reserve are not an instruction to erase files.
+Linux owns mounting; monitoring is not required to keep a mount available.
+
+Pi has its own storage/history page rather than Neousys disk commissioning.
+See [Pi installation and storage](docs/raspberry-pi.md).
+
+## Protection And Recovery
+
+Separate core, web and hardware-feeder services isolate responsibilities. The web
+process runs unprivileged and uses an authenticated, allowlisted helper for
+privileged actions. Web liveness checks can restart the web service without
+restarting the gateway. There is no fallback HTTP server in the core loop.
+
+Collectors are isolated from supervisor liveness. A stalled collector has a
+bounded worker and becomes unknown rather than freezing all checks. Software
+recovery uses bounded service restarts with cooldowns and budgets. Network,
+storage, service, CPU and RAM warnings cannot request an automatic V3 reboot.
+
+On supported Neousys POC-451VTC/551VTC gateways the independent WDT_DIO feeder
+handles hardware protection. Installation does not silently arm a clean system.
+Activation and deliberate reset tests require an attended maintenance window.
+Startup/post-test grace preserves access; current-boot feed evidence is required
+before protection is reported proven. Ordinary health warnings do not stop
+feeding. Stale supervisor heartbeat and deliberate trip tests are separate from
+software recovery.
+
+Pi uses its native watchdog through systemd PID 1. Its protection page reports
+that configuration, without Neousys driver/trip controls. Enabling it is an
+explicit attended step using `v3/scripts/enable_pi_native_watchdog.sh`. Do not
+open the device with a second feeder. System-hang protection is not proof an
+application freeze will cause a reset.
+
+## Security
+
+Operator sign-in protects actions. Remote downloads of sensitive support evidence
+also need authorization. Loopback diagnostics do not bypass action authorization.
+Use a trusted VPN or HTTPS reverse proxy for remote access: plain HTTP does not
+encrypt credentials. Preserve the account/helper permissions installed by the
+updater.
+
+## Crash Evidence
+
+Before-crash samples are bounded and persisted on the OS disk independently of
+recording storage. A new boot freezes previous-boot evidence before live retention
+can overwrite it. Incident archives contain matching heartbeat, black-box and
+history samples, saved status/feed state, previous kernel journal, `last -x`,
+restart evidence and available persistent crash records.
+
+Defaults retain ten incidents and 25 MB, always keeping the newest. Evidence
+cannot be recovered if it was never written or storage failed. A clean shutdown
+does not identify who initiated it; missing proof stays unknown.
+
+Support bundles include bounded syslog tails/rotations and configured system
+evidence. Persistent journald is explicitly enabled through a separate drop-in,
+capped at 512 MB with 1 GB reserved and 30-day retention. Review bundles as
+sensitive operational information before sharing.
+
+## Verification
 
 ```bash
-cd /opt
-sudo git clone <YOUR_REPO_URL> va-connect-watchdog-v3
-cd /opt/va-connect-watchdog-v3
-sudo ./v3/scripts/install.sh
+PYTHONPATH=v3 python3 -m unittest discover -s v3/tests -q
+systemctl is-active va-watchdog va-watchdog-feed va-watchdog-web
+curl -fsS http://127.0.0.1:9110/api/healthz
+curl -fsS http://127.0.0.1:9110/api/readyz
 ```
 
-Or bootstrap from a downloaded script on the gateway:
+Also confirm recording timestamps advance, hardware evidence is fresh where
+configured, and downloaded evidence contains system logs. Do not use an unattended
+trip test as a routine update check.
 
-```bash
-cd ~/Desktop
-wget -O bootstrap_v3_gateway.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/1758091/bootstrap_v3_gateway.sh
-bash ./bootstrap_v3_gateway.sh
-```
+- [Hardening review](docs/watchdog-review-2026-10-27.md)
+- [Cleanup reassessment](docs/watchdog-cleanup-2026-10-27.md)
+- [Ellingers recovery test plan](docs/ellingers-watchdog-recovery-test-plan.md)
 
-Check status:
-```bash
-systemctl status va-watchdog
-systemctl status va-watchdog-feed va-watchdog-web
-curl http://127.0.0.1:9110/api/status
-```
-
-Web page:
-```text
-http://<gateway-ip>:9110/
-```
-
-After installing or restoring a cloned gateway image, open **Settings > Gateway identity** and set:
-
-- **Site name**: the operator-facing location, for example `Ellingers`.
-- **Asset ID**: an optional physical gateway identifier.
-
-The page also shows the hostname, hardware fingerprint, OS disk serial, and recording
-disk serial. Confirm these before changing a remote unit because cloned gateways may
-share the same hostname. The site identity is included in page headers, APIs, CSV
-exports, support bundles, and new Stage 0 baseline archive names.
-
-Recording storage is mounted by Linux through `/etc/fstab`; the watchdog monitors and can safely configure the labelled entry, but it is not required for the mount to exist. Intended entry:
-
-```fstab
-LABEL=CCTV_STORAGE /media/vsuser/Storage ext4 defaults,nofail,x-systemd.device-timeout=5 0 2
-```
-
-The Storage page includes a Recording Storage panel and guarded setup flows. Existing-partition setup refuses protected system mounts and the parent disk containing `/`, never formats a disk, and only relabels a selected ext4 partition after explicit confirmation. Blank-disk setup is separate and requires explicit confirmation before creating a single ext4 partition labelled `CCTV_STORAGE`. Setup also prepares `/media/vsuser/Storage/recordings` for the `vsuser` account so the recording application can create files there.
-
-For an already-working recorder mount that must not be changed, use Storage > Configure recording storage > Monitor only. This updates watchdog monitoring to the current mountpoint/label without relabelling, remounting, editing `/etc/fstab`, or changing permissions. Candidate lists hide devices smaller than 10 GB.
-
-For a gateway where the operating system and recordings share one physical drive,
-use **Storage > Configure recording storage > One Drive: Monitor Existing Recording
-Folder**. Enter the existing path selected in Videosoft, such as
-`/home/vsuser/recordings`. This mode keeps the system disk protected and makes no
-partition, label, mount, ownership, or `/etc/fstab` changes.
-
-Hardware watchdog feeding is disabled by default. This test build supports only the
-Neousys WDT_DIO backend on POC-451VTC. Install the bundled reviewed driver without
-starting the hardware timer:
-
-```bash
-cd /opt/va-connect-watchdog-v3
-sudo ./v3/scripts/install_neousys_wdt.sh
-```
-
-Activation is explicit. It removes the Ubuntu legacy watchdog package/service,
-removes and blacklists Intel TCO hardware paths, selects `/dev/wdt_dio`, and starts
-a 15-minute remote-access safety window:
-
-```bash
-sudo ./v3/scripts/install_neousys_wdt.sh --activate
-```
-
-The effective hardware settings are:
-
-```json
-"hardware_watchdog": {
-  "enabled": true,
-  "backend": "neousys_wdt_dio",
-  "device": "/dev/wdt_dio",
-  "library_path": "/usr/local/lib/va-watchdog/vendor/libwdt_dio.so",
-  "feed_interval_seconds": 10,
-  "timeout_seconds": 30,
-  "startup_grace_seconds": 300,
-  "post_trip_grace_seconds": 900
-}
-```
-
-When hardware feeding is enabled, the independent feeder controls the vendor API.
-It continues feeding during startup grace while stale-heartbeat enforcement is
-deferred, allowing the main application and remote access to initialise without a
-reboot loop. Ordinary service, storage, network, CPU, and RAM warnings never stop
-feeding. Only a stale main heartbeat, a deliberate trip test, shutdown, or an
-explicitly configured fatal condition can pause the hardware feed.
-
-The HTTP interface runs in `va-watchdog-web.service`, independently of the
-core health loop and the hardware feeder. Its local `/api/healthz` probe must
-respond before the service reports ready to systemd. Three failed probes exit
-the web process so systemd restarts it without restarting the gateway.
-During an upgrade from an older updater that has not installed the web unit,
-the core temporarily serves HTTP itself to keep the interface reachable.
-The attended recovery procedure for Ellingers is in
-[`docs/ellingers-watchdog-recovery-test-plan.md`](docs/ellingers-watchdog-recovery-test-plan.md).
-
-## Preserved crash evidence
-
-When a new boot ID is detected, V3 freezes the previous boot's evidence before live
-retention can overwrite it. Each incident archive is stored below
-`/var/lib/va-watchdog/incidents` and is included in the downloadable support bundle.
-It contains matching heartbeat, Black Box, and history rows, the last status and feed
-state, previous-boot kernel journal, `last -x`, recent events, reboot classification,
-and any available `pstore` records.
-
-Incident archives are bounded independently to 10 incidents and 25 MB by default.
-The newest archive is always retained. Reboot classification only reports a watchdog
-or kernel reset when direct evidence supports it; informational messages such as
-`NMI watchdog: Enabled` do not establish a reset cause.
-
-The Evidence page also provides a dedicated Neousys report. Its readable summary and
-raw evidence cover DMI/BIOS identity, OS and kernel, CPU and memory, disks and SMART,
-PCI/USB driver bindings, DKMS and WDT_DIO module details, power-management settings,
-watchdog configuration and tests, and compact recent-incident summaries. It does not
-intentionally collect CCTV recordings, configured IP addresses/routes, credentials,
-or complete application journals. The same report is embedded in support bundles.
-
-The explicit persistent-journal action writes a separate
-`/etc/systemd/journald.conf.d/va-watchdog-persistent.conf` drop-in. It limits journal
-storage to 512 MB, reserves 1 GB free on the OS disk, and retains up to 30 days
-without editing unrelated journald configuration.
+Older stage plans and incident notes are historical references, not current
+deployment instructions.

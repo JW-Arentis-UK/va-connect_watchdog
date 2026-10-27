@@ -157,9 +157,13 @@ class HardenedWebTests(unittest.TestCase):
 
     def test_legacy_saved_reboot_permission_is_overridden(self):
         config = self.root / "config.json"
-        config.write_text('{"recovery":{"allow_reboot":true}}', encoding="utf-8")
+        config.write_text('{"recovery":{"allow_reboot":true,"critical_grace_seconds":60,"consolidated_policy":{"enabled":true,"restart_network_before_reboot":true}}}', encoding="utf-8")
         with patch("va_watchdog.config.CONFIG_PATHS", [config]):
-            self.assertFalse(load_config()["recovery"]["allow_reboot"])
+            recovery = load_config()["recovery"]
+        self.assertFalse(recovery["allow_reboot"])
+        self.assertNotIn("critical_grace_seconds", recovery)
+        self.assertNotIn("restart_network_before_reboot", recovery["consolidated_policy"])
+        self.assertTrue(recovery["consolidated_policy"]["enabled"])
 
 
 class CredentialAndEvidenceTests(unittest.TestCase):
@@ -170,12 +174,14 @@ class CredentialAndEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             config = Path(temporary) / "config.json"
             config.write_text(json.dumps({"identity": {"site_name": "Keep this"}, "recovery": {
-                "allow_reboot": True, "consolidated_policy": {"restart_network_before_reboot": True}}}))
+                "allow_reboot": True, "critical_grace_seconds": 60,
+                "consolidated_policy": {"restart_network_before_reboot": True}}}))
             with patch("sys.argv", [str(script), str(config)]):
                 exec(compile(block, str(script), "exec"), {})
             migrated = json.loads(config.read_text())
             self.assertFalse(migrated["recovery"]["allow_reboot"])
-            self.assertFalse(migrated["recovery"]["consolidated_policy"]["restart_network_before_reboot"])
+            self.assertNotIn("critical_grace_seconds", migrated["recovery"])
+            self.assertNotIn("restart_network_before_reboot", migrated["recovery"]["consolidated_policy"])
             self.assertEqual(migrated["identity"]["site_name"], "Keep this")
             backup = next(Path(temporary).glob("*.bak"))
             self.assertTrue(json.loads(backup.read_text())["recovery"]["allow_reboot"])

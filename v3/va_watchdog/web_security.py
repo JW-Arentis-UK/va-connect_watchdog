@@ -10,6 +10,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import BoundedSemaphore, Lock
 from urllib.parse import urlsplit
+from .ui_profile import route_supported
 
 HELPER = "/usr/local/lib/va-watchdog/web-action-helper.py"
 MAX_ACTION_BODY = 64 * 1024
@@ -121,6 +122,8 @@ class ProtectedHandler(BaseHTTPRequestHandler):
 
     def allow_read(self):
         route = urlsplit(self.path).path
+        if not route_supported(self.app_cfg, route):
+            return self.deny(404, "This tool does not apply to this device.")
         try:
             local = ipaddress.ip_address(self.client_address[0]).is_loopback
         except ValueError:
@@ -135,6 +138,8 @@ class ProtectedHandler(BaseHTTPRequestHandler):
         if self.privileged_action:
             return True
         route = urlsplit(self.path).path
+        if not route_supported(self.app_cfg, route):
+            return self.deny(404, "This tool does not apply to this device.")
         camera_event = route == "/hikvision/events"
         if camera_event:
             camera = self.app_cfg.get("people_counting", {})

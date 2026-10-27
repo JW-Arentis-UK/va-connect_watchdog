@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 from .config import load_config
 from .web_security import ACTION_PATHS, MAX_ACTION_BODY, credentials
+from .ui_profile import route_supported
 
 
 def verify_operator(cfg, authorization):
@@ -80,6 +81,8 @@ def execute(payload, cfg):
     if not isinstance(target, str) or not target.startswith("/") or len(target) > 2048 or any(c in target for c in "\r\n "):
         raise ValueError("Invalid action path")
     route = urlsplit(target).path
+    if not route_supported(cfg, route):
+        raise ValueError("This tool does not apply to this device")
     if not camera_event and route not in ACTION_PATHS:
         raise ValueError("Unsupported action")
     body = base64.b64decode(payload.get("body", ""), validate=True)
