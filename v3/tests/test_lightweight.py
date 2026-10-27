@@ -17,6 +17,7 @@ from va_watchdog.lite_server import evidence_zip, start_web
 from va_watchdog.web_smoke import check_setup
 from va_watchdog.lite import snapshot
 from va_watchdog.log_tail import tail_lines
+from va_watchdog.watchdog_test import current_boot_id
 from va_watchdog.retention import enforce_retention, purge_data
 
 
@@ -33,7 +34,7 @@ class LightweightTests(unittest.TestCase):
             cfg = {'platform': {'kind': 'raspberry_pi'}, 'storage': {'recordings_path': str(recordings)},
                    'web': {'host': '127.0.0.1', 'port': 0},
                    'events_path': str(base / 'events.jsonl'), 'status_path': str(base / 'status.json')}
-            (base / 'status.json').write_text(json.dumps({'time': datetime.now(timezone.utc).isoformat(),
+            (base / 'status.json').write_text(json.dumps({'time': datetime.now(timezone.utc).isoformat(), 'boot_id': current_boot_id(),
                 'checks': [{'name': 'root_disk', 'state': 'healthy', 'message': 'OK'}]}))
             storage = {'available': False, 'reason': 'No space beyond root', 'root': '/dev/nvme0n1p2',
                        'disk': '/dev/nvme0n1', 'root_gib': 931.01, 'disk_gib': 931.51, 'free_gib': 0}

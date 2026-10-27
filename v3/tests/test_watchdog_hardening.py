@@ -21,6 +21,7 @@ from va_watchdog.web import start_web
 from va_watchdog.web_health import health_response
 from va_watchdog.web_security import credentials, same_origin
 from va_watchdog.watchdog import hardware_feed_status
+from va_watchdog.watchdog_test import current_boot_id
 
 
 class CollectorIsolationTests(unittest.TestCase):
@@ -142,7 +143,7 @@ class HardenedWebTests(unittest.TestCase):
         path = Path(self.cfg["status_path"])
         now = datetime.now(timezone.utc)
         for stamp, state, expected in [(now, "healthy", True), (now, "critical", False), (now - timedelta(minutes=5), "healthy", False)]:
-            path.write_text(json.dumps({"time": stamp.isoformat(), "state": state}), encoding="utf-8")
+            path.write_text(json.dumps({"time": stamp.isoformat(), "state": state, "boot_id": current_boot_id()}), encoding="utf-8")
             self.assertEqual(health_response(self.cfg)["ready"], expected)
 
     def test_storage_page_uses_saved_core_result_without_web_write_probe(self):

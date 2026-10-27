@@ -1,6 +1,6 @@
 # Watchdog Implementation And Reassessment
 
-Candidate build: `20261027.3`. Build `20261027.1` was installed on the local
+Candidate build: `20261027.4`. Build `20261027.1` was installed on the local
 POC-551VTC test gateway on 27 October. Its live reassessment found that the full
 support bundle omitted syslog, despite the compact bundle including it. Build .2
 shares the bounded syslog collector between both formats and retains the compact
@@ -11,6 +11,17 @@ history or the dashboard. Build .3 collects recording timestamps in a bounded co
 worker and shares the saved, freshness-checked result with the read-only dashboard;
 the web account does not need access to private footage directories. Deployment
 checks are recorded below.
+
+Build .4 follow-up closes a cross-boot status gap: core snapshots now carry an
+explicit boot ID, and readiness, the public status API, and the dashboard reject
+saved observations from a different or unidentified boot when the running boot
+identity is available. Earlier .3 snapshots remain compatible through their
+embedded heartbeat boot ID. Original evidence on disk is not rewritten.
+The gateway hardware card uses current core feed/proof evidence rather than an
+independent saved feeder file. Pi native watchdog observations retain their
+systemd-specific interpretation. Black Box health also requires current-boot
+samples and no reported recorder write error. An unreadable syslog directory is
+recorded as omitted evidence instead of aborting the whole download.
 
 ## Implemented Changes
 
@@ -59,7 +70,7 @@ web listener when the separate web unit is absent.
 
 ## Verification
 
-Final full suites: 361 tests on Windows/Python 3.13 (10 skipped), and 361 on
+Final full suites: 373 tests on Windows/Python 3.13 (10 skipped), and 373 on
 Ubuntu/Python 3.14 (9 skipped). Both completed successfully. Bash syntax checks
 passed for installation, update, and web-access setup. `git diff --check` passed.
 
@@ -162,6 +173,21 @@ extraction should be guided by deployed usage and forwarded-browser testing.
 The privileged helper temporarily reuses the existing validated action handlers;
 it is a narrower process boundary, not a claim that every setup operation has
 already been rewritten as an independent command module.
+
+### Remaining Work After Build .4
+
+| Item | Status |
+|---|---|
+| Cross-boot readiness, status and dashboard claims | Corrected in .4; regression coverage includes current, previous, missing and unavailable boot IDs. |
+| Black Box write-error reporting on the main page | Corrected in .4; a fresh in-memory sample cannot hide a reported persistence error. |
+| Unreadable system-log directory | Corrected in .4; omissions are listed in the support manifest. |
+| .4 installation on POC-551VTC | Pending authenticated access. KVM remains at its admin login; SSH key-only access was rejected. The live gateway remains healthy on .3. |
+| Operator sign-in and authenticated settings round trip | Pending the existing local operator account; no bypass or replacement password is introduced. |
+| Actual router/HTTPS forwarding | Pending testing through that deployed path; plain HTTP does not encrypt operator credentials. |
+| Network-loss and blocked-collector acceptance | Automated policy/isolation coverage exists; sustained live fault injection is still outstanding. |
+| Bounded application-service recovery | Automated recovery coverage exists; attended live stop/restart verification is still outstanding. |
+| Hardware trip and forced-power-loss preservation | Not performed in this follow-up. Require attended access and recovery capability. |
+| Large compatibility renderer and optional camera analytics | Retained to avoid removing deployed functions. Further extraction is optional maintenance, not an incident fix. |
 
 The remaining acceptance risks are physical watchdog behavior, device I/O under
 recording load, and the new authentication/permission boundary on a real gateway.

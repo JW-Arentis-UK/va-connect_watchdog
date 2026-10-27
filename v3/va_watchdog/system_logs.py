@@ -9,13 +9,13 @@ def add_syslogs(archive, cfg, budget=20 * 1024 * 1024):
     for filename in ("syslog", "syslog.1", "syslog.2.gz", "syslog.3.gz", "syslog.4.gz"):
         path = directory / filename
         name = f"system-logs/{filename}"
-        if path.is_symlink():
-            manifest["omitted"].append(name)
-            continue
-        if not path.is_file():
-            manifest["missing"].append(name)
-            continue
         try:
+            if path.is_symlink():
+                manifest["omitted"].append(name)
+                continue
+            if not path.is_file():
+                manifest["missing"].append(name)
+                continue
             size = path.stat().st_size
             allowance = min(4 * 1024 * 1024, remaining)
             if allowance <= 0 or (size > allowance and filename.endswith(".gz")):

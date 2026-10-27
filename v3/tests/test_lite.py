@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 from va_watchdog.lite import event_tail, snapshot
+from va_watchdog.watchdog_test import current_boot_id
 
 
 class LiteTests(unittest.TestCase):
@@ -15,6 +16,9 @@ class LiteTests(unittest.TestCase):
         names = ['esg.service', 'network_module', 'mobile_router', 'recording_storage', 'temperature', 'ram', 'cpu_load', 'root_disk', 'write_test']
         self.status = {"time": "2026-10-04T00:00:00+00:00", "checks": [{"name": n, "state": "healthy", "message": "OK"} for n in names], "recording_storage": {"free_mb": 5120, "message": "Actual CCTV disk"}}
         self.now = 1791072005
+        self.status["boot_id"] = current_boot_id()
+        self.status["hardware_watchdog_feed"] = {"boot_id": current_boot_id(), "feeding": True,
+            "proven_this_boot": True, "last_feed_unix": self.now - 2}
         self.write('status.json', self.status)
         self.write('hardware-watchdog-feed.json', {"last_feed_unix": self.now - 2, "process_status": "feeding"})
 
@@ -51,6 +55,8 @@ class LiteTests(unittest.TestCase):
         self.write('status.json', self.status)
         self.assertEqual(snapshot(self.cfg, self.now)['state'], 'warning')
         self.write('hardware-watchdog-feed.json', {"last_feed_unix": self.now - 100, "process_status": "feeding"})
+        self.status["hardware_watchdog_feed"]["last_feed_unix"] = self.now - 100
+        self.write('status.json', self.status)
         self.assertEqual(snapshot(self.cfg, self.now)['cards'][-1]['state'], 'unknown')
 
     def test_bounded_event_tail_ignores_malformed_data_and_secrets(self):

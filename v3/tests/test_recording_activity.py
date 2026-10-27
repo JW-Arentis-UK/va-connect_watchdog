@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 from va_watchdog.recording_activity import recording_activity
 from va_watchdog.health import collect_health
 from va_watchdog.lite import snapshot
+from va_watchdog.watchdog_test import current_boot_id
 
 
 class RecordingActivityTests(unittest.TestCase):
@@ -26,7 +27,7 @@ class RecordingActivityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             now = time.time()
-            status = {"time": datetime.fromtimestamp(now, timezone.utc).isoformat(), "checks": [],
+            status = {"time": datetime.fromtimestamp(now, timezone.utc).isoformat(), "checks": [], "boot_id": current_boot_id(),
                       "recording_activity": {"available": True, "checked_at": now,
                                              "oldest": {"display_local": "old"},
                                              "latest": {"display_local": "new"}}}

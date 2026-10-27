@@ -10,6 +10,7 @@ from va_watchdog.hardware import check_hardware
 from va_watchdog.lite import page, snapshot
 from va_watchdog.storage import check_storage
 from va_watchdog.watchdog import add_hardware_feed_check
+from va_watchdog.watchdog_test import current_boot_id
 
 
 ROOT = Path(__file__).parents[1]
@@ -66,6 +67,7 @@ class PiProfileTests(unittest.TestCase):
             cfg["identity"]["site_name"] = "Pi AIO"
             (root / "status.json").write_text(json.dumps({
                 "time": "2026-10-19T12:00:00+00:00",
+                "boot_id": current_boot_id(),
                 "checks": [
                     {"name": name, "state": "healthy", "message": "OK"}
                     for name in ("teamviewerd.service", "lightdm.service", "ssh.service",

@@ -10,6 +10,7 @@ from .network import check_network
 from .process_monitor import check_watchdog_process
 from .mobile_router import check_mobile_router
 from .recording_activity import recording_activity
+from .watchdog_test import current_boot_id
 
 _COLLECTOR_CACHE = {}
 
@@ -119,6 +120,7 @@ def collect_health(cfg, collectors=None):
 
     status = {
         "time": now_iso(),
+        "boot_id": current_boot_id(),
         "state": worst_state([c.state for c in checks]),
         "score": score_from_checks(checks),
         "critical_failed": critical_failed,

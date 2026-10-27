@@ -7,6 +7,7 @@ import time
 
 from .recording_activity import recording_activity
 from .status_shortcuts import selected_shortcuts
+from .status_freshness import freshness
 
 
 def read_object(path):
@@ -59,14 +60,14 @@ def snapshot(cfg, now=None):
     now = time.time() if now is None else now
     data = Path(cfg["events_path"]).parent
     status = read_object(cfg["status_path"])
-    feed = read_object(cfg.get("hardware_watchdog_feed_state_path") or data / "hardware-watchdog-feed.json")
     evidence_path = Path(cfg.get("reboot_evidence_path") or data / "reboot-evidence.jsonl").with_name("last-reboot-evidence.json")
     evidence = read_object(evidence_path)
     legacy = read_object(cfg.get("legacy_watchdog_state_path") or "/var/lib/va-connect-site-watchdog/state.json")
     legacy_config = read_object(cfg.get("legacy_watchdog_config_path") or "/opt/va-connect-watchdog/site-watchdog.json")
     checks = {c["name"]: c for c in status.get("checks", []) if isinstance(c, dict) and c.get("name")}
-    sample_age = age(status.get("time"), now)
-    stale = sample_age is None or sample_age > max(60, cfg.get("poll_interval_seconds", 5) * 6)
+    observed = freshness(cfg, status, now, max_age=max(60, cfg.get("poll_interval_seconds", 5) * 6))
+    sample_age = observed["status_age_seconds"]
+    stale = not observed["status_fresh"]
 
     def card(title, names, detail=None):
         found = [checks[name] for name in names if name in checks]
@@ -83,7 +84,7 @@ def snapshot(cfg, now=None):
     recordings = status.get("recording_activity")
     if isinstance(recordings, dict):
         history_age = age(recordings.get("checked_at"), now)
-        if recordings.get("available") and (history_age is None or history_age > 90):
+        if recordings.get("available") and (stale or history_age is None or history_age > 90):
             recordings = {"available": False, "message": "Saved recording history is stale; waiting for a fresh check"}
     else:
         suffix = ".data" if pi_profile else None
@@ -120,9 +121,13 @@ def snapshot(cfg, now=None):
                 metrics.append(f"{label} {value:g}{unit}")
         if metrics:
             system_card["detail"] = " · ".join(metrics)
+    feed = status.get("hardware_watchdog_feed") or checks.get("hardware_watchdog_feed_status", {}).get("value") or {}
     feed_age = age(feed.get("last_feed_unix"), now)
     feed_fresh = feed_age is not None and feed_age < cfg.get("hardware_watchdog", {}).get("timeout_seconds", 30)
-    feeding = feed.get("process_status") == "feeding" and feed_fresh
+    feed_boot_matches = observed["current_boot_id"] in {"", "-"} or feed.get("boot_id") == observed["current_boot_id"]
+    feeding = not stale and feed_boot_matches and feed.get("feeding") and feed.get("proven_this_boot") and feed_fresh
+    hardware_card = {"title": "Hardware protection", "state": "healthy" if feeding else "unknown",
+                     "detail": f"Feeding · last feed {int(feed_age)}s ago" if feeding else "Fresh hardware feeding is not confirmed"}
     if not pi_profile:
         if recordings.get("available"):
             oldest = recordings.get("oldest") or {}
@@ -133,7 +138,7 @@ def snapshot(cfg, now=None):
             recording_state = "unknown"
             recording_detail = recordings.get("message") or "No timestamped recordings were found"
         cards.append({"title": "Recording history", "state": recording_state, "detail": recording_detail})
-        cards.append({"title": "Hardware protection", "state": "healthy" if feeding else "unknown", "detail": f"Feeding · last feed {int(feed_age)}s ago" if feeding else "Fresh hardware feeding is not confirmed"})
+        cards.append(hardware_card)
     destinations = {
         "Pi services": "/#diagnostics",
         "Network": "/#diagnostics",
@@ -161,7 +166,8 @@ def snapshot(cfg, now=None):
     recovery_live = status.get('recovery') or {}
     blackbox = status.get("blackbox") or {}
     box_age = age(blackbox.get("last_time"), now)
-    recorder_ok = blackbox.get("enabled") and blackbox.get("recorder_running") and box_age is not None and box_age < 30
+    box_boot_matches = observed["current_boot_id"] in {"", "-"} or blackbox.get("last_boot_id") == observed["current_boot_id"]
+    recorder_ok = not stale and box_boot_matches and not blackbox.get("last_error") and blackbox.get("enabled") and blackbox.get("recorder_running") and box_age is not None and box_age < 30
     capture = [
         {"id": "incident", "name": "Reboot & incident evidence", "current": "Boot IDs, command reason, previous journal, crash signatures", "proposal": "Keep", "why": "Distinguishes a requested reboot, watchdog reset and an unexplained restart."},
         {"id": "blackbox", "name": "Before-crash recorder", "current": f"{blackbox.get('sample_seconds', '?')}s samples; {int(blackbox.get('retention_seconds', 0) / 60)} minute rolling buffer", "proposal": "Keep", "why": "CPU, memory pressure, disk I/O, kernel counters and application progress before a freeze."},
@@ -183,6 +189,7 @@ def snapshot(cfg, now=None):
     return {
         "site": (cfg.get("identity") or {}).get("site_name") or "Gateway",
         "time": status.get("time"), "sample_age": sample_age, "stale": stale,
+        "status_current_boot": observed["status_current_boot"],
         "headline": "Monitoring data is stale" if stale else "All current checks are healthy" if healthy else "Attention needed",
         "state": "unknown" if stale else "healthy" if healthy else "warning",
         "cards": cards, "alerts": alerts[:8],

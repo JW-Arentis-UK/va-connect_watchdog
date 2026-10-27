@@ -372,7 +372,7 @@ button.action:disabled { opacity:.5; cursor:not-allowed; }
     var watchdogMemory = document.getElementById('watchdog-memory');
     var watchdogDisk = document.getElementById('watchdog-disk');
     var checks = status.checks || [];
-    var hasIssue = false;
+    var hasIssue = status.status_fresh === false || status.state === 'unknown';
     var processValue = status.watchdog_process || {};
     for (var i = 0; i < checks.length; i++) {
       if (checks[i].name === 'watchdog_process' && checks[i].value) processValue = checks[i].value;

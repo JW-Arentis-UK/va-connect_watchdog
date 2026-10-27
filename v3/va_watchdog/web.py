@@ -60,6 +60,7 @@ from .status_shortcuts import selected_shortcuts, validate_selection
 from .web_security import BoundedHTTPServer, ProtectedHandler, protect
 from .web_health import health_response
 from .system_logs import add_syslogs
+from .status_freshness import status_view
 
 
 _camera_capture_lock = Lock()
@@ -6458,7 +6459,10 @@ def start_web(cfg, handler_only=False):
                 return
             if route_path == "/api/status":
                 try:
-                    body = status_path.read_text(encoding="utf-8")
+                    saved = json.loads(status_path.read_text(encoding="utf-8"))
+                    if not isinstance(saved, dict):
+                        raise ValueError("Invalid saved status")
+                    body = json.dumps(status_view(cfg, saved))
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body.encode("utf-8"))))
