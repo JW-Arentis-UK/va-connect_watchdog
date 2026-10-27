@@ -32,6 +32,7 @@ def build_startup_summary(cfg, checks):
     warnings = [check.name for check in checks if check.state == "warning"]
     degraded = [check.name for check in checks if check.state == "degraded"]
     critical = [check.name for check in checks if check.state == "critical"]
+    unknown = [check.name for check in checks if check.state == "unknown"]
 
     optional_missing = []
     hardware_watchdog_cfg = cfg.get("hardware_watchdog", {})
@@ -57,6 +58,8 @@ def build_startup_summary(cfg, checks):
         headline = "Startup has critical failures"
     elif warnings or degraded:
         headline = "System ready with warnings"
+    elif unknown:
+        headline = "Monitoring checks pending"
 
     details = []
     if healthy:
@@ -67,6 +70,8 @@ def build_startup_summary(cfg, checks):
         details.append(f"{len(degraded)} degraded checks")
     if critical:
         details.append(f"{len(critical)} critical checks")
+    if unknown:
+        details.append(f"{len(unknown)} checks unavailable or pending")
     if optional_missing:
         details.append("; ".join(optional_missing))
 
@@ -77,22 +82,28 @@ def build_startup_summary(cfg, checks):
         "warning_checks": warnings,
         "degraded_checks": degraded,
         "critical_checks": critical,
+        "unknown_checks": unknown,
         "optional_missing": optional_missing,
         "service_states": service_states,
         "generated_at": now_iso(),
     }
 
-def collect_health(cfg):
+def collect_health(cfg, collectors=None):
     checks = []
     intervals = cfg.get("collector_intervals", {}) if isinstance(cfg.get("collector_intervals"), dict) else {}
-    checks.extend(_cached_checks("hardware", intervals.get("hardware_seconds", 5), lambda: check_hardware(cfg)))
-    checks.extend(_cached_checks("storage", intervals.get("storage_seconds", 30), lambda: check_storage(cfg)))
-    checks.extend(_cached_checks("services", intervals.get("services_seconds", 15), lambda: check_services(cfg)))
-    checks.extend(_cached_checks("network", intervals.get("network_seconds", 30), lambda: check_network(cfg)))
+    def collect(name, interval, callback):
+        if collectors is None:
+            return _cached_checks(name, interval, callback)
+        return collectors.poll(name, interval, cfg.get("collector_deadline_seconds", 15), callback)
+
+    checks.extend(collect("hardware", intervals.get("hardware_seconds", 5), lambda: check_hardware(cfg)))
+    checks.extend(collect("storage", intervals.get("storage_seconds", 30), lambda: check_storage(cfg)))
+    checks.extend(collect("services", intervals.get("services_seconds", 15), lambda: check_services(cfg)))
+    checks.extend(collect("network", intervals.get("network_seconds", 30), lambda: check_network(cfg)))
     router_cfg = cfg.get("mobile_router", {}) if isinstance(cfg.get("mobile_router", {}), dict) else {}
     router_interval = router_cfg.get("poll_interval_seconds", intervals.get("router_seconds", 60))
-    checks.extend(_cached_checks("router", router_interval, lambda: check_mobile_router(cfg)))
-    checks.extend(_cached_checks("process", intervals.get("process_seconds", 5), lambda: [check_watchdog_process(cfg)]))
+    checks.extend(collect("router", router_interval, lambda: check_mobile_router(cfg)))
+    checks.extend(collect("process", intervals.get("process_seconds", 5), lambda: [check_watchdog_process(cfg)]))
 
     critical_failed = any(c.state == "critical" and c.critical for c in checks)
     recording_storage = next((c.value for c in checks if c.name == "recording_storage"), None)

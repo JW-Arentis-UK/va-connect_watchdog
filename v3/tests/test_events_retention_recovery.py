@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -103,7 +104,10 @@ class RetentionTests(unittest.TestCase):
 class RecoveryTests(unittest.TestCase):
     def _engine(self):
         log = FakeEventLog()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
         cfg = {
+            "events_path": str(Path(temporary.name) / "events.jsonl"),
             "services": [{"name": "esg.service", "critical": True, "restart": True}],
             "recovery": {
                 "enabled": True,
@@ -121,20 +125,18 @@ class RecoveryTests(unittest.TestCase):
         run.return_value = SimpleNamespace(returncode=1)
         engine, log = self._engine()
 
-        summary = engine.process([SimpleNamespace(name="esg.service", state="critical", critical=True, to_dict=lambda: {})])
+        summary = engine.process([SimpleNamespace(name="esg.service", state="critical", critical=True,
+                                  value={"collected_at": time.time(), "active": "failed"}, to_dict=lambda: {})])
 
         self.assertNotIn("restarted esg.service", summary["actions"])
         self.assertTrue(any(row[2] == "Restart failed for esg.service" for row in log.rows))
 
-    def test_healthy_service_resets_restart_limit(self):
+    def test_sustained_healthy_service_resets_restart_limit(self):
         engine, _ = self._engine()
-        engine.restart_attempts["esg.service"] = 3
-        engine.restart_limit_logged.add("esg.service")
-
-        engine.process([SimpleNamespace(name="esg.service", state="healthy", critical=True, to_dict=lambda: {})])
-
-        self.assertEqual(engine.restart_attempts["esg.service"], 0)
-        self.assertNotIn("esg.service", engine.restart_limit_logged)
+        engine.state["services"]["esg.service"] = {"attempts": 3, "last_action": None, "healthy_since": time.monotonic() - 61}
+        engine.process([SimpleNamespace(name="esg.service", state="healthy", critical=True,
+                                       value={"collected_at": time.time(), "active": "active"})])
+        self.assertEqual(engine.state["services"]["esg.service"]["attempts"], 0)
 
 
 class UpdateTests(unittest.TestCase):

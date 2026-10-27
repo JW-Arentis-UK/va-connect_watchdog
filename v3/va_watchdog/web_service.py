@@ -32,7 +32,7 @@ def probe_web(url, opener=None):
         if response.status != 200:
             raise RuntimeError(f"Web health probe returned HTTP {response.status}")
         payload = json.load(response)
-    if not isinstance(payload, dict) or "ok" not in payload:
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
         raise RuntimeError("Web health probe returned an invalid response")
 
 

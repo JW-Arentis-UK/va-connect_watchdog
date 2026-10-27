@@ -4,18 +4,14 @@ import json
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
 import zipfile
 
-from .lite import page, read_object, snapshot
+from .lite import read_object
 from .build import build_number
 from .log_tail import tail_lines
-from .pi_storage import expand as expand_pi_storage, inspect as inspect_pi_storage, verify_account_password
+from .pi_storage import inspect as inspect_pi_storage
 from .recording_activity import recording_activity
-from .gateway_reboot import request_gateway_reboot
-from .update import _git_value, last_completed, launch_update_job, load_update_status, update_in_progress
+from .update import _git_value, last_completed, load_update_status, update_in_progress
 
 
 def action_page(title, body, follow_update=False):
@@ -217,102 +213,7 @@ def evidence_zip(cfg, max_bytes=32 * 1024 * 1024):
 
 
 def start_web(cfg):
-    web = cfg.get('web', {})
-    if not web.get('enabled', True):
-        return None
-    update_launch_lock = threading.Lock()
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *args):
-            pass
-
-        def send(self, payload, content_type='application/json', status=200, download=False):
-            self.send_response(status)
-            self.send_header('Content-Type', content_type)
-            self.send_header('Content-Length', str(len(payload)))
-            self.send_header('Cache-Control', 'no-store')
-            self.send_header('X-Content-Type-Options', 'nosniff')
-            if download:
-                self.send_header('Content-Disposition', 'attachment; filename="watchdog-evidence.zip"')
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def do_GET(self):
-            request = urlsplit(self.path)
-            path = request.path
-            if path in ('/', '/lite'):
-                return self.send(page(cfg), 'text/html; charset=utf-8')
-            if path == '/update-confirm':
-                follow = parse_qs(request.query).get('follow') == ['1']
-                state = load_update_status(cfg)
-                if follow and state.get('state') == 'completed':
-                    self.send_response(303)
-                    self.send_header('Location', '/')
-                    self.send_header('Content-Length', '0')
-                    return self.end_headers()
-                return self.send(update_page(cfg, follow=follow), 'text/html; charset=utf-8')
-            if path == '/pi-storage' and cfg.get('platform', {}).get('kind') == 'raspberry_pi':
-                return self.send(pi_storage_page(cfg), 'text/html; charset=utf-8')
-            if path == '/api/healthz':
-                result = {'ok': True, 'mode': 'lightweight'}
-            elif path == '/api/lite':
-                result = snapshot(cfg)
-            elif path == '/api/status':
-                result = read_object(cfg['status_path'])
-            elif path == '/api/version':
-                state = load_update_status(cfg)
-                completed = last_completed(state, build_number())
-                result = {'build_number': build_number(), 'build_at': datetime.fromtimestamp(Path(__file__).stat().st_mtime, timezone.utc).isoformat(),
-                          'last_update_at': completed['at'], 'last_update_build': completed['build'], 'update_state': state.get('state', 'idle')}
-            elif path == '/api/evidence.zip':
-                return self.send(evidence_zip(cfg), 'application/zip', download=True)
-            elif path in ('/evidence', '/events', '/watchdog', '/setup'):
-                self.send_response(302)
-                self.send_header('Location', '/#diagnostics')
-                self.send_header('Content-Length', '0')
-                return self.end_headers()
-            else:
-                return self.send(b'{"error":"Not found"}', status=404)
-            self.send(json.dumps(result).encode())
-
-        def do_POST(self):
-            path = urlsplit(self.path).path
-            if path in ('/update-now', '/pi-storage-expand', '/pi-storage-reboot'):
-                size = int(self.headers.get('Content-Length', '0'))
-                if size > 4096:
-                    return self.send(action_page('Invalid request', '<p>Request is too large.</p>'), 'text/html; charset=utf-8', status=400)
-                form = parse_qs(self.rfile.read(size).decode('utf-8'), keep_blank_values=True)
-                if path == '/update-now':
-                    with update_launch_lock:
-                        if not cfg.get('update', {}).get('enabled', True):
-                            result = {'ok': False, 'message': 'Web updates are disabled.'}
-                        elif update_in_progress(load_update_status(cfg)):
-                            result = {'ok': False, 'message': 'An update is already running.'}
-                        else:
-                            result = launch_update_job(cfg)
-                    return self.send(update_page(cfg, result, follow=bool(result.get('ok') or update_in_progress(load_update_status(cfg)))), 'text/html; charset=utf-8')
-                if cfg.get('platform', {}).get('kind') != 'raspberry_pi':
-                    return self.send(b'{"error":"Not found"}', status=404)
-                local_client = self.client_address[0] in {'127.0.0.1', '::1', self.connection.getsockname()[0]}
-                if not local_client:
-                    result = {'ok': False, 'message': "Open this page in the Pi's own browser to expand storage."}
-                elif not verify_account_password(form.get('password', [''])[0]):
-                    result = {'ok': False, 'message': 'Pi account password was not accepted.'}
-                elif path == '/pi-storage-reboot':
-                    if not inspect_pi_storage().get('reboot_pending'):
-                        result = {'ok': False, 'message': 'No pending filesystem resize was found. Reboot was not scheduled.'}
-                    else:
-                        result = request_gateway_reboot(
-                            cfg, reason_message='Pi reboot requested to complete root filesystem resize.',
-                            requested_by='pi_storage', hardware_fallback_requested=False,
-                        )
-                else:
-                    result = expand_pi_storage(form.get('root', [''])[0])
-                return self.send(pi_storage_page(cfg, result), 'text/html; charset=utf-8')
-            self.send(b'{"error":"This dashboard is read-only"}', status=405)
-
-    server = ThreadingHTTPServer((web.get('host', '0.0.0.0'), int(web.get('port', 9110))), Handler)
-    server.daemon_threads = True
-    server.serve_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server.serve_thread.start()
-    return server
+    """Compatibility entry point; all profiles use the same HTTP action boundary."""
+    from .web import start_web as start
+    cfg.setdefault("web", {}).setdefault("lightweight", True)
+    return start(cfg)

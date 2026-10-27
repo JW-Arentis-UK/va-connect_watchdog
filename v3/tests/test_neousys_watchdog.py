@@ -295,7 +295,16 @@ class NeousysWatchdogTests(unittest.TestCase):
                 "hardware_watchdog": {"timeout_seconds": 30},
             })
             completed = Mock(returncode=0, stdout="", stderr="")
-            with patch("va_watchdog.watchdog_feed.os.path.exists", side_effect=[False, False, True]), patch(
+            original_exists = __import__("os").path.exists
+            device_checks = []
+            def exists(path):
+                if str(path) == worker.device:
+                    device_checks.append(path)
+                    return len(device_checks) > 1
+                if str(path) == "/sbin/modprobe":
+                    return False
+                return original_exists(path)
+            with patch("va_watchdog.watchdog_feed.os.path.exists", side_effect=exists), patch(
                 "va_watchdog.watchdog_feed.subprocess.run", return_value=completed
             ) as run, patch("va_watchdog.watchdog_feed.time.sleep"):
                 loaded = worker._ensure_driver_loaded()

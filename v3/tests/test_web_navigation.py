@@ -118,6 +118,7 @@ class WebNavigationTests(unittest.TestCase):
 
     def test_event_evidence_expands_as_a_full_width_table_row(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+        source += (Path(__file__).parents[1] / "va_watchdog" / "dashboard_shell.html").read_text(encoding="utf-8")
 
         self.assertIn('class=\\\"event-detail-row\\\" hidden', source)
         self.assertIn('onclick=\\\"toggleEventEvidence(this)\\\"', source)
@@ -187,6 +188,7 @@ class WebNavigationTests(unittest.TestCase):
 
     def test_status_shows_compact_recent_restart_history(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+        source += (Path(__file__).parents[1] / "va_watchdog" / "dashboard_shell.html").read_text(encoding="utf-8")
 
         self.assertIn("def recent_restarts_card():", source)
         self.assertIn("Planned tests are labelled separately from automatic recovery.", source)
@@ -301,6 +303,7 @@ class WebNavigationTests(unittest.TestCase):
 
     def test_header_shows_watchdog_process_overhead(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+        source += (Path(__file__).parents[1] / "va_watchdog" / "dashboard_shell.html").read_text(encoding="utf-8")
 
         self.assertIn('id="watchdog-cpu"', source)
         self.assertIn('id="watchdog-cpu-source"', source)
@@ -313,6 +316,7 @@ class WebNavigationTests(unittest.TestCase):
 
     def test_build_badge_reports_the_code_loaded_by_the_running_process(self):
         source = (Path(__file__).parents[1] / "va_watchdog" / "web.py").read_text(encoding="utf-8")
+        source += (Path(__file__).parents[1] / "va_watchdog" / "dashboard_shell.html").read_text(encoding="utf-8")
 
         self.assertIn("running_version = {", source)
         self.assertIn('"commit": running_version["commit"]', source)

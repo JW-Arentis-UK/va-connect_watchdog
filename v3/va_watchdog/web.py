@@ -32,8 +32,8 @@ from .storage import apply_recording_service_mount_guards, configure_recording_s
 from .services import _runtime_stats
 from .watchdog_grace import arm_current_boot, delay_current_boot, startup_grace_status
 from .watchdog_test import arm_trip_test, confirm_trip_test, read_trip_test_state, trigger_trip_test, trip_test_summary
-from .watchdog_liveness_test import reconcile_liveness_test, start_liveness_test
-from .update import last_completed, launch_update_job, load_update_status
+from .watchdog_liveness_test import read_liveness_test_state as reconcile_liveness_test, start_liveness_test
+from .update import last_completed, launch_update_job, load_update_status, update_in_progress
 from .speedtest import run_speed_test
 from .heartbeat import heartbeat_paths, read_state, read_tail, heartbeat_age_seconds
 from .journal import persistent_status, enable_persistent
@@ -57,22 +57,18 @@ from .web_links import LINK_GROUPS, MAX_LINKS, configured_web_links, normalize_w
 from .anpr import DEFAULT_DB as ANPR_DB, csv_report as anpr_csv_report, load_settings as anpr_load_settings, query_reads as anpr_query_reads, save_settings as anpr_save_settings, start_collector as anpr_start_collector, stop_collector as anpr_stop_collector
 from .factory_reset import reset_watchdog_data
 from .status_shortcuts import selected_shortcuts, validate_selection
+from .web_security import BoundedHTTPServer, ProtectedHandler, protect
+from .web_health import health_response
 
 
 _camera_capture_lock = Lock()
 
 
 def verify_local_reset_password(password):
-    if not password or os.name != 'posix':
-        return False
-    import crypt
-    import spwd
-    try:
-        stored = spwd.getspnam('vsuser').sp_pwdp
-        candidate = crypt.crypt(password, stored) if stored and stored[0] not in '! *' else None
-        return bool(candidate and hmac.compare_digest(candidate, stored))
-    except (KeyError, PermissionError, OSError):
-        return False
+    import base64
+    from .privileged_actions import verify_operator
+    return verify_operator({"web": {"operator_account": "vsuser"}},
+                           "Basic " + base64.b64encode(f"vsuser:{password}".encode()).decode())
 
 
 def restart_after_factory_reset():
@@ -193,484 +189,11 @@ def crossing_direction_labels(camera):
         back = "B to A"
     return forward, back
 
-HTML = """<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>__SITE_NAME__ - VA-Connect Watchdog</title>
-<style>
-:root {
-  --bg: #080b0f;
-  --sidebar: #05080c;
-  --panel: #11161d;
-  --panel-2: #151b23;
-  --input: #05080c;
-  --line: #28313d;
-  --text: #edf2f7;
-  --muted: #9aa6b2;
-  --green: #36d15f;
-  --amber: #ffbf3c;
-  --orange: #ff8a34;
-  --red: #ff4f64;
-  --blue: #3b82f6;
-  --scale: .75;
-}
-body[data-theme="light"] {
-  --bg: #eef3f8;
-  --sidebar: #dde7f1;
-  --panel: #ffffff;
-  --panel-2: #edf4fb;
-  --input: #ffffff;
-  --line: #c9d5e2;
-  --text: #182230;
-  --muted: #526173;
-  --green: #168a3a;
-  --amber: #a86700;
-  --orange: #b45309;
-  --red: #c6283a;
-  --blue: #1d64d8;
-}
-body[data-theme="steel"] {
-  --bg: #10151a;
-  --sidebar: #161d24;
-  --panel: #1e2730;
-  --panel-2: #25313b;
-  --input: #141b22;
-  --line: #3b4855;
-  --text: #f4f7f9;
-  --muted: #b4c0cb;
-  --blue: #38a3ff;
-}
-body[data-theme="sand"] {
-  --bg: #f2eadc;
-  --sidebar: #e0d2bb;
-  --panel: #fff9ef;
-  --panel-2: #f2e5cf;
-  --input: #fffaf0;
-  --line: #cbbda4;
-  --text: #261f17;
-  --muted: #6d604f;
-  --green: #2f7d32;
-  --amber: #9a6400;
-  --orange: #a34800;
-  --red: #b52222;
-  --blue: #1769aa;
-}
-* { box-sizing: border-box; }
-body { font-family:"Trebuchet MS", "DejaVu Sans", sans-serif; background:var(--bg); color:var(--text); margin:0; font-size:calc(14px * var(--scale)); }
-.shell { display:grid; grid-template-columns: calc(220px * var(--scale)) 1fr; min-height:100vh; }
-.sidebar { border-right:1px solid var(--line); background:var(--sidebar); padding:calc(18px * var(--scale)) calc(14px * var(--scale)); display:flex; flex-direction:column; gap:calc(18px * var(--scale)); }
-.brand { font-size:calc(18px * var(--scale)); font-weight:800; line-height:1.25; letter-spacing:-.02em; }
-.brand small { display:block; margin-top:calc(5px * var(--scale)); color:var(--muted); font-size:calc(10px * var(--scale)); font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
-.nav { display:grid; gap:calc(6px * var(--scale)); }
-.nav button, .nav a { width:100%; text-align:left; background:transparent; color:var(--muted); border:1px solid transparent; border-radius:6px; padding:calc(10px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-size:inherit; text-decoration:none; display:block; }
-.nav button.active, .nav a.active { color:#fff; background:var(--blue); border-color:var(--blue); font-weight:700; }
-.mode-switcher { display:grid; grid-template-columns:1fr; gap:calc(4px * var(--scale)); margin-bottom:calc(12px * var(--scale)); padding:calc(4px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel); }
-.nav .mode-tab { padding:calc(7px * var(--scale)) calc(8px * var(--scale)); text-align:left; font-size:calc(10px * var(--scale)); font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
-.nav .mode-tab.active { background:var(--blue); border-color:var(--blue); color:#fff; }
-.nav-section { padding:calc(4px * var(--scale)) calc(10px * var(--scale)); color:var(--muted); font-size:calc(10px * var(--scale)); font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
-.nav-section:not(:first-child) { margin-top:calc(12px * var(--scale)); }
-.moved-section { margin-top:calc(18px * var(--scale)); scroll-margin-top:calc(72px * var(--scale)); }
-.moved-section-heading { margin:0 0 calc(10px * var(--scale)); padding:0 calc(2px * var(--scale)); }
-.moved-section-heading h2 { margin:0 0 calc(3px * var(--scale)); }
-.moved-section-heading p { margin:0; color:var(--muted); }
-.side-status { margin-top:auto; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:calc(12px * var(--scale)); color:var(--muted); }
-.main { min-width:0; }
-.topbar { height:calc(58px * var(--scale)); border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; padding:0 calc(18px * var(--scale)); color:var(--muted); }
-.topbar-right { display:flex; gap:10px; align-items:center; }
-select, input, textarea { background:var(--input); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 8px; font-size:inherit; max-width:100%; }
-textarea { width:100%; min-height:calc(70px * var(--scale)); resize:vertical; }
-label { display:block; margin:calc(6px * var(--scale)) 0; }
-.content { padding:calc(18px * var(--scale)); max-width:calc(1360px * var(--scale)); margin:0 auto; }
-.page-intro { display:flex; align-items:center; justify-content:space-between; gap:calc(14px * var(--scale)); margin-bottom:calc(14px * var(--scale)); padding:0 calc(2px * var(--scale)); }
-.page-intro h1 { margin:calc(2px * var(--scale)) 0; font-size:calc(24px * var(--scale)); letter-spacing:-.03em; }
-.page-kicker { color:var(--blue); font-size:calc(11px * var(--scale)); font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
-.page-question { color:var(--muted); font-size:calc(13px * var(--scale)); }
-.help-popover { position:relative; flex:0 0 auto; }
-.help-popover summary { display:grid; place-items:center; width:calc(32px * var(--scale)); height:calc(32px * var(--scale)); border:1px solid var(--line); border-radius:999px; color:var(--blue); background:var(--panel); cursor:pointer; font-weight:900; list-style:none; }
-.help-popover summary::-webkit-details-marker { display:none; }
-.help-popover p { position:absolute; z-index:5; right:0; width:calc(300px * var(--scale)); margin:calc(8px * var(--scale)) 0 0; padding:calc(12px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text); box-shadow:0 10px 30px rgba(0,0,0,.2); }
-.grid { display:grid; gap:calc(12px * var(--scale)); }
-.top-grid { grid-template-columns: minmax(0, 1.6fr) minmax(300px, 0.9fr); }
-.metric-grid { grid-template-columns: repeat(7, minmax(calc(125px * var(--scale)), 1fr)); }
-.lower-grid { grid-template-columns: minmax(0, 1.1fr) minmax(330px, 0.9fr); }
-.operations-grid { grid-template-columns:repeat(2, minmax(0,1fr)); }
-.bottom-grid { grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr); }
-.card, .tile { background:linear-gradient(145deg, var(--panel), var(--panel-2)); border:1px solid var(--line); border-radius:8px; padding:calc(14px * var(--scale)); min-width:0; }
-.card h2, .card h3, .tile h3 { margin:0 0 calc(10px * var(--scale)); font-size:calc(16px * var(--scale)); }
-.summary-card { display:grid; grid-template-columns:minmax(calc(145px * var(--scale)), .8fr) minmax(calc(210px * var(--scale)), 1.25fr) minmax(calc(170px * var(--scale)), 1fr); gap:calc(10px * var(--scale)); align-items:stretch; }
-.summary-panel { padding:calc(14px * var(--scale)); border:1px solid var(--line); border-radius:7px; background:rgba(255,255,255,.025); }
-.summary-status { display:flex; flex-direction:column; justify-content:center; background:linear-gradient(145deg, rgba(59,130,246,.11), rgba(255,255,255,.025)); }
-.summary-panel-title { color:var(--muted); font-size:calc(11px * var(--scale)); font-weight:800; letter-spacing:.1em; text-transform:uppercase; margin-bottom:calc(8px * var(--scale)); }
-.summary-primary { font-size:calc(19px * var(--scale)); font-weight:800; line-height:1.2; overflow-wrap:anywhere; }
-.summary-pairs { display:grid; grid-template-columns:1fr 1fr; gap:calc(8px * var(--scale)) calc(14px * var(--scale)); }
-.summary-pairs .label { margin-top:0; }
-.operational-list { display:grid; gap:0; }
-.operational-row { display:grid; grid-template-columns:minmax(calc(135px * var(--scale)), .75fr) minmax(calc(240px * var(--scale)), 2fr) auto auto; gap:calc(12px * var(--scale)); align-items:center; padding:calc(11px * var(--scale)) calc(4px * var(--scale)); border-top:1px solid var(--line); }
-.operational-row:first-child { border-top:0; }
-.restart-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:calc(7px * var(--scale)); }
-.restart-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:calc(9px * var(--scale)); align-items:center; padding:calc(9px * var(--scale)) calc(10px * var(--scale)); border:1px solid var(--line); border-radius:7px; background:var(--panel-2); }
-.restart-row.restart-watchdog { border-left:4px solid #087f5b; }
-.restart-row.restart-clean { border-left:4px solid #168a3a; }
-.restart-row.restart-test { border-left:4px solid #1d64d8; }
-.restart-row.restart-fault { border-left:4px solid #c6283a; }
-.restart-row.restart-unknown { border-left:4px solid #b36b00; }
-.restart-number { min-width:calc(42px * var(--scale)); color:var(--muted); font-size:calc(11px * var(--scale)); text-transform:uppercase; letter-spacing:.04em; }
-.restart-time { font-weight:700; white-space:nowrap; }
-.operational-area { font-weight:800; }
-.operational-detail { color:var(--muted); overflow-wrap:anywhere; }
-.operational-state { min-width:calc(105px * var(--scale)); font-weight:800; text-align:right; }
-.operational-link { white-space:nowrap; }
-.build-badge { display:inline-block; font-size:calc(18px * var(--scale)); font-weight:800; border:1px solid var(--line); border-radius:8px; padding:calc(8px * var(--scale)) calc(10px * var(--scale)); margin:calc(6px * var(--scale)) 0; background:rgba(59,130,246,.16); color:var(--text); }
-.status-word { font-size:calc(22px * var(--scale)); font-weight:800; }
-.healthy { color:var(--green); }
-.warning { color:var(--amber); }
-.degraded { color:var(--orange); }
-.critical { color:var(--red); }
-.waiting { color:var(--blue); }
-.unknown, .disabled, .idle { color:var(--muted); }
-.pill { display:inline-block; border-radius:999px; padding:calc(4px * var(--scale)) calc(8px * var(--scale)); background:#0d2b17; color:var(--green); font-size:calc(12px * var(--scale)); font-weight:700; }
-.pill.warning { background:rgba(255,191,60,.14); color:var(--amber); }
-.pill.critical { background:rgba(255,79,100,.14); color:var(--red); }
-.restart-row .pill.restart-watchdog { background:#087f5b; color:#fff; }
-.restart-row .pill.restart-clean { background:#168a3a; color:#fff; }
-.restart-row .pill.restart-test { background:#1d64d8; color:#fff; }
-.restart-row .pill.restart-fault { background:#c6283a; color:#fff; }
-.restart-row .pill.restart-unknown { background:#b36b00; color:#fff; }
-.label { color:var(--muted); font-size:calc(12px * var(--scale)); margin-top:calc(8px * var(--scale)); }
-.value { font-weight:700; overflow-wrap:anywhere; }
-.tile-value { font-size:calc(24px * var(--scale)); font-weight:800; margin:calc(8px * var(--scale)) 0 calc(4px * var(--scale)); }
-.tile-detail { color:var(--green); font-size:calc(13px * var(--scale)); overflow-wrap:anywhere; }
-.overview-page .tile { min-height:calc(116px * var(--scale)); }
-.overview-page .tile h3 { font-size:calc(17px * var(--scale)); }
-.overview-page .tile-value { font-size:calc(28px * var(--scale)); line-height:1.08; }
-.recording-tile { border-color:rgba(59,130,246,.55); background:linear-gradient(145deg, rgba(59,130,246,.14), var(--panel-2)); }
-.recording-tile .tile-value { color:var(--blue); font-size:calc(27px * var(--scale)); }
-.recording-tile .tile-detail { color:var(--muted); }
-table { width:100%; border-collapse:collapse; }
-th, td { padding:calc(9px * var(--scale)) calc(6px * var(--scale)); border-top:1px solid var(--line); text-align:left; white-space:nowrap; }
-th { color:var(--muted); font-weight:600; font-size:calc(12px * var(--scale)); }
-tr.selectable-row { cursor:pointer; }
-tr.selectable-row:hover { outline:2px solid var(--blue); outline-offset:-2px; }
-tr.selectable-row.selected { background:rgba(59,130,246,.18); }
-input[type="radio"] { width:18px; height:18px; }
-.events { display:grid; gap:calc(8px * var(--scale)); }
-.event { display:grid; grid-template-columns: calc(82px * var(--scale)) 1fr; gap:calc(8px * var(--scale)); border-top:1px solid var(--line); padding-top:calc(8px * var(--scale)); }
-.event-time { color:var(--muted); font-size:calc(12px * var(--scale)); }
-.event-card { border:1px solid var(--line); border-radius:6px; padding:calc(8px * var(--scale)); background:rgba(255,255,255,.025); }
-.event-card .event-head { display:flex; justify-content:space-between; gap:calc(10px * var(--scale)); align-items:center; margin-bottom:calc(6px * var(--scale)); }
-.event-card summary { cursor:pointer; list-style:none; }
-.event-card summary::-webkit-details-marker { display:none; }
-.event-summary { display:grid; grid-template-columns:calc(76px * var(--scale)) minmax(0, 1fr) auto; gap:calc(10px * var(--scale)); align-items:center; }
-.event-summary .event-message { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.event-card[open] .event-summary .event-message { white-space:normal; }
-.event-detail { margin-top:calc(8px * var(--scale)); padding-top:calc(8px * var(--scale)); border-top:1px solid var(--line); }
-.event-source { color:var(--muted); font-size:calc(12px * var(--scale)); }
-.event-message { font-weight:700; }
-.event-data { margin-top:calc(6px * var(--scale)); max-height:calc(130px * var(--scale)); }
-.count-grid { display:grid; grid-template-columns: repeat(5, minmax(calc(90px * var(--scale)), 1fr)); gap:calc(8px * var(--scale)); margin-bottom:calc(10px * var(--scale)); }
-.history-box { height:calc(160px * var(--scale)); border:1px solid var(--line); border-radius:6px; background:linear-gradient(180deg, rgba(54,209,95,.18), rgba(54,209,95,.04)); display:flex; align-items:center; justify-content:center; color:var(--muted); }
-.trend-bars { display:flex; align-items:flex-end; gap:2px; height:34px; min-width:150px; padding:4px 0; }
-.trend-bar { flex:1; min-width:2px; background:var(--blue); border-radius:2px 2px 0 0; opacity:.8; }
-.count-chart { display:grid; grid-template-columns:repeat(7,minmax(64px,1fr)); gap:12px; min-height:220px; align-items:end; padding:18px 6px 4px; overflow-x:auto; }
-.count-day { display:grid; grid-template-rows:160px auto auto; gap:5px; min-width:0; text-align:center; }
-.count-bars { height:160px; display:flex; align-items:flex-end; justify-content:center; gap:6px; border-bottom:1px solid var(--line); }
-.count-bar { width:min(28px,38%); min-height:2px; border-radius:4px 4px 0 0; background:var(--green); }
-.count-bar.back { background:var(--blue); }
-.count-day-label { font-size:12px; font-weight:700; }
-.count-day-total { font-size:11px; color:var(--muted); }
-.top-watchdog { display:flex; align-items:center; gap:calc(8px * var(--scale)); border:1px solid var(--line); border-radius:8px; padding:calc(5px * var(--scale)) calc(8px * var(--scale)); background:var(--panel); white-space:nowrap; }
-.top-resource { color:var(--muted); padding-left:calc(8px * var(--scale)); border-left:1px solid var(--line); }
-.top-resource strong { color:var(--text); }
-.top-build-date { color:var(--green); font-weight:800; }
-pre { white-space:pre-wrap; overflow:auto; max-height:calc(540px * var(--scale)); background:var(--input); border:1px solid var(--line); border-radius:6px; padding:calc(12px * var(--scale)); }
-.detail-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:calc(10px * var(--scale)); }
-.mini-card { border:1px solid var(--line); border-radius:6px; padding:calc(10px * var(--scale)); background:rgba(255,255,255,.03); min-width:0; }
-.status-strip { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:calc(10px * var(--scale)); margin:calc(10px * var(--scale)) 0; }
-.status-box { border:1px solid var(--line); border-radius:8px; padding:calc(12px * var(--scale)); background:rgba(255,255,255,.035); min-width:0; }
-.status-box .big { font-size:calc(22px * var(--scale)); font-weight:800; margin:calc(4px * var(--scale)) 0; overflow-wrap:anywhere; }
-.action-panel { border-left:calc(5px * var(--scale)) solid var(--amber); }
-.action-panel.healthy { border-left-color:var(--green); }
-.action-panel.critical { border-left-color:var(--red); }
-.setup-steps { display:grid; gap:calc(8px * var(--scale)); counter-reset:step; }
-.setup-step { display:grid; grid-template-columns:calc(28px * var(--scale)) 1fr auto; gap:calc(10px * var(--scale)); align-items:center; border:1px solid var(--line); border-radius:8px; padding:calc(10px * var(--scale)); background:rgba(255,255,255,.025); }
-.setup-step:before { counter-increment:step; content:counter(step); width:calc(24px * var(--scale)); height:calc(24px * var(--scale)); display:grid; place-items:center; border-radius:999px; background:var(--input); color:var(--muted); font-weight:800; }
-.setup-step.healthy:before { background:rgba(54,209,95,.16); color:var(--green); }
-.setup-step.warning:before { background:rgba(255,191,60,.16); color:var(--amber); }
-.setup-step.critical:before { background:rgba(255,79,100,.16); color:var(--red); }
-.step-title { font-weight:800; }
-.step-detail { color:var(--muted); font-size:calc(12px * var(--scale)); overflow-wrap:anywhere; }
-.compact-table td, .compact-table th { white-space:normal; }
-.muted { color:var(--muted); }
-.toolbar { display:flex; flex-wrap:wrap; gap:calc(8px * var(--scale)); align-items:center; margin-bottom:calc(10px * var(--scale)); }
-.page-tabs { display:flex; gap:calc(6px * var(--scale)); margin-bottom:calc(12px * var(--scale)); padding:calc(5px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel); }
-.page-tabs a { flex:1; padding:calc(10px * var(--scale)); border-radius:6px; color:var(--muted); text-align:center; text-decoration:none; font-weight:800; }
-.page-tabs a.active { background:var(--blue); color:#fff; }
-.event-table { table-layout:fixed; }
-.event-table th:nth-child(1), .event-table td:nth-child(1) { width:calc(190px * var(--scale)); }
-.event-table th:nth-child(2), .event-table td:nth-child(2) { width:calc(82px * var(--scale)); }
-.event-table th:nth-child(3), .event-table td:nth-child(3) { width:calc(125px * var(--scale)); }
-.event-table th:nth-child(5), .event-table td:nth-child(5) { width:calc(92px * var(--scale)); }
-.event-table th:nth-child(6), .event-table td:nth-child(6) { width:calc(78px * var(--scale)); }
-.event-table td { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.event-table .event-time-cell { white-space:nowrap; overflow:visible; text-overflow:clip; }
-.event-table .event-message-cell { font-weight:700; }
-.event-view-button { appearance:none; border:0; padding:0; background:transparent; color:var(--blue); cursor:pointer; font:inherit; font-weight:700; }
-.event-detail-row td { width:auto !important; padding:calc(12px * var(--scale)); white-space:normal; overflow:visible; background:var(--input); }
-.event-evidence-body { width:100%; }
-.event-evidence-grid { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:calc(6px * var(--scale)) calc(14px * var(--scale)); margin-bottom:calc(10px * var(--scale)); }
-.event-evidence-grid .value { overflow-wrap:anywhere; }
-.event-evidence-body pre { max-height:calc(260px * var(--scale)); }
-.chart { width:100%; height:calc(180px * var(--scale)); border:1px solid var(--line); border-radius:6px; background:rgba(54,209,95,.08); }
-.chart text { fill:var(--muted); font-size:10px; }
-.chart polyline { fill:none; stroke:var(--green); stroke-width:2; }
-.chart .grid-line { stroke:var(--line); stroke-width:1; }
-.signal-chart-panel { margin-top:calc(12px * var(--scale)); padding:calc(12px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel-2); }
-.period-tabs { display:flex; gap:calc(5px * var(--scale)); }
-.period-tabs a { padding:calc(5px * var(--scale)) calc(8px * var(--scale)); border:1px solid var(--line); border-radius:6px; color:var(--muted); text-decoration:none; font-weight:700; }
-.period-tabs a.active { color:#fff; background:var(--blue); border-color:var(--blue); }
-.chart-legend { display:flex; gap:calc(12px * var(--scale)); flex-wrap:wrap; margin:calc(6px * var(--scale)) 0; color:var(--muted); font-size:calc(11px * var(--scale)); }
-.button-row { display:flex; gap:calc(8px * var(--scale)); flex-wrap:wrap; align-items:center; margin:calc(10px * var(--scale)) 0; }
-.quick-actions { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:calc(8px * var(--scale)); }
-.quick-actions a { min-height:calc(54px * var(--scale)); display:flex; flex-direction:column; justify-content:center; }
-.quick-actions a span { display:block; margin-top:calc(3px * var(--scale)); color:var(--muted); font-size:calc(11px * var(--scale)); font-weight:400; }
-.issue-list { display:grid; gap:calc(7px * var(--scale)); }
-.issue-row { display:grid; grid-template-columns:auto 1fr; gap:calc(9px * var(--scale)); align-items:start; padding:calc(9px * var(--scale)); border:1px solid var(--line); border-radius:7px; background:rgba(255,255,255,.025); }
-.issue-row .pill { min-width:calc(68px * var(--scale)); text-align:center; }
-.advanced-disclosure { margin-top:calc(12px * var(--scale)); border-top:1px solid var(--line); padding-top:calc(10px * var(--scale)); }
-.advanced-disclosure summary { color:var(--blue); cursor:pointer; font-weight:700; }
-.section-disclosure { margin-top:calc(12px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel); overflow:hidden; }
-.section-disclosure > summary { display:flex; align-items:center; justify-content:space-between; gap:calc(10px * var(--scale)); padding:calc(12px * var(--scale)) calc(14px * var(--scale)); color:var(--text); cursor:pointer; font-weight:800; list-style:none; }
-.section-disclosure > summary::-webkit-details-marker { display:none; }
-.section-disclosure > summary:after { content:'Show'; color:var(--blue); font-size:calc(11px * var(--scale)); font-weight:700; }
-.section-disclosure[open] > summary:after { content:'Hide'; }
-.section-disclosure[open] > summary { border-bottom:1px solid var(--line); }
-.section-body { padding:calc(14px * var(--scale)); }
-.summary-strip { display:grid; grid-template-columns:repeat(auto-fit, minmax(calc(145px * var(--scale)),1fr)); gap:calc(10px * var(--scale)); margin-bottom:calc(12px * var(--scale)); }
-.summary-stat { min-width:0; padding:calc(12px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:linear-gradient(145deg, var(--panel), var(--panel-2)); }
-.summary-stat .stat-value { margin-top:calc(5px * var(--scale)); font-size:calc(21px * var(--scale)); font-weight:800; overflow-wrap:anywhere; }
-.summary-stat .stat-detail { margin-top:calc(3px * var(--scale)); color:var(--muted); font-size:calc(11px * var(--scale)); overflow-wrap:anywhere; }
-.tool-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:calc(9px * var(--scale)); }
-.tool-card { display:flex; flex-direction:column; justify-content:space-between; min-height:calc(86px * var(--scale)); padding:calc(12px * var(--scale)); border:1px solid var(--line); border-radius:8px; background:var(--panel-2); color:var(--text); text-decoration:none; }
-.tool-card strong { font-size:calc(14px * var(--scale)); }
-.tool-card span { margin-top:calc(5px * var(--scale)); color:var(--muted); font-size:calc(11px * var(--scale)); }
-.tool-card:not(.disabled):hover { border-color:var(--blue); }
-.tool-card.primary { background:var(--blue); color:#fff; border-color:var(--blue); }
-.tool-card.primary span { color:rgba(255,255,255,.78); }
-.tool-card.danger { border-color:var(--red); }
-.tool-card.disabled { opacity:.58; cursor:not-allowed; }
-.section-lead { display:flex; align-items:flex-start; justify-content:space-between; gap:calc(12px * var(--scale)); margin-bottom:calc(10px * var(--scale)); }
-.section-lead h2 { margin-bottom:calc(4px * var(--scale)); }
-.section-lead p { margin:0; }
-.status-dot { display:inline-block; width:calc(8px * var(--scale)); height:calc(8px * var(--scale)); margin-right:calc(5px * var(--scale)); border-radius:999px; background:currentColor; }
-.settings-sections { display:grid; gap:calc(9px * var(--scale)); }
-.settings-sections .section-disclosure { margin-top:0; }
-.settings-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:calc(12px * var(--scale)); }
-.option-row { display:flex; align-items:flex-start; gap:calc(8px * var(--scale)); margin:calc(10px * var(--scale)) 0; padding:calc(10px * var(--scale)); border:1px solid var(--line); border-radius:7px; background:var(--panel-2); }
-.option-row input { width:auto; margin-top:calc(2px * var(--scale)); }
-.table-scroll { overflow-x:auto; }
-button.action, a.action { background:var(--blue); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; text-decoration:none; display:inline-block; }
-button.danger, a.danger { background:var(--red); color:#fff; border:0; border-radius:6px; padding:calc(9px * var(--scale)) calc(12px * var(--scale)); cursor:pointer; font-weight:700; font-size:inherit; text-decoration:none; display:inline-block; }
-button.ghost, a.ghost { background:transparent; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:calc(7px * var(--scale)) calc(10px * var(--scale)); cursor:pointer; font-size:inherit; text-decoration:none; display:inline-block; }
-form.inline { display:inline-block; margin:0; }
-button.action:disabled { opacity:.5; cursor:not-allowed; }
-.page { display:none; }
-.page.active { display:block; }
-@media (max-width: 1100px) {
-  .shell { grid-template-columns: calc(180px * var(--scale)) 1fr; }
-  .metric-grid { grid-template-columns: repeat(3, minmax(calc(130px * var(--scale)), 1fr)); }
-  .status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .top-grid, .lower-grid, .bottom-grid { grid-template-columns: 1fr; }
-  .tool-grid { grid-template-columns:repeat(2, minmax(0,1fr)); }
-  .topbar { height:auto; min-height:calc(58px * var(--scale)); padding-top:calc(7px * var(--scale)); padding-bottom:calc(7px * var(--scale)); }
-  .topbar-right { flex-wrap:wrap; justify-content:flex-end; }
-}
-@media (max-width: 760px) {
-  .shell { grid-template-columns: 1fr; }
-  .sidebar { position:static; }
-  .topbar { height:auto; min-height:calc(58px * var(--scale)); align-items:flex-start; flex-direction:column; gap:calc(8px * var(--scale)); padding-top:calc(10px * var(--scale)); padding-bottom:calc(10px * var(--scale)); }
-  .topbar-right { width:100%; flex-wrap:wrap; gap:calc(7px * var(--scale)); }
-  #last-update { flex:1 1 100%; overflow-wrap:anywhere; }
-  .metric-grid { grid-template-columns: repeat(2, minmax(calc(130px * var(--scale)), 1fr)); }
-  .status-strip { grid-template-columns: 1fr; }
-  .summary-card { grid-template-columns: 1fr; }
-  .summary-pairs { grid-template-columns:1fr 1fr; }
-  .operations-grid { grid-template-columns:1fr; }
-  .page-intro { align-items:flex-start; }
-  .quick-actions { grid-template-columns:1fr; }
-  .summary-strip, .tool-grid, .settings-grid, .restart-list { grid-template-columns:1fr; }
-  .event-summary { grid-template-columns:auto 1fr; }
-  .event-summary .event-time { grid-column:2; }
-  .page-tabs { display:grid; grid-template-columns:1fr; }
-  .operational-row { grid-template-columns:1fr auto; }
-  .operational-detail { grid-column:1 / -1; grid-row:2; }
-  .operational-state { min-width:0; }
-  .operational-link { grid-column:1 / -1; }
-}
-</style>
-</head>
-<body data-theme="__BODY_THEME__">
-<div class="shell">
-  <aside class="sidebar">
-    <div class="brand">VA-Connect Watchdog<small>__SITE_NAME__</small></div>
-    <nav class="nav" id="nav">__SERVER_NAV__</nav>
-  </aside>
-  <main class="main">
-    <header class="topbar">
-      <div id="page-title">__SITE_NAME__ / __PAGE_MODE__ / __PAGE_TITLE__</div>
-      <div class="topbar-right">
-        <div class="top-watchdog"><span>Watchdog</span><strong id="side-state" class="value">Loading</strong><span class="top-resource">CPU <strong id="watchdog-cpu">-</strong></span><span class="top-resource" id="watchdog-cpu-source-wrap" style="display:none">Source <strong id="watchdog-cpu-source">-</strong></span><span class="top-resource">RAM <strong id="watchdog-memory">-</strong></span><span class="top-resource">Disk <strong id="watchdog-disk">-</strong></span><span class="label">Build</span><strong>__BUILD_ID__</strong></div>
-        <label>Theme <select id="theme-select" onchange="setTheme(this.value)"><option value="light">Light</option><option value="dark">Dark</option><option value="steel">Steel</option><option value="sand">Sand</option></select></label>
-        <span class="advanced-only"><label>Refresh <select id="refresh-select" onchange="setRefreshInterval(this.value)"><option value="5000">5s</option><option value="15000">15s</option><option value="30000">30s</option><option value="60000">60s</option><option value="0">Manual</option></select></label></span>
-        <button class="ghost advanced-only" onclick="load()">Refresh now</button>
-        <button class="ghost" onclick="reloadPage()">Reload page</button>
-        <div id="last-update">Last update: -</div>
-      </div>
-    </header>
-    <section class="content" id="app">
-      __BASIC_DASHBOARD__
-    </section>
-  </main>
-</div>
-<script>
-(function(){
-  var refreshTimer = null;
-  function esc(value){
-    return String(value === null || value === undefined ? '' : value)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-  function request(path, done){
-    var xhr = new XMLHttpRequest();
-    xhr.open('GET', path, true);
-    xhr.onreadystatechange = function(){
-      if (xhr.readyState === 4) {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try { done(null, JSON.parse(xhr.responseText)); }
-          catch (e) { done(e); }
-        } else {
-          done(new Error('HTTP ' + xhr.status));
-        }
-      }
-    };
-    xhr.send();
-  }
-  function renderBasic(status){
-    var lastUpdate = document.getElementById('last-update');
-    var sideState = document.getElementById('side-state');
-    var watchdogCpu = document.getElementById('watchdog-cpu');
-    var watchdogCpuSource = document.getElementById('watchdog-cpu-source');
-    var watchdogCpuSourceWrap = document.getElementById('watchdog-cpu-source-wrap');
-    var watchdogMemory = document.getElementById('watchdog-memory');
-    var watchdogDisk = document.getElementById('watchdog-disk');
-    var checks = status.checks || [];
-    var hasIssue = false;
-    var processValue = status.watchdog_process || {};
-    for (var i = 0; i < checks.length; i++) {
-      if (checks[i].name === 'watchdog_process' && checks[i].value) processValue = checks[i].value;
-      if (checks[i].state === 'critical' || checks[i].state === 'warning' || checks[i].state === 'unknown') {
-        hasIssue = true;
-      }
-    }
-    var state = status.critical_failed ? 'critical' : (hasIssue ? 'warning' : 'healthy');
-    if (lastUpdate) lastUpdate.textContent = 'Last update: ' + (status.time || '-');
-    if (watchdogCpu) watchdogCpu.textContent = processValue.cpu_percent === null || processValue.cpu_percent === undefined ? '-' : processValue.cpu_percent + '%';
-    var topThread = processValue.top_thread || {};
-    if (watchdogCpuSource && watchdogCpuSourceWrap && topThread.label) {
-      watchdogCpuSource.textContent = topThread.label + ' ' + topThread.cpu_percent + '%';
-      watchdogCpuSource.title = topThread.location || topThread.name || '';
-      watchdogCpuSourceWrap.style.display = '';
-    } else if (watchdogCpuSourceWrap) {
-      watchdogCpuSourceWrap.style.display = 'none';
-    }
-    if (watchdogMemory) watchdogMemory.textContent = processValue.memory_mb === null || processValue.memory_mb === undefined ? '-' : processValue.memory_mb + ' MB';
-    if (watchdogDisk) {
-      var diskRead = processValue.disk_read_kbps === null || processValue.disk_read_kbps === undefined ? '-' : processValue.disk_read_kbps;
-      var diskWrite = processValue.disk_write_kbps === null || processValue.disk_write_kbps === undefined ? '-' : processValue.disk_write_kbps;
-      var dataUsed = processValue.data_used_mb;
-      var dataLimit = processValue.data_limit_mb;
-      var dataUsage = dataUsed === null || dataUsed === undefined ? '-' : dataUsed + '/' + (dataLimit || '-') + ' MB';
-      watchdogDisk.textContent = dataUsage + ' · R/W ' + diskRead + '/' + diskWrite + ' KB/s';
-    }
-    if (sideState) {
-      sideState.textContent = state.toUpperCase();
-      sideState.className = 'value ' + state;
-    }
-  }
-  function hideAdvancedControls(){
-    var items = document.getElementsByClassName('advanced-only');
-    for (var i = 0; i < items.length; i++) {
-      items[i].style.display = 'none';
-    }
-  }
-  function restoreDisclosureState(){
-    var details = document.querySelectorAll('details.section-disclosure');
-    for (var i = 0; i < details.length; i++) {
-      var summary = details[i].querySelector('summary');
-      if (!summary) continue;
-      var key = 'va_watchdog_disclosure_' + location.pathname + '_' + summary.textContent.trim();
-      try {
-        var saved = localStorage.getItem(key);
-        if (saved === 'open') details[i].open = true;
-        if (saved === 'closed') details[i].open = false;
-      } catch (e) {}
-      details[i].addEventListener('toggle', function(){
-        var item = this.querySelector('summary');
-        if (!item) return;
-        try {
-          localStorage.setItem('va_watchdog_disclosure_' + location.pathname + '_' + item.textContent.trim(), this.open ? 'open' : 'closed');
-        } catch (e) {}
-      });
-    }
-  }
-  window.vaWatchdogCompatibilityLoad = function(){
-    request('/api/status', function(error, status){
-      if (error) {
-        document.getElementById('app').innerHTML = '<div class="card"><h2>Dashboard Load Error</h2><p>Could not read /api/status: ' + esc(error.message || error) + '</p></div>';
-        return;
-      }
-      renderBasic(status);
-    });
-  };
-  window.load = window.vaWatchdogCompatibilityLoad;
-  window.reloadPage = function(){
-    window.location.reload();
-  };
-  window.setRefreshInterval = function(value){
-    if (refreshTimer) {
-      clearInterval(refreshTimer);
-      refreshTimer = null;
-    }
-    var ms = Number(value);
-    if (ms > 0) {
-      refreshTimer = setInterval(window.vaWatchdogCompatibilityLoad, ms);
-    }
-  };
-  window.setTheme = function(value){
-    try {
-      localStorage.setItem('va_watchdog_theme', value);
-    } catch (e) {}
-    document.cookie = 'va_watchdog_theme=' + encodeURIComponent(value) + '; path=/; max-age=31536000; samesite=lax';
-    document.body.setAttribute('data-theme', value);
-  };
-  var initialTheme = document.body.getAttribute('data-theme') || 'light';
-  var themeSelect = document.getElementById('theme-select');
-  if (themeSelect) themeSelect.value = initialTheme;
-  hideAdvancedControls();
-  restoreDisclosureState();
-  window.vaWatchdogCompatibilityLoad();
-}());
-</script>
-</body>
-</html>
-"""
+HTML = Path(__file__).with_name("dashboard_shell.html").read_text(encoding="utf-8")
 
-def start_web(cfg):
+def start_web(cfg, handler_only=False):
     web_cfg = cfg["web"]
+    lightweight = bool(web_cfg.get("lightweight"))
     if not web_cfg.get("enabled", True):
         return None
 
@@ -680,6 +203,8 @@ def start_web(cfg):
 
     def _quick_run(command, cwd=None, timeout=3):
         try:
+            if command and command[0] == "git":
+                command = ["git", "-c", f"safe.directory={Path(__file__).resolve().parents[2]}", *command[1:]]
             result = subprocess.run(
                 command,
                 cwd=cwd,
@@ -710,6 +235,7 @@ def start_web(cfg):
             "build_number": build_number(),
             "last_update_at": completed_update["at"],
             "last_update_build": completed_update["build"],
+            "update_state": load_update_status(cfg).get("state", "idle"),
             "branch": running_version["branch"],
             "commit": running_version["commit"],
             "commit_id": running_version["commit"],
@@ -820,6 +346,18 @@ def start_web(cfg):
                 "checks": [],
                 "error": str(exc),
             }
+
+    def recording_status():
+        if handler_only:
+            return recording_storage_status(cfg)
+        status = status_snapshot()
+        recording = status.get("recording_storage")
+        if not isinstance(recording, dict):
+            return {"status": "unknown", "message": "Waiting for the monitor's recording storage check"}
+        result = dict(recording)
+        if not health_response(cfg)["status_fresh"]:
+            result.update(status="unknown", message="Recording storage check is stale")
+        return result
 
     def local_time(value):
         if not value:
@@ -1308,7 +846,7 @@ def start_web(cfg):
             recovery = cfg.get("recovery", {})
             rec_storage = cfg.get("recording_storage", {}) if isinstance(cfg.get("recording_storage", {}), dict) else {}
             hw_cfg = cfg.get("hardware_watchdog", {}) if isinstance(cfg.get("hardware_watchdog", {}), dict) else {}
-            live_recording_storage = recording_storage_status(cfg)
+            live_recording_storage = recording_status()
             settings_summary = summary_strip([
                 ("Gateway", gateway_identity.get("display_name") or gateway_identity.get("hostname") or "Not named", gateway_identity.get("asset_id") or "No asset ID", "healthy"),
                 ("Health checks", f"Every {cfg.get('poll_interval_seconds', 5)}s", "Lightweight live monitoring", "healthy"),
@@ -1479,8 +1017,7 @@ def start_web(cfg):
                 "</div>"
                 f"<label class=\"option-row\"><input name=\"recovery_enabled\" type=\"checkbox\" {'checked' if recovery.get('enabled') else ''}> Enable recovery engine</label>"
                 f"<label class=\"option-row\"><input name=\"restart_failed_services\" type=\"checkbox\" {'checked' if recovery.get('restart_failed_services') else ''}> Restart failed critical services</label>"
-                f"<label class=\"option-row\"><input name=\"allow_reboot\" type=\"checkbox\" {'checked' if recovery.get('allow_reboot') else ''}> Allow gateway reboot after a persistent critical failure</label>"
-                "<p class=\"warning\">Automatic reboot should remain disabled until recovery rules have been tested on the gateway.</p>"
+                "<p class=\"muted\">Automatic gateway reboot for network or health faults is unavailable. Recovery can restart explicitly configured services.</p>"
             )
             normal_grace = int(hw_cfg.get("startup_grace_seconds", 300) or 0)
             post_trip_grace = int(hw_cfg.get("post_trip_grace_seconds", 900) or 0)
@@ -2046,7 +1583,7 @@ def start_web(cfg):
             if not file_rows:
                 file_rows.append("<tr><td colspan=\"3\">No watchdog data files found.</td></tr>")
             default_days = retention.get("events_retention_days") or 30
-            recording = status_snapshot().get("recording_storage") or recording_storage_status(cfg)
+            recording = status_snapshot().get("recording_storage") or recording_status()
             activity = recording_activity(cfg)
             oldest_activity = activity.get("oldest") if isinstance(activity.get("oldest"), dict) else {}
             rec_rows = [
@@ -2392,7 +1929,7 @@ def start_web(cfg):
                     ("Recovery engine", "Enabled" if cfg_recovery.get("enabled") else "Disabled", recovery.get("message", "-"), "healthy" if cfg_recovery.get("enabled") else "warning"),
                     ("Videosoft services", f"{active_services}/{len(configured_services)}", "Running now", "healthy" if configured_services and active_services == len(configured_services) else "critical"),
                     ("Watchdog service", str(install.get("active", "unknown")).upper(), str(install.get("enabled", "-")).upper(), "healthy" if install.get("active") == "active" else "critical"),
-                    ("Automatic reboot", "Allowed" if cfg_recovery.get("allow_reboot") else "Blocked", f"Grace {cfg_recovery.get('critical_grace_seconds', '-')}s", "warning" if cfg_recovery.get("allow_reboot") else "healthy"),
+                    ("Automatic gateway reboot", "Unavailable", "Hardware liveness protection is separate", "healthy"),
                 ])
                 + "<div class=\"card\"><h2>Recovery Tools</h2>"
                 "<p class=\"section-lead\">Manual repair actions only. Every action opens a confirmation or downloads evidence.</p>"
@@ -3304,7 +2841,7 @@ def start_web(cfg):
                     blank_options.append(
                         f"<option value=\"{escape(device)}\">{escape(str(item.get('model', '-') or '-'))} - {escape(str(item.get('size_gb', '-')))} GB - {escape(device)} - serial {escape(str(item.get('serial', '-') or '-'))}</option>"
                     )
-        rec = recording_storage_status(cfg)
+        rec = recording_status()
         current_directory = rec.get("recordings_path") if rec.get("mode") == "system_directory" else "/home/vsuser/recordings"
         body = (
             "<div class=\"card\">"
@@ -3478,7 +3015,7 @@ def start_web(cfg):
             "message": "Watchdog is now monitoring the existing recording mount only.",
             "output": "No disk, label, mount, ownership, or fstab changes were made.",
             "backup": f"Config backup created automatically beside {saved_path}",
-            "status": recording_storage_status(cfg),
+            "status": recording_status(),
         }
 
     def monitor_system_recording_directory(path, ack):
@@ -3491,7 +3028,7 @@ def start_web(cfg):
                 "ok": False,
                 "message": validation.get("message", "Recording directory validation failed."),
                 "output": f"Requested path: {validation.get('path') or path}",
-                "status": recording_storage_status(cfg),
+                "status": recording_status(),
             }
         updates = {
             "recording_storage": {
@@ -3512,7 +3049,7 @@ def start_web(cfg):
         live_cfg = deep_merge(cfg, updates)
         cfg.clear()
         cfg.update(live_cfg)
-        status = recording_storage_status(cfg)
+        status = recording_status()
         return {
             "ok": status.get("status") in {"healthy", "warning"},
             "message": "Watchdog is now monitoring the existing recording folder.",
@@ -4093,7 +3630,7 @@ def start_web(cfg):
             "recovery": {
                 "enabled": "recovery_enabled" in form,
                 "restart_failed_services": "restart_failed_services" in form,
-                "allow_reboot": "allow_reboot" in form,
+                "allow_reboot": False,
             },
         }
 
@@ -5755,7 +5292,7 @@ def start_web(cfg):
             "volumes": volumes,
             "write_test_path": storage_cfg.get("write_test_path"),
             "retention": retention_status(),
-            "recording_storage": status_snapshot().get("recording_storage") or recording_storage_status(cfg),
+            "recording_storage": status_snapshot().get("recording_storage") or recording_status(),
             "recording_storage_candidates": recording_storage_candidates(cfg),
         }
 
@@ -6070,7 +5607,7 @@ def start_web(cfg):
             "recovery": {
                 "enabled": bool(recovery.get("enabled", False)),
                 "restart_failed_services": bool(recovery.get("restart_failed_services", False)),
-                "allow_reboot": bool(recovery.get("allow_reboot", False)),
+                "allow_reboot": False,
             },
         }
         if updates["thresholds"]["root_disk_warning_percent"] >= updates["thresholds"]["root_disk_critical_percent"]:
@@ -6502,17 +6039,9 @@ def start_web(cfg):
         }
 
     def healthz():
-        status = status_snapshot()
-        return {
-            "ok": "error" not in status,
-            "state": status.get("state"),
-            "score": status.get("score"),
-            "critical_failed": bool(status.get("critical_failed", False)),
-            "status_time": status.get("time"),
-            "version": version_info(),
-        }
+        return {**health_response(cfg), "mode": "lightweight" if lightweight else "full", "version": version_info()}
 
-    class Handler(BaseHTTPRequestHandler):
+    class Handler(ProtectedHandler):
         def log_message(self, fmt, *args):
             return
 
@@ -6579,8 +6108,33 @@ def start_web(cfg):
             return "light"
 
         def do_GET(self):
+            if not self.allow_read():
+                return
             request_context.theme = self._request_theme()
             route_path = self.path.split("?", 1)[0]
+            if route_path == "/operator-login":
+                self.send_response(303)
+                self.send_header("Location", "/")
+                self.end_headers()
+                return
+            if lightweight and route_path in {"/update-confirm", "/pi-storage", "/api/evidence.zip"}:
+                from .lite_server import evidence_zip, pi_storage_page, update_page
+                if route_path == "/api/evidence.zip":
+                    self._send_bytes(evidence_zip(cfg), content_type="application/zip", filename="watchdog-evidence.zip")
+                elif route_path == "/pi-storage":
+                    if cfg.get("platform", {}).get("kind") != "raspberry_pi":
+                        self._send_json({"error": "Not found"}, status=404)
+                    else:
+                        self._send_bytes(pi_storage_page(cfg), content_type="text/html; charset=utf-8")
+                else:
+                    follow = parse_qs(self.path.partition("?")[2]).get("follow") == ["1"]
+                    if follow and load_update_status(cfg).get("state") == "completed":
+                        self.send_response(303)
+                        self.send_header("Location", "/")
+                        self.end_headers()
+                    else:
+                        self._send_bytes(update_page(cfg, follow=follow), content_type="text/html; charset=utf-8")
+                return
             if route_path == "/pi-storage" and cfg.get("platform", {}).get("kind") == "raspberry_pi":
                 body = pi_storage_html().encode("utf-8")
                 self._send_bytes(body, content_type="text/html; charset=utf-8")
@@ -6592,7 +6146,7 @@ def start_web(cfg):
                 self.end_headers()
                 return
             if route_path == "/":
-                body = lite_page()
+                body = lite_page(cfg if lightweight else None)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -7018,8 +6572,13 @@ def start_web(cfg):
             if route_path == "/api/identity":
                 self._send_json(identity_summary(cfg))
                 return
-            if route_path == "/api/healthz":
+            if route_path in {"/api/healthz", "/api/livez"}:
                 self._send_json(healthz())
+                return
+            if route_path == "/api/readyz":
+                result = healthz()
+                result.update(ok=result["ready"], scope="gateway_readiness")
+                self._send_json(result, status=200 if result["ok"] else 503)
                 return
             if route_path == "/api/system-info":
                 self._send_json(system_info())
@@ -7128,6 +6687,14 @@ def start_web(cfg):
             self.end_headers()
 
         def do_POST(self):
+            if not self.allow_action():
+                if getattr(self, "action_completed", False):
+                    from .config import load_config
+                    cfg.update(load_config())
+                    if self.path.split("?", 1)[0] == "/analytics/anpr-save":
+                        anpr_stop_collector()
+                        anpr_start_collector(anpr_load_settings())
+                return
             request_context.theme = self._request_theme()
             route_path = self.path.split("?", 1)[0]
             if route_path == "/network-router-save":
@@ -7191,7 +6758,8 @@ def start_web(cfg):
                     anpr_save_settings(first('address'), first('username'), first('password') or existing.get('password', ''),
                                        first('retention_days') or 30)
                     anpr_stop_collector()
-                    anpr_start_collector(anpr_load_settings())
+                    if not handler_only:
+                        anpr_start_collector(anpr_load_settings())
                     location = '/analytics/anpr-setup?saved=1'
                 except (OSError, ValueError, TimeoutError) as exc:
                     location = '/analytics/anpr-setup?error=' + quote(str(exc))
@@ -7440,13 +7008,22 @@ def start_web(cfg):
                 return
             if route_path == "/update-now":
                 try:
-                    result = launch_update_job(cfg)
+                    if not cfg.get("update", {}).get("enabled", True):
+                        result = {"ok": False, "message": "Web updates are disabled."}
+                    elif update_in_progress(load_update_status(cfg)):
+                        result = {"ok": False, "message": "An update is already running."}
+                    else:
+                        result = launch_update_job(cfg)
                 except Exception as exc:
                     result = {
                         "ok": False,
                         "message": f"Update could not be started ({type(exc).__name__}). View the update log for details.",
                     }
-                body = update_started_html(result).encode("utf-8")
+                if lightweight:
+                    from .lite_server import update_page
+                    body = update_page(cfg, result, follow=bool(result.get("ok") or update_in_progress(load_update_status(cfg))))
+                else:
+                    body = update_started_html(result).encode("utf-8")
                 # Return the result page even when launching the updater fails so the browser
                 # shows the actionable message instead of replacing it with a generic HTTP 500.
                 self.send_response(200)
@@ -7476,7 +7053,11 @@ def start_web(cfg):
                         )
                 else:
                     result = expand_pi_storage(form.get("root", [""])[0])
-                body = pi_storage_html(result).encode("utf-8")
+                if lightweight:
+                    from .lite_server import pi_storage_page
+                    body = pi_storage_page(cfg, result)
+                else:
+                    body = pi_storage_html(result).encode("utf-8")
                 self._send_bytes(body, content_type="text/html; charset=utf-8")
                 return
             if route_path == "/settings-save":
@@ -7755,10 +7336,10 @@ def start_web(cfg):
                     form = parse_qs(raw_body, keep_blank_values=True)
                     ack = form.get("ack", [""])[0] in {"1", "on", "true", "True", "yes"}
                     result = apply_recording_service_mount_guards(cfg, ack)
-                    result.setdefault("status", recording_storage_status(cfg))
+                    result.setdefault("status", recording_status())
                     append_web_event("healthy" if result.get("ok") else "warning", "recording_storage", result.get("message", "Recording service mount guard processed"), result)
                 except Exception as exc:
-                    result = {"ok": False, "message": str(exc), "output": "", "status": recording_storage_status(cfg)}
+                    result = {"ok": False, "message": str(exc), "output": "", "status": recording_status()}
                 body = recording_storage_result_html(result).encode("utf-8")
                 self.send_response(200 if result.get("ok") else 400)
                 self.send_header("Content-Type", "text/html")
@@ -8088,7 +7669,12 @@ def start_web(cfg):
                 self.wfile.write(body)
                 return
             if self.path == "/api/update":
-                result = launch_update_job(cfg)
+                if not cfg.get("update", {}).get("enabled", True):
+                    result = {"ok": False, "message": "Web updates are disabled."}
+                elif update_in_progress(load_update_status(cfg)):
+                    result = {"ok": False, "message": "An update is already running."}
+                else:
+                    result = launch_update_job(cfg)
                 status = 200 if result.get("ok") else 500
                 self._send_json(result, status=status)
                 return
@@ -8120,8 +7706,13 @@ def start_web(cfg):
                 return
             self._send_json({"error": "not found"}, status=404)
 
-    server = ThreadingHTTPServer((web_cfg["host"], int(web_cfg["port"])), Handler)
-    anpr_start_collector(anpr_load_settings())
+    protect(Handler, mode="lightweight" if lightweight else "full", cfg=cfg)
+    if handler_only:
+        Handler.privileged_action = True
+        return Handler
+    server = BoundedHTTPServer((web_cfg["host"], int(web_cfg["port"])), Handler)
+    if not lightweight:
+        anpr_start_collector(anpr_load_settings())
     t = Thread(target=server.serve_forever, daemon=True)
     t.start()
     server.serve_thread = t

@@ -49,6 +49,7 @@ class PiStorageTests(unittest.TestCase):
         run.assert_not_called()
 
     def test_pi_storage_page_and_confirmed_action_are_reachable(self):
+        self.enterContext(patch('va_watchdog.web_security.ProtectedHandler.allow_action', return_value=True))
         cfg = {"platform": {"kind": "raspberry_pi"}, "web": {"host": "127.0.0.1", "port": 0},
                "events_path": "/tmp/pi-storage-test-events.jsonl", "status_path": "/tmp/pi-storage-test-status.json"}
         storage = {"available": True, "reason": "Space available", "root": "/dev/nvme0n1p2",

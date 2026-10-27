@@ -9,5 +9,7 @@ sudo systemctl disable va-watchdog-feed.service || true
 sudo rm -f /etc/systemd/system/va-watchdog.service
 sudo rm -f /etc/systemd/system/va-watchdog-web.service
 sudo rm -f /etc/systemd/system/va-watchdog-feed.service
+sudo rm -f /etc/sudoers.d/va-watchdog-web
+sudo rm -f /usr/local/lib/va-watchdog/web-action-helper.py
 sudo systemctl daemon-reload
 echo "Uninstalled VA-Connect Watchdog service"

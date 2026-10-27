@@ -84,14 +84,5 @@ def expand(expected_root):
 
 def verify_account_password(password):
     """Authenticate the local Pi account without placing credentials in config."""
-    if not password or os.name != "posix":
-        return False
-    import crypt
-    import hmac
-    import spwd
-    try:
-        stored = spwd.getspnam("vsuser").sp_pwdp
-        candidate = crypt.crypt(password, stored) if stored and stored[0] not in "! *" else None
-        return bool(candidate and hmac.compare_digest(candidate, stored))
-    except (KeyError, PermissionError, OSError):
-        return False
+    from .web import verify_local_reset_password
+    return verify_local_reset_password(password)

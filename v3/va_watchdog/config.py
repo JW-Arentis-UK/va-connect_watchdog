@@ -57,7 +57,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "web": {
         "enabled": True,
         "host": "0.0.0.0",
-        "port": 9110
+        "port": 9110,
+        "operator_account": "vsuser"
     },
     "display_monitor": {
         "enabled": False,
@@ -305,6 +306,8 @@ def load_config() -> Dict[str, Any]:
             break
     cfg = _migrate_default_videosoft_services(cfg)
     cfg = _enforce_neousys_watchdog(cfg)
+    cfg = dict(cfg)
+    cfg["recovery"] = {**cfg.get("recovery", {}), "allow_reboot": False}
     return _enforce_recording_free_space_reserve(cfg)
 
 def active_config_path() -> Path:

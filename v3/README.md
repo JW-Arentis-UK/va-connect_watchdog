@@ -3,6 +3,12 @@
 Health Engine for Ubuntu gateways and Raspberry Pi OS. The Pi profile and setup
 notes are in [docs/raspberry-pi.md](docs/raspberry-pi.md).
 
+Build `20261027.1` removes automatic gateway reboots for network and health faults,
+isolates collectors from supervisor liveness, and requires operator authentication
+for web actions. Installation updates are required for the unprivileged web account
+and action helper. See [the implementation and reassessment](docs/watchdog-review-2026-10-27.md)
+for compatibility details and the attended gateway acceptance tests.
+
 Current scope:
 - System health checks
 - Service checks

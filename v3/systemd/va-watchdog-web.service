@@ -10,8 +10,12 @@ Restart=on-failure
 RestartSec=5
 WatchdogSec=30
 NotifyAccess=main
-User=root
-Group=root
+User=va-watchdog-web
+Group=va-watchdog-web
+SupplementaryGroups=systemd-journal adm
+UMask=0027
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]
 WantedBy=multi-user.target

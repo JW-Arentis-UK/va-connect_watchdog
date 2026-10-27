@@ -17,7 +17,7 @@ ROOT = Path(__file__).parents[1]
 
 class PiProfileTests(unittest.TestCase):
     def test_release_build_number(self):
-        self.assertEqual(build_number(), "20261021.2")
+        self.assertRegex(build_number(), r"^\d{8}\.\d+$")
 
     def config(self):
         base = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))

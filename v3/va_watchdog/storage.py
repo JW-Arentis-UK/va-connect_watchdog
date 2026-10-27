@@ -967,8 +967,6 @@ def check_storage(cfg):
     if cfg.get("recording_storage", {}).get("enabled", True):
         recording = _stabilize_recording_storage_warning(recording_storage_status(cfg), cfg)
         checks.append(CheckResult("recording_storage", recording["status"], recording["message"], recording, False))
-    if cfg.get("recording_storage", {}).get("enabled", True) and not cfg.get('web', {}).get('lightweight'):
-        checks.append(_usage_check("recordings_disk", st["recordings_path"], th["recordings_disk_warning_percent"], th["recordings_disk_critical_percent"], False))
     writable = _writable(st["write_test_path"])
     checks.append(CheckResult(
         "write_test",

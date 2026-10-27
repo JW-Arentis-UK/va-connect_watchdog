@@ -1,159 +1,103 @@
+"""One recovery owner: explicit, bounded service restarts only."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
-from collections import defaultdict
 from pathlib import Path
-from typing import Any
 
-
-def _write_json(path: str | Path, payload: Any) -> None:
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 class RecoveryEngine:
     def __init__(self, cfg, event_log):
-        self.cfg = cfg
-        self.event_log = event_log
-        self.consolidated = None
-        if cfg.get('recovery', {}).get('consolidated_policy', {}).get('enabled'):
-            from .consolidated_recovery import ConsolidatedRecovery
-            self.consolidated = ConsolidatedRecovery(cfg, event_log)
-        self.restart_attempts = defaultdict(int)
-        self.restart_limit_logged = set()
-        self.reboot_suppressed_logged = False
-        self.critical_since = None
-        self.last_action = {
-            "state": "disabled",
-            "message": "Recovery is disabled.",
-            "actions": [],
-            "critical_since": None,
-            "updated_at": None,
-        }
+        self.cfg, self.event_log = cfg, event_log
+        policy = cfg.get("recovery", {}).get("consolidated_policy", {})
+        self.path = Path(policy.get("state_path") or
+                         Path(cfg.get("events_path", "/var/lib/va-watchdog/events.jsonl")).parent / "recovery/state.json")
+        try:
+            self.boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        except OSError:
+            self.boot = ""
+        try:
+            saved = json.loads(self.path.read_text(encoding="utf-8"))
+            self.state = saved if isinstance(saved, dict) and saved.get("boot_id") == self.boot else {}
+        except (OSError, ValueError):
+            self.state = {}
+        self.state = {"boot_id": self.boot, "services": self.state.get("services", {})}
+        self.persisted = json.dumps(self.state, sort_keys=True)
+        self.last_action = {}
+        self._summary("disabled", "Service recovery is disabled.")
 
     def summary(self):
-        if self.consolidated:
-            return dict(self.consolidated.last)
         return dict(self.last_action)
 
-    def _set_summary(self, state: str, message: str, actions=None, details=None):
-        summary = {
-            "state": state,
-            "message": message,
-            "actions": list(actions or []),
-            "critical_since": self.critical_since,
-            "updated_at": time.time(),
-        }
-        if details is not None:
-            summary["details"] = details
-        self.last_action = summary
-        return summary
+    def _summary(self, state, message, actions=None):
+        self.last_action = {"state": state, "message": message, "actions": actions or [],
+                            "owner": "v3", "automatic_reboot": False, "updated_at": time.time()}
+        return self.summary()
+
+    def _save(self):
+        encoded = json.dumps(self.state, sort_keys=True)
+        if encoded == self.persisted:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp.replace(self.path)
+        self.persisted = encoded
 
     def process(self, checks):
-        if self.consolidated:
-            return self.consolidated.process(checks)
-        recovery = self.cfg["recovery"]
-        if not recovery["enabled"]:
-            return self._set_summary("disabled", "Recovery is disabled.")
-
-        critical = [c for c in checks if c.state == "critical" and c.critical]
-        if critical and self.critical_since is None:
-            self.critical_since = time.time()
-        if not critical:
-            self.critical_since = None
-            self.reboot_suppressed_logged = False
-
+        settings = self.cfg.get("recovery", {})
+        if not settings.get("enabled") or not settings.get("restart_failed_services"):
+            return self._summary("disabled", "Service recovery is disabled. Automatic gateway reboot is unavailable.")
+        now = time.monotonic()
+        cooldown = max(30, float(settings.get("restart_cooldown_seconds", 60)))
+        limit = max(0, min(10, int(settings.get("max_restart_attempts", 3))))
+        configured = {s["name"]: s for s in self.cfg.get("services", []) if s.get("restart")}
         actions = []
-        if recovery.get("restart_failed_services"):
-            service_names = {s["name"]: s for s in self.cfg["services"]}
-            for c in checks:
-                if c.name in service_names and c.state == "healthy":
-                    self.restart_attempts[c.name] = 0
-                    self.restart_limit_logged.discard(c.name)
-                if c.name in service_names and c.state == "critical":
-                    svc_cfg = service_names[c.name]
-                    if svc_cfg.get("restart", False) and svc_cfg.get("critical", False):
-                        if self._restart_service(c.name):
-                            actions.append(f"restarted {c.name}")
-                elif c.name in service_names and c.state == "degraded" and recovery.get("restart_noncritical_services"):
-                    svc_cfg = service_names[c.name]
-                    if svc_cfg.get("restart", False):
-                        if self._restart_service(c.name):
-                            actions.append(f"restarted {c.name}")
-
-        if critical:
-            grace = int(recovery.get("critical_grace_seconds", 60))
-            elapsed = time.time() - float(self.critical_since or time.time())
-            if recovery.get("allow_reboot") and elapsed >= grace:
-                reason = {
-                    "state": "critical",
-                    "message": "Persistent critical failure threshold reached.",
-                    "critical_since": self.critical_since,
-                    "elapsed_seconds": round(elapsed, 1),
-                    "critical_checks": [c.to_dict() for c in critical],
-                    "actions": actions,
-                }
-                _write_json(self.cfg["last_reboot_reason_path"], reason)
-                self.event_log.add("critical", "recovery", "Reboot requested after persistent critical failure", reason)
-                subprocess.run(["systemctl", "reboot"], timeout=20, check=False)
-                actions.append("requested reboot")
-                return self._set_summary(
-                    "reboot_requested",
-                    "Persistent critical failure triggered a reboot request.",
-                    actions,
-                    reason,
-                )
-            if not recovery.get("allow_reboot") and not self.reboot_suppressed_logged:
-                self.event_log.add(
-                    "warning",
-                    "recovery",
-                    "Critical fault detected, reboot suppressed by config",
-                    {
-                        "critical_since": self.critical_since,
-                        "grace_seconds": grace,
-                        "critical_checks": [c.to_dict() for c in critical],
-                    },
-                )
-                self.reboot_suppressed_logged = True
-
-        if actions:
-            return self._set_summary(
-                "active",
-                "Recovery actions were attempted.",
-                actions,
-                {"critical_checks": [c.to_dict() for c in critical]},
-            )
-        if critical:
-            return self._set_summary(
-                "watching",
-                "Critical fault is being monitored.",
-                actions,
-                {"critical_checks": [c.to_dict() for c in critical]},
-            )
-        return self._set_summary("idle", "No recovery action needed.", actions)
-
-    def _restart_service(self, name):
-        limit = self.cfg["recovery"]["max_restart_attempts"]
-        if self.restart_attempts[name] >= limit:
-            if name not in self.restart_limit_logged:
-                self.event_log.add("critical", "recovery", f"Restart limit reached for {name}")
-                self.restart_limit_logged.add(name)
-            return False
-        self.restart_attempts[name] += 1
-        self.event_log.add("warning", "recovery", f"Restarting {name}")
-        try:
-            result = subprocess.run(["systemctl", "restart", name], timeout=20, check=False)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            self.event_log.add("critical", "recovery", f"Restart failed for {name}", {"error": str(exc)})
-            return False
-        if result.returncode != 0:
-            self.event_log.add(
-                "critical",
-                "recovery",
-                f"Restart failed for {name}",
-                {"returncode": result.returncode},
-            )
-            return False
-        return True
+        for check in checks:
+            service = configured.get(check.name)
+            if not service or not check.name.endswith(".service") or "/" in check.name:
+                continue
+            value = check.value if isinstance(check.value, dict) else {}
+            stamp = value.get("collected_at")
+            if not isinstance(stamp, (int, float)) or not 0 <= time.time() - stamp <= 90:
+                continue
+            state = self.state["services"].setdefault(check.name, {"attempts": 0, "last_action": None})
+            if check.state == "healthy":
+                state.setdefault("healthy_since", now)
+                if now - state["healthy_since"] >= cooldown:
+                    state.update(attempts=0, last_action=None)
+                continue
+            state.pop("healthy_since", None)
+            eligible = check.state == "critical" and bool(service.get("critical"))
+            eligible |= check.state == "degraded" and settings.get("restart_noncritical_services", False)
+            if not eligible or value.get("active") not in {"failed", "inactive"}:
+                continue
+            if state["attempts"] >= limit or (state["last_action"] is not None and now - state["last_action"] < cooldown):
+                continue
+            if settings.get("consolidated_policy", {}).get("enabled"):
+                try:
+                    owner = subprocess.run(["systemctl", "is-active", "va-connect-site-watchdog.service"],
+                                           capture_output=True, timeout=3, check=False)
+                    if owner.returncode not in (3, 4):
+                        return self._summary("blocked", "Legacy recovery ownership is not confirmed stopped.")
+                except (OSError, subprocess.SubprocessError):
+                    return self._summary("blocked", "Legacy recovery ownership could not be checked.")
+            state.update(attempts=state["attempts"] + 1, last_action=now)
+            self._save()
+            self.event_log.add("warning", "recovery", f"Service restart requested: {check.name}",
+                               {"attempt": state["attempts"], "limit": limit})
+            try:
+                result = subprocess.run(["systemctl", "--no-block", "restart", check.name],
+                                        capture_output=True, timeout=5, check=False)
+                if result.returncode:
+                    raise RuntimeError("service manager rejected restart")
+                actions.append(f"restart queued: {check.name}")
+            except (OSError, subprocess.SubprocessError, RuntimeError):
+                self.event_log.add("critical", "recovery", f"Restart failed for {check.name}")
+        self._save()
+        return self._summary("active" if actions else "watching", "Only configured service restarts are permitted.", actions)

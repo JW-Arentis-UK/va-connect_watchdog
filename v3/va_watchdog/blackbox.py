@@ -454,6 +454,7 @@ class BlackBoxRecorder:
         self.sampler = sampler or (ProcSampler(cfg) if self.settings["enabled"] else None)
         self.ring: deque[dict[str, Any]] = deque(maxlen=self.settings["max_rows"])
         self.pending: list[dict[str, Any]] = []
+        self.dropped_pending_samples = 0
         self._lock = Lock()
         self._stop = Event()
         self._thread: Thread | None = None
@@ -500,6 +501,9 @@ class BlackBoxRecorder:
         with self._lock:
             self.ring.append(sample)
             self.pending.append(sample)
+            if len(self.pending) > self.settings["max_rows"]:
+                self.dropped_pending_samples += len(self.pending) - self.settings["max_rows"]
+                self.pending = self.pending[-self.settings["max_rows"]:]
         return sample
 
     def flush(self) -> dict[str, Any]:
@@ -526,6 +530,7 @@ class BlackBoxRecorder:
                 "retention_seconds": self.settings["retention_seconds"],
                 "checkpoint_seconds": self.settings["checkpoint_seconds"],
                 "missed_deadlines": self.missed_deadlines,
+                "dropped_pending_samples": self.dropped_pending_samples,
                 "last_error": "",
             })
             self.last_error = ""
@@ -533,7 +538,9 @@ class BlackBoxRecorder:
         except Exception as exc:
             self.last_error = str(exc)
             with self._lock:
-                self.pending = rows + self.pending
+                combined = rows + self.pending
+                self.dropped_pending_samples += max(0, len(combined) - self.settings["max_rows"])
+                self.pending = combined[-self.settings["max_rows"]:]
             return {"written": 0, "error": self.last_error}
 
     def _run(self) -> None:
@@ -631,6 +638,7 @@ def blackbox_summary(cfg: dict[str, Any]) -> dict[str, Any]:
         "recorder_running": bool(_ACTIVE_RECORDER and _ACTIVE_RECORDER._thread and _ACTIVE_RECORDER._thread.is_alive()),
         "last_error": (_ACTIVE_RECORDER.last_error if _ACTIVE_RECORDER else "") or state.get("last_error", ""),
         "missed_deadlines": _ACTIVE_RECORDER.missed_deadlines if _ACTIVE_RECORDER else state.get("missed_deadlines", 0),
+        "dropped_pending_samples": _ACTIVE_RECORDER.dropped_pending_samples if _ACTIVE_RECORDER else state.get("dropped_pending_samples", 0),
         "size_bytes": _directory_size(segment_dir),
     }
 
@@ -845,6 +853,7 @@ def _write_segment(cfg: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str,
         raw.flush()
         os.fsync(raw.fileno())
     os.replace(temporary, target)
+    _sync_directory(directory)
     return {"written": len(rows), "path": str(target), "size_bytes": target.stat().st_size}
 
 
@@ -914,6 +923,18 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, path)
+    _sync_directory(path.parent)
+
+
+def _sync_directory(directory: Path) -> None:
+    try:
+        descriptor = os.open(str(directory), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError:
+        pass  # Some development filesystems do not support directory fsync.
 
 
 def _directory_size(path: Path) -> int:

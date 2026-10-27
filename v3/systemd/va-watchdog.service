@@ -16,7 +16,8 @@ MemoryAccounting=true
 MemoryMax=256M
 TasksMax=64
 User=root
-Group=root
+Group=va-watchdog-web
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target

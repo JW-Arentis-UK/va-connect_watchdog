@@ -98,19 +98,19 @@ class WebServiceTests(unittest.TestCase):
             self.assertIn("Download all preserved samples", page)
             self.assertEqual(unknown.exception.code, 404)
 
-    def test_first_update_keeps_web_available_until_new_unit_is_installed(self):
+    def test_missing_web_unit_never_starts_network_listener_in_root_core(self):
         with tempfile.TemporaryDirectory() as temporary:
             unit_path = Path(temporary) / "va-watchdog-web.service"
             events = Mock()
             with patch("va_watchdog.web.start_web") as start:
-                self.assertTrue(start_web_without_service({"web": {"enabled": True}}, events, unit_path))
-                start.assert_called_once()
+                self.assertFalse(start_web_without_service({"web": {"enabled": True}}, events, unit_path))
+                start.assert_not_called()
                 unit_path.touch()
                 self.assertFalse(start_web_without_service({"web": {"enabled": True}}, events, unit_path))
                 self.assertFalse(start_web_without_service({"web": {"enabled": False}}, events, unit_path))
-                start.assert_called_once()
+                start.assert_not_called()
 
-    def test_probe_accepts_live_web_even_when_core_status_is_unhealthy(self):
+    def test_probe_rejects_explicit_liveness_failure(self):
         response = Mock(status=200)
         response.__enter__ = Mock(return_value=response)
         response.__exit__ = Mock(return_value=False)
@@ -118,7 +118,8 @@ class WebServiceTests(unittest.TestCase):
         opener = Mock()
         opener.open.return_value = response
 
-        web_service.probe_web("http://127.0.0.1:9110/api/healthz", opener=opener)
+        with self.assertRaisesRegex(RuntimeError, "invalid response"):
+            web_service.probe_web("http://127.0.0.1:9110/api/healthz", opener=opener)
 
         opener.open.assert_called_once_with("http://127.0.0.1:9110/api/healthz", timeout=3)
 

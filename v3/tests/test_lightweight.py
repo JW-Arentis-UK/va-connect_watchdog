@@ -127,7 +127,7 @@ class LightweightTests(unittest.TestCase):
                     self.assertTrue(json.load(response)['ok'])
                 with self.assertRaises(HTTPError) as error:
                     urlopen(Request(url + '/api/reboot', data=b'{}'))
-                self.assertEqual(error.exception.code, 405)
+                self.assertEqual(error.exception.code, 404)
                 with urlopen(url + '/api/evidence.zip') as response:
                     bundle = zipfile.ZipFile(io.BytesIO(response.read()))
                 self.assertIn('status.json', bundle.namelist())
@@ -142,6 +142,7 @@ class LightweightTests(unittest.TestCase):
                 server.server_close()
 
     def test_pi_navigation_reaches_storage_and_update_actions(self):
+        self.enterContext(patch('va_watchdog.web_security.ProtectedHandler.allow_action', return_value=True))
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             cfg = {'platform': {'kind': 'raspberry_pi'}, 'web': {'host': '127.0.0.1', 'port': 0},
@@ -150,9 +151,10 @@ class LightweightTests(unittest.TestCase):
             storage = {'available': True, 'reason': 'Space available', 'root': '/dev/nvme0n1p2',
                        'disk': '/dev/nvme0n1', 'root_gib': 29.23, 'disk_gib': 931.51, 'free_gib': 901.78}
             with (patch('va_watchdog.lite_server.inspect_pi_storage', return_value=storage),
-                  patch('va_watchdog.lite_server.verify_account_password', return_value=True),
-                  patch('va_watchdog.lite_server.expand_pi_storage', return_value={'ok': True, 'message': 'Reboot required'}) as expand,
-                  patch('va_watchdog.lite_server.launch_update_job') as update):
+                  patch('va_watchdog.web.inspect_pi_storage', return_value=storage),
+                  patch('va_watchdog.web.verify_local_reset_password', return_value=True),
+                  patch('va_watchdog.web.expand_pi_storage', return_value={'ok': True, 'message': 'Reboot required'}) as expand,
+                  patch('va_watchdog.web.launch_update_job') as update):
                 def queue_update(_cfg):
                     (base / 'update-state.json').write_text(json.dumps({
                         'state': 'queued', 'message': 'Update queued',
@@ -204,6 +206,7 @@ class LightweightTests(unittest.TestCase):
                     server.server_close()
 
     def test_pi_resize_reboot_requires_pending_state(self):
+        self.enterContext(patch('va_watchdog.web_security.ProtectedHandler.allow_action', return_value=True))
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             cfg = {'platform': {'kind': 'raspberry_pi'}, 'web': {'host': '127.0.0.1', 'port': 0},
@@ -212,8 +215,9 @@ class LightweightTests(unittest.TestCase):
                        'disk': '/dev/nvme0n1', 'root_gib': 931.01, 'disk_gib': 931.51,
                        'free_gib': 0, 'reboot_pending': True}
             with (patch('va_watchdog.lite_server.inspect_pi_storage', return_value=storage),
-                  patch('va_watchdog.lite_server.verify_account_password', return_value=True),
-                  patch('va_watchdog.lite_server.request_gateway_reboot', return_value={'ok': True, 'message': 'Reboot scheduled'}) as reboot):
+                  patch('va_watchdog.web.inspect_pi_storage', return_value=storage),
+                  patch('va_watchdog.web.verify_local_reset_password', return_value=True),
+                  patch('va_watchdog.web.request_gateway_reboot', return_value={'ok': True, 'message': 'Reboot scheduled'}) as reboot):
                 server = start_web(cfg)
                 url = f'http://127.0.0.1:{server.server_port}'
                 try:

@@ -116,6 +116,7 @@ if [ -f "$ROOT_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" ]; then
   fi
 fi
 
+/bin/bash "$ROOT_DIR/scripts/setup_web_access.sh"
 if [ -f "$ROOT_DIR/systemd/va-watchdog.service" ]; then
   install -m 0644 "$ROOT_DIR/systemd/va-watchdog.service" /etc/systemd/system/va-watchdog.service
   log "installed current va-watchdog systemd unit"

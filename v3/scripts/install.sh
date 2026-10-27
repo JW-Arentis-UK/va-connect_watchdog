@@ -155,6 +155,7 @@ EOF
   journalctl --vacuum-size=512M --vacuum-time=30d || true
 fi
 
+/bin/bash "$APP_DIR/scripts/setup_web_access.sh"
 install -m 0644 "$APP_DIR/systemd/va-watchdog.service" /etc/systemd/system/va-watchdog.service
 install -m 0644 "$APP_DIR/systemd/va-watchdog-feed.service" /etc/systemd/system/va-watchdog-feed.service
 install -m 0644 "$APP_DIR/systemd/va-watchdog-web.service" /etc/systemd/system/va-watchdog-web.service

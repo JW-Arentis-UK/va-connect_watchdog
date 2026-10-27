@@ -16,16 +16,19 @@ class ConsolidatedTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.now = 1000.
-        self.clock = patch('va_watchdog.consolidated_recovery.time.time', side_effect=lambda: self.now)
-        self.clock.start(); self.addCleanup(self.clock.stop)
-        self.boot = patch('va_watchdog.consolidated_recovery.boot_id', return_value='boot-a')
-        self.boot.start(); self.addCleanup(self.boot.stop)
-        self.runner = patch('va_watchdog.consolidated_recovery.subprocess.run', side_effect=self.run_command)
-        self.runner.start(); self.addCleanup(self.runner.stop)
+        self.enterContext(patch('va_watchdog.recovery.time.time', side_effect=lambda: self.now))
+        self.enterContext(patch('va_watchdog.recovery.time.monotonic', side_effect=lambda: self.now))
         self.commands = []
-        self.reboot_code = 0
         self.legacy_code = 3
-        self.cfg = {'events_path': str(self.root/'events.jsonl'), 'last_reboot_reason_path': str(self.root/'reason.json'), 'recovery': {'enabled': True, 'restart_failed_services': True, 'max_restart_attempts': 3, 'allow_reboot': True, 'consolidated_policy': {'enabled': True, 'startup_grace_seconds': 0}}}
+        self.restart_code = 0
+        self.enterContext(patch('va_watchdog.recovery.subprocess.run', side_effect=self.run_command))
+        self.cfg = {
+            'events_path': str(self.root / 'events.jsonl'),
+            'services': [{'name': name, 'critical': True, 'restart': True}
+                         for name in ['esg.service', 'bridge.service', 'sysops.service']],
+            'recovery': {'enabled': True, 'restart_failed_services': True,
+                         'max_restart_attempts': 3, 'allow_reboot': True,
+                         'consolidated_policy': {'enabled': True}}}
         self.log = Mock()
         self.engine = ConsolidatedRecovery(self.cfg, self.log)
 
@@ -33,109 +36,86 @@ class ConsolidatedTests(unittest.TestCase):
         self.commands.append(args)
         if args[:2] == ['systemctl', 'is-active']:
             return SimpleNamespace(returncode=self.legacy_code)
-        if args[0] == 'shutdown':
-            # Reason and backoff must be durable before the reboot syscall.
-            self.assertEqual(json.loads((self.root/'reason.json').read_text())['boot_id'], 'boot-a')
-            self.assertTrue(json.loads(self.engine.path.read_text())['reboot_requested'])
-            return SimpleNamespace(returncode=self.reboot_code)
-        return SimpleNamespace(returncode=0)
+        return SimpleNamespace(returncode=self.restart_code)
 
-    def checks(self, wan=(True, True), lan=True, app=True, service=True):
-        targets = [{'group':'internet','ok':ok} for ok in wan] + [{'group':'local','ok':lan}]
-        rows = [CheckResult('network_module','healthy' if all(wan) and lan else 'warning',value={'targets':targets,'collected_at':self.now}), CheckResult('videosoft_process','healthy' if app else 'critical',value={'collected_at':self.now})]
-        rows += [CheckResult(n,'healthy' if service else 'critical',value={'collected_at':self.now,'active':'active' if service else 'inactive'}) for n in ['esg.service','bridge.service','sysops.service']]
+    def checks(self, wan=False, lan=False, app=False, services=False):
+        rows = [CheckResult('network_module', 'healthy' if wan and lan else 'critical',
+                            value={'collected_at': self.now}, critical=True),
+                CheckResult('videosoft_process', 'healthy' if app else 'critical',
+                            value={'collected_at': self.now}, critical=True)]
+        rows += [CheckResult(item['name'], 'healthy' if services else 'critical',
+                             value={'collected_at': self.now, 'active': 'active' if services else 'failed'},
+                             critical=True) for item in self.cfg['services']]
         return rows
 
-    def test_healthy_and_partial_wan_failure_do_not_restart(self):
-        self.assertEqual(self.engine.process(self.checks())['state'], 'idle')
-        self.assertEqual(self.engine.process(self.checks(wan=(False,True)))['state'], 'idle')
+    def test_network_and_application_faults_never_reboot_or_restart_network(self):
+        self.cfg['recovery']['restart_failed_services'] = False
+        for policy in (RecoveryEngine, ConsolidatedRecovery):
+            engine = policy(self.cfg, self.log)
+            for advance in (0, 60, 3600, 86400):
+                self.now += advance
+                self.assertFalse(engine.process(self.checks())['automatic_reboot'])
+        self.assertEqual(self.commands, [])
+        self.assertFalse((self.root / 'last-reboot-reason.json').exists())
+
+    def test_restarts_are_bounded_and_persist_across_monitor_restart(self):
+        for _ in range(8):
+            self.engine.process(self.checks())
+            self.now += 60
+            self.engine = ConsolidatedRecovery(self.cfg, self.log)
+        for item in self.cfg['services']:
+            self.assertEqual(sum(command[-1] == item['name'] for command in self.commands), 3)
+
+    def test_cooldown_prevents_repeated_restarts(self):
+        self.engine.process(self.checks())
+        self.engine.process(self.checks())
+        self.assertEqual(sum('--no-block' in command for command in self.commands), 3)
+
+    def test_healthy_service_must_stay_healthy_before_attempts_reset(self):
+        self.engine.process(self.checks())
+        self.now += 1
+        self.engine.process(self.checks(services=True))
+        self.assertEqual(self.engine.state['services']['esg.service']['attempts'], 1)
+        self.now += 60
+        self.engine.process(self.checks(services=True))
+        self.assertEqual(self.engine.state['services']['esg.service']['attempts'], 0)
+
+    def test_stale_unknown_and_missing_checks_cannot_restart(self):
+        rows = self.checks()
+        self.now += 300
+        self.engine.process(rows)
+        self.engine.process([])
+        self.engine.process([CheckResult('esg.service', 'unknown', value={'collected_at': self.now})])
         self.assertEqual(self.commands, [])
 
-    def test_network_restart_then_reboot_once_with_cause(self):
-        self.assertEqual(self.engine.process(self.checks(wan=(False,False),lan=False))['state'],'settling')
-        self.now += 299
-        self.assertEqual(self.engine.process(self.checks(wan=(False,False),lan=False))['state'],'watching')
-        self.now += 1
-        self.assertEqual(self.engine.process(self.checks(wan=(False,False),lan=False))['state'],'reboot_requested')
-        self.engine.process(self.checks(wan=(False,False),lan=False))
-        self.assertEqual(sum(c[0]=='shutdown' for c in self.commands),1)
-        self.assertEqual(json.loads((self.root/'reason.json').read_text())['cause'],'network_access_lost')
-        engine2=ConsolidatedRecovery(self.cfg,self.log)
-        self.assertEqual(engine2.process(self.checks())['state'],'reboot_requested')
+    def test_active_but_high_resource_service_is_not_restarted(self):
+        rows = self.checks()
+        for row in rows:
+            row.value['active'] = 'active'
+        self.engine.process(rows)
+        self.assertEqual(self.commands, [])
 
-    def test_lan_only_fault_reboots_without_restarting_network(self):
-        self.engine.process(self.checks(lan=False))
-        self.now += 300
-        self.engine.process(self.checks(lan=False))
-        self.assertFalse(any('--no-block' in c for c in self.commands))
-        self.assertTrue(any(c[0]=='shutdown' for c in self.commands))
+    def test_legacy_owner_conflict_blocks_service_actions(self):
+        for code in (0, 999):
+            self.legacy_code = code
+            self.assertEqual(self.engine.process(self.checks())['state'], 'blocked')
+        self.assertFalse(any('--no-block' in command for command in self.commands))
 
-    def test_failed_reboot_removes_false_attribution_and_waits(self):
-        self.reboot_code=1
-        self.engine.process(self.checks(lan=False)); self.now += 300
-        self.assertEqual(self.engine.process(self.checks(lan=False))['state'],'action_failed')
-        self.assertFalse((self.root/'reason.json').exists())
-        self.assertEqual(self.engine.state['failure_count'],0)
-        self.assertEqual(self.engine.process(self.checks(lan=False))['state'],'waiting')
-
-    def test_stale_missing_and_unknown_checks_cannot_reboot(self):
-        self.engine.process(self.checks(lan=False))
-        old=self.checks(lan=False); self.now += 300
-        self.assertEqual(self.engine.process(old)['state'],'waiting')
-        self.assertEqual(self.engine.process([])['state'],'waiting')
-        rows=self.checks();rows[-1].value['active']='unknown'
-        self.assertEqual(self.engine.process(rows)['state'],'waiting')
-        self.assertFalse(any(c[0]=='shutdown' for c in self.commands))
-
-    def test_application_restarts_are_bounded_and_settle(self):
-        self.engine.process(self.checks(app=False))
-        self.assertEqual(self.engine.process(self.checks(app=False))['state'],'settling')
-        for _ in range(4):
-            self.now += 30
-            self.engine.process(self.checks(app=False))
-        self.assertEqual(sum('esg.service' in c for c in self.commands),3)
+    def test_only_configured_restart_services_are_eligible(self):
+        self.cfg['services'][0]['restart'] = False
         self.engine.process(self.checks())
-        self.assertNotIn('app_attempts',self.engine.state)
+        self.assertFalse(any(command[-1] == 'esg.service' for command in self.commands))
 
-    def test_ownership_conflict_and_command_errors_fail_closed(self):
-        for code in (0,999):
-            self.legacy_code=code
-            self.assertEqual(self.engine.process(self.checks(lan=False))['state'],'blocked')
-        self.assertFalse(any(c[0]=='shutdown' or '--no-block' in c for c in self.commands))
+    def test_failed_commands_consume_attempt_without_claiming_success(self):
+        self.restart_code = 1
+        result = self.engine.process(self.checks())
+        self.assertEqual(result['actions'], [])
+        self.assertEqual(self.engine.state['services']['esg.service']['attempts'], 1)
 
     def test_disabled_recovery_does_nothing(self):
-        self.cfg['recovery']['enabled']=False
-        self.assertEqual(self.engine.process(self.checks(lan=False))['state'],'disabled')
-        self.assertEqual(self.commands,[])
-
-    def test_backoff_survives_boot_and_resets_when_healthy(self):
-        self.engine.state['failure_count']=2;self.engine._save()
-        with patch('va_watchdog.consolidated_recovery.boot_id',return_value='boot-b'):
-            other=ConsolidatedRecovery(self.cfg,self.log)
-        other.process(self.checks(lan=False));self.now+=300
-        result=other.process(self.checks(lan=False))
-        self.assertEqual(result['reboot_after_seconds'],1200)
-        self.assertEqual(result['state'],'watching')
-        other.process(self.checks())
-        self.assertEqual(other.state['failure_count'],0)
-
-    def test_recovery_engine_dispatches_only_to_one_policy(self):
-        engine=RecoveryEngine(self.cfg,self.log)
-        result=engine.process(self.checks())
-        self.assertEqual(result['owner'],'v3')
-        self.assertEqual(engine.summary(),result)
-
-    def test_service_failure_escalates_without_claiming_network_failure(self):
-        self.engine.process(self.checks(service=False)); self.now += 300
-        self.engine.process(self.checks(service=False))
-        self.assertEqual(json.loads((self.root/'reason.json').read_text())['cause'],'application_failure')
-
-    def test_network_cooldown_survives_monitor_restart(self):
-        self.engine.process(self.checks(wan=(False,False)))
-        self.now += 40
-        other=ConsolidatedRecovery(self.cfg,self.log)
-        other.process(self.checks(wan=(False,False)))
-        self.assertEqual(sum('NetworkManager.service' in c for c in self.commands),1)
+        self.cfg['recovery']['enabled'] = False
+        self.assertEqual(self.engine.process(self.checks())['state'], 'disabled')
+        self.assertEqual(self.commands, [])
 
 
 class CollectorContractTests(unittest.TestCase):

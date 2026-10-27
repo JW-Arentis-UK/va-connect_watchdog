@@ -13,6 +13,7 @@ from .common import CheckResult, score_from_checks, worst_state
 from .events import EventLog
 from .display_monitor import DisplayMonitor
 from .health import build_startup_summary, collect_health
+from .collectors import CollectorPool
 from .history import append_history
 from .recovery import RecoveryEngine
 from .retention import enforce_retention
@@ -31,15 +32,8 @@ WEB_UNIT_PATH = Path("/etc/systemd/system/va-watchdog-web.service")
 def start_web_without_service(cfg, event_log, unit_path=WEB_UNIT_PATH):
     if not cfg.get("web", {}).get("enabled", True) or unit_path.exists():
         return False
-    try:
-        from .web_service import start_web
-
-        start_web(cfg)
-        event_log.add("warning", "web", "Web service unit missing; serving from core until installation")
-        return True
-    except Exception as exc:
-        event_log.add("warning", "web", f"Web fallback could not start: {exc}")
-        return False
+    event_log.add("warning", "web", "Web service unit missing; run the current installer to restore the independent dashboard")
+    return False
 
 
 def atomic_write_json(path: str, data):
@@ -50,12 +44,13 @@ def atomic_write_json(path: str, data):
     tmp.replace(p)
 
 
-def add_display_status(status, checks, monitor, cfg):
-    check = monitor.poll()
-    if check is None:
-        return
-    checks.append(check)
-    status["checks"].append(check.to_dict())
+def add_display_status(status, checks, monitor, cfg, collectors=None):
+    def poll():
+        check = monitor.poll()
+        return [check] if check is not None else []
+    extra = collectors.poll("display", 30, 10, poll) if collectors else poll()
+    checks.extend(extra)
+    status["checks"].extend(check.to_dict() for check in extra)
     status["state"] = worst_state([item.state for item in checks])
     status["score"] = score_from_checks(checks)
     status["startup_summary"] = build_startup_summary(cfg, checks)
@@ -223,11 +218,14 @@ def hardware_feed_status(cfg, startup_grace, trip_active=False, trip_summary=Non
     except (TypeError, ValueError):
         process_alive = False
     process_status = str(feed.get("process_status", "unknown"))
+    expected_boot = str(startup_grace.get("boot_id") or "")
+    same_boot = not expected_boot or feed.get("boot_id") == expected_boot
     reports_open = process_status in {"running", "feeding", "paused_stale_heartbeat", "paused_liveness_failure", "paused_trip_test"}
     feed_interval = max(1, int(hw_cfg.get("feed_interval_seconds", 10) or 10))
     fresh_after = max(feed_interval * 3, 30)
     feeding = bool(
         reports_open
+        and same_boot
         and process_alive
         and process_status == "feeding"
         and feed_age is not None
@@ -240,7 +238,7 @@ def hardware_feed_status(cfg, startup_grace, trip_active=False, trip_summary=Non
         "boot_id": feed.get("boot_id", ""),
         "backend": "neousys_wdt_dio",
         "device": feed.get("device") or hw_cfg.get("device", "/dev/wdt_dio"),
-        "opened": reports_open and process_alive,
+        "opened": reports_open and process_alive and same_boot,
         "reported_open": reports_open,
         "process_alive": process_alive,
         "feeding": feeding,
@@ -259,7 +257,7 @@ def hardware_feed_status(cfg, startup_grace, trip_active=False, trip_summary=Non
         "health_progress_age_seconds": feed.get("health_progress_age_seconds"),
         "health_progress_timeout_seconds": feed.get("health_progress_timeout_seconds") or hw_cfg.get("health_progress_timeout_seconds", 90),
         "protection_proof": proof,
-        "proven_this_boot": bool(proof.get("proven") and proof.get("boot_id") and proof.get("boot_id") == feed.get("boot_id")),
+        "proven_this_boot": bool(same_boot and proof.get("proven") and proof.get("boot_id") and proof.get("boot_id") == feed.get("boot_id")),
         "trip_countdown": feed.get("trip_countdown", {}),
         "stale_heartbeat_seconds": feed.get("stale_heartbeat_seconds") or hw_cfg.get("stale_heartbeat_seconds", 15),
         "fed_this_cycle": fed,
@@ -270,6 +268,7 @@ def hardware_feed_status(cfg, startup_grace, trip_active=False, trip_summary=Non
 
 def main():
     cfg = load_config()
+    collectors = CollectorPool()
     event_log = EventLog(cfg["events_path"], compact=bool(cfg.get('web', {}).get('lightweight')))
     display_monitor = DisplayMonitor(cfg, event_log)
     recovery = RecoveryEngine(cfg, event_log)
@@ -302,8 +301,8 @@ def main():
             startup_grace,
         )
 
-    status, checks = collect_health(cfg)
-    add_display_status(status, checks, display_monitor, cfg)
+    status, checks = collect_health(cfg, collectors)
+    add_display_status(status, checks, display_monitor, cfg, collectors)
     status["hardware_watchdog_feed"] = hardware_feed_status(
         cfg,
         startup_grace,
@@ -331,8 +330,6 @@ def main():
     systemd_notify("READY=1\nSTATUS=VA-Connect Watchdog running")
 
     health_sequence = 0
-    last_kernel_scan = 0.0
-    last_retention_check = 0.0
     collector_intervals = cfg.get("collector_intervals", {})
     if not isinstance(collector_intervals, dict):
         collector_intervals = {}
@@ -343,12 +340,15 @@ def main():
     while True:
         try:
             health_sequence += 1
-            status, checks = collect_health(cfg)
-            add_display_status(status, checks, display_monitor, cfg)
+            status, checks = collect_health(cfg, collectors)
+            add_display_status(status, checks, display_monitor, cfg, collectors)
             event_log.add_state_changes(checks)
             event_log.add_service_resource_changes(checks, cfg)
             event_log.add_recording_storage_change(status.get("recording_storage"))
-            recovery.process(checks)
+            def recover(current=tuple(checks)):
+                recovery.process(current)
+                return []
+            collectors.poll("service_recovery", 15, 25, recover)
             trip_active, trip_summary = trip_test_active(cfg)
             startup_grace = startup_grace_status(cfg, trip_summary)
             if trip_active and not last_trip_active:
@@ -367,9 +367,9 @@ def main():
             )
             add_hardware_feed_check(status, cfg)
             status["recovery"] = recovery.summary()
-            if time.time() - last_kernel_scan >= 30:
-                status["kernel_faults"] = scan_kernel_faults(cfg, event_log)
-                last_kernel_scan = time.time()
+            kernel = collectors.poll("kernel_evidence", 30, 10,
+                                     lambda: [CheckResult("kernel_evidence", "healthy", value=scan_kernel_faults(cfg, event_log))])
+            status["kernel_faults"] = kernel[0].value or {"available": False, "message": kernel[0].message}
             status["blackbox"] = blackbox_summary(cfg)
             heartbeat.mark_health_sample(
                 health_sequence,
@@ -380,11 +380,12 @@ def main():
             status["heartbeat"] = heartbeat.snapshot()
             atomic_write_json(cfg["status_path"], status)
             append_history(cfg, status)
-            if time.monotonic() - last_retention_check >= retention_interval:
+            def retain():
                 retention_result = enforce_retention(cfg)
-                last_retention_check = time.monotonic()
                 if retention_result.get("actions"):
                     event_log.add("warning", "retention", "Watchdog data retention purge completed", retention_result)
+                return []
+            collectors.poll("retention", retention_interval, 15, retain)
             systemd_notify("WATCHDOG=1\nSTATUS=VA-Connect Watchdog healthy loop")
             last_trip_active = trip_active
         except Exception as e:

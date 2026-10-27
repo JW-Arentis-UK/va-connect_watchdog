@@ -634,6 +634,7 @@ class CounterTests(unittest.TestCase):
 
 class SetupSmokeTests(unittest.TestCase):
     def test_http_smoke_rejects_500_and_accepts_real_setup(self):
+        self.enterContext(patch('va_watchdog.web_security.ProtectedHandler.allow_action', return_value=True))
         bad = Mock()
         bad.open.side_effect = HTTPError('http://localhost',500,'Error',{},None)
         with self.assertRaises(RuntimeError):
@@ -715,6 +716,7 @@ class SetupSmokeTests(unittest.TestCase):
                 server.server_close()
 
     def test_http_push_receiver_accepts_only_configured_camera_and_reduces_event(self):
+        self.enterContext(patch('va_watchdog.web_security.ProtectedHandler.allow_action', return_value=True))
         with tempfile.TemporaryDirectory() as directory:
             cfg = copy.deepcopy(DEFAULT_CONFIG)
             for key in cfg:
