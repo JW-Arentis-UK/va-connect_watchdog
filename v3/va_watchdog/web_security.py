@@ -16,6 +16,7 @@ HELPER = "/usr/local/lib/va-watchdog/web-action-helper.py"
 MAX_ACTION_BODY = 64 * 1024
 PUBLIC_GET = {"/", "/lite", "/api/lite", "/api/status", "/api/version", "/api/healthz", "/api/livez", "/api/readyz"}
 ACTION_PATHS = frozenset({
+    "/lan-devices-scan", "/lan-devices-credentials",
     "/network-router-save", "/api/status-shortcuts", "/analytics/anpr-save", "/analytics/crossing-save",
     "/factory-reset", "/teamviewer-password", "/web-link-add", "/web-link-update", "/web-link-delete",
     "/stage0-baseline-start", "/network-speed-test", "/journal-enable", "/update-now", "/pi-storage-expand",

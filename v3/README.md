@@ -161,3 +161,32 @@ trip test as a routine update check.
 
 Older stage plans and incident notes are historical references, not current
 deployment instructions.
+
+## LAN devices / Cameras (build 20261124.4)
+
+Open Maintenance > LAN devices / Cameras (`/lan-devices`). Select a connected
+IPv4 network and click Scan LAN. The read-only scan lists IP address,
+manufacturer, device-reported model and serial number where available. It uses
+TCP/ICMP responses, the neighbour cache, ONVIF discovery, Hikvision ISAPI device
+information and ONVIF GetDeviceInformation. Unknown devices and rejected camera
+credentials are explicitly labelled; models are never inferred from an IP.
+
+Scans run in the short-lived authenticated operator helper, not the watchdog
+core. Each selected network is limited to the gateway's /24 or smaller subnet,
+16 workers and a 90-second scheduling budget. Separate VLANs, NVR-private
+networks, silent hosts and nonstandard camera HTTP ports may not be identified.
+HTTPS-only cameras require a trusted certificate. Camera requests do not follow
+redirects or use ambient proxy settings.
+
+The camera username initially displays `admin`. Save the site camera password
+once in Camera credentials, or use a private provisioning file. The public
+repository contains no site password. Blank passwords retain the saved value;
+the checkbox removes it. Changing username requires entering a password again.
+Camera credentials are independent of the Ubuntu operator login. The secret is
+stored root-only in `/etc/va-watchdog-private/lan-camera.json` and is not returned
+to the browser. Existing installs and updates preserve it. Only a username and
+password-present indicator are published to the authenticated page.
+
+Validation: fixture-based Hikvision/ONVIF, subnet limits, rejected targets,
+credential retention/redaction, privileged action dispatch and browser scan/save
+checks. Live camera discovery must still be verified at a site.

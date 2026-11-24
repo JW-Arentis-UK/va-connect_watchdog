@@ -44,6 +44,7 @@ from .identity import configured_identity, hardware_identity, identity_slug, ide
 from .manufacturer_report import collect_manufacturer_report, manufacturer_report_bundle, render_manufacturer_report
 from .mobile_router import radio_metric_score, radio_quality, radio_score, signal_quality
 from .recording_activity import recording_activity, recording_span_label
+from . import lan_devices
 from .reboot_evidence import recent_restarts
 from .lite import page as lite_page, snapshot as lite_snapshot
 from .pi_storage import inspect as inspect_pi_storage, expand as expand_pi_storage
@@ -5748,6 +5749,12 @@ def start_web(cfg, handler_only=False):
                 return
             request_context.theme = self._request_theme()
             route_path = self.path.split("?", 1)[0]
+            if route_path == "/lan-devices":
+                self._send_text(Path(__file__).with_name("lan_devices.html").read_text(encoding="utf-8"), content_type="text/html; charset=utf-8")
+                return
+            if route_path == "/api/lan-devices":
+                self._send_json(lan_devices.status())
+                return
             if route_path in {"/advanced", "/legacy", "/advanced/links", "/advanced/crossing-activity"}:
                 self.send_response(302)
                 self.send_header("Location", LEGACY_PAGE_REDIRECTS[route_path])
@@ -6322,6 +6329,23 @@ def start_web(cfg, handler_only=False):
                 return
             request_context.theme = self._request_theme()
             route_path = self.path.split("?", 1)[0]
+            if route_path in {"/lan-devices-scan", "/lan-devices-credentials"}:
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= 4096:
+                        raise ValueError("Invalid request size")
+                    form = parse_qs(self.rfile.read(length).decode("utf-8"), keep_blank_values=True)
+                    first = lambda key: form.get(key, [""])[0]
+                    if route_path == "/lan-devices-scan":
+                        result = lan_devices.scan(first("network"))
+                    else:
+                        result = lan_devices.save_credentials(first("username"), first("password"), first("clear") == "1")
+                    self._send_json(result)
+                except (ValueError, UnicodeError) as exc:
+                    self._send_json({"message": str(exc)}, status=400)
+                except OSError:
+                    self._send_json({"message": "LAN operation failed. Check the gateway service log."}, status=500)
+                return
             if route_path == "/network-router-save":
                 try:
                     length = int(self.headers.get('Content-Length', '0'))

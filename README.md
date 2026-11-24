@@ -50,6 +50,7 @@ explicit attended commissioning step, not an automatic installation action.
 - Persistent Black Box buffer, boot attribution, syslog and support bundles.
 - ANPR collection, plate searches/database and exports.
 - People/crossing analytics, camera delivery/configuration diagnostics and PDF reports.
+- LAN device/camera discovery with model and serial information and editable site credentials.
 - Network speed tests, custom web links and TeamViewer password management.
 - Updates, evidence, protected commissioning and recovery tools.
 
