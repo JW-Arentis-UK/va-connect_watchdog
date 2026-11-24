@@ -16,8 +16,14 @@ bash install_v3_gateway.sh
 For an existing V3 installation, use the authenticated update button or run:
 
 ```sh
-sudo bash /opt/va-connect-watchdog-v3/v3/scripts/update.sh origin codex/gui-refresh
+wget -O update_v3_gateway.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/codex/gui-refresh/update_v3_gateway.sh &&
+sudo bash ./update_v3_gateway.sh origin codex/gui-refresh
 ```
+
+On builds older than `20261124.2`, use this SSH command once instead of the
+installed updater or dashboard button. It downloads the current updater before
+changing the checkout. Subsequent updates hand over to the downloaded setup
+script before installing dependencies, accounts, helpers and service units.
 
 Open `http://<unit-ip>:9110/`. Operator actions require the existing configured
 local account. Use VPN or HTTPS forwarding for remote sign-in; plain HTTP does

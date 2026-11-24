@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT_DIR="${VA_WATCHDOG_INSTALL_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}/v3"
+REPO_DIR="$(cd "$ROOT_DIR/.." && pwd)"
+VENV_DIR="$REPO_DIR/.venv"
+STATE_DIR="${VA_WATCHDOG_STATE_DIR:-/var/lib/va-watchdog}"
+STATE_FILE="${VA_WATCHDOG_STATE_FILE:-$STATE_DIR/update-state.json}"
+LOG_FILE="${VA_WATCHDOG_LOG_FILE:-$STATE_DIR/update.log}"
+REMOTE="${1:-origin}"
+GIT=(git -c "safe.directory=$REPO_DIR" -C "$REPO_DIR")
+BRANCH="${2:-$("${GIT[@]}" rev-parse --abbrev-ref HEAD)}"
+
+mkdir -p "$(dirname "$STATE_FILE")" "$(dirname "$LOG_FILE")"
+
+write_state() {
+  local state="$1"
+  local message="$2"
+  local commit="${3:-}"
+  python3 - "$STATE_FILE" "$state" "$message" "$BRANCH" "$commit" "$ROOT_DIR/build.json" <<'PY'
+import json
+import os
+import pathlib
+import sys
+from datetime import datetime, timezone
+
+path = pathlib.Path(sys.argv[1])
+state = sys.argv[2]
+message = sys.argv[3]
+branch = sys.argv[4]
+commit = sys.argv[5]
+build_file = pathlib.Path(sys.argv[6])
+try:
+    previous = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(previous, dict):
+        previous = {}
+except (OSError, ValueError):
+    previous = {}
+try:
+    build = str(json.loads(build_file.read_text(encoding="utf-8")).get("build_number") or "")
+except (OSError, ValueError, AttributeError):
+    build = ""
+now = datetime.now(timezone.utc).isoformat()
+last_at = previous.get("last_completed_at") or (previous.get("updated_at") if previous.get("state") == "completed" else "")
+last_build = previous.get("last_completed_build") or (build if previous.get("state") == "completed" else "")
+last_commit = previous.get("last_completed_commit") or (previous.get("commit") if previous.get("state") == "completed" else "")
+if state == "completed":
+    last_at, last_build, last_commit = now, build, commit
+payload = {
+    "state": state,
+    "message": message,
+    "branch": branch,
+    "commit": commit,
+    "updated_at": now,
+    "last_completed_at": last_at or "",
+    "last_completed_build": last_build or "",
+    "last_completed_commit": last_commit or "",
+}
+path.parent.mkdir(parents=True, exist_ok=True)
+temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+os.replace(temporary, path)
+PY
+}
+
+log() {
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" | tee -a "$LOG_FILE"
+}
+
+update_failed() {
+  local exit_code=$?
+  local line_number="${1:-unknown}"
+  local message="update failed at line $line_number (exit $exit_code)"
+  write_state "failed" "$message"
+  log "$message"
+  exit "$exit_code"
+}
+trap 'update_failed "$LINENO"' ERR
+
+commit_after="$("${GIT[@]}" rev-parse --short HEAD)"
+write_state "running" "installing downloaded update" "$commit_after"
+log "applying downloaded update commit=$commit_after"
+
+if [ -s "$ROOT_DIR/requirements.txt" ]; then
+  log "installing Watchdog Python dependencies in isolated runtime"
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required" >&2
+    exit 1
+  fi
+  if [ ! -x "$VENV_DIR/bin/python" ]; then
+    if ! python3 -m venv "$VENV_DIR"; then
+      log "Python virtual-environment support is missing; installing python3-venv"
+      apt-get install -y python3-venv
+      python3 -m venv "$VENV_DIR"
+    fi
+  fi
+  "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check --upgrade -r "$ROOT_DIR/requirements.txt"
+fi
+
+if [ -f "$ROOT_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" ]; then
+  if HARDWARE_PROFILE="$(PYTHONPATH="$ROOT_DIR" python3 -m va_watchdog.hardware_profile 2>&1)"; then
+    log "installing bundled Neousys WDT_DIO driver on $HARDWARE_PROFILE without activating hardware feeding"
+    if ! command -v gcc >/dev/null 2>&1 || [ ! -d "/lib/modules/$(uname -r)/build" ]; then
+      apt-get update
+      apt-get install -y build-essential "linux-headers-$(uname -r)" unzip
+    fi
+    /bin/bash "$ROOT_DIR/scripts/install_neousys_wdt.sh"
+    log "Neousys WDT_DIO driver installed"
+  else
+    log "skipping Neousys watchdog driver: $HARDWARE_PROFILE"
+  fi
+fi
+
+/bin/bash "$ROOT_DIR/scripts/setup_web_access.sh"
+if [ -f "$ROOT_DIR/systemd/va-watchdog.service" ]; then
+  install -m 0644 "$ROOT_DIR/systemd/va-watchdog.service" /etc/systemd/system/va-watchdog.service
+  log "installed current va-watchdog systemd unit"
+fi
+if [ -f "$ROOT_DIR/systemd/va-watchdog-feed.service" ]; then
+  install -m 0644 "$ROOT_DIR/systemd/va-watchdog-feed.service" /etc/systemd/system/va-watchdog-feed.service
+  log "installed current va-watchdog-feed systemd unit"
+fi
+if [ -f "$ROOT_DIR/systemd/va-watchdog-web.service" ]; then
+  install -m 0644 "$ROOT_DIR/systemd/va-watchdog-web.service" /etc/systemd/system/va-watchdog-web.service
+  log "installed current va-watchdog-web systemd unit"
+fi
+systemctl daemon-reload
+
+RUNTIME=python3
+if [ -x "$VENV_DIR/bin/python" ]; then
+  RUNTIME="$VENV_DIR/bin/python"
+fi
+PYTHONPATH="$ROOT_DIR" "$RUNTIME" -c 'from va_watchdog.web import start_web'
+log "web runtime import check passed"
+
+systemctl unmask va-watchdog-feed va-watchdog va-watchdog-web 2>/dev/null || true
+systemctl enable va-watchdog-feed va-watchdog va-watchdog-web
+systemctl restart va-watchdog-feed
+log "hardware feeder restart requested"
+systemctl restart va-watchdog
+log "main service restart requested"
+if PYTHONPATH="$ROOT_DIR" "$RUNTIME" -c 'from va_watchdog.config import load_config; raise SystemExit(0 if load_config().get("web", {}).get("enabled", True) else 1)'; then
+  systemctl restart va-watchdog-web
+  log "web service restart requested"
+else
+  systemctl stop va-watchdog-web || true
+  log "web service stopped because web is disabled"
+fi
+sleep 2
+systemctl is-active --quiet va-watchdog-feed
+systemctl is-active --quiet va-watchdog
+if PYTHONPATH="$ROOT_DIR" "$RUNTIME" -c 'from va_watchdog.config import load_config; raise SystemExit(0 if load_config().get("web", {}).get("enabled", True) else 1)'; then
+  systemctl is-active --quiet va-watchdog-web
+fi
+systemctl is-enabled --quiet va-watchdog-feed
+PYTHONPATH="$ROOT_DIR" "$RUNTIME" -m va_watchdog.web_smoke
+log "Setup HTTP smoke check passed"
+
+write_state "completed" "update completed" "$commit_after"
+log "update completed commit=$commit_after"

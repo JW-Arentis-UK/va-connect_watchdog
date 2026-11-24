@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT_DIR="${VA_WATCHDOG_INSTALL_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}/v3"
 REPO_DIR="$(cd "$ROOT_DIR/.." && pwd)"
 VENV_DIR="$REPO_DIR/.venv"
 STATE_DIR="${VA_WATCHDOG_STATE_DIR:-/var/lib/va-watchdog}"
@@ -77,89 +77,21 @@ update_failed() {
 }
 trap 'update_failed "$LINENO"' ERR
 
-commit_before="$("${GIT[@]}" rev-parse --short HEAD)"
-write_state "running" "update started" "$commit_before"
-log "update started branch=$BRANCH remote=$REMOTE commit=$commit_before"
-
-"${GIT[@]}" fetch "$REMOTE" "$BRANCH"
-"${GIT[@]}" pull --ff-only "$REMOTE" "$BRANCH"
-commit_after="$("${GIT[@]}" rev-parse --short HEAD)"
-log "update pulled commit=$commit_after"
-
-if [ -s "$ROOT_DIR/requirements.txt" ]; then
-  log "installing Watchdog Python dependencies in isolated runtime"
-  if ! command -v python3 >/dev/null 2>&1; then
-    echo "python3 is required" >&2
-    exit 1
+# Parse the complete fetch/handoff function before Git can replace this file.
+# No installation code from the old checkout may run after the pull.
+main() {
+  local commit_before commit_after
+  commit_before="$("${GIT[@]}" rev-parse --short HEAD)"
+  write_state "running" "update started" "$commit_before"
+  log "update started branch=$BRANCH remote=$REMOTE commit=$commit_before"
+  "${GIT[@]}" fetch "$REMOTE" "$BRANCH"
+  "${GIT[@]}" pull --ff-only "$REMOTE" "$BRANCH"
+  commit_after="$("${GIT[@]}" rev-parse --short HEAD)"
+  log "update pulled commit=$commit_after; handing over to downloaded setup"
+  if [[ ! -f "$ROOT_DIR/scripts/update_apply.sh" ]]; then
+    log "Downloaded branch has no update_apply.sh; no services were changed"
+    return 1
   fi
-  if [ ! -x "$VENV_DIR/bin/python" ]; then
-    if ! python3 -m venv "$VENV_DIR"; then
-      log "Python virtual-environment support is missing; installing python3-venv"
-      apt-get install -y python3-venv
-      python3 -m venv "$VENV_DIR"
-    fi
-  fi
-  "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check --upgrade -r "$ROOT_DIR/requirements.txt"
-fi
-
-if [ -f "$ROOT_DIR/vendor/neousys/WDT_DIO_202505_v2-4-1-0_Linux.zip" ]; then
-  if HARDWARE_PROFILE="$(PYTHONPATH="$ROOT_DIR" python3 -m va_watchdog.hardware_profile 2>&1)"; then
-    log "installing bundled Neousys WDT_DIO driver on $HARDWARE_PROFILE without activating hardware feeding"
-    if ! command -v gcc >/dev/null 2>&1 || [ ! -d "/lib/modules/$(uname -r)/build" ]; then
-      apt-get update
-      apt-get install -y build-essential "linux-headers-$(uname -r)" unzip
-    fi
-    /bin/bash "$ROOT_DIR/scripts/install_neousys_wdt.sh"
-    log "Neousys WDT_DIO driver installed"
-  else
-    log "skipping Neousys watchdog driver: $HARDWARE_PROFILE"
-  fi
-fi
-
-/bin/bash "$ROOT_DIR/scripts/setup_web_access.sh"
-if [ -f "$ROOT_DIR/systemd/va-watchdog.service" ]; then
-  install -m 0644 "$ROOT_DIR/systemd/va-watchdog.service" /etc/systemd/system/va-watchdog.service
-  log "installed current va-watchdog systemd unit"
-fi
-if [ -f "$ROOT_DIR/systemd/va-watchdog-feed.service" ]; then
-  install -m 0644 "$ROOT_DIR/systemd/va-watchdog-feed.service" /etc/systemd/system/va-watchdog-feed.service
-  log "installed current va-watchdog-feed systemd unit"
-fi
-if [ -f "$ROOT_DIR/systemd/va-watchdog-web.service" ]; then
-  install -m 0644 "$ROOT_DIR/systemd/va-watchdog-web.service" /etc/systemd/system/va-watchdog-web.service
-  log "installed current va-watchdog-web systemd unit"
-fi
-systemctl daemon-reload
-
-RUNTIME=python3
-if [ -x "$VENV_DIR/bin/python" ]; then
-  RUNTIME="$VENV_DIR/bin/python"
-fi
-PYTHONPATH="$ROOT_DIR" "$RUNTIME" -c 'from va_watchdog.web import start_web'
-log "web runtime import check passed"
-
-systemctl unmask va-watchdog-feed va-watchdog va-watchdog-web 2>/dev/null || true
-systemctl enable va-watchdog-feed va-watchdog va-watchdog-web
-systemctl restart va-watchdog-feed
-log "hardware feeder restart requested"
-systemctl restart va-watchdog
-log "main service restart requested"
-if PYTHONPATH="$ROOT_DIR" "$RUNTIME" -c 'from va_watchdog.config import load_config; raise SystemExit(0 if load_config().get("web", {}).get("enabled", True) else 1)'; then
-  systemctl restart va-watchdog-web
-  log "web service restart requested"
-else
-  systemctl stop va-watchdog-web || true
-  log "web service stopped because web is disabled"
-fi
-sleep 2
-systemctl is-active --quiet va-watchdog-feed
-systemctl is-active --quiet va-watchdog
-if PYTHONPATH="$ROOT_DIR" "$RUNTIME" -c 'from va_watchdog.config import load_config; raise SystemExit(0 if load_config().get("web", {}).get("enabled", True) else 1)'; then
-  systemctl is-active --quiet va-watchdog-web
-fi
-systemctl is-enabled --quiet va-watchdog-feed
-PYTHONPATH="$ROOT_DIR" "$RUNTIME" -m va_watchdog.web_smoke
-log "Setup HTTP smoke check passed"
-
-write_state "completed" "update completed" "$commit_after"
-log "update completed commit=$commit_after"
+  /bin/bash "$ROOT_DIR/scripts/update_apply.sh" "$REMOTE" "$BRANCH"
+}
+main

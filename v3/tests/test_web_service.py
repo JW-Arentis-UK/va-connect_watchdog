@@ -191,7 +191,7 @@ class WebServiceTests(unittest.TestCase):
         core = (root / "va_watchdog" / "watchdog.py").read_text(encoding="utf-8")
         unit = (root / "systemd" / "va-watchdog-web.service").read_text(encoding="utf-8")
         install = (root / "scripts" / "install.sh").read_text(encoding="utf-8")
-        update = (root / "scripts" / "update.sh").read_text(encoding="utf-8")
+        update = (root / "scripts" / "update_apply.sh").read_text(encoding="utf-8")
         self.assertIn("start_web_without_service(cfg, event_log)", core)
         self.assertIn("-m va_watchdog.web_service", unit)
         self.assertIn("WatchdogSec=30", unit)
