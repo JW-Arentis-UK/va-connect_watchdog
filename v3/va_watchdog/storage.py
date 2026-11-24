@@ -10,12 +10,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from .common import CheckResult
+from .recording_location import resolve as resolve_recording_location
 
 _SMART_CACHE = {}
 _RECORDING_WARNING_STATE = {}
 SMART_CACHE_SECONDS = 6 * 60 * 60
 
 DEFAULT_RECORDING_STORAGE = {
+    "auto_detect": True,
     "enabled": True,
     "mode": "dedicated_mount",
     "directory_path": "",
@@ -282,6 +284,27 @@ def _prepare_recording_directories(cfg: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "message": f"Could not prepare recording directory: {exc}", "output": "\n".join(output), "recordings_path": str(recordings_path)}
 
 def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
+    detection = resolve_recording_location(cfg)
+    effective = cfg
+    if detection.get("state") in {"detected", "missing"}:
+        rec = dict(cfg.get("recording_storage", {}))
+        rec.update(mode="system_directory", directory_path=detection["path"],
+                   directory_mountpoint=detection["mountpoint"], filesystem=detection["filesystem"])
+        effective = dict(cfg, recording_storage=rec)
+    result = _configured_recording_storage_status(effective, probe_writable=detection.get("state") not in {"missing", "ambiguous"})
+    result["location_detection"] = detection
+    if detection.get("state") in {"missing", "ambiguous"}:
+        result["status"] = "critical" if detection["state"] == "missing" else "warning"
+        result["message"] = detection["message"]
+    if detection.get("state") == "missing":
+        result.update(present=False, mounted=False, writable=False, device=detection["source"],
+                      mountpoint=detection["mountpoint"], total_gb=None, free_gb=None,
+                      smart_status="unavailable", smart_device=None, temperature_c=None, label="-",
+                      free_mb=None, used_percent=None, free_percent=None)
+    return result
+
+
+def _configured_recording_storage_status(cfg: dict[str, Any], probe_writable=True) -> dict[str, Any]:
     rec_cfg = recording_storage_cfg(cfg)
     mode = str(rec_cfg.get("mode") or "dedicated_mount")
     directory_mode = mode == "system_directory"
@@ -315,7 +338,9 @@ def recording_storage_status(cfg: dict[str, Any]) -> dict[str, Any]:
     options = str(mounted_info.get("options", ""))
     option_set = {item.strip() for item in options.split(",") if item.strip()}
     read_only = mounted and "ro" in option_set
-    writable = bool(mounted and not read_only and _recording_writable(monitored_path))
+    writable = bool(probe_writable and mounted and not read_only
+                    and (not expected_directory_mount or mountpoint == expected_directory_mount)
+                    and _recording_writable(monitored_path))
     total_gb = free_gb = free_mb = used_percent = free_percent = None
     if mounted:
         try:
@@ -762,7 +787,7 @@ def configure_recording_storage(cfg: dict[str, Any], device: str, confirm_label:
             output.append(f"Restored previous label: {restored_label['stdout'] or restored_label['stderr'] or restored_label['returncode']}")
         return {"ok": False, "message": f"Recording storage configuration failed: {exc}", "output": "\n".join(output)}
 
-    status = recording_storage_status(cfg)
+    status = _configured_recording_storage_status(cfg)
     if not (status.get("mounted") and status.get("writable") and status.get("label") == expected_label and status.get("filesystem") == expected_fs):
         _restore_fstab(fstab_path, backup, original)
         remount = _run(["mount", "-a"], timeout=30)
@@ -857,7 +882,7 @@ def prepare_blank_recording_disk(cfg: dict[str, Any], disk: str, confirm_device:
                 "backup": str(backup) if backup else "",
                 "fstab_entry": entry,
             }
-        status = recording_storage_status(cfg)
+        status = _configured_recording_storage_status(cfg)
         if not (status.get("mounted") and status.get("writable") and status.get("label") == expected_label and status.get("filesystem") == expected_fs):
             _restore_fstab(fstab_path, backup, original)
             remount = _run(["mount", "-a"], timeout=30)

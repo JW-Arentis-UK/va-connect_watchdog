@@ -149,6 +149,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         ]
     },
     "recording_storage": {
+        "auto_detect": True,
         "enabled": True,
         "mode": "dedicated_mount",
         "directory_path": "",

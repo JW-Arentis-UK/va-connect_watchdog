@@ -1426,6 +1426,8 @@ def start_web(cfg, handler_only=False):
                 ("Writable", "Yes" if recording.get("writable") else "No"),
                 ("Oldest recording", oldest_activity.get("display_local", "Not found")),
                 ("Recording span", recording_span_label(activity)),
+                ("Recording folder", activity.get("recordings_path", "Not found")),
+                ("Location detection", activity.get("location_detection", {}).get("message", "Configured location")),
             ]
             rec_html = "".join(
                 "<tr>"

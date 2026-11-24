@@ -44,7 +44,7 @@ explicit attended commissioning step, not an automatic installation action.
 
 ## Included Features
 
-- Health, recording/storage monitoring, bounded service recovery and event history.
+- Health, automatic recording disk/folder detection, bounded service recovery and event history.
 - Independent hardware feeding on supported Neousys gateways; native systemd
   watchdog observation on Pi.
 - Persistent Black Box buffer, boot attribution, syslog and support bundles.

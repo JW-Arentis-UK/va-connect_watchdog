@@ -152,6 +152,7 @@
     ]
   },
   "recording_storage": {
+    "auto_detect": true,
     "enabled": true,
     "mode": "dedicated_mount",
     "directory_path": "",

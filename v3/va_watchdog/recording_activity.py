@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .storage import recording_storage_recordings_path
+from .recording_location import resolve as resolve_recording_location
 
 
 def _timestamp_from_name(name: str) -> int | None:
@@ -29,6 +30,11 @@ def _display_times(timestamp: int) -> dict[str, Any]:
 
 
 def candidate_recording_paths(cfg: dict[str, Any]) -> list[Path]:
+    detection = resolve_recording_location(cfg)
+    if detection.get("state") == "detected":
+        return [Path(detection["path"])]
+    if detection.get("state") in {"missing", "ambiguous"}:
+        return []
     storage_cfg = cfg.get("storage", {}) if isinstance(cfg.get("storage", {}), dict) else {}
     configured = [
         storage_cfg.get("recordings_path"),
@@ -140,6 +146,7 @@ def recording_activity(
 ) -> dict[str, Any]:
     recent_count = min(50, max(1, int(recent_count)))
     max_buckets = min(7, max(1, int(max_buckets)))
+    detection = resolve_recording_location(cfg)
     results = []
     unreadable_paths = []
     for path in candidate_recording_paths(cfg):
@@ -161,7 +168,8 @@ def recording_activity(
     if best is None:
         return {
             "available": False,
-            "message": "Recording history could not be read from one or more locations." if unreadable_paths else "No Unix-timestamped recording files were found.",
+            "message": detection["message"] if detection.get("state") in {"missing", "ambiguous"} else ("Recording history could not be read from one or more locations." if unreadable_paths else "No Unix-timestamped recording files were found."),
+            "location_detection": detection,
             "recordings_path": next((item["path"] for item in results), "-"),
             "oldest": None,
             "oldest_recordings": [],
@@ -185,6 +193,7 @@ def recording_activity(
     newest_buckets = best.get("newest_buckets", [])
     return {
         "available": True,
+        "location_detection": detection,
         "message": f"Oldest recording: {oldest_recordings[0]['display_local']}",
         "recordings_path": best["path"],
         "oldest": oldest_recordings[0],

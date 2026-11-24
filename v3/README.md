@@ -190,3 +190,39 @@ password-present indicator are published to the authenticated page.
 Validation: fixture-based Hikvision/ONVIF, subnet limits, rejected targets,
 credential retention/redaction, privileged action dispatch and browser scan/save
 checks. Live camera discovery must still be verified at a site.
+
+## Automatic recording-location detection (build 20261124.5)
+
+Recording history and disk health now share automatic detection, enabled by
+default for existing V3 configurations as well as new installations. Mounted
+physical filesystems are checked for Unix-timestamped `.data`, `.mp4` or `.mkv`
+files, directly in a recording folder or one timestamp-bucket level below it.
+Empty folders alone do not count as evidence. This supports labelled mounts such
+as `/media/vsuser/Storage/recordings` and UUID mounts such as
+`/media/1cac11a8-caf7-4184-a750-c2046e26a1ba/recordings`.
+
+Discovery prefers an evidenced dedicated disk over system-disk footage. If more
+than one dedicated location is found, an evidenced configured location can break
+the tie; otherwise monitoring reports ambiguity rather than guessing. Detection
+is bounded and cached for 30 seconds. The root collector remembers the disk UUID
+(or device when no UUID is available) in
+`/var/lib/va-watchdog/recording-location.json`. A missing remembered disk is
+reported as missing without silently monitoring the root disk instead. A changed
+mountpoint for the same UUID is followed automatically.
+
+Detection changes only the effective monitoring location. It does not edit
+Videosoft configuration, move files, mount/format/relabel disks, or rewrite fstab.
+Existing capacity/free-space thresholds and administrative disk-action targets
+are retained. The normal small writability probe remains part of disk health,
+but is not run for missing or ambiguous automatically detected disks.
+
+Set `recording_storage.auto_detect` to `false` to use manual configuration. An
+intentional disk replacement can be commissioned by updating the configured
+recording path (which resets remembered selection), or by removing only the
+`recording-location.json` discovery-state file before the next check. No footage
+should be removed. Storage details report the detected recording folder.
+
+This feature does not install V3 on a machine that lacks it and does not change
+the Ubuntu 22.04 requirement of the unified setup entry point. A Melton-style UUID
+mount is supported; Melton's Ubuntu 20.04 installation needs a separate supported
+runtime/migration assessment.
