@@ -34,7 +34,19 @@ dependencies/services and preserves existing configuration. Confirm the gateway
 identity before changing a remote unit, particularly a cloned image.
 The dashboard is at `http://<gateway-ip>:9110/`.
 
-Update an existing V3 installation through the dashboard or:
+For new, existing or partially installed Ubuntu 22.04 amd64 gateways, the full
+setup entry point also handles repository and Python dependency setup:
+
+```bash
+wget -O setup_gateway.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/codex/gui-refresh/setup_gateway.sh && bash ./setup_gateway.sh
+```
+
+It preserves existing V3 identity and journal settings. New installs prompt for
+identity and enable persistent crash logging. Active/enabled V1/V2 services
+require attended migration; other platforms need their platform-specific setup.
+
+For an existing V3 installation with working package repositories, update
+through the dashboard or:
 
 ```bash
 wget -O update_v3_gateway.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/codex/gui-refresh/update_v3_gateway.sh &&

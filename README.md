@@ -6,24 +6,32 @@ evidence, and provides independent hardware protection where configured.
 
 ## Install Or Update
 
-For a new installation, download the current installer:
+For a new, older V3 or partially installed **Ubuntu 22.04 amd64 gateway**, run:
 
 ```sh
-wget -O install_v3_gateway.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/codex/gui-refresh/install_v3_gateway.sh
-bash install_v3_gateway.sh
+wget -O setup_gateway.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/codex/gui-refresh/setup_gateway.sh && bash ./setup_gateway.sh
 ```
 
-For an existing V3 installation, use the authenticated update button or run:
+The entry point downloads the current full installer instead of running an old
+installed updater. It temporarily uses the official Ubuntu main, updates and
+security repositories (including universe), keeps signature checks enabled, and
+installs Python virtual-environment support before application setup. Permanent
+APT sources and third-party repository settings are not changed.
 
-```sh
-wget -O update_v3_gateway.sh https://raw.githubusercontent.com/JW-Arentis-UK/va-connect_watchdog/codex/gui-refresh/update_v3_gateway.sh &&
-sudo bash ./update_v3_gateway.sh origin codex/gui-refresh
-```
+New installations prompt for the site name and optional asset ID and enable
+persistent crash logging. Existing V3 installations retain their identity and
+journal settings, back up configuration, and run complete setup to repair missing
+accounts, dependencies, helpers and service units. Tracked local source changes
+stop installation rather than being discarded. The published login and recording
+span fixes are included; Ubuntu account passwords are not changed.
 
-On builds older than `20261124.2`, use this SSH command once instead of the
-installed updater or dashboard button. It downloads the current updater before
-changing the checkout. Subsequent updates hand over to the downloaded setup
-script before installing dependencies, accounts, helpers and service units.
+Active or enabled V1/V2 services stop this entry point with an attended-migration
+message. It does not uninstall legacy services or erase their evidence. Other
+operating systems/architectures are rejected before package changes; use the
+platform-specific documentation for Raspberry Pi.
+
+After this installation, the dashboard update button uses the corrected updater.
+For options, run `bash ./setup_gateway.sh --help`.
 
 Open `http://<unit-ip>:9110/`. Operator actions require the existing configured
 local account. Use VPN or HTTPS forwarding for remote sign-in; plain HTTP does
