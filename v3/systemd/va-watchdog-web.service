@@ -15,7 +15,8 @@ Group=va-watchdog-web
 SupplementaryGroups=systemd-journal adm
 UMask=0027
 PrivateTmp=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Seccomp address-family filters imply NoNewPrivileges for this unprivileged
+# service, which blocks the narrowly allowlisted sudo authentication helper.
 
 [Install]
 WantedBy=multi-user.target

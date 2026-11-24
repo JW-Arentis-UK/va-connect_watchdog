@@ -43,7 +43,7 @@ from .baseline_capture import baseline_paths, baseline_status, completed_archive
 from .identity import configured_identity, hardware_identity, identity_slug, identity_summary
 from .manufacturer_report import collect_manufacturer_report, manufacturer_report_bundle, render_manufacturer_report
 from .mobile_router import radio_metric_score, radio_quality, radio_score, signal_quality
-from .recording_activity import recording_activity
+from .recording_activity import recording_activity, recording_span_label
 from .reboot_evidence import recent_restarts
 from .lite import page as lite_page, snapshot as lite_snapshot
 from .pi_storage import inspect as inspect_pi_storage, expand as expand_pi_storage
@@ -1424,6 +1424,7 @@ def start_web(cfg, handler_only=False):
                 ("Space", f"{recording.get('free_gb', '-')} GB free / {recording.get('used_percent', '-')}% used"),
                 ("Writable", "Yes" if recording.get("writable") else "No"),
                 ("Oldest recording", oldest_activity.get("display_local", "Not found")),
+                ("Recording span", recording_span_label(activity)),
             ]
             rec_html = "".join(
                 "<tr>"
@@ -1492,6 +1493,7 @@ def start_web(cfg, handler_only=False):
                     ("Recording storage", rec_state.upper(), recording.get("message", "Status unavailable"), rec_state),
                     ("Free space", f"{recording.get('free_gb', '-')} GB", f"{recording.get('used_percent', '-')}% used", rec_state),
                     ("Oldest recording", oldest_activity.get("display_local", "Not found"), "Oldest footage currently available", "healthy" if activity.get("available") else "warning"),
+                    ("Recording span", recording_span_label(activity), "Elapsed time between oldest and latest recordings", "healthy" if activity.get("available") else "warning"),
                     ("Writable", "Yes" if recording.get("writable") else "No", recording.get("recordings_path", "-"), "healthy" if recording.get("writable") else "critical"),
                 ])
                 + storage_action
@@ -2174,6 +2176,7 @@ def start_web(cfg, handler_only=False):
             recording_summary = (
                 f'<div class="label">Oldest recording</div><div class="value">{escape(oldest.get("display_local", "Unknown"))}</div>'
                 f'<div class="label">Latest recording</div><div class="value">{escape(latest.get("display_local", "Unknown"))}</div>'
+                f'<p>{escape(recording_span_label(recordings))}</p>'
                 f'<p>From timestamped recording filenames in {escape(recordings.get("recordings_path", ""))}.</p>'
             )
         else:

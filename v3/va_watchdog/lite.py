@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 import time
 
-from .recording_activity import recording_activity
+from .recording_activity import recording_activity, recording_span_label
 from .status_shortcuts import selected_shortcuts
 from .status_freshness import freshness
 
@@ -96,6 +96,7 @@ def snapshot(cfg, now=None):
             oldest = recordings.get("oldest") or {}
             latest = recordings.get("latest") or {}
             recording_detail = f"Oldest recording: {oldest.get('display_local', 'Unknown')} · Latest: {latest.get('display_local', 'Unknown')}"
+            recording_detail += " | " + recording_span_label(recordings)
         else:
             recording_detail = recordings.get("message") or "No timestamped recordings were found"
         cards = [
@@ -134,6 +135,7 @@ def snapshot(cfg, now=None):
             latest = recordings.get("latest") or {}
             recording_state = "healthy"
             recording_detail = f"Oldest: {oldest.get('display_local', 'Unknown')} · Latest: {latest.get('display_local', 'Unknown')}"
+            recording_detail += " | " + recording_span_label(recordings)
         else:
             recording_state = "unknown"
             recording_detail = recordings.get("message") or "No timestamped recordings were found"

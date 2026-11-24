@@ -166,6 +166,7 @@ def recording_activity(
             "oldest": None,
             "oldest_recordings": [],
             "latest": None,
+            "recording_span_days": None,
             "recent": [],
             "checked_at": checked_at,
             "paths_checked": [item["path"] for item in results],
@@ -190,6 +191,7 @@ def recording_activity(
         "oldest_age_seconds": round(oldest_age_seconds, 1),
         "oldest_recordings": oldest_recordings,
         "latest": recent[0],
+        "recording_span_days": round(max(0, latest_unix - oldest_unix) / 86400, 2),
         "latest_age_seconds": round(latest_age_seconds, 1),
         "recent": recent,
         "oldest_bucket_unix": oldest_buckets[0] if oldest_buckets else None,
@@ -201,3 +203,15 @@ def recording_activity(
         "paths_checked": [item["path"] for item in results],
         "unreadable_paths": unreadable_paths,
     }
+
+
+def recording_span_label(activity: dict[str, Any]) -> str:
+    """Describe the timestamp span, not a guarantee of uninterrupted footage."""
+    if not activity.get("available"):
+        return "Recording span unavailable"
+    oldest = (activity.get("oldest") or {}).get("unix")
+    latest = (activity.get("latest") or {}).get("unix")
+    if not isinstance(oldest, (int, float)) or not isinstance(latest, (int, float)):
+        return "Recording span unavailable"
+    days = max(0, latest - oldest) / 86400
+    return f"Recording span: {days:.2f} days (may include gaps)"

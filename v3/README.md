@@ -48,6 +48,14 @@ records its result.
 V1/V2 deployments need an attended migration. Do not run an old uninstall helper
 against historical evidence. See [legacy migration](../docs/legacy-runtime.md).
 
+## Build 20261124.1
+
+The web service now permits its allowlisted authentication helper to verify the
+configured Ubuntu operator password. Normal installation and updates install the
+corrected service unit; the web process still runs as `va-watchdog-web`.
+Recording history shows the span between the oldest and latest file timestamps
+in days. This includes any gaps and does not imply continuous footage.
+
 ## Recording Storage
 
 Gateway setup offers two choices:

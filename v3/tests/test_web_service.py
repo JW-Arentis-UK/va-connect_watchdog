@@ -172,6 +172,20 @@ class WebServiceTests(unittest.TestCase):
         server.shutdown.assert_called_once()
         server.server_close.assert_called_once()
 
+    def test_web_unit_allows_the_privileged_operator_helper(self):
+        root = Path(__file__).parents[1]
+        unit = (root / "systemd" / "va-watchdog-web.service").read_text(encoding="utf-8")
+        settings = {
+            line.split("=", 1)[0]: line.split("=", 1)[1]
+            for line in unit.splitlines()
+            if "=" in line and not line.lstrip().startswith("#")
+        }
+        self.assertEqual(settings["User"], "va-watchdog-web")
+        self.assertEqual(settings["PrivateTmp"], "true")
+        self.assertNotIn("RestrictAddressFamilies", settings)
+        self.assertNotIn("SystemCallFilter", settings)
+        self.assertNotIn(settings.get("NoNewPrivileges", "false"), ("true", "yes", "1"))
+
     def test_web_is_supervised_independently_of_core_and_feeder(self):
         root = Path(__file__).parents[1]
         core = (root / "va_watchdog" / "watchdog.py").read_text(encoding="utf-8")
